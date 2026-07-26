@@ -30,7 +30,8 @@ pub(crate) fn detect_chi_routes(file: &str, source: &str) -> Vec<DetectedRoute> 
     let mut result = Vec::new();
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("go").expect("go grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("go") { Some(l) => l, None => return result };
+    if parser.set_language(&lang).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {

@@ -585,7 +585,7 @@ async function init(): Promise<void> {
         console.warn(`[sandbox] ⚠ DEGRADED: ${s.reason} — permission engine is the only barrier`);
       }
     })
-    .catch(() => {});
+    .catch((e) => console.warn('[sandbox] status check failed:', e));
 
   // Chat core（无头）+ React 信标视图（经 core-instance 注入 App 树）
   chatPanel = new ChatCore();
@@ -781,7 +781,7 @@ async function init(): Promise<void> {
     starGraph.resize();
     if (workspace) {
       // Save current conversation BEFORE re-initializing agent — avoids data loss
-      await chatPanel.saveActiveSession(workspace.path).catch(() => {});
+      await chatPanel.saveActiveSession(workspace.path).catch((e) => console.error('[settings] saveActiveSession failed:', e));
       await workspace.setupAgent(chatPanel);
       if (workspace?.agent) {
         await chatPanel

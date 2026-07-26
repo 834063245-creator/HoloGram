@@ -67,6 +67,7 @@ pub(crate) fn read_memory_batch(
 ) -> Result<String, String> {
     let mut map = serde_json::Map::new();
     for path in &paths {
+        crate::utils::validate_hologram_path(path)?;
         match std::fs::read_to_string(path) {
             Ok(content) => { map.insert(path.clone(), serde_json::Value::String(content)); }
             Err(_) => { map.insert(path.clone(), serde_json::Value::Null); }

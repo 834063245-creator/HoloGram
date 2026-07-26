@@ -426,8 +426,12 @@ fn handle_check(request: &str) -> Vec<u8> {
 
     // Auto-analyze if no graph loaded
     if !hologram_engine::engine::engine_read_graph(|g| g.node_count() > 0 || g.edge_count() > 0).unwrap_or(false) {
-        let _ = hologram_engine::engine::engine_init(&root);
-        let _ = hologram_engine::engine::engine_analyze(&root);
+        if let Err(e) = hologram_engine::engine::engine_init(&root) {
+            tracing::warn!("auto engine_init failed: {e}");
+        }
+        if let Err(e) = hologram_engine::engine::engine_analyze(&root) {
+            tracing::warn!("auto engine_analyze failed: {e}");
+        }
     }
 
     let after = match hologram_engine::engine::engine_read_graph(|g| g.clone()) {

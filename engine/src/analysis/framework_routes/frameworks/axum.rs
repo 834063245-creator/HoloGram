@@ -34,7 +34,8 @@ const METHOD_ROUTERS: [&str; 8] = [
 pub(crate) fn detect_axum_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("rs").expect("rust grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("rs") { Some(l) => l, None => return result };
+    if parser.set_language(&lang).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {

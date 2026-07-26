@@ -16,7 +16,8 @@ pub(crate) fn detect_fastapi_routes(file: &str, source: &str) -> Vec<DetectedRou
     let mut result = Vec::new();
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("py") { Some(l) => l, None => return result };
+    if parser.set_language(&lang).is_err() {
         return result;
     }
     let tree = match parser.parse(source, None) {

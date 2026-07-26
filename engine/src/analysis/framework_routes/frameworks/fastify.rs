@@ -15,7 +15,7 @@ pub(crate) fn detect_fastify_routes(file: &str, source: &str) -> Vec<DetectedRou
     let mut result = Vec::new();
     let is_ts = file.ends_with(".ts");
     let ext = if is_ts { "ts" } else { "js" };
-    let lang = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return result };
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() { return result; }
     let tree = match parser.parse(source, None) { Some(t) => t, None => return result };

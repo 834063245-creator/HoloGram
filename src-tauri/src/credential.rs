@@ -286,7 +286,9 @@ mod windows_impl {
     }
 
     pub(super) fn store_windows(provider: &str, key: &str) -> Result<(), String> {
-        let dir = cred_path().parent().unwrap().to_path_buf();
+        let dir = cred_path().parent()
+            .ok_or_else(|| "无法确定凭证目录的父路径".to_string())?
+            .to_path_buf();
         std::fs::create_dir_all(&dir).ok();
         let mut map = load_cred_map().unwrap_or_default();
         map.insert(provider.to_string(), serde_json::Value::String(key.to_string()));

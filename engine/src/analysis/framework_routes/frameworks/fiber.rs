@@ -15,7 +15,8 @@ pub(crate) fn detect_fiber_routes(file: &str, source: &str) -> Vec<DetectedRoute
     let methods: HashSet<&str> = ["Get", "Post", "Put", "Delete", "Patch", "Head", "Options", "All"]
         .iter().cloned().collect();
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("go").expect("go grammar")).is_err() { return result; }
+    let lang = match GRAMMAR_LOADER.get("go") { Some(l) => l, None => return result };
+    if parser.set_language(&lang).is_err() { return result; }
     let tree = match parser.parse(source, None) { Some(t) => t, None => return result };
     let root = tree.root_node();
     let mut cursor = root.walk();

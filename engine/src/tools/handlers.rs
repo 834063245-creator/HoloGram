@@ -991,7 +991,15 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
             details: json!({}),
         };
     }
-    let _ = engine::engine_save();
+    let save_result = engine::engine_save();
+    if let Err(e) = save_result {
+        tracing::warn!("engine_save failed after rename: {e}");
+        return ToolResponse::Degraded {
+            guidance: format!("Rename succeeded in memory but failed to persist: {e}"),
+            fallback: "Retry the operation or save manually".into(),
+            details: json!({"renamed_count": count, "renamed_ids": matched_ids}),
+        };
+    }
     ToolResponse::Success(json!({
         "dry_run": false,
         "old_name": old_name,

@@ -88,7 +88,7 @@ fn synthesize_js_from_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tr
 fn synthesize_js_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let ext = if is_ts { "ts" } else { "js" };
-    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return 0 };
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {
         return 0;
@@ -255,7 +255,8 @@ fn synthesize_py_from_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tr
 /// Fallback: parse from source for files not in parse cache.
 fn synthesize_py_fallback(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("py") { Some(l) => l, None => return 0 };
+    if parser.set_language(&lang).is_err() {
         return 0;
     }
     let tree = match parser.parse(source, None) {

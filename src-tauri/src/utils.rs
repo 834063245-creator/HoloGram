@@ -247,6 +247,35 @@ pub(crate) fn workspace_path(state: &WorkspaceState) -> Result<String, String> {
         .ok_or_else(|| "未打开工作区，请先打开项目".into())
 }
 
+/// Reject IDs that could be used for path traversal.
+/// Allows alphanumeric, dash, underscore, dot, colon, and space.
+pub(crate) fn sanitize_path_id(id: &str, label: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err(format!("{label} 不能为空"));
+    }
+    if id.contains('/') || id.contains('\\') || id.contains("..") || id.contains('\0') {
+        return Err(format!("{label} 包含非法字符"));
+    }
+    Ok(())
+}
+
+/// Validate that a path is within the `.hologram` directory of some project root.
+/// Rejects `..` traversal and paths outside the hologram workspace.
+pub(crate) fn validate_hologram_path(path: &str) -> Result<(), String> {
+    if path.contains('\0') {
+        return Err("路径包含非法字符".into());
+    }
+    let canonical = std::path::Path::new(path);
+    let normalized = canonical.to_string_lossy().replace('\\', "/");
+    if normalized.contains("/../") || normalized.starts_with("../") || normalized.ends_with("/..") {
+        return Err("路径包含目录穿越序列".into());
+    }
+    if !normalized.contains(".hologram") {
+        return Err("路径不在 .hologram 目录范围内".into());
+    }
+    Ok(())
+}
+
 /// Helper: get a reference to the active WorkspaceHandle.
 #[allow(dead_code)] // ponytail: kept for non-permission workspace access
 pub(crate) fn with_workspace<F, R>(state: &WorkspaceState, f: F) -> Result<R, String>

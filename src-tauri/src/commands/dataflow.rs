@@ -70,6 +70,7 @@ pub(crate) async fn dataflow_query(
 
     // Load specific trace
     if let Some(tid) = trace_id {
+        crate::utils::sanitize_path_id(&tid, "trace_id")?;
         let path = dir.join(format!("{tid}.json"));
         let content = fs::read_to_string(&path)
             .map_err(|e| format!("读取失败: {e}"))?;
@@ -123,6 +124,7 @@ pub(crate) async fn dataflow_delete(
     trace_id: String,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
+    crate::utils::sanitize_path_id(&trace_id, "trace_id")?;
     let root = crate::utils::workspace_path(&state)?;
     let path = PathBuf::from(&root)
         .join(".hologram")

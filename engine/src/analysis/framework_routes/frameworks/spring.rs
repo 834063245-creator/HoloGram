@@ -24,7 +24,7 @@ pub(crate) fn detect_spring_routes(file: &str, source: &str) -> Vec<DetectedRout
         // Kotlin tree-sitter isn't wired yet, skip
         return result;
     } else {
-        GRAMMAR_LOADER.get("java").expect("java grammar")
+        match GRAMMAR_LOADER.get("java") { Some(l) => l, None => return result }
     };
 
     let mut parser = tree_sitter::Parser::new();

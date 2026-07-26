@@ -603,6 +603,7 @@ pub(crate) async fn rpc(
         "session_append" => {
             let path = req_str(&params, "path", "session_append")?;
             let session_id = req_str(&params, "session_id", "session_append")?;
+            crate::utils::sanitize_path_id(&session_id, "session_id")?;
             let message = params.get("message")
                 .ok_or("session_append: missing 'message'")?;
             let file = std::path::Path::new(&path)

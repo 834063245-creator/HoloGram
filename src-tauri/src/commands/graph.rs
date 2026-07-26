@@ -13,6 +13,9 @@ pub(crate) async fn load_graph_json(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     if let Some(ref p) = path {
+        if p.contains("..") || p.contains('\0') {
+            return Err("路径包含非法字符".into());
+        }
         let content = std::fs::read_to_string(p)
             .map_err(|e| format!("Graph JSON not found at {}: {}", p, e))?;
         if content.trim().is_empty() {
@@ -52,6 +55,9 @@ pub(crate) async fn load_binary_graph(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<Vec<u8>, String> {
     if let Some(ref p) = path {
+        if p.contains("..") || p.contains('\0') {
+            return Err("路径包含非法字符".into());
+        }
         let json_path = p.replace(".hologram", ".json");
         if let (Ok(h_meta), Ok(j_meta)) = (std::fs::metadata(p), std::fs::metadata(&json_path)) {
             if let (Ok(h_time), Ok(j_time)) = (h_meta.modified(), j_meta.modified()) {

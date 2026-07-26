@@ -540,12 +540,12 @@ export class Workspace {
 
     if (!active.apiKey || active.apiKey.trim() === '') {
       this.agent = null;
-      chatPanel.setAgent(null as any);
+      chatPanel.setAgent(null);
       bus.emit('agent:diag', { text: `❌ 未检测到 API Key — provider="${active.name}" 的 Key 为空。`, ready: false });
       return;
     }
 
-    persistSecrets(settings).catch(() => {});
+    persistSecrets(settings).catch((e) => console.error('[workspace] persistSecrets failed:', e));
 
     // Load memories (global + project)
     let memorySection = '';
@@ -571,7 +571,7 @@ export class Workspace {
     // Init agent state persistence + goal lifecycle + skill registry
     this.agentStore = new AgentStore(this.path);
     this.goalManager = new GoalManager(this.path, (r) => bus.emit('goal:state', r));
-    this.goalManager.migrateLegacy().then(() => this.goalManager?.adoptOrphans()).catch(() => {});
+    this.goalManager.migrateLegacy().then(() => this.goalManager?.adoptOrphans()).catch((e) => console.warn('[workspace] goal migration failed:', e));
     this.skillRegistry = new SkillRegistry(this.path);
 
     await auraReady;
@@ -701,7 +701,8 @@ export class Workspace {
         },
       });
 
-      const agent = (handle as any)._getAgent() as Agent;
+      const agent = ('_getAgent' in handle ? (handle as { _getAgent(): Agent })._getAgent() : null);
+      if (!agent) return null;
       agentRef.current = agent;
       this.memoryManager?.prewarmAura();
       return agent;

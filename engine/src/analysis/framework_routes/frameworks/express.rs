@@ -37,7 +37,7 @@ pub(crate) fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRou
     // Determine which tree-sitter language to use
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let ext = if is_ts { "ts" } else { "js" };
-    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return result };
 
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {

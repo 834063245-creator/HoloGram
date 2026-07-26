@@ -149,7 +149,9 @@ impl CodeVectorIndex {
         let slot_path = self.path.with_extension("slots.json");
         let slots = self.slots.read().unwrap();
         let data = serde_json::json!({ "slots": *slots, "dim": VECTOR_DIM });
-        std::fs::write(&slot_path, serde_json::to_string(&data).unwrap())
+        let json_str = serde_json::to_string(&data)
+            .map_err(|e| format!("slot serialize: {e}"))?;
+        std::fs::write(&slot_path, json_str)
             .map_err(|e| format!("slot save: {e}"))?;
         Ok(())
     }

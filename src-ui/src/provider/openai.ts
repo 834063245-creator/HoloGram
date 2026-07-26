@@ -78,7 +78,7 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
         10000,
       );
       if (!json) return [];
-      const data: Array<{ id: string }> = (json as any).data || [];
+      const data: Array<{ id: string }> = (json as { data?: Array<{ id: string }> }).data || [];
       return data
         .filter((m) => m.id)
         .map((m) => ({
@@ -216,8 +216,8 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
 
   for await (const ev of sseEvents(body, name, signal)) {
     // In-stream error from OpenAI-compatible API (DeepSeek overload, rate limit, etc.)
-    if ((ev as any).error) {
-      const e = (ev as any).error;
+    if ((ev as { error?: { message?: string } }).error) {
+      const e = (ev as { error?: { message?: string } }).error!;
       yield { type: ChunkType.Error, err: new Error(`${name}: ${e.message || JSON.stringify(e)}`) };
       return;
     }

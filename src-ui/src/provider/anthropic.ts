@@ -76,7 +76,7 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
         10000,
       );
       if (!json) return [];
-      const data: Array<{ id: string; display_name?: string }> = (json as any).data || [];
+      const data: Array<{ id: string; display_name?: string }> = (json as { data?: Array<{ id: string; display_name?: string }> }).data || [];
       return data
         .filter((m) => m.id)
         .map((m) => ({

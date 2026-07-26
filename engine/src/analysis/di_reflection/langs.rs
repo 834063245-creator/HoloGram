@@ -14,8 +14,9 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
+    let lang = match GRAMMAR_LOADER.get("py") { Some(l) => l, None => return 0 };
     if parser
-        .set_language(&GRAMMAR_LOADER.get("py").expect("python grammar"))
+        .set_language(&lang)
         .is_err()
     {
         return 0;
@@ -217,8 +218,9 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
+    let lang = match GRAMMAR_LOADER.get("java") { Some(l) => l, None => return 0 };
     if parser
-        .set_language(&GRAMMAR_LOADER.get("java").expect("java grammar"))
+        .set_language(&lang)
         .is_err()
     {
         return 0;
@@ -431,7 +433,7 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
 
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let ext = if is_ts { "ts" } else { "js" };
-    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return 0 };
 
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {
@@ -606,7 +608,8 @@ pub(crate) fn detect_python_dynamic_import(graph: &mut Graph, file: &str, source
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("py") { Some(l) => l, None => return 0 };
+    if parser.set_language(&lang).is_err() {
         return 0;
     }
     let tree = match parser.parse(source, None) {
@@ -670,7 +673,7 @@ pub(crate) fn detect_js_ts_dynamic_import(graph: &mut Graph, file: &str, source:
 
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let ext = if is_ts { "ts" } else { "js" };
-    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return 0 };
 
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() { return 0; }
@@ -728,7 +731,8 @@ pub(crate) fn detect_python_eval(graph: &mut Graph, file: &str, source: &str) ->
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("py") { Some(l) => l, None => return 0 };
+    if parser.set_language(&lang).is_err() {
         return 0;
     }
     let tree = match parser.parse(source, None) {
@@ -779,7 +783,7 @@ pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> 
 
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let ext = if is_ts { "ts" } else { "js" };
-    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return 0 };
 
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() { return 0; }
@@ -1218,7 +1222,8 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("py").expect("python grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("py") { Some(l) => l, None => return 0 };
+    if parser.set_language(&lang).is_err() {
         return 0;
     }
     let tree = match parser.parse(source, None) {
@@ -1315,7 +1320,7 @@ pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) 
 
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let ext = if is_ts { "ts" } else { "js" };
-    let lang: tree_sitter::Language = GRAMMAR_LOADER.get(ext).expect("ts/js grammar");
+    let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return 0 };
 
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() { return 0; }
@@ -1396,7 +1401,8 @@ pub(crate) fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("java").expect("java grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("java") { Some(l) => l, None => return 0 };
+    if parser.set_language(&lang).is_err() {
         return 0;
     }
     let tree = match parser.parse(source, None) {
@@ -1446,7 +1452,8 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&GRAMMAR_LOADER.get("go").expect("go grammar")).is_err() {
+    let lang = match GRAMMAR_LOADER.get("go") { Some(l) => l, None => return 0 };
+    if parser.set_language(&lang).is_err() {
         return 0;
     }
     let tree = match parser.parse(source, None) {
