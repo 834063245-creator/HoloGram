@@ -310,9 +310,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // Create dummy DLL files (just empty files for scan test)
-        std::fs::File::create(tmp.join("tree-sitter-php.dll")).unwrap();
-        std::fs::File::create(tmp.join("tree-sitter-kotlin.dll")).unwrap();
+        // Create dummy grammar files (just empty files for scan test);
+        // scan_dir matches .dll on Windows, .so elsewhere
+        let ext = if cfg!(windows) { "dll" } else { "so" };
+        std::fs::File::create(tmp.join(format!("tree-sitter-php.{ext}"))).unwrap();
+        std::fs::File::create(tmp.join(format!("tree-sitter-kotlin.{ext}"))).unwrap();
         std::fs::File::create(tmp.join("not-a-grammar.txt")).unwrap();
 
         let loader = GrammarLoader::new(&tmp);

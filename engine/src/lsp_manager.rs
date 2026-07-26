@@ -562,9 +562,13 @@ impl LspManager {
         let mut started = 0;
         let mut failed = 0;
         for h in handles {
-            match h.join().unwrap() {
-                Ok(_) => started += 1,
-                Err(_) => failed += 1,
+            match h.join() {
+                Ok(Ok(_)) => started += 1,
+                Ok(Err(_)) => failed += 1,
+                Err(_) => {
+                    eprintln!("[lsp] warm-up thread panicked");
+                    failed += 1;
+                }
             }
         }
 
@@ -1031,13 +1035,24 @@ mod tests {
 
     /// Spawn cmd that hangs for 60s — used for timeout test.
     fn spawn_hanging_process() -> LspProcess {
-        let mut child = Command::new("cmd")
-            .args(&["/c", "ping -n 60 127.0.0.1 > nul"])
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.args(&["/c", "ping -n 60 127.0.0.1 > nul"]);
+            c
+        };
+        #[cfg(not(windows))]
+        let mut cmd = {
+            let mut c = Command::new("sh");
+            c.args(&["-c", "sleep 60"]);
+            c
+        };
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn cmd timeout");
+            .expect("spawn hanging process");
 
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
