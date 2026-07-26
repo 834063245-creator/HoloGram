@@ -170,7 +170,7 @@ function _streamingAssistant(ctx: StreamContext): AssistantMessage {
 const NOTICE_DEDUP_MS = 10 * 60 * 1000;
 const _recentNotices = new Map<string, number>(); // storeId:text → last-shown ts
 
-export function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info' | 'warn' | 'error'): void {
+function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info' | 'warn' | 'error'): void {
   // L3 dedup: skip if same text was shown within the time window (scoped per storeId to avoid cross-session suppression)
   const now = Date.now();
   const dedupKey = `${ctx.storeId}:${text}`;
@@ -216,7 +216,7 @@ export function addNotice(ctx: StreamContext, text: string, level: 'info' | 'war
 // ═══════════════════════════════════════════════════════════
 
 /** Mark the current streaming assistant as done. */
-export function _finaliseStreamingAssistant(ctx: StreamContext): void {
+function _finaliseStreamingAssistant(ctx: StreamContext): void {
   const sid = ctx.getStreamingAssistantId();
   const target = _resolveSessionTarget(ctx, sid);
   const msgs = target ? target.messages : ctx.getActiveMessages();
@@ -430,7 +430,7 @@ export function addTurnSep(_ctx: StreamContext): void {
 // Turn lifecycle
 // ═══════════════════════════════════════════════════════════
 
-export function finishCurrentTurn(ctx: StreamContext): void {
+function finishCurrentTurn(ctx: StreamContext): void {
   _finaliseStreamingAssistant(ctx);
   _streamingBump(ctx);
 }

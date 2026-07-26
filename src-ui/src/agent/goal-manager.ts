@@ -12,6 +12,7 @@
 
 import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
+import { stripNums } from './board-persistence';
 
 // ── Types ──
 
@@ -41,12 +42,6 @@ interface LegacyGoalState {
 }
 
 const INDEX_FILE = 'index.json';
-
-// ── Helpers ──
-
-function stripNums(text: string): string {
-  return text.replace(/^\s*\d+\t/gm, '');
-}
 
 // ── GoalManager ──
 

@@ -57,11 +57,6 @@ import {
 } from './session-store';
 import { disposeSessionStore } from './session-store';
 
-// ── Re-export types ──
-
-export type { AgentState, AgentTab, CollaborationMode, PanelMode, PermissionMode } from './panel-store';
-export type { ChatSessionMeta } from './session-store';
-
 // ── ChatStore handles — direct sub-store access ──
 
 export interface ChatStoreHandles {
@@ -121,31 +116,6 @@ export function getUserScrolledUp(storeId?: string) {
 export function getExpandedReasoningSet(storeId?: string) {
   return _msg_expandedReasoning(storeId);
 }
-
-// Session (re-exported)
-// Panel (re-exported)
-// Input (re-exported)
-export {
-  getActiveIdx,
-  getActiveSessionId,
-  getActiveTab,
-  getAttachedFiles,
-  getContextFilter,
-  getDraftText,
-  getInputHistory,
-  getInputHistoryIdx,
-  getInputText,
-  getMsgIdSeq,
-  getNextSessionId,
-  getPanelMode,
-  getProjectPath,
-  getSessions,
-  getSessionTokens,
-  getToolFilter,
-  getTotalTokensUsed,
-  isHistoryOpen,
-  nextMsgId,
-};
 
 // ── Panel disposal — call when a panel is closed to prevent memory leaks ──
 

@@ -16,13 +16,7 @@
 // 持久化：flush() / restore() 将 entries 序列化到 .hologram/taskboard.json。
 // 状态变更后通过 debounced flush 延迟批量写入，避免频繁 I/O。
 
-import { rpc } from '../bridge'
-
-// ── Helpers ──
-
-function stripNums(text: string): string {
-  return text.replace(/^\s*\d+\t/gm, '')
-}
+import { BoardPersistence } from './board-persistence';
 
 export type BoardStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'merged';
 
@@ -41,59 +35,33 @@ export interface BoardEntry {
 
 export class TaskBoard {
   private entries = new Map<string, BoardEntry>();
-  private _projectPath: string;
-  private _sessionId: string;
-  private _dirReady = false;
-  private _destroyed = false;
-  // debounced flush — 延迟批量写入
-  private _flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private _store: BoardPersistence;
 
   // ── Eviction: expired terminal entries are removed after TTL ──
   private static readonly TERMINAL_TTL_MS = 60 * 60 * 1000; // 1h
   private static readonly MAX_ENTRIES = 200;
 
   constructor(projectPath?: string, sessionId?: string) {
-    this._projectPath = projectPath ?? '';
-    this._sessionId = sessionId ?? 'default';
-  }
-
-  private get _boardPath(): string {
-    return this._projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/taskboard/' + this._sessionId + '.json';
-  }
-
-  private async _ensureDir(): Promise<void> {
-    if (this._dirReady) return;
-    try {
-      await rpc('create_directory', {
-        path: this._projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/taskboard',
-      });
-    } catch {
-      /* already exists */
-    }
-    this._dirReady = true;
+    this._store = new BoardPersistence({
+      projectPath: projectPath ?? '',
+      sessionId: sessionId ?? 'default',
+      dirName: 'taskboard',
+    });
   }
 
   /** 序列化 entries（Map → Array）写文件。best-effort — 永不抛异常。 */
   async flush(): Promise<void> {
-    if (!this._projectPath || this._destroyed) return;
-    try {
-      await this._ensureDir();
-      const arr = Array.from(this.entries.entries());
-      await rpc('write_file_content', {
-        filePath: this._boardPath,
-        content: JSON.stringify(arr, null, 2),
-      });
-    } catch {
-      /* best-effort */
-    }
+    if (this._store.destroyed) return;
+    const arr = Array.from(this.entries.entries());
+    await this._store.flush(JSON.stringify(arr, null, 2));
   }
 
   /** 读文件，反序列化回 Map。文件不存在时静默返回。 */
   async restore(): Promise<void> {
-    if (!this._projectPath) return;
+    const raw = await this._store.restore();
+    if (!raw) return;
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: this._boardPath });
-      const arr = JSON.parse(stripNums(raw)) as [string, BoardEntry][];
+      const arr = JSON.parse(raw) as [string, BoardEntry][];
       if (Array.isArray(arr)) {
         for (const [id, entry] of arr) {
           this.entries.set(id, entry);
@@ -101,44 +69,32 @@ export class TaskBoard {
         this._evict();
       }
     } catch {
-      /* 文件不存在 — 无可恢复数据 */
+      /* corrupt file — no data to restore */
     }
+  }
+
+  /** debounced flush — 2 秒后批量写入，避免频繁 I/O */
+  private _scheduleFlush(): void {
+    this._store.scheduleFlush(() => {
+      const arr = Array.from(this.entries.entries());
+      return JSON.stringify(arr, null, 2);
+    });
+  }
+
+  /** 清理 flush 定时器 — 销毁时调用 */
+  clearFlushTimer(): void {
+    this._store.clearFlushTimer();
+  }
+
+  /** 删除持久化文件 — 会话结束时调用。清除 entries 防止后续 flush 复活文件。 */
+  async destroy(): Promise<void> {
+    this.entries.clear();
+    await this._store.destroy();
   }
 
   /** 获取所有条目 — 用于孤儿检测等全局遍历 */
   getAllEntries(): BoardEntry[] {
     return Array.from(this.entries.values());
-  }
-
-  /** debounced flush — 2 秒后批量写入，避免频繁 I/O */
-  private _scheduleFlush(): void {
-    if (!this._projectPath) return;
-    if (this._flushTimer) clearTimeout(this._flushTimer);
-    this._flushTimer = setTimeout(() => {
-      this._flushTimer = null;
-      void this.flush();
-    }, 2000);
-  }
-
-  /** 清理 flush 定时器 — 销毁时调用 */
-  clearFlushTimer(): void {
-    if (this._flushTimer) {
-      clearTimeout(this._flushTimer);
-      this._flushTimer = null;
-    }
-  }
-
-  /** 删除持久化文件 — 会话结束时调用。清除 entries 防止后续 flush 复活文件。 */
-  async destroy(): Promise<void> {
-    if (!this._projectPath) return;
-    this._destroyed = true;
-    this.entries.clear();
-    this.clearFlushTimer();
-    try {
-      await rpc('delete_file_or_dir', { path: this._boardPath });
-    } catch {
-      /* best-effort */
-    }
   }
 
   /** Remove terminal entries (completed/failed/stopped/merged) older than TTL.

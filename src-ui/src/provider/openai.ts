@@ -5,6 +5,7 @@
 // 手写 fetch() + SSE 解析，零第三方 SDK
 
 import { sendWithRetry } from './retry';
+import { extractWritePreview, fetchJsonWithTimeout, prewarmEndpoint, sseEvents } from './shared';
 import {
   type Chunk,
   ChunkType,
@@ -59,46 +60,39 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
 
       if (!response.body) throw new Error(`${name}: no response body`);
 
-            yield* readSSE(response.body, name, signal);
+      yield* readSSE(response.body, name, signal);
     },
 
     prewarm(): void {
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 3000);
-      fetch(`${baseUrl}/models`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: ctrl.signal,
-      }).catch(() => {});
+      prewarmEndpoint(`${baseUrl}/models`, {
+        Authorization: `Bearer ${apiKey}`,
+      });
     },
 
     async fetchModels(): Promise<ModelDescriptor[]> {
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 10000);
-      try {
-        const resp = await fetch(`${baseUrl}/models`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: ctrl.signal,
-        });
-        if (!resp.ok) return [];
-        const json = await resp.json();
-        const data: Array<{ id: string }> = json.data || [];
-        return data
-          .filter((m) => m.id)
-          .map((m) => ({
-            id: m.id,
-            name: m.id,
-            kind: 'openai' as const,
-            provider: name,
-            baseUrl,
-            reasoning: false,
-            input: ['text'] as ('text' | 'image')[],
-            cost: { input: 0, output: 0, cacheRead: 0 },
-            contextWindow: 0,
-            maxTokens: 0,
-          }));
-      } catch {
-        return [];
-      }
+      const json = await fetchJsonWithTimeout(
+        `${baseUrl}/models`,
+        {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        10000,
+      );
+      if (!json) return [];
+      const data: Array<{ id: string }> = (json as any).data || [];
+      return data
+        .filter((m) => m.id)
+        .map((m) => ({
+          id: m.id,
+          name: m.id,
+          kind: 'openai' as const,
+          provider: name,
+          baseUrl,
+          reasoning: false,
+          input: ['text'] as ('text' | 'image')[],
+          cost: { input: 0, output: 0, cacheRead: 0 },
+          contextWindow: 0,
+          maxTokens: 0,
+        }));
     },
   };
 }
@@ -216,230 +210,97 @@ function buildChatRequest(
 
 // ---- SSE stream parsing ----
 
-interface DeltaChunk {
-  role?: string;
-  content?: string;
-  reasoning_content?: string;
-  tool_calls?: Array<{
-    index: number;
-    id?: string;
-    type?: 'function';
-    function?: {
-      name?: string;
-      arguments?: string;
-    };
-  }>;
-}
-
-interface ChatChunk {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  choices: Array<{
-    index: number;
-    delta: DeltaChunk;
-    finish_reason: string | null;
-  }>;
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-    completion_tokens_details?: {
-      reasoning_tokens?: number;
-    };
-    prompt_tokens_details?: {
-      cached_tokens?: number;
-    };
-  };
-}
-
-/** Extract partial content from streaming JSON args for write/edit tools. */
-function extractWritePreview(toolName: string, args: string): string | null {
-  const isWrite = toolName === 'write_file' || toolName === 'write_file_content';
-  const isEdit = toolName === 'edit_file';
-  if (!isWrite && !isEdit) return null;
-  const key = isEdit ? 'newString' : 'content';
-  const re = new RegExp(`"${key}"\\s*:\\s*"(.*)`, 's');
-  const m = args.match(re);
-  if (!m) return null;
-  return m[1]
-    .replace(/\\(["\\\/bfnrt])/g, (_, c: string) =>
-      ({ '"': '"', '\\': '\\', '/': '/', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t' })[c] || c)
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/"\s*\}?\s*$/, '');
-}
-
 async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?: AbortSignal): AsyncGenerator<Chunk> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  // Accumulate tool calls by index
   const toolsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
   let usage: Chunk['usage'];
 
-  try {
-    while (true) {
-      if (signal?.aborted) throw new Error(`${name}: aborted`);
-      const { done, value } = await reader.read();
-      if (done) {
-        // Flush decoder internal state and process any trailing data in buffer
-        buffer += decoder.decode();
-        break;
+  for await (const ev of sseEvents(body, name, signal)) {
+    // In-stream error from OpenAI-compatible API (DeepSeek overload, rate limit, etc.)
+    if ((ev as any).error) {
+      const e = (ev as any).error;
+      yield { type: ChunkType.Error, err: new Error(`${name}: ${e.message || JSON.stringify(e)}`) };
+      return;
+    }
+
+    // Usage may come in a separate chunk or alongside the last choice.
+    // Process it but DO NOT continue — the same chunk may also carry choices
+    // with finish_reason that we need for tool call completion detection.
+    if (ev.usage) {
+      usage = {
+        prompt_tokens: ev.usage.prompt_tokens,
+        completion_tokens: ev.usage.completion_tokens,
+        total_tokens: ev.usage.total_tokens,
+        cache_hit_tokens: ev.usage.prompt_tokens_details?.cached_tokens || 0,
+        cache_miss_tokens: ev.usage.prompt_tokens - (ev.usage.prompt_tokens_details?.cached_tokens || 0),
+        reasoning_tokens: ev.usage.completion_tokens_details?.reasoning_tokens || 0,
+        finish_reason: 'stop',
+      };
+    }
+
+    for (const choice of ev.choices) {
+      const delta = choice.delta;
+
+      // Text content
+      if (delta.content) {
+        yield { type: ChunkType.Text, text: delta.content };
       }
-      buffer += decoder.decode(value, { stream: true });
 
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      // Reasoning content (DeepSeek thinking mode)
+      if (delta.reasoning_content) {
+        yield { type: ChunkType.Reasoning, text: delta.reasoning_content };
+      }
 
-      for (const raw of lines) {
-        const line = raw.trim();
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-
-        let ev: ChatChunk;
-        try {
-          ev = JSON.parse(data);
-        } catch {
-          continue;
-        }
-
-        // In-stream error from OpenAI-compatible API (DeepSeek overload, rate limit, etc.)
-        if ((ev as any).error) {
-          const e = (ev as any).error;
-          yield { type: ChunkType.Error, err: new Error(`${name}: ${e.message || JSON.stringify(e)}`) };
-          return;
-        }
-
-        // Usage may come in a separate chunk or alongside the last choice.
-        // Process it but DO NOT continue — the same chunk may also carry choices
-        // with finish_reason that we need for tool call completion detection.
-        if (ev.usage) {
-          usage = {
-            prompt_tokens: ev.usage.prompt_tokens,
-            completion_tokens: ev.usage.completion_tokens,
-            total_tokens: ev.usage.total_tokens,
-            cache_hit_tokens: ev.usage.prompt_tokens_details?.cached_tokens || 0,
-            cache_miss_tokens: ev.usage.prompt_tokens - (ev.usage.prompt_tokens_details?.cached_tokens || 0),
-            reasoning_tokens: ev.usage.completion_tokens_details?.reasoning_tokens || 0,
-            finish_reason: 'stop',
-          };
-        }
-
-        for (const choice of ev.choices) {
-          const delta = choice.delta;
-
-          // Text content
-          if (delta.content) {
-            yield { type: ChunkType.Text, text: delta.content };
+      // Tool calls
+      if (delta.tool_calls) {
+        for (const tcDelta of delta.tool_calls) {
+          let tc = toolsByIndex.get(tcDelta.index);
+          if (!tc) {
+            tc = { id: '', name: '', arguments: '' };
+            toolsByIndex.set(tcDelta.index, tc);
           }
-
-          // Reasoning content (DeepSeek thinking mode)
-          if (delta.reasoning_content) {
-            yield { type: ChunkType.Reasoning, text: delta.reasoning_content };
+          if (tcDelta.id) tc.id = tcDelta.id;
+          if (tcDelta.function?.name) {
+            tc.name = tcDelta.function.name;
+            yield {
+              type: ChunkType.ToolCallStart,
+              tool_call: { id: tc.id, name: tc.name, arguments: '' },
+            };
           }
-
-          // Tool calls
-          if (delta.tool_calls) {
-            for (const tcDelta of delta.tool_calls) {
-              let tc = toolsByIndex.get(tcDelta.index);
-              if (!tc) {
-                tc = { id: '', name: '', arguments: '' };
-                toolsByIndex.set(tcDelta.index, tc);
-              }
-              if (tcDelta.id) tc.id = tcDelta.id;
-              if (tcDelta.function?.name) {
-                tc.name = tcDelta.function.name;
-                yield {
-                  type: ChunkType.ToolCallStart,
-                  tool_call: { id: tc.id, name: tc.name, arguments: '' },
-                };
-              }
-              if (tcDelta.function?.arguments) {
-                tc.arguments += tcDelta.function.arguments;
-                // Streaming write preview: extract content from partial JSON args
-                const preview = extractWritePreview(tc.name, tc.arguments);
-                if (preview) {
-                  yield {
-                    type: ChunkType.ToolArgPreview,
-                    tool_arg_preview: { tool_id: tc.id, tool_name: tc.name, content: preview },
-                  };
-                }
-              }
-            }
-          }
-
-          // Finish reason — detect completed tool calls
-          if (choice.finish_reason) {
-            if (usage) {
-              usage.finish_reason = choice.finish_reason;
-            }
-            // Emit completed tool calls
-            for (const tc of toolsByIndex.values()) {
+          if (tcDelta.function?.arguments) {
+            tc.arguments += tcDelta.function.arguments;
+            // Streaming write preview: extract content from partial JSON args
+            const preview = extractWritePreview(tc.name, tc.arguments);
+            if (preview) {
               yield {
-                type: ChunkType.ToolCall,
-                tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments },
+                type: ChunkType.ToolArgPreview,
+                tool_arg_preview: { tool_id: tc.id, tool_name: tc.name, content: preview },
               };
             }
-            toolsByIndex.clear();
           }
         }
-
-        // Emit usage after choices (so finish_reason is correct)
-        if (ev.usage && usage) {
-          yield { type: ChunkType.Usage, usage };
-        }
       }
-    }
 
-    // Process any remaining complete lines in buffer after stream ends
-    if (buffer.trim()) {
-      const remaining = buffer.split('\n').filter((l) => l.trim());
-      for (const raw of remaining) {
-        const line = raw.trim();
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-
-        let ev: ChatChunk;
-        try {
-          ev = JSON.parse(data);
-        } catch {
-          continue;
+      // Finish reason — detect completed tool calls
+      if (choice.finish_reason) {
+        if (usage) {
+          usage.finish_reason = choice.finish_reason;
         }
-
-        if (ev.usage) {
-          usage = {
-            prompt_tokens: ev.usage.prompt_tokens,
-            completion_tokens: ev.usage.completion_tokens,
-            total_tokens: ev.usage.total_tokens,
-            cache_hit_tokens: ev.usage.prompt_tokens_details?.cached_tokens || 0,
-            cache_miss_tokens: ev.usage.prompt_tokens - (ev.usage.prompt_tokens_details?.cached_tokens || 0),
-            reasoning_tokens: ev.usage.completion_tokens_details?.reasoning_tokens || 0,
-            finish_reason: 'stop',
+        // Emit completed tool calls
+        for (const tc of toolsByIndex.values()) {
+          yield {
+            type: ChunkType.ToolCall,
+            tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments },
           };
         }
-
-        for (const choice of ev.choices) {
-          if (choice.delta.content) {
-            yield { type: ChunkType.Text, text: choice.delta.content };
-          }
-          if (choice.delta.reasoning_content) {
-            yield { type: ChunkType.Reasoning, text: choice.delta.reasoning_content };
-          }
-        }
+        toolsByIndex.clear();
       }
     }
-  } finally {
-    reader.releaseLock();
+
+    // Emit usage after choices (so finish_reason is correct)
+    if (ev.usage && usage) {
+      yield { type: ChunkType.Usage, usage };
+    }
   }
 
-  if (usage) {
-    // Only emit if not already emitted (usage from inline chunks is already out)
-    yield { type: ChunkType.Done };
-    return;
-  }
   yield { type: ChunkType.Done };
 }

@@ -15,7 +15,9 @@
 
 #![allow(non_snake_case)] // Win32 FFI naming conventions
 
+#[cfg(windows)]
 use std::ffi::c_void;
+#[cfg(windows)]
 use std::path::PathBuf;
 
 // ═══════════════════════════════════════════════════════════════
@@ -389,8 +391,6 @@ use macos_impl::*;
 
 #[cfg(target_os = "linux")]
 mod linux_impl {
-    use super::*;
-
     const SERVICE: &str = "hologram";
 
     /// Check if secret-tool is available (gnome-keyring/kwallet installed).

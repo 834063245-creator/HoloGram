@@ -7,12 +7,7 @@
 
 import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
-
-// ── Helpers ──
-
-function stripNums(text: string): string {
-  return text.replace(/^\s*\d+\t/gm, '');
-}
+import { stripNums } from './board-persistence';
 
 // ── Types ──
 

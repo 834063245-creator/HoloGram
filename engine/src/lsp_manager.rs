@@ -709,9 +709,9 @@ impl LspManager {
         let exe = Self::resolve_cmd_path(cfg.command)
             .unwrap_or_else(|| std::path::PathBuf::from(cfg.command));
         let (program, args_vec) = {
-            let ext = exe.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
             #[cfg(target_os = "windows")]
             {
+                let ext = exe.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
                 if ext == "cmd" || ext == "bat" {
                     let mut v = vec!["/c".to_string(), exe.to_string_lossy().into_owned()];
                     v.extend(cfg.args.iter().map(|a| a.to_string()));

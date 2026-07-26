@@ -1,29 +1,35 @@
 // Memory Bundle HTTP client — calls the Dockerized FirstBeat memory service.
 // If the service is unreachable, all methods degrade gracefully (return null/empty).
+//
+// NOTE: Currently only memoryBundleIngest() is wired into workspace.ts/runtime.ts.
+// The other exported functions (health/analyze/recall/portrait) are NOT yet
+// integrated — do not call them from agent logic without first wiring them up.
 
 const BASE_URL = 'http://127.0.0.1:9600';
 const TIMEOUT_MS = 5000;
 
 // ── Types ──
+// These types are only used by the un-integrated APIs below.
+// They will become public once the corresponding functions are wired up.
 
-export interface EmotionResult {
+interface EmotionResult {
   valence: number;
   arousal: number;
   category: string;
 }
 
-export interface IntentResult {
+interface IntentResult {
   label: string;
   confidence: number;
 }
 
-export interface RelationshipResult {
+interface RelationshipResult {
   trust: number;
   closeness: number;
   familiarity: number;
 }
 
-export interface AnalyzeResult {
+interface AnalyzeResult {
   embedding_dim: number;
   emotion?: EmotionResult;
   intent?: IntentResult;
@@ -34,13 +40,13 @@ export interface AnalyzeResult {
   field_direction_norm?: number;
 }
 
-export interface FactRecord {
+interface FactRecord {
   id: string;
   content: string;
   score: number;
 }
 
-export interface RecallResult {
+interface RecallResult {
   query: string;
   embedding_dim: number;
   facts?: FactRecord[];
@@ -49,7 +55,7 @@ export interface RecallResult {
   rerank_reference?: boolean;
 }
 
-export interface PortraitResult {
+interface PortraitResult {
   emotion?: EmotionResult;
   relationship?: RelationshipResult;
   intent?: string;
@@ -78,16 +84,16 @@ async function fetchJson<T>(path: string, body?: unknown): Promise<T | null> {
   }
 }
 
-// ── Public API ──
+// ── Un-integrated API (NOT yet wired into agent logic) ──
 
 /** Check if the memory bundle service is alive. */
-export async function memoryBundleHealth(): Promise<boolean> {
+async function memoryBundleHealth(): Promise<boolean> {
   const result = await fetchJson<{ status: string }>('/health');
   return result?.status === 'ok';
 }
 
 /** Analyze a single message: extract emotion, intent, entities, tags, relationship. */
-export async function memoryBundleAnalyze(
+async function memoryBundleAnalyze(
   text: string,
   userId: string = 'default',
   sessionId: string = '',
@@ -96,7 +102,7 @@ export async function memoryBundleAnalyze(
 }
 
 /** Recall facts and memory field residuals for a query. */
-export async function memoryBundleRecall(
+async function memoryBundleRecall(
   query: string,
   topK: number = 10,
   includeText: boolean = false,
@@ -119,6 +125,6 @@ export async function memoryBundleIngest(
 }
 
 /** Get current user portrait. */
-export async function memoryBundlePortrait(): Promise<PortraitResult | null> {
+async function memoryBundlePortrait(): Promise<PortraitResult | null> {
   return await fetchJson<PortraitResult>('/portrait');
 }

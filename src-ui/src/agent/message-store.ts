@@ -9,12 +9,7 @@
 
 import { rpc } from '../bridge'
 import type { AgentMessage, MessageStore } from './message-types'
-
-// ── Helpers ──
-
-function stripNums(text: string): string {
-  return text.replace(/^\s*\d+\t/gm, '')
-}
+import { stripNums } from './board-persistence'
 
 // ── JsonMessageStore ──
 

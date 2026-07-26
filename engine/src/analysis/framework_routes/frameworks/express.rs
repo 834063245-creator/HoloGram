@@ -86,7 +86,7 @@ pub(crate) fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRou
                             let arg_children: Vec<_> = args.children(&mut args_cursor).collect();
 
                             let mut route_str = String::new();
-                            let mut handler = String::new();
+                            let mut handler: String;
                             let mut found_route = false;
                             let mut last_identifier = String::new();
 

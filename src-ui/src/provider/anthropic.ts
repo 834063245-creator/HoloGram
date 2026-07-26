@@ -4,6 +4,7 @@
 // Anthropic Messages API provider — 手写 fetch() + SSE 解析，零第三方 SDK
 
 import { sendWithRetry } from './retry';
+import { extractWritePreview, fetchJsonWithTimeout, prewarmEndpoint, sseEvents } from './shared';
 import {
   type Chunk,
   ChunkType,
@@ -55,46 +56,41 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
 
       if (!response.body) throw new Error(`${name}: no response body`);
 
-            yield* readSSE(response.body, name, signal);
+      yield* readSSE(response.body, name, signal);
     },
 
     prewarm(): void {
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 3000);
-      fetch(`${baseUrl}/v1/models`, {
-        headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION },
-        signal: ctrl.signal,
-      }).catch(() => {});
+      prewarmEndpoint(`${baseUrl}/v1/models`, {
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      });
     },
 
     async fetchModels(): Promise<ModelDescriptor[]> {
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 10000);
-      try {
-        const resp = await fetch(`${baseUrl}/v1/models`, {
-          headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION },
-          signal: ctrl.signal,
-        });
-        if (!resp.ok) return [];
-        const json = await resp.json();
-        const data: Array<{ id: string; display_name?: string }> = json.data || [];
-        return data
-          .filter((m) => m.id)
-          .map((m) => ({
-            id: m.id,
-            name: m.display_name || m.id,
-            kind: 'anthropic' as const,
-            provider: name,
-            baseUrl,
-            reasoning: m.id.includes('sonnet') || m.id.includes('opus') || m.id.includes('haiku'),
-            input: ['text', 'image'] as ('text' | 'image')[],
-            cost: { input: 0, output: 0, cacheRead: 0 },
-            contextWindow: 0,
-            maxTokens: 0,
-          }));
-      } catch {
-        return [];
-      }
+      const json = await fetchJsonWithTimeout(
+        `${baseUrl}/v1/models`,
+        {
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        10000,
+      );
+      if (!json) return [];
+      const data: Array<{ id: string; display_name?: string }> = (json as any).data || [];
+      return data
+        .filter((m) => m.id)
+        .map((m) => ({
+          id: m.id,
+          name: m.display_name || m.id,
+          kind: 'anthropic' as const,
+          provider: name,
+          baseUrl,
+          reasoning: m.id.includes('sonnet') || m.id.includes('opus') || m.id.includes('haiku'),
+          input: ['text', 'image'] as ('text' | 'image')[],
+          cost: { input: 0, output: 0, cacheRead: 0 },
+          contextWindow: 0,
+          maxTokens: 0,
+        }));
     },
   };
 }
@@ -305,58 +301,7 @@ function buildRequest(
 
 // ---- SSE stream parsing ----
 
-interface WireUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
-}
-
-interface StreamEvent {
-  type: string;
-  index: number;
-  message?: { usage: WireUsage };
-  content_block?: { type: string; id: string; name: string };
-  delta?: {
-    type: string;
-    text: string;
-    thinking: string;
-    signature: string;
-    partial_json: string;
-    stop_reason: string;
-  };
-  usage?: WireUsage;
-  error?: { type: string; message: string };
-}
-
-/** Extract partial content from streaming JSON args for write/edit tools.
- *  Handles incomplete JSON — the content string may not be closed yet. */
-function extractWritePreview(toolName: string, args: string): string | null {
-  const isWrite = toolName === 'write_file' || toolName === 'write_file_content';
-  const isEdit = toolName === 'edit_file';
-  if (!isWrite && !isEdit) return null;
-
-  const key = isEdit ? 'newString' : 'content';
-  // ponytail: regex extracts "key": "..." from partial JSON.
-  // Handles escaped chars (\", \\, \n, etc.) inside the string value.
-  const re = new RegExp(`"${key}"\\s*:\\s*"(.*)`, 's');
-  const m = args.match(re);
-  if (!m) return null;
-
-  // Unescape JSON escapes so the preview is readable
-  return m[1]
-    .replace(/\\(["\\\/bfnrt])/g, (_, c: string) =>
-      ({ '"': '"', '\\': '\\', '/': '/', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t' })[c] || c)
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    // Strip trailing garbage (partial JSON may have " or "} or nothing trailing)
-    .replace(/"\s*\}?\s*$/, '');
-}
-
 async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?: AbortSignal): AsyncGenerator<Chunk> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
   const toolsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
   let inTok = 0;
   let outTok = 0;
@@ -365,152 +310,94 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
   let finishReason = '';
   let haveUsage = false;
 
-  try {
-    while (true) {
-      if (signal?.aborted) throw new Error(`${name}: aborted`);
-      const { done, value } = await reader.read();
-      if (done) {
-        // Flush decoder internal state and process any trailing data in buffer
-        buffer += decoder.decode();
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // keep incomplete last line
-
-      for (const raw of lines) {
-        const line = raw.trim();
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data) continue;
-
-        let ev: StreamEvent;
-        try {
-          ev = JSON.parse(data);
-        } catch {
-          continue; // skip non-JSON lines
+  for await (const ev of sseEvents(body, name, signal)) {
+    switch (ev.type) {
+      case 'message_start':
+        if (ev.message?.usage) {
+          inTok = ev.message.usage.input_tokens;
+          _cacheCreate = ev.message.usage.cache_creation_input_tokens;
+          cacheRead = ev.message.usage.cache_read_input_tokens;
+          haveUsage = true;
         }
+        break;
 
-        switch (ev.type) {
-          case 'message_start':
-            if (ev.message?.usage) {
-              inTok = ev.message.usage.input_tokens;
-              _cacheCreate = ev.message.usage.cache_creation_input_tokens;
-              cacheRead = ev.message.usage.cache_read_input_tokens;
-              haveUsage = true;
-            }
+      case 'content_block_start':
+        if (ev.content_block?.type === 'tool_use') {
+          const tc = {
+            id: ev.content_block.id,
+            name: ev.content_block.name,
+            arguments: '',
+          };
+          toolsByIndex.set(ev.index, tc);
+          yield {
+            type: ChunkType.ToolCallStart,
+            tool_call: { id: tc.id, name: tc.name, arguments: '' },
+          };
+        }
+        break;
+
+      case 'content_block_delta':
+        if (!ev.delta) continue;
+        switch (ev.delta.type) {
+          case 'text_delta':
+            if (ev.delta.text) yield { type: ChunkType.Text, text: ev.delta.text };
             break;
-
-          case 'content_block_start':
-            if (ev.content_block?.type === 'tool_use') {
-              const tc = {
-                id: ev.content_block.id,
-                name: ev.content_block.name,
-                arguments: '',
-              };
-              toolsByIndex.set(ev.index, tc);
-              yield {
-                type: ChunkType.ToolCallStart,
-                tool_call: { id: tc.id, name: tc.name, arguments: '' },
-              };
-            }
+          case 'thinking_delta':
+            if (ev.delta.thinking) yield { type: ChunkType.Reasoning, text: ev.delta.thinking };
             break;
-
-          case 'content_block_delta':
-            if (!ev.delta) continue;
-            switch (ev.delta.type) {
-              case 'text_delta':
-                if (ev.delta.text) yield { type: ChunkType.Text, text: ev.delta.text };
-                break;
-              case 'thinking_delta':
-                if (ev.delta.thinking) yield { type: ChunkType.Reasoning, text: ev.delta.thinking };
-                break;
-              case 'signature_delta':
-                if (ev.delta.signature) yield { type: ChunkType.Reasoning, signature: ev.delta.signature };
-                break;
-              case 'input_json_delta': {
-                const tc = toolsByIndex.get(ev.index);
-                if (tc) {
-                  tc.arguments += ev.delta.partial_json;
-                  // Streaming write preview: extract content from partial JSON args
-                  const preview = extractWritePreview(tc.name, tc.arguments);
-                  if (preview) {
-                    yield {
-                      type: ChunkType.ToolArgPreview,
-                      tool_arg_preview: { tool_id: tc.id, tool_name: tc.name, content: preview },
-                    };
-                  }
-                }
-                break;
+          case 'signature_delta':
+            if (ev.delta.signature) yield { type: ChunkType.Reasoning, signature: ev.delta.signature };
+            break;
+          case 'input_json_delta': {
+            const tc = toolsByIndex.get(ev.index);
+            if (tc) {
+              tc.arguments += ev.delta.partial_json;
+              // Streaming write preview: extract content from partial JSON args
+              const preview = extractWritePreview(tc.name, tc.arguments);
+              if (preview) {
+                yield {
+                  type: ChunkType.ToolArgPreview,
+                  tool_arg_preview: { tool_id: tc.id, tool_name: tc.name, content: preview },
+                };
               }
             }
             break;
-
-          case 'content_block_stop': {
-            const tc = toolsByIndex.get(ev.index);
-            if (tc) {
-              yield {
-                type: ChunkType.ToolCall,
-                tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments },
-              };
-              toolsByIndex.delete(ev.index);
-            }
-            break;
-          }
-
-          case 'message_delta':
-            if (ev.delta?.stop_reason) {
-              finishReason = ev.delta.stop_reason;
-            }
-            if (ev.usage) {
-              outTok = ev.usage.output_tokens;
-              haveUsage = true;
-            }
-            break;
-
-          case 'message_stop':
-            // stream complete
-            break;
-
-          case 'error': {
-            const msg = ev.error?.message || 'stream error';
-            yield { type: ChunkType.Error, err: new Error(`${name}: ${msg}`) };
-            return;
           }
         }
+        break;
+
+      case 'content_block_stop': {
+        const tc = toolsByIndex.get(ev.index);
+        if (tc) {
+          yield {
+            type: ChunkType.ToolCall,
+            tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments },
+          };
+          toolsByIndex.delete(ev.index);
+        }
+        break;
+      }
+
+      case 'message_delta':
+        if (ev.delta?.stop_reason) {
+          finishReason = ev.delta.stop_reason;
+        }
+        if (ev.usage) {
+          outTok = ev.usage.output_tokens;
+          haveUsage = true;
+        }
+        break;
+
+      case 'message_stop':
+        // stream complete
+        break;
+
+      case 'error': {
+        const msg = ev.error?.message || 'stream error';
+        yield { type: ChunkType.Error, err: new Error(`${name}: ${msg}`) };
+        return;
       }
     }
-
-    // Process any remaining complete lines in buffer after stream ends
-    if (buffer.trim()) {
-      const remaining = buffer.split('\n').filter((l) => l.trim());
-      for (const raw of remaining) {
-        const line = raw.trim();
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data) continue;
-
-        let ev: StreamEvent;
-        try {
-          ev = JSON.parse(data);
-        } catch {
-          continue;
-        }
-
-        if (ev.type === 'message_delta') {
-          if (ev.delta?.stop_reason) finishReason = ev.delta.stop_reason;
-          if (ev.usage) {
-            outTok = ev.usage.output_tokens;
-            haveUsage = true;
-          }
-        } else if (ev.type === 'message_stop') {
-          // final event
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
   }
 
   if (haveUsage) {

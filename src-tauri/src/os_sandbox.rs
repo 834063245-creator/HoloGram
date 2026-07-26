@@ -245,6 +245,7 @@ pub fn assign_to_job(child: &std::process::Child) -> bool {
 
 /// Single-quote a command for bash -c. Single quotes escape EVERYTHING
 /// (including $, &, !, `, \), only ' itself needs special handling.
+#[cfg(windows)]
 fn quote_cmd(cmd: &str) -> String {
     let escaped = cmd.replace('\'', "'\\''");
     format!("'{}'", escaped)

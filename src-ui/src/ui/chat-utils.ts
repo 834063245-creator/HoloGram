@@ -12,30 +12,8 @@ import { iconHtml } from './icons';
 // escapeHtml
 // ═══════════════════════════════════════════════════════════════════
 
-export function escapeHtml(s: string): string {
+function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// showCopiedFeedback
-// ═══════════════════════════════════════════════════════════════════
-
-/** Copy-to-clipboard with visual feedback. Shows check-circle icon for 1.5s then restores copy icon. */
-export function showCopiedFeedback(btn: HTMLElement, iconSize = 12): void {
-  const copyHtml = iconHtml('copy', iconSize);
-  btn.innerHTML = iconHtml('check-circle', iconSize);
-  setTimeout(() => {
-    btn.innerHTML = copyHtml;
-  }, 1500);
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// truncateArgs
-// ═══════════════════════════════════════════════════════════════════
-
-export function truncateArgs(args: string, max = 60): string {
-  if (args.length <= max) return args;
-  return args.slice(0, max) + '…';
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -152,74 +130,6 @@ export function computeSimpleDiff(
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// extractCodeTokens
-// ═══════════════════════════════════════════════════════════════════
-
-/** Extract identifiers that look like code symbols from natural language text. */
-export function extractCodeTokens(text: string): string[] {
-  const seen = new Set<string>();
-  const tokens: string[] = [];
-
-  // Patterns to match: snake_case, CamelCase, dot.paths, paths/with/slashes
-  const patterns = [
-    /\b[a-z_][a-z0-9_]{2,}(?:\.[a-z_][a-z0-9_]{2,})+\b/gi, // dot.separated
-    /\b[a-z_][a-z0-9_]*_[a-z0-9_]{2,}\b/gi, // snake_case
-    /\b[A-Z][a-z]+(?:[A-Z][a-z]+){1,}\b/g, // CamelCase
-    /\b[a-z]+(?:\/[a-z]+){1,}\b/gi, // path/like
-  ];
-
-  for (const re of patterns) {
-    for (const m of text.matchAll(re)) {
-      const t = m[0];
-      if (t.length >= 3 && t.length <= 120 && !seen.has(t)) {
-        seen.add(t);
-        tokens.push(t);
-      }
-    }
-  }
-
-  return tokens.slice(0, 30); // cap to avoid DOM bloat
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// linkifyTextNode
-// ═══════════════════════════════════════════════════════════════════
-
-/** Build a DocumentFragment from a text node, wrapping code tokens in link spans. */
-export function linkifyTextNode(
-  text: string,
-  tokens: string[],
-  createLink: (token: string) => HTMLElement,
-): DocumentFragment | null {
-  const fragment = document.createDocumentFragment();
-  let pos = 0;
-  let changed = false;
-
-  while (pos < text.length) {
-    let bestIdx = text.length;
-    let bestToken = '';
-    for (const t of tokens) {
-      const idx = text.indexOf(t, pos);
-      if (idx >= 0 && idx < bestIdx) {
-        bestIdx = idx;
-        bestToken = t;
-      }
-    }
-    if (!bestToken) {
-      fragment.appendChild(document.createTextNode(text.slice(pos)));
-      break;
-    }
-    if (bestIdx > pos) {
-      fragment.appendChild(document.createTextNode(text.slice(pos, bestIdx)));
-    }
-    fragment.appendChild(createLink(bestToken));
-    pos = bestIdx + bestToken.length;
-    changed = true;
-  }
-  return changed ? fragment : null;
-}
-
-// ═══════════════════════════════════════════════════════════════════
 // Dataflow inline card interfaces
 // ═══════════════════════════════════════════════════════════════════
 
@@ -249,7 +159,7 @@ interface DfFileResult {
 // formatDataflowCard
 // ═══════════════════════════════════════════════════════════════════
 
-export function formatDataflowCard(text: string): string | null {
+function formatDataflowCard(text: string): string | null {
   let data: { results: DfFileResult[] };
   try {
     data = JSON.parse(text);

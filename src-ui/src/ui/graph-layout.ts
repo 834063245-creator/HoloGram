@@ -42,7 +42,7 @@ export function fibonacciSphere(n: number, radius: number): Float32Array {
 // rep/att/damp LOCKED at 600/0.018/0.72.
 // Returns positions centered around local origin.
 
-async function simulateForces(
+export async function simulateForces(
   m: number,
   localPairs: [number, number][],
   shellRadius: number,
