@@ -15,8 +15,9 @@ use tree_sitter::Language;
 use tree_sitter_language::LanguageFn;
 
 /// A loaded grammar: owns the Library handle so Language stays valid.
+/// `None` for statically-linked grammars (data lives in .text, nothing to unload).
 struct LoadedGrammar {
-    _lib: libloading::Library,
+    _lib: Option<libloading::Library>,
     language: Language,
 
 }
@@ -72,8 +73,9 @@ impl GrammarLoader {
     /// Multiple extensions share the same Language.
     pub fn register_static(&self, lang: Language, _lang_key: &str, extensions: &[&str]) {
         let grammar = Arc::new(LoadedGrammar {
-            // ponytail: static grammars don't need a Library handle — data is in .text
-            _lib: unsafe { std::mem::zeroed() },
+            // ponytail: static grammars don't need a Library handle — data is in .text.
+            // A zeroed Library would dlclose(0)/FreeLibrary(NULL) on drop, which aborts on glibc.
+            _lib: None,
             language: lang,
         });
         let mut loaded = self.loaded.write().unwrap();
@@ -122,7 +124,7 @@ impl GrammarLoader {
             let language = Language::new(lang_fn);
 
             let grammar = Arc::new(LoadedGrammar {
-                _lib: lib,
+                _lib: Some(lib),
                 language: language.clone(),
             });
 
