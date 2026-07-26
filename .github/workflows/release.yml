@@ -63,7 +63,7 @@ jobs:
           cp release-bin/hologram.cmd staging/
           cp release-bin/hologram staging/
           cp release-bin/install.cmd staging/
-          cd staging && zip -r ../${{ matrix.artifact }}.zip .
+          cd staging && 7z a -tzip ../${{ matrix.artifact }}.zip .
 
       - name: Generate changelog
         shell: bash
