@@ -31,7 +31,7 @@ import {
 } from '../hooks';
 import type { Agent } from '../agent';
 import { createCodingTools } from '../tools/coding';
-import { createSubAgentTool, createAgentKillTool } from '../tools/subagent';
+import { createSubAgentTool, createAgentKillTool, createAgentStatusTool } from '../tools/subagent';
 import { createSkillTool } from '../skills';
 import { createTaskTools } from '../task';
 
@@ -368,6 +368,7 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
   // ── Sub-agent tools ──
   if (subAgentSpawner) {
     registry.register(createSubAgentTool(subAgentSpawner, subAgentPool));
+    registry.register(createAgentStatusTool(subAgentPool));
   }
 
   return registry;

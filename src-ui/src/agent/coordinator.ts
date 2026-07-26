@@ -273,6 +273,19 @@ export class SubAgentPool {
     return this.agents.get(internalId)?.handle ?? this.completed.find((h) => h.id === internalId);
   }
 
+  /** Handles of all RUNNING sub-agents, with the model-visible (alias) id swapped
+   *  in where one is registered — agent_status reports these so the model can
+   *  correlate with the ids it already knows. Queued (not-yet-spawned) agents
+   *  are excluded: they have no event stream to observe. */
+  listRunning(): SubAgentHandle[] {
+    const out: SubAgentHandle[] = [];
+    for (const [, pending] of this.agents) {
+      const alias = this._reverseAlias(pending.handle.id);
+      out.push(alias ? { ...pending.handle, id: alias } : pending.handle);
+    }
+    return out;
+  }
+
   /** Stop a running sub-agent: aborts its runFn, then marks it stopped.
    *  Also covers queued (not-yet-spawned) agents — dequeues them and settles
    *  their `done` as stopped so agent_kill works before a slot frees up.

@@ -53,6 +53,7 @@ import { createDiscoveryTools } from './tools/discovery';
 import { createBoardTrackingHook } from './hooks/board-tracking-hook';
 import { enqueueIsolationOp } from './isolation-queue';
 import { FileOwnership, WRITE_TOOLS, extractFilePath } from './file-ownership';
+import { removeSubAgentActivity, wrapSubAgentSink } from './subagent-activity';
 
 export { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent };
 
@@ -1947,6 +1948,8 @@ ${resumeNote}
     subTools.unregister('agent_spawn');
     // Sub-agents cannot kill siblings — only the parent can kill sub-agents.
     subTools.unregister('agent_kill');
+    // Pool observability is the parent's job too — sub-agents get no agent_status.
+    subTools.unregister('agent_status');
 
     // Re-register discovery tools with the sub-agent's own id — the cloned
     // tools' getAgentId closure captures the parent's id, which would cause
@@ -2067,7 +2070,12 @@ ${subTools
     // Use agentIdOverride for both UI and Agent so the LLM-facing ID matches
     // board/bus entries (async mode returns this ID to the LLM).
     const subAgentId = agentIdOverride ?? `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const subSink = this._ui.subAgentSpawn?.({ agentId: subAgentId, description, sessionId: this._uiSessionId }, onProgress) ?? (() => {});
+    const rawSubSink =
+      this._ui.subAgentSpawn?.({ agentId: subAgentId, description, sessionId: this._uiSessionId }, onProgress) ??
+      (() => {});
+    // Tee the child's event stream into the activity tracker — agent_status reads
+    // it to report the current tool call + wait time (see subagent-activity.ts).
+    const subSink = wrapSubAgentSink(subAgentId, rawSubSink);
 
     // Shared provider, fresh session, no compact
     const subAgent = new Agent(this.prov, subTools, subSystem, {
@@ -2151,6 +2159,7 @@ ${subTools
       result = { text: '', err: errReason };
     } finally {
       this._ui.subAgentFinished?.(subAgentId, this._uiSessionId, subAgentSucceeded);
+      removeSubAgentActivity(subAgentId);
       // Release this sub-agent's file ownership claims
       this._fileOwnership?.release(subAgent.id);
     }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '../src/agent/agent-types';
+import { EventKind } from '../src/agent/agent-types';
 import type { Hook, PreflightHook } from '../src/agent/hooks';
 import { HookRegistry, PreflightHookRegistry } from '../src/agent/hooks';
 import { StreamingToolExecutor } from '../src/agent/streaming-executor';
@@ -290,5 +291,31 @@ describe('StreamingToolExecutor — hook integration', () => {
     expect(results).toHaveLength(1);
     expect(checkSpy).toHaveBeenCalledTimes(1);
     expect(results[0].output).toContain('⚠️ renaming file');
+  });
+});
+
+describe('StreamingToolExecutor — unknown tool', () => {
+  it('unknown tool emits ToolDispatch AND ToolResult-with-error (no false stuck signal)', async () => {
+    const registry = makeRegistry([]); // nothing registered — the call is hallucinated
+
+    const events: AgentEvent[] = [];
+    const executor = new StreamingToolExecutor(registry, (ev) => events.push(ev), null, null);
+    executor.addTool({ id: 'c-ghost', name: 'hallucinated_tool', arguments: '{}' });
+
+    const results = await executor.awaitRemaining();
+    expect(results).toHaveLength(1);
+    expect(results[0].err).toBe('unknown tool "hallucinated_tool"');
+
+    // Dispatch AND result must both fire — the sub-agent activity tracker sets
+    // currentTool on dispatch and only clears on ToolResult; without the result
+    // a healthy agent looks stuck after 120s.
+    const dispatch = events.find((e) => e.kind === EventKind.ToolDispatch);
+    expect(dispatch?.tool?.name).toBe('hallucinated_tool');
+    const resultEv = events.find((e) => e.kind === EventKind.ToolResult);
+    expect(resultEv).toBeDefined();
+    expect(resultEv?.tool?.id).toBe('c-ghost');
+    expect(resultEv?.tool?.name).toBe('hallucinated_tool');
+    expect(resultEv?.tool?.err).toBe('unknown tool "hallucinated_tool"');
+    expect(resultEv?.tool?.output).toBe('error: unknown tool "hallucinated_tool"');
   });
 });

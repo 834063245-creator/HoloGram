@@ -1,6 +1,6 @@
 # 框架路由检测扩展立项计划
 
-> 状态：待开工。前置条件：修复计划 `audit-fix-plan-2026-07-25.md` 全部批次完成后启动（尤其 C1 结构体变更、D5 测试范式、D7 分发链重排必须已落地）。
+> 状态：已竣工（2026-07-26 落地，见文末「落地备注」）。前置条件：修复计划 `audit-fix-plan-2026-07-25.md` 全部批次完成后启动（尤其 C1 结构体变更、D5 测试范式、D7 分发链重排必须已落地）。
 > 目标：补齐两个结构性空洞——① 文件系统路由范式零覆盖（Next.js/SvelteKit）；② 生态权重高的新框架（Axum/Hono/Echo/Chi）。
 
 ## 集成契约（开工前再核对一遍，以落地后代码为准）
@@ -95,3 +95,35 @@
 - **修复**：`agent_list` 返回值对每个运行中子 Agent 增加三字段——当前正在执行的工具调用（无则 null）、该调用已等待时长、最后事件时间戳。
 - **验收**：`agent_list` 输出可辨识「推进中」与「疑似卡死」（某工具等待超阈值）两种状态；配合 A2 的 `agent_kill` 形成「看得见 → 杀得准」闭环。
 - **回归**：`tests/subagent-sink.test.ts` + 新增状态字段用例。
+
+---
+
+## 落地备注（2026-07-26）
+
+**交付清单**
+
+- 阶段 1：`frameworks/axum.rs`、`hono.rs`、`echo.rs`、`chi.rs`（全部 tree-sitter AST；basePath/Group/Route/inline-nest 单级前缀传播）+ 分发注册（hono 在 express 前、echo/chi 在 gin 前、axum 在 actix 前，门槛均内联在分支条件里）+ 24 个测试 + `fixtures/framework_routes_p1`（14 路由集成验收）。
+- 阶段 2：`frameworks/nextjs.rs`、`sveltekit.rs`（纯路径映射 + API 文件导出方法扫描），在 `detect_framework_routes` 顶部新增独立扫描块（先于 Express 分支，D7 排序要求）+ 12 个测试 + `fixtures/framework_routes_nextjs`（8 路由）与 `fixtures/framework_routes_sveltekit`（6 路由）集成验收。
+- 搭车项：`src-ui/src/agent/subagent-activity.ts`（事件旁路追踪）+ `agent_status` 工具（注册于 agent-builder.ts），13 个新测试。
+
+**与计划的偏差（以落地代码为准）**
+
+1. `agent_list` 改名 **`agent_status`**——`agent_list` 已被 `tools/communication.ts` 的拓扑工具占用；且 `PendingAgent` 并无现成运行状态（计划假设过时），实现改为在子 Agent 事件流上开旁路（`wrapSubAgentSink`）。
+2. Chi **不做** `{id}`→`:id` 归一化——核对现有惯例（FastAPI 保留 `{user_id}`、Gin 保留 `:id`）为「保留框架原生风格」。
+3. Next.js 额外支持 `src/app/**`（主流目录布局，同一匹配路径）；Pages Router 未做（计划标注可选项）。
+4. 拦截路由降级实现：剥掉 `(.)`/`(..)`/`(...)` 标记后按普通段映射（代码注释注明为已知限制）。
+5. 搭车修复（验收前置）：`test_cancel_token_stops_pipeline` 与 `test_reanalyze_cancels_running_analysis` 的线程调度竞态——盲 sleep 改为等待 `cancel_token` 发布，与路由无关但挡住「cargo test --lib 全绿」验收。
+
+**验收结果**
+
+- `cd engine && cargo test --lib`：516 passed / 0 failed，连续两遍。
+- `cd src-ui && npx tsc --noEmit`：0 错误；子 Agent 相关 63 测试全过（全套件仅 `audit-fixes-render` 一例预存 UI 计时 flake，单跑即过）。
+- 三个 fixture 集成测试断言路由总数、分框架计数（`properties["framework"]`）与分发互斥（hono 不被 express 吞、echo/chi 不被 gin 吞、route.ts 归属 nextjs）。
+
+**复审轮（2026-07-26，两路独立评审 + 修复）**
+
+两路对抗性评审结论均为 SHIP-WITH-FIXES，发现项已全部修复：
+
+- 引擎 10 项：F1 fs 路由文件从逐文件检测循环排除（Next+Hono 混用会双重注入，评审抓到的最大问题）；F2 fs 路由 file 字段统一为绝对路径；F3 hono 链式 basePath 不再污染语句级前缀；F4 SvelteKit `[id=integer]` 匹配器剥离；F5 API 文件支持 `export const GET: Type =` 类型标注；F6 Echo 支持 `var g = e.Group(...)`；F7 actix 分发门槛加内容检查（不再吞 Rocket，预存 bug 顺手修）；N1-N3 陈旧注释/测试去重/API 路由行号定位。
+- src-ui 5 项：B1 幻觉工具名不发 ToolResult 导致 agent_status 误报卡死（会诱导错杀，评审抓到的最大问题）；B2 增加「120s 无事件」次级卡死信号（覆盖并发批下的单槽盲区）；B3 时长钳制；B4 补 tee 接线集成测试 + 时间戳发散断言；B5 reanalyze 测试 deadline 未命中时显式断言失败。
+- 终验：`cargo test --lib` 521 passed；`npx tsc --noEmit` 0 错误；`npm test` 656/656 全过。

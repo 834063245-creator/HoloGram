@@ -97,12 +97,18 @@ export class StreamingToolExecutor {
     });
 
     if (!tool) {
-      this.completed.push({
+      const result: PendingResult = {
         call,
         output: `error: unknown tool "${call.name}"`,
         err: `unknown tool "${call.name}"`,
         truncated: false,
-      });
+      };
+      this.completed.push(result);
+      // Unknown tools never reach executeTool, so emit the ToolResult here —
+      // without it the sub-agent activity tracker keeps the hallucinated call
+      // as currentTool forever (false ⚠️ 疑似卡死 after 120s) and the UI tool
+      // part spins indefinitely.
+      this.emitResult(call, null, result);
       return;
     }
 
@@ -289,7 +295,7 @@ export class StreamingToolExecutor {
     }
   }
 
-  private emitResult(call: ToolCall, tool: Tool, result: PendingResult): void {
+  private emitResult(call: ToolCall, tool: Tool | null, result: PendingResult): void {
     this.emit({
       kind: EventKind.ToolResult,
       tool: {
@@ -298,7 +304,7 @@ export class StreamingToolExecutor {
         args: call.arguments,
         output: result.output,
         err: result.err,
-        read_only: tool.readOnly(),
+        read_only: tool?.readOnly() ?? false,
         truncated: result.truncated,
       },
     });

@@ -1281,7 +1281,15 @@ mod tests {
         let t = tmp.clone();
         let handle = std::thread::spawn(move || e.analyze(&t));
 
-        // Wait for analysis to enter its first stage, then cancel.
+        // Wait until the analysis has actually started (its cancel token is
+        // published at pipeline entry), then cancel mid-pipeline. A blind 50ms
+        // sleep raced thread scheduling: under full-suite load the spawned
+        // thread often hadn't started yet, the token was still None, and the
+        // cancel silently never fired — the pipeline then ran to completion.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while engine.cancel_token.read().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
         if let Some(token) = engine.cancel_token.read().as_ref() {
             token.store(true, Ordering::SeqCst);
@@ -1363,8 +1371,19 @@ mod tests {
         let t1 = tmp.clone();
         let handle = std::thread::spawn(move || e1.analyze(&t1));
 
-        // Brief sleep so first analysis is past init and into pipeline
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Wait until the first analysis has actually started (its cancel token
+        // is published at pipeline entry). A blind 200ms sleep raced thread
+        // scheduling: under full-suite load the first thread sometimes hadn't
+        // started, so the second analyze ran first and was itself cancelled by
+        // the late first one — failing the result2.is_ok() assertion below.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while engine.cancel_token.read().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            engine.cancel_token.read().is_some(),
+            "first analysis never started within 5s"
+        );
 
         // Second analysis — this cancels the first via the token
         let result2 = engine.analyze(&tmp);

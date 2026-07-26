@@ -10,6 +10,14 @@ pub(crate) fn is_actix_candidate(file: &str) -> bool {
     lower.ends_with(".rs")
 }
 
+/// Content gate for Actix detection. `is_actix_candidate` matches every .rs
+/// file and the route attributes (`#[get("/x")]`) share Rocket's identical
+/// spelling, so the dispatcher requires a real actix reference — actual
+/// actix files always import actix_web — before claiming the file (F7).
+pub(crate) fn has_actix_content(source: &str) -> bool {
+    source.contains("actix")
+}
+
 pub(crate) fn detect_actix_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
     let mut parser = tree_sitter::Parser::new();

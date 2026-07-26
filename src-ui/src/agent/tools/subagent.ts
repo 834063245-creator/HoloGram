@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import type { SubAgentPool } from '../coordinator';
+import { getSubAgentActivity, STUCK_THRESHOLD_S } from '../subagent-activity';
 import type { Tool, ToolExecutor } from '../tool';
 import { agentInvoke } from '../tool';
 
@@ -12,8 +13,9 @@ import { agentInvoke } from '../tool';
 // 并行方式：同一轮发多个 agent_spawn 调用（StreamingToolExecutor 并发执行）。
 //
 // 工具集：
-//   - agent_spawn — 阻塞/异步派发子Agent
-//   - agent_kill  — 停止运行中的子Agent（池级单体停止，幂等）
+//   - agent_spawn  — 阻塞/异步派发子Agent
+//   - agent_kill   — 停止运行中的子Agent（池级单体停止，幂等）
+//   - agent_status — 运行中子Agent 状态（当前工具/等待时长/最近事件，标记疑似卡死）
 //
 // 用户侧停止走 ChatPanel.abort → Agent.cascadeAbort → pool.stopAll。
 // ═══════════════════════════════════════════════════════════════
@@ -182,6 +184,51 @@ export function createAgentKillTool(pool: SubAgentPool, isolationExec?: ToolExec
       }
 
       return `子Agent ${agentId} 不存在（可能已完成并清理）`;
+    },
+  };
+}
+
+/** agent_status — 运行中子Agent 的可观测状态（只读）。
+ *  对每个运行中的子Agent 报告：模型可见 id、描述、总耗时、当前正在执行的工具
+ *  （或 null）、该工具已等待秒数（或 null）、距最近一次事件的秒数。
+ *  两个卡死信号：工具等待超过 STUCK_THRESHOLD_S 秒，或超过 STUCK_THRESHOLD_S
+ *  秒无任何事件（长生成会持续流 Text 事件，活跃生成不会误报）——标记
+ *  ⚠️ 疑似卡死，配合 agent_kill 形成「看见 → 杀掉」闭环。
+ *  活动数据来自 subagent-activity.ts 的事件旁路。 */
+export function createAgentStatusTool(pool: SubAgentPool): Tool {
+  return {
+    name: () => 'agent_status',
+    description: () =>
+      'Report the live status of each running sub-agent: id, description, total elapsed time, the tool call currently executing (if any), how long that call has been waiting, and seconds since its last event. ' +
+      'Use this to tell a slow sub-agent apart from a stuck one before deciding to kill it — two signals are flagged as suspected-stuck (⚠️): a tool call waiting over 120s, and no events at all for over 120s (long generations stream text events, so an actively-generating sub-agent will not trip the second one). ' +
+      'Read-only. Combine with agent_kill to stop stuck sub-agents.',
+    parameters: () => ({ type: 'object', properties: {} }),
+    readOnly: () => true,
+    execute: async () => {
+      const running = pool.listRunning();
+      if (running.length === 0) return '当前没有运行中的子Agent。';
+      const now = Date.now();
+      const lines: string[] = [`运行中的子Agent (${running.length} 个):`];
+      for (const h of running) {
+        const elapsedS = Math.max(0, Math.round((now - h.startedAt) / 1000));
+        const act = getSubAgentActivity(h.id);
+        const currentTool = act?.currentTool ?? null;
+        const toolWaitS =
+          currentTool && act?.toolStartedAt != null ? Math.max(0, Math.round((now - act.toolStartedAt) / 1000)) : null;
+        const lastEventS = act ? Math.max(0, Math.round((now - act.lastEventAt) / 1000)) : null;
+        const stuckTool = toolWaitS !== null && toolWaitS > STUCK_THRESHOLD_S;
+        const stuckQuiet = lastEventS !== null && lastEventS > STUCK_THRESHOLD_S;
+        lines.push(`- ${h.id} 「${h.description}」 已运行 ${elapsedS}s`);
+        if (currentTool) {
+          lines.push(`  当前工具: ${currentTool}（已等待 ${toolWaitS ?? 0}s）${stuckTool ? ' ⚠️ 疑似卡死' : ''}`);
+        } else {
+          lines.push('  当前工具: 无（未在执行工具调用）');
+        }
+        lines.push(
+          `  最近事件: ${lastEventS !== null ? `${lastEventS}s 前` : '暂无记录'}${stuckQuiet ? ` ⚠️ 疑似卡死（${STUCK_THRESHOLD_S}s 无事件）` : ''}`,
+        );
+      }
+      return lines.join('\n');
     },
   };
 }

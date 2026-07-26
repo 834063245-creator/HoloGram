@@ -54,7 +54,7 @@ flowchart LR
 | V1 | 节点/边/社区/BFS/路径/diff | `graph/`, `community/` |
 | V2 | L1-L4 耦合、数据流环、线程冲突、盲点 | `analysis/` |
 | V3 | L5-L1 破坏信号、YAML 约束、变更简报 | `routing/` |
-| v4+ | 框架路由(8)、动态调度合成、NL explore | `framework_routes`, `dynamic_dispatch`, `explore` |
+| v4+ | 框架路由(24)、动态调度合成、NL explore | `framework_routes`, `dynamic_dispatch`, `explore` |
 
 ## Agent 操作手册
 
@@ -70,6 +70,7 @@ flowchart LR
 |------|------|
 | `agent_spawn` | 派发子 Agent（fork/fresh 模式，支持异步） |
 | `agent_kill` | 停止运行中的子 Agent（幂等） |
+| `agent_status` | 运行中子 Agent 可观测状态（当前工具/等待时长/最后事件，>120s 标疑似卡死） |
 | `agent_merge` | 合并异步子 Agent 的 worktree |
 | `agent_isolation_create` | 创建隔离 worktree |
 | `agent_isolation_diff` | 查看隔离 worktree 的 diff |
