@@ -47,7 +47,15 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential g++ pkg-config
 
-      - run: cargo test --release
+      - if: runner.os != 'Linux'
+        run: cargo test --release
+        working-directory: engine
+        env:
+          RUSTFLAGS: ''
+      # TEMP-DIAG: ubuntu release 测试二进制首个用例后无声崩溃（预存问题，
+      # 非断言失败）。串行执行让崩溃点=最后一个 ok 之后的用例，定位后回退本步。
+      - if: runner.os == 'Linux'
+        run: cargo test --release -- --test-threads=1
         working-directory: engine
         env:
           RUSTFLAGS: ''
