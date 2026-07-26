@@ -24,6 +24,8 @@ jobs:
             bin: hologram-engine.exe
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      RUSTC_WRAPPER: ''
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,6 +80,8 @@ jobs:
   desktop:
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: ''
     steps:
       - uses: actions/checkout@v4
         with:
