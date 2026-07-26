@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
 
+# analyze 步骤需要上传 SARIF 到 code-scanning API——默认 GITHUB_TOKEN 无权，
+# 显式授权（否则分析成功也挂在 "Resource not accessible by integration"）。
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
 jobs:
   analyze:
     runs-on: ubuntu-latest

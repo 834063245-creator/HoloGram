@@ -33,6 +33,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: -D warnings
+      # 仓库级 .cargo/config.toml 配了 sccache（本地 worktree 共享编译缓存），
+      # CI runner 没装 sccache 会全体暴毙——置空 env 覆盖之（env 优先于 config）。
+      RUSTC_WRAPPER: ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -57,6 +60,8 @@ jobs:
     runs-on: windows-latest
     env:
       RUSTFLAGS: -D warnings
+      # 同 engine job：中和 .cargo/config.toml 的 sccache wrapper
+      RUSTC_WRAPPER: ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
