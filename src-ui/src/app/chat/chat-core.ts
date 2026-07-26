@@ -914,17 +914,21 @@ export class ChatCore {
     const filesSnapshot = [...files];
     this.appendUserBubble(text, filesSnapshot);
 
-    // Build focus context prefix — tells Agent what the user is looking at
+        // Build focus context prefix — tells Agent what the user is looking at.
+    // Consumed once per send, then cleared so stale focus doesn't leak into later turns.
     let focusPrefix = '';
     const focusNode = getChatStore(this.panelId).panel.getState().userFocusNode;
+    const focusFile = getChatStore(this.panelId).panel.getState().userFocusFile;
     if (focusNode) {
       focusPrefix = `[用户当前选中了图中的节点 "${focusNode.name}"`;
       if (focusNode.location) {
         focusPrefix += ` (位于 ${focusNode.location})`;
       }
       focusPrefix += ']\n\n';
-    } else if (getChatStore(this.panelId).panel.getState().userFocusFile) {
-      focusPrefix = `[用户当前正在查看文件 "${getChatStore(this.panelId).panel.getState().userFocusFile}"]\n\n`;
+      getChatStore(this.panelId).panel.setState({ userFocusNode: null });
+    } else if (focusFile) {
+      focusPrefix = `[用户当前正在查看文件 "${focusFile}"]\n\n`;
+      getChatStore(this.panelId).panel.setState({ userFocusFile: null });
     }
 
     // Attached files — expose paths so Agent can read them

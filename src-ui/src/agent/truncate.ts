@@ -314,7 +314,7 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 
 /** Tools whose output should be truncated from the tail (keep end).
  *  Shell commands produce errors/results at the end. */
-const TAIL_TOOLS = new Set(['run_shell', 'bash_output']);
+const TAIL_TOOLS = new Set(['run_shell', 'bash_output', 'bash_wait']);
 
 /** Truncate tool output, choosing head or tail based on the tool name.
  *  Returns the (possibly truncated) content and whether truncation occurred.

@@ -318,8 +318,8 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
     return formatDiffResult(body, args);
   }
 
-  // ── Code: run_shell, bash_output → code block ──
-  if (toolName === 'run_shell' || toolName === 'bash_output') {
+    // ── Code: run_shell, bash_output, bash_wait → code block ──
+  if (toolName === 'run_shell' || toolName === 'bash_output' || toolName === 'bash_wait') {
     return `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`;
   }
   if (toolName === 'search_content') {

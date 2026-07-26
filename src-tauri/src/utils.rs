@@ -178,6 +178,61 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
     Ok(format!("{info}{stdout}{stderr}"))
 }
 
+/// Block until a background job completes (or timeout). Returns full output + exit code.
+/// Unlike read_bg_output (non-blocking snapshot), this waits and then cleans up.
+pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let mut jobs = BG_JOBS.lock().unwrap();
+        let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
+        match job.child.try_wait() {
+            Ok(Some(status)) => {
+                // Drain remaining output
+                if let Some(stdout) = job.child.stdout_reader() {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match stdout.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => { job.stdout_buf.extend_from_slice(&buf[..n]); }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(_) => break,
+                        }
+                    }
+                }
+                if let Some(stderr) = job.child.stderr_reader() {
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match stderr.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => { job.stderr_buf.extend_from_slice(&buf[..n]); }
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                            Err(_) => break,
+                        }
+                    }
+                }
+                let elapsed = job.start_time.elapsed().as_secs();
+                let ec = status.code().unwrap_or(-1);
+                let stdout = String::from_utf8_lossy(&job.stdout_buf).to_string();
+                let stderr = String::from_utf8_lossy(&job.stderr_buf).to_string();
+                jobs.remove(&id);
+                let header = format!("[任务已完成, exit code: {}, 耗时: {}s]\n", ec, elapsed);
+                return Ok(format!("{header}{stdout}{stderr}"));
+            }
+            Ok(None) => {
+                drop(jobs);
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!("等待超时 ({}ms)", timeout_ms));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(e) => {
+                jobs.remove(&id);
+                return Err(format!("检查进程状态失败: {e}"));
+            }
+        }
+    }
+}
+
 pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
     let mut jobs = BG_JOBS.lock().unwrap();
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;

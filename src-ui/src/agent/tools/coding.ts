@@ -316,7 +316,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
     {
       name: () => 'run_shell',
       description: () =>
-        'Execute a shell command and return stdout + stderr. Default timeout 5 min (max 10 min). For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress and bash_kill to stop. Commands run in the project directory by default. IMPORTANT: Do NOT use run_shell for file search, code search, or git operations — use glob (file patterns), search_content (text search), list_directory (directory listing), and the dedicated git_* tools (git_status, git_diff, git_stage, git_commit, git_push, git_pull, git_log, git_checkout, git_create_branch, etc.) instead. run_shell is ONLY for building and testing commands (npm test, cargo build, pytest, etc.).',
+        'Execute a shell command and return stdout + stderr. Default timeout 5 min (max 10 min). For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress, bash_wait to wait for completion, or bash_kill to stop. Commands run in the project directory by default. IMPORTANT: Do NOT use run_shell for file search, code search, or git operations — use glob (file patterns), search_content (text search), list_directory (directory listing), and the dedicated git_* tools (git_status, git_diff, git_stage, git_commit, git_push, git_pull, git_log, git_checkout, git_create_branch, etc.) instead. run_shell is ONLY for building and testing commands (npm test, cargo build, pytest, etc.).',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -336,7 +336,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
           runInBackground: {
             type: 'boolean',
             description:
-              'Set to true to run in background (returns job ID immediately). Use bash_output(id) to check progress, bash_kill(id) to stop.',
+              'Set to true to run in background (returns job ID immediately). Use bash_output(id) to check progress, bash_wait(id) to wait for completion, bash_kill(id) to stop.',
             default: false,
           },
         },
@@ -379,6 +379,27 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
       }),
       readOnly: () => false,
       execute: (args, onProgress) => exec('bash_kill', { jobId: args.jobId }, onProgress),
+    },
+    {
+      name: () => 'bash_wait',
+      description: () =>
+        'Block until a background shell job completes (or timeout), then return full output + exit code. Use after run_shell with runInBackground: true to wait for a long-running task.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          jobId: {
+            type: 'integer',
+            description: 'The job ID returned by run_shell with runInBackground: true',
+          },
+          timeoutMs: {
+            type: 'integer',
+            description: 'Maximum wait time in milliseconds (default: 60000 = 60s, max: 600000 = 10min)',
+          },
+        },
+        required: ['jobId'],
+      }),
+      readOnly: () => true,
+      execute: (args, onProgress) => exec('bash_wait', { jobId: args.jobId, timeoutMs: args.timeoutMs }, onProgress),
     },
 
     // ── Git ──

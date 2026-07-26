@@ -437,10 +437,16 @@ pub(crate) async fn rpc(
                 .ok_or_else(|| "bash_output: missing 'job_id'".to_string())?;
             commands::shell::bash_output(job_id).await
         }
-        "bash_kill" => {
+                "bash_kill" => {
             let job_id = params.get("job_id").and_then(|v| v.as_u64()).map(|n| n as u32)
                 .ok_or_else(|| "bash_kill: missing 'job_id'".to_string())?;
             commands::shell::bash_kill(job_id).await
+        }
+        "bash_wait" => {
+            let job_id = params.get("job_id").and_then(|v| v.as_u64()).map(|n| n as u32)
+                .ok_or_else(|| "bash_wait: missing 'job_id'".to_string())?;
+            let timeout_ms = opt_u64(&params, "timeout_ms");
+            commands::shell::bash_wait(job_id, timeout_ms).await
         }
         "drain_bg_notifications" => {
             commands::shell::drain_bg_notifications().await

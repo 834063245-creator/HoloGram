@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Shell execution: exec_command, bash_output, bash_kill.
+// Shell execution: exec_command, bash_output, bash_wait, bash_kill.
 
 use std::thread;
 use std::time::Duration;
@@ -33,7 +33,7 @@ pub(crate) async fn exec_command(
 
     if is_bg {
         let id = crate::utils::spawn_bg(&command, &physical_dir_str)?;
-        return Ok(format!("[后台任务已启动, ID: {}]\n使用 bash_output({}) 查看输出, bash_kill({}) 终止任务", id, id, id));
+        return Ok(format!("[后台任务已启动, ID: {}]\n使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止任务", id, id, id, id));
     }
 
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000));
@@ -118,8 +118,8 @@ pub(crate) async fn exec_command(
                             match crate::utils::spawn_bg_from_child(child, &label) {
                                 Ok(job_id) => {
                                     let msg = format!(
-                                        "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_kill({}) 终止。",
-                                        timeout_ms_val, job_id, job_id, job_id
+                                        "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止。",
+                                        timeout_ms_val, job_id, job_id, job_id, job_id
                                     );
                                     crate::utils::push_bg_note(&msg);
                                     let _ = app_done.emit("shell:done", serde_json::json!({
@@ -213,8 +213,8 @@ pub(crate) async fn exec_command(
                     let label: String = command.chars().take(80).collect();
                     let job_id = crate::utils::spawn_bg_from_child(child, &label)?;
                     let msg = format!(
-                        "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_kill({}) 终止。",
-                        timeout_ms.unwrap_or(300_000), job_id, job_id, job_id
+                        "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止。",
+                        timeout_ms.unwrap_or(300_000), job_id, job_id, job_id, job_id
                     );
                     crate::utils::push_bg_note(&msg);
                     return Ok(msg);
@@ -237,6 +237,11 @@ pub(crate) async fn bash_output(job_id: u32) -> Result<String, String> {
 #[tauri::command]
 pub(crate) async fn bash_kill(job_id: u32) -> Result<String, String> {
     crate::utils::kill_bg(job_id)
+}
+
+#[tauri::command]
+pub(crate) async fn bash_wait(job_id: u32, timeout_ms: Option<u64>) -> Result<String, String> {
+    crate::utils::wait_bg(job_id, timeout_ms.unwrap_or(60_000))
 }
 
 #[tauri::command]
