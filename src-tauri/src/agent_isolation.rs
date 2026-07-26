@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// Create a git Command with CREATE_NO_WINDOW on Windows (prevents console flash).
 pub(crate) fn git_cmd() -> std::process::Command {
-    let c = std::process::Command::new("git");
+    let mut c = std::process::Command::new("git");
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; c.creation_flags(crate::utils::NO_WINDOW); }
     c
