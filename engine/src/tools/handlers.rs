@@ -4,7 +4,11 @@
 
 //! Tool handler implementations.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use serde_json::{json, Value};
 use crate::analysis::*;
 use crate::community::detect_communities_from_index;
@@ -933,46 +937,225 @@ pub(crate) fn handler_run_health(args: &Value) -> ToolResponse {
     }))
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Rename — two-phase preview/apply with expiry + unified diff
+// ═══════════════════════════════════════════════════════════════
+
+const RENAME_EXPIRY_SECS: u64 = 600; // 10 minutes
+
+struct RenamePlan {
+    old_name: String,
+    new_name: String,
+    matched_ids: Vec<String>,
+    affected_files: Vec<String>,
+    file_snapshots: HashMap<String, String>, // file_path → original content
+}
+
+static PENDING_RENAMES: std::sync::LazyLock<Mutex<HashMap<String, (Instant, RenamePlan)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn refactor_id() -> String {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    // ponytail: timestamp nanos is unique enough for our single-process use case.
+    // No uuid crate — saves a dependency for a 12-character ID.
+    format!("ref_{:016x}", nanos)
+}
+
+fn cleanup_expired_renames(lock: &mut HashMap<String, (Instant, RenamePlan)>) {
+    let now = Instant::now();
+    let expired: Vec<String> = lock
+        .iter()
+        .filter(|(_, (ts, _))| now.duration_since(*ts) >= Duration::from_secs(RENAME_EXPIRY_SECS))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in expired {
+        lock.remove(&k);
+    }
+}
+
+/// Generate a unified-diff preview of the rename across affected files.
+fn generate_rename_diff(plan: &RenamePlan) -> String {
+    let mut output = String::new();
+    let old = &plan.old_name;
+    let new = &plan.new_name;
+
+    for file_path in &plan.affected_files {
+        let original = match plan.file_snapshots.get(file_path) {
+            Some(s) => s,
+            None => continue,
+        };
+        let renamed = original.replace(old, new);
+        if *original == renamed {
+            continue;
+        }
+
+        let orig_lines: Vec<&str> = original.lines().collect();
+        let new_lines: Vec<&str> = renamed.lines().collect();
+
+        output.push_str(&format!("--- a/{}\n", file_path));
+        output.push_str(&format!("+++ b/{}\n", file_path));
+
+        // Collect hunks — simple scan for changed lines with 3-line context
+        let mut hunks: Vec<(usize, usize, usize, usize)> = Vec::new(); // (old_start, old_len, new_start, new_len)
+        let max_len = orig_lines.len().max(new_lines.len());
+        let mut i = 0usize;
+        while i < max_len {
+            let old_line = orig_lines.get(i).copied().unwrap_or("");
+            let new_line = new_lines.get(i).copied().unwrap_or("");
+            if old_line != new_line {
+                let hunk_start = i.saturating_sub(3);
+                let mut hunk_end = i + 1;
+                // Extend forward to capture adjacent changes within 3-line context
+                let mut j = i + 1;
+                while j < max_len && j <= i + 6 {
+                    let ol = orig_lines.get(j).copied().unwrap_or("");
+                    let nl = new_lines.get(j).copied().unwrap_or("");
+                    if ol != nl {
+                        hunk_end = j + 1;
+                    }
+                    j += 1;
+                }
+                hunk_end = (hunk_end + 3).min(max_len);
+                // Ponytail: merge with previous hunk if they overlap
+                if let Some(last) = hunks.last_mut() {
+                    if hunk_start <= last.3 + 3 {
+                        last.3 = hunk_end;
+                        i = hunk_end;
+                        continue;
+                    }
+                }
+                let old_len = (hunk_end - hunk_start).min(orig_lines.len() - hunk_start);
+                let new_len = (hunk_end - hunk_start).min(new_lines.len() - hunk_start);
+                hunks.push((hunk_start + 1, old_len, hunk_start + 1, new_len));
+                i = hunk_end;
+            } else {
+                i += 1;
+            }
+        }
+
+        for (old_start, old_len, new_start, new_len) in &hunks {
+            output.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                old_start, old_len, new_start, new_len
+            ));
+            let ctx_start = old_start.saturating_sub(1);
+            let ctx_end = (old_start + old_len - 1).min(orig_lines.len());
+            // Show context before
+            for li in ctx_start..(*old_start - 1) {
+                if let Some(l) = orig_lines.get(li) {
+                    output.push_str(&format!(" {}\n", l));
+                }
+            }
+            // Show changed lines
+            for li in (*old_start - 1)..ctx_end {
+                let orig = orig_lines.get(li).copied().unwrap_or("");
+                let renamed_line = new_lines.get(li).copied().unwrap_or("");
+                if orig != renamed_line {
+                    if !orig.is_empty() || !renamed_line.is_empty() {
+                        output.push_str(&format!("-{}\n", orig));
+                    }
+                    if !renamed_line.is_empty() || !orig.is_empty() {
+                        output.push_str(&format!("+{}\n", renamed_line));
+                    }
+                } else {
+                    output.push_str(&format!(" {}\n", orig));
+                }
+            }
+            // Show context after
+            for li in ctx_end..(ctx_end + 3).min(orig_lines.len()) {
+                if let Some(l) = orig_lines.get(li) {
+                    output.push_str(&format!(" {}\n", l));
+                }
+            }
+        }
+    }
+    output
+}
+
 pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
     let old_name = args.get("old_name").or_else(|| args.get("oldName")).and_then(|v| v.as_str()).unwrap_or("");
     let new_name = args.get("new_name").or_else(|| args.get("newName")).and_then(|v| v.as_str()).unwrap_or("");
-    let dry_run = args.get("dry_run").or_else(|| args.get("dryRun")).and_then(|v| v.as_bool()).unwrap_or(false);
-    let _node_id = args.get("node_id").or_else(|| args.get("nodeId")).and_then(|v| v.as_str());
+    let dry_run = args.get("dry_run").or_else(|| args.get("dryRun")).and_then(|v| v.as_bool()).unwrap_or(true);
+    let ref_id = args.get("refactor_id").or_else(|| args.get("refactorId")).and_then(|v| v.as_str());
+
+    // ── Phase 2: apply by refactor_id ──
+    if let Some(rid) = ref_id {
+        let mut lock = PENDING_RENAMES.lock().unwrap();
+        cleanup_expired_renames(&mut lock);
+        let plan = match lock.remove(rid) {
+            Some((_, plan)) => plan,
+            None => {
+                return ToolResponse::Degraded {
+                    guidance: format!("Refactor ID '{}' not found or expired ({}s TTL)", rid, RENAME_EXPIRY_SECS),
+                    fallback: "Run rename with dry_run=true to create a new preview".into(),
+                    details: json!({}),
+                };
+            }
+        };
+        // Execute the actual rename
+        let count = plan.matched_ids.len();
+        let matched_ids = plan.matched_ids;
+        if let Err(e) = engine::engine_write(|idx| {
+            for nid in &matched_ids {
+                idx.rename_node_name(nid, &plan.new_name);
+            }
+        }) {
+            return ToolResponse::Degraded {
+                guidance: e,
+                fallback: "Engine write failed, retry once".into(),
+                details: json!({}),
+            };
+        }
+        if let Err(e) = engine::engine_save() {
+            tracing::warn!("engine_save failed after rename: {e}");
+            return ToolResponse::Degraded {
+                guidance: format!("Rename succeeded in memory but failed to persist: {e}"),
+                fallback: "Retry the operation or save manually".into(),
+                details: json!({"renamed_count": count, "renamed_ids": matched_ids}),
+            };
+        }
+        return ToolResponse::Success(json!({
+            "phase": "applied",
+            "old_name": plan.old_name,
+            "new_name": plan.new_name,
+            "renamed_count": count,
+            "renamed_ids": matched_ids,
+            "note": "Rename applied to graph and persisted to storage.",
+        }));
+    }
+
+    // ── Phase 1: dry_run preview (default) ──
     if old_name.is_empty() || new_name.is_empty() {
         return ToolResponse::Degraded {
-            guidance: "old_name and new_name are required".into(),
+            guidance: "old_name and new_name are required for preview".into(),
             fallback: "Provide both the old and new symbol names".into(),
             details: json!({}),
         };
     }
-    if dry_run {
-        return ToolResponse::Success(with_graph(|g| {
-            let matched: Vec<_> = g.nodes.values().filter(|n| n.name == old_name).collect();
-            if matched.is_empty() {
-                return json!({"error": format!("No nodes match '{}'", old_name)});
-            }
-            json!({
-                "dry_run": true,
-                "old_name": old_name,
-                "new_name": new_name,
-                "matched_count": matched.len(),
-                "matched_nodes": matched.iter().map(|n| node_to_value(n)).collect::<Vec<_>>(),
-                "files_to_modify": matched.iter().filter_map(|n| n.location.clone()).collect::<Vec<_>>(),
-                "message": format!("Dry run: {} nodes would be renamed from '{}' to '{}'. Execute with dry_run=false to commit.", matched.len(), old_name, new_name),
-            })
-        }));
+
+    if !dry_run && ref_id.is_none() {
+        return ToolResponse::Degraded {
+            guidance: "To apply a rename, first run with dry_run=true (or omit dry_run) to preview, then pass the returned refactor_id with dry_run=false.".into(),
+            fallback: "Run rename_symbol(old_name, new_name, dry_run=true) first".into(),
+            details: json!({}),
+        };
     }
-    let (matched_ids, count) = {
+
+    // dry_run: preview with unified diff
+    let (matched_ids, matched_locations): (Vec<String>, Vec<String>) = {
         match engine::engine_read(|idx| {
             let ids: Vec<String> = idx.nodes_iter().filter(|n| n.name == old_name).map(|n| n.id.clone()).collect();
-            (ids.len(), ids)
+            let locs: Vec<String> = idx.nodes_iter()
+                .filter(|n| n.name == old_name)
+                .filter_map(|n| n.location.clone())
+                .collect();
+            (ids, locs)
         }) {
-            Ok((0, _)) => return ToolResponse::Degraded {
-                guidance: format!("No nodes match '{}'", old_name),
-                fallback: "Use search_symbols to find the correct symbol name".into(),
-                details: json!({}),
-            },
-            Ok((cnt, ids)) => (ids, cnt),
+            Ok((ids, locs)) => (ids, locs),
             Err(e) => return ToolResponse::Degraded {
                 guidance: e,
                 fallback: "Engine read failed, retry once".into(),
@@ -980,33 +1163,70 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
             },
         }
     };
-    if let Err(e) = engine::engine_write(|idx| {
-        for nid in &matched_ids {
-            idx.rename_node_name(nid, new_name);
-        }
-    }) {
+
+    if matched_ids.is_empty() {
         return ToolResponse::Degraded {
-            guidance: e,
-            fallback: "Engine write failed, retry once".into(),
+            guidance: format!("No nodes match '{}'", old_name),
+            fallback: "Use search_symbols to find the correct symbol name".into(),
             details: json!({}),
         };
     }
-    let save_result = engine::engine_save();
-    if let Err(e) = save_result {
-        tracing::warn!("engine_save failed after rename: {e}");
-        return ToolResponse::Degraded {
-            guidance: format!("Rename succeeded in memory but failed to persist: {e}"),
-            fallback: "Retry the operation or save manually".into(),
-            details: json!({"renamed_count": count, "renamed_ids": matched_ids}),
+
+    // Snapshot affected files for diff generation
+    let mut file_snapshots: HashMap<String, String> = HashMap::new();
+    let mut seen_files: Vec<String> = Vec::new();
+    for loc in &matched_locations {
+        let file_path = if let Some(pos) = loc.rfind(':') {
+            let maybe_line = &loc[pos + 1..];
+            if maybe_line.chars().all(|c| c.is_ascii_digit()) {
+                &loc[..pos]
+            } else {
+                loc.as_str()
+            }
+        } else {
+            loc.as_str()
         };
+        if !seen_files.iter().any(|f| f == file_path) {
+            seen_files.push(file_path.to_string());
+            // Read file content from disk
+            let full_path = project_root().join(file_path);
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                file_snapshots.insert(file_path.to_string(), content);
+            }
+        }
     }
+
+    let rid = refactor_id();
+    let plan = RenamePlan {
+        old_name: old_name.to_string(),
+        new_name: new_name.to_string(),
+        matched_ids: matched_ids.clone(),
+        affected_files: seen_files.clone(),
+        file_snapshots,
+    };
+    let diff = generate_rename_diff(&plan);
+
+    // Store plan for later apply
+    {
+        let mut lock = PENDING_RENAMES.lock().unwrap();
+        cleanup_expired_renames(&mut lock);
+        lock.insert(rid.clone(), (Instant::now(), plan));
+    }
+
     ToolResponse::Success(json!({
-        "dry_run": false,
+        "phase": "preview",
+        "refactor_id": rid,
         "old_name": old_name,
         "new_name": new_name,
-        "renamed_count": count,
-        "renamed_ids": matched_ids,
-        "note": "Rename applied to graph and persisted to storage.",
+        "matched_count": matched_ids.len(),
+        "matched_ids": matched_ids,
+        "affected_files": seen_files,
+        "diff": diff,
+        "expires_in_secs": RENAME_EXPIRY_SECS,
+        "message": format!(
+            "Preview: {} nodes in {} files would be renamed. Apply with rename_symbol(refactor_id=\"{}\", dry_run=false). Preview expires in {}s.",
+            matched_ids.len(), seen_files.len(), rid, RENAME_EXPIRY_SECS,
+        ),
     }))
 }
 
@@ -1179,7 +1399,7 @@ fn is_entry_point(node: &Node) -> bool {
         return true;
     }
     // Test functions (dynamically discovered by test frameworks)
-    if name.starts_with("test_") {
+    if name.starts_with("test_") || name.ends_with("_test") || name.ends_with("Test") {
         return true;
     }
     // Tauri command dispatcher (registered via #[command] macro)
@@ -1202,7 +1422,71 @@ fn is_entry_point(node: &Node) -> bool {
     if name == "init" && node.out_degree > 3 {
         return true;
     }
+    // ponytail: common entry-point name patterns across languages.
+    // These functions are invoked by framework/CLI/test runners,
+    // not by direct CALLS edges — static analysis can't see them.
+    const ENTRY_PATTERNS: &[&str] = &[
+        "handle", "process", "run", "start", "stop", "serve",
+        "migrate", "setup", "teardown", "bootstrap", "execute",
+        "configure", "initialize", "load",
+    ];
+    let name_lower = name.to_lowercase();
+    for pat in ENTRY_PATTERNS {
+        if name_lower.starts_with(pat) || name_lower.ends_with(pat) {
+            return true;
+        }
+    }
     false
+}
+
+/// Check whether a node name looks like a mock/stub test fixture.
+/// These are referenced by test framework wiring, not direct CALLS edges.
+fn is_mock_or_stub(name: &str) -> bool {
+    // mockSomething, MockXxx, createMockXxx
+    if name.starts_with("mock") || name.starts_with("Mock") || name.starts_with("createMock") {
+        return true;
+    }
+    // somethingMock, dbStub, s3Fake, userSpy
+    for suffix in &["Mock", "Stub", "Fake", "Spy"] {
+        if name.ends_with(suffix) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Framework base classes that are instantiated via metaclass/DI/framework magic,
+/// not by direct CALLS edges. Inheriting from one of these means the class is
+/// framework-managed — not dead code.
+fn is_framework_base(name: &str) -> bool {
+    matches!(
+        name,
+        // Python ORM / Pydantic
+        "Base" | "DeclarativeBase" | "Model" | "BaseModel" | "BaseSettings"
+        | "db.Model" | "TableBase"
+        // AWS CDK / IaC constructs
+        | "Stack" | "NestedStack" | "Construct" | "Resource"
+        // Django REST / DRF
+        | "Serializer" | "ViewSet" | "ModelViewSet"
+        // Android / mobile
+        | "Activity" | "Fragment" | "ViewModel" | "Service"
+        // Spring / Java EE
+        | "Application" | "Configuration"
+    )
+}
+
+/// React/Vue/Android lifecycle methods — called by the framework,
+/// never by direct CALLS edges.
+fn is_lifecycle_method(name: &str) -> bool {
+    matches!(
+        name,
+        "render" | "componentDidMount" | "componentWillUnmount" | "componentDidUpdate"
+        | "shouldComponentUpdate" | "getDerivedStateFromProps" | "getSnapshotBeforeUpdate"
+        | "mounted" | "created" | "destroyed" | "beforeMount" | "beforeDestroy"
+        | "updated" | "activated" | "deactivated"
+        | "onCreate" | "onDestroy" | "onStart" | "onStop" | "onResume" | "onPause"
+        | "ngOnInit" | "ngOnDestroy" | "ngOnChanges" | "ngAfterViewInit"
+    )
 }
 
 pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
@@ -1218,13 +1502,18 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
         // Every function has ≥1 defines edge from its parent module, so in_degree==0
         // never matches functions — only orphan symbols. in_degree≤1 catches functions
         // whose sole incoming edge is their own defines (nobody calls/imports them).
-        // False positives possible for event handlers / callback registrations.
+        // Exclusions: entry points (framework/CLI), mocks/stubs (test wiring),
+        // framework base classes (ORM/Pydantic/CDK — instantiated via metaclass magic),
+        // and lifecycle methods (React/Vue/Android — called by framework runtime).
         let mut candidates: Vec<&Node> = idx
             .nodes_iter()
             .filter(|n| {
                 n.in_degree <= 1
                     && kinds.iter().any(|k| n.kind.as_str() == *k)
                     && !is_entry_point(n)
+                    && !is_mock_or_stub(&n.name)
+                    && !is_framework_base(&n.name)
+                    && !is_lifecycle_method(&n.name)
             })
             .collect();
         candidates.sort_by_key(|n| std::cmp::Reverse(n.out_degree));
@@ -1532,4 +1821,294 @@ pub(crate) fn handler_dataflow(args: &Value) -> ToolResponse {
         })
         .collect();
     ToolResponse::Success(json!({"results": json_results}))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Flow tools: list_flows, get_flow, get_affected_flows
+// ═══════════════════════════════════════════════════════════════
+
+pub(crate) fn handler_list_flows(args: &Value) -> ToolResponse {
+    let limit = get_usize(args, "limit", 50).min(200);
+    let sort_by = args
+        .get("sort_by")
+        .and_then(|v| v.as_str())
+        .unwrap_or("criticality");
+    let kind_filter = args.get("kind_filter").and_then(|v| v.as_str());
+    let detail_level = args
+        .get("detail_level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("standard");
+
+    ToolResponse::Success(with_store(|idx| {
+        let mut flows: Vec<serde_json::Value> = idx
+            .nodes_iter()
+            .filter_map(|n| {
+                let flow = n.properties.get("flow")?;
+                let id = flow.get("id")?.as_u64()?;
+                let entry_kind = n.properties.get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // Apply kind filter
+                if let Some(kf) = kind_filter {
+                    // Map display kind to internal kind
+                    let matches = match kf {
+                        "framework_route" => entry_kind == "route",
+                        "naming_convention" => n.name == "main" || n.name.starts_with("handle"),
+                        _ => true,
+                    };
+                    if !matches {
+                        return None;
+                    }
+                }
+
+                let name = if let (Some(fw), Some(k)) = (
+                    flow.get("framework").and_then(|v| v.as_str()),
+                    n.properties.get("kind").and_then(|v| v.as_str()),
+                ) {
+                    if k == "route" {
+                        format!("[{}] {}", fw, n.name)
+                    } else {
+                        n.name.clone()
+                    }
+                } else {
+                    n.name.clone()
+                };
+
+                let criticality = flow.get("criticality").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let depth = flow.get("depth").and_then(|v| v.as_u64()).unwrap_or(0);
+                let node_count = flow.get("node_count").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                Some(json!({
+                    "id": id,
+                    "name": name,
+                    "entry_point_id": n.id,
+                    "entry_kind": if entry_kind == "route" { "framework_route" } else { "naming_convention" },
+                    "criticality": criticality,
+                    "depth": depth,
+                    "node_count": node_count,
+                    "file_count": flow.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0),
+                    "l4_count": flow.get("l4_count").and_then(|v| v.as_u64()).unwrap_or(0),
+                }))
+            })
+            .collect();
+
+        // Sort
+        flows.sort_by(|a, b| {
+            match sort_by {
+                "depth" => b["depth"].as_u64().cmp(&a["depth"].as_u64()),
+                "node_count" => b["node_count"].as_u64().cmp(&a["node_count"].as_u64()),
+                "file_count" => b["file_count"].as_u64().cmp(&a["file_count"].as_u64()),
+                "name" => a["name"].as_str().cmp(&b["name"].as_str()),
+                _ => b["criticality"].as_f64().unwrap_or(0.0)
+                    .partial_cmp(&a["criticality"].as_f64().unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            }
+        });
+
+        let total = flows.len();
+        flows.truncate(limit);
+
+        let items: Vec<serde_json::Value> = if detail_level == "minimal" {
+            flows.iter().map(|f| json!({
+                "id": f["id"],
+                "name": f["name"],
+                "criticality": f["criticality"],
+                "node_count": f["node_count"],
+            })).collect()
+        } else {
+            flows
+        };
+
+        json!({
+            "flows": items,
+            "total": total,
+            "limit": limit,
+            "sort_by": sort_by,
+        })
+    }))
+}
+
+pub(crate) fn handler_get_flow(args: &Value) -> ToolResponse {
+    let flow_id = args.get("flow_id").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let flow_name = args.get("flow_name").and_then(|v| v.as_str()).map(|s| s.to_lowercase());
+    let include_source = args.get("include_source").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    ToolResponse::Success(with_store(|idx| {
+        // Find the entry point node with matching flow
+        let entry: Option<(&crate::graph::Node, &serde_json::Value)> = idx
+            .nodes_iter()
+            .find_map(|n| {
+                let flow = n.properties.get("flow")?;
+                if let Some(fid) = flow_id {
+                    if flow.get("id")?.as_u64()? == fid as u64 {
+                        return Some((n, flow));
+                    }
+                } else if let Some(ref name) = flow_name {
+                    if n.name.to_lowercase().contains(name) {
+                        return Some((n, flow));
+                    }
+                }
+                None
+            });
+
+        let (node, flow) = match entry {
+            Some(e) => e,
+            None => {
+                let msg = if let Some(fid) = flow_id {
+                    format!("Flow #{} not found", fid)
+                } else if let Some(ref name) = flow_name {
+                    format!("No flow matching '{}' found", name)
+                } else {
+                    "Provide flow_id or flow_name".into()
+                };
+                return json!({"error": msg});
+            }
+        };
+
+        let node_ids: Vec<String> = flow
+            .get("node_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        // Build the flow path with node details
+        let path: Vec<serde_json::Value> = node_ids
+            .iter()
+            .filter_map(|nid| {
+                let n = idx.get_node(nid)?;
+                let mut step = json!({
+                    "node_id": n.id,
+                    "name": n.name,
+                    "kind": n.kind.as_str(),
+                    "location": n.location,
+                });
+                if include_source {
+                    if let Some(loc) = &n.location {
+                        let file = if let Some(pos) = loc.rfind(':') {
+                            &loc[..pos]
+                        } else {
+                            loc
+                        };
+                        let full = project_root().join(file);
+                        if let Ok(content) = std::fs::read_to_string(&full) {
+                            step["source_snippet"] = json!(content.lines().take(50).collect::<Vec<_>>().join("\n"));
+                        }
+                    }
+                }
+                Some(step)
+            })
+            .collect();
+
+        json!({
+            "flow": {
+                "id": flow.get("id"),
+                "name": node.name,
+                "entry_point_id": node.id,
+                "criticality": flow.get("criticality"),
+                "depth": flow.get("depth"),
+                "node_count": flow.get("node_count"),
+                "file_count": flow.get("file_count"),
+                "l4_count": flow.get("l4_count"),
+                "cross_community": flow.get("cross_community"),
+                "path": path,
+            }
+        })
+    }))
+}
+
+pub(crate) fn handler_affected_flows(args: &Value) -> ToolResponse {
+    let files: Vec<String> = args
+        .get("files")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let changed_node_ids: Vec<String> = args
+        .get("changed_nodes")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if files.is_empty() && changed_node_ids.is_empty() {
+        return ToolResponse::Degraded {
+            guidance: "files or changed_nodes is required".into(),
+            fallback: "Pass the list of changed file paths or node IDs".into(),
+            details: json!({}),
+        };
+    }
+
+    ToolResponse::Success(with_store(|idx| {
+        // Build set of nodes that belong to changed files
+        let mut changed_set: HashSet<String> = changed_node_ids.into_iter().collect();
+        for file_path in &files {
+            for n in idx.nodes_iter() {
+                if let Some(loc) = &n.location {
+                    let node_file = if let Some(pos) = loc.rfind(':') {
+                        &loc[..pos]
+                    } else {
+                        loc
+                    };
+                    if node_file == file_path || loc.ends_with(file_path) {
+                        changed_set.insert(n.id.clone());
+                    }
+                }
+            }
+        }
+
+        let mut affected: Vec<serde_json::Value> = idx
+            .nodes_iter()
+            .filter_map(|n| {
+                let flow = n.properties.get("flow")?;
+                let node_ids: Vec<&str> = flow
+                    .get("node_ids")
+                    .and_then(|v| v.as_array())?
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect();
+
+                let affected_nodes: Vec<&str> = node_ids
+                    .iter()
+                    .filter(|nid| changed_set.contains(**nid))
+                    .copied()
+                    .collect();
+
+                if affected_nodes.is_empty() {
+                    return None;
+                }
+
+                let impact_ratio = affected_nodes.len() as f64 / node_ids.len().max(1) as f64;
+                Some(json!({
+                    "flow_id": flow.get("id"),
+                    "flow_name": n.name,
+                    "entry_point_id": n.id,
+                    "criticality": flow.get("criticality"),
+                    "affected_nodes": affected_nodes,
+                    "total_nodes": node_ids.len(),
+                    "impact_ratio": (impact_ratio * 100.0).round() / 100.0,
+                }))
+            })
+            .collect();
+
+        // Sort by criticality descending
+        affected.sort_by(|a, b| {
+            b["criticality"].as_f64().unwrap_or(0.0)
+                .partial_cmp(&a["criticality"].as_f64().unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        json!({
+            "changed_files": files,
+            "affected_flows": affected,
+            "total": affected.len(),
+        })
+    }))
 }

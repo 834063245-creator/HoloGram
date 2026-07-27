@@ -33,6 +33,20 @@ pub enum ToolResponse {
 }
 
 impl ToolResponse {
+    /// Attach next-tool suggestions to a Success response.
+    /// Degraded/Fault/Refused pass through unchanged.
+    pub fn with_suggestions(self, suggestions: &[&'static str]) -> Self {
+        match self {
+            Self::Success(mut data) => {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("next_tool_suggestions".into(), json!(suggestions));
+                }
+                Self::Success(data)
+            }
+            other => other,
+        }
+    }
+
     /// Convert to a JSON-RPC result or error Value.
     pub fn to_mcp_value(&self, id: &Value) -> Value {
         match self {

@@ -99,6 +99,9 @@ impl ToolRegistry {
         "check_boundaries",
         "find_unused",
         "trace_dataflow",
+        "list_flows",
+        "get_flow",
+        "get_affected_flows",
         "resolve_call",
         "infer_type",
         "find_implementations",
@@ -152,6 +155,9 @@ impl ToolRegistry {
             "engine_status" => handlers::handler_status(args),
             "check_boundaries" => handlers::handler_policy_check(args),
             "find_unused" => handlers::handler_unused(args),
+            "list_flows" => handlers::handler_list_flows(args),
+            "get_flow" => handlers::handler_get_flow(args),
+            "get_affected_flows" => handlers::handler_affected_flows(args),
             "trace_dataflow" => handlers::handler_dataflow(args),
             "resolve_call" => handlers::handler_resolve_call(args),
             "infer_type" => handlers::handler_resolve_type(args),
@@ -163,7 +169,63 @@ impl ToolRegistry {
                 details: json!({}),
             }.to_mcp_value(id),
         };
-        resp.to_mcp_value(id)
+        // ponytail: inject next-tool suggestions at the dispatch layer
+        // so every handler gets them for free — no per-handler boilerplate.
+        resp.with_suggestions(suggestions_for(name)).to_mcp_value(id)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Next-tool suggestions — static lookup, injected by dispatch().
+// ═══════════════════════════════════════════════════════════════
+
+fn suggestions_for(name: &str) -> &'static [&'static str] {
+    match name {
+        // ── Graph navigation ──
+        "search_symbols" => &["get_neighbors", "inspect_symbol", "trace_impact"],
+        "get_neighbors" => &["trace_impact", "find_dep_path", "inspect_symbol"],
+        "trace_impact" => &["find_dep_path", "preflight_check", "coupling_report"],
+        "find_dep_path" => &["trace_impact", "inspect_symbol", "get_neighbors"],
+        "inspect_symbol" | "symbol_history" => {
+            &["trace_impact", "coupling_report", "get_community"]
+        }
+        "explore_deps" => &["trace_impact", "inspect_symbol", "get_neighbors"],
+        // ── Community ──
+        "get_community" => &["cluster_report", "coupling_report", "trace_impact"],
+        "cluster_report" => &["get_community", "coupling_report", "arch_blindspots"],
+        // ── Analysis ──
+        "fragile_modules" => &["coupling_report", "arch_blindspots", "trace_impact"],
+        "detect_cycles" => &["arch_blindspots", "coupling_report", "fragile_modules"],
+        "thread_conflicts" => &["trace_dataflow", "arch_blindspots", "preflight_check"],
+        "coupling_report" => &["fragile_modules", "detect_cycles", "arch_blindspots"],
+        "arch_blindspots" => &["preflight_check", "coupling_report", "thread_conflicts"],
+        "check_boundaries" => &["preflight_check", "arch_blindspots", "coupling_report"],
+        // ── Dataflow ──
+        "trace_dataflow" => &["thread_conflicts", "preflight_check", "async_edges"],
+        "async_edges" => &["trace_dataflow", "coupling_report", "detect_cycles"],
+        // ── Dead code / refactor ──
+        "find_unused" => &["inspect_symbol", "trace_impact", "rename_symbol"],
+        "rename_symbol" => &["search_symbols", "preflight_check", "trace_impact"],
+        // ── Preflight ──
+        "preflight_check" => &["trace_impact", "trace_dataflow", "check_boundaries"],
+        // ── LSP ──
+        "resolve_call" => &["find_implementations", "infer_type", "find_references"],
+        "infer_type" => &["resolve_call", "find_references", "find_implementations"],
+        "find_implementations" => &["resolve_call", "infer_type", "trace_impact"],
+        "find_references" => &["trace_impact", "inspect_symbol", "preflight_check"],
+        // ── Operations ──
+        "graph_summary" => &["cluster_report", "fragile_modules", "detect_cycles"],
+        "graph_diff" => &["trace_impact", "inspect_symbol", "engine_status"],
+        "analyze_project" => &["engine_status", "graph_summary", "cluster_report"],
+        "validate_project" => &["arch_blindspots", "check_boundaries", "graph_diff"],
+        "project_health" => &["fragile_modules", "arch_blindspots", "project_timeline"],
+        "project_timeline" => &["inspect_symbol", "graph_diff", "project_health"],
+        "engine_status" => &["graph_summary", "analyze_project", "search_symbols"],
+        // ── Flows ──
+        "list_flows" => &["get_flow", "get_affected_flows", "trace_impact"],
+        "get_flow" => &["trace_impact", "inspect_symbol", "preflight_check"],
+        "get_affected_flows" => &["get_flow", "preflight_check", "detect_cycles"],
+        _ => &[],
     }
 }
 
@@ -545,6 +607,43 @@ fn all_schemas() -> &'static [ToolSchema] {
             params: &[
                 p!("limit", "integer", "Max results (default 20, max 200)"),
                 p!("kind_filter", "string", "Node kinds to include, comma-separated. Default: \"function,class\". Options: symbol, function, class, module, interface, medium, temporal."),
+            ],
+            required: &[],
+            read_only: true,
+            category: "analysis",
+        },
+        // ── Flow detection ──
+        ToolSchema {
+            name: "list_flows",
+            description: "List execution flows in the codebase, sorted by criticality. Each flow is a full call chain from an entry point (framework route, main function, CLI command) through all its callees. \"这个项目的核心业务流程是什么？\" \"哪些调用链最关键？\" → this. Follow up with get_flow to drill into a specific flow.",
+            params: &[
+                p!("sort_by", "string", "Sort: criticality (default), depth, node_count, file_count, name"),
+                p!("limit", "integer", "Max flows (default 50, max 200)"),
+                p!("kind_filter", "string", "Entry kind filter: framework_route, naming_convention, orphan_entry"),
+                p!("detail_level", "string", "standard (default) or minimal (name + criticality only)"),
+            ],
+            required: &[],
+            read_only: true,
+            category: "analysis",
+        },
+        ToolSchema {
+            name: "get_flow",
+            description: "Get the full call path of a single execution flow. Returns every step (function name, file, line) from entry point to deepest callee. Use after list_flows to drill into a critical flow. \"这个登录流程具体经过哪些函数？\" → this with the flow id or name.",
+            params: &[
+                p!("flow_id", "number", "Flow ID from list_flows"),
+                p!("flow_name", "string", "Flow name to search (partial match) — ignored if flow_id given"),
+                p!("include_source", "boolean", "Include source snippets for each step (default false)"),
+            ],
+            required: &[],
+            read_only: true,
+            category: "analysis",
+        },
+        ToolSchema {
+            name: "get_affected_flows",
+            description: "Find execution flows that pass through changed files. Maps your code changes to the user-facing or critical paths they impact. \"我改了 auth.js，会影响哪些业务流程？\" → this. Use before merging to understand downstream impact.",
+            params: &[
+                p!("files", "array", "Changed file paths, e.g. [\"src/auth.py\", \"src/db.py\"]"),
+                p!("changed_nodes", "array", "Specific node IDs to check (optional — uses files if omitted)"),
             ],
             required: &[],
             read_only: true,

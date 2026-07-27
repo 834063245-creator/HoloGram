@@ -16,6 +16,7 @@ use crate::analysis::di_reflection::{
 use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
 use crate::analysis::dynamic_dispatch_react::synthesize_react_edges;
 use crate::analysis::dynamic_dispatch_vue::synthesize_vue_edges;
+use crate::analysis::flows::detect_all_flows;
 use crate::analysis::framework_routes::detect_framework_routes;
 use crate::community::detect_communities_and_hierarchy;
 use crate::graph::resolver::CrossFileResolver;
@@ -292,6 +293,21 @@ impl Engine {
                 }
             }
         }
+
+        // 7.6. Execution flow detection
+        // Entry points from framework routes + naming conventions → BFS forward
+        // through CALLS edges → criticality scoring → persisted as node properties.
+        set_progress("执行流检测", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let flows = detect_all_flows(&mut result);
+        let flow_elapsed = stage_start.elapsed().as_secs_f64();
+        eprintln!("[engine] stage: flows done in {:.1}s ({} flows)",
+            flow_elapsed, flows.len());
+        stage_timings.push(StageTiming {
+            name: "Flow Detection".into(),
+            elapsed_secs: flow_elapsed,
+            detail: format!("{} flows", flows.len()),
+        });
 
         // 7.5. Build semantic vector index (fire-and-forget in background)
         // ponytail: uses nodes with snippets populated in step 5.9.
