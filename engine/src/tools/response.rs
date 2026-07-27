@@ -33,8 +33,8 @@ pub enum ToolResponse {
 }
 
 impl ToolResponse {
-    /// Attach next-tool suggestions to a Success response.
-    /// Degraded/Fault/Refused pass through unchanged.
+    /// Attach next-tool suggestions to Success and Degraded responses.
+    /// Fault/Refused pass through unchanged.
     pub fn with_suggestions(self, suggestions: &[&'static str]) -> Self {
         match self {
             Self::Success(mut data) => {
@@ -42,6 +42,12 @@ impl ToolResponse {
                     obj.insert("next_tool_suggestions".into(), json!(suggestions));
                 }
                 Self::Success(data)
+            }
+            Self::Degraded { guidance, fallback, mut details } => {
+                if let Some(obj) = details.as_object_mut() {
+                    obj.insert("next_tool_suggestions".into(), json!(suggestions));
+                }
+                Self::Degraded { guidance, fallback, details }
             }
             other => other,
         }

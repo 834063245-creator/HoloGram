@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -943,6 +944,8 @@ pub(crate) fn handler_run_health(args: &Value) -> ToolResponse {
 
 const RENAME_EXPIRY_SECS: u64 = 600; // 10 minutes
 
+static REFACTOR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 struct RenamePlan {
     old_name: String,
     new_name: String,
@@ -955,14 +958,13 @@ static PENDING_RENAMES: std::sync::LazyLock<Mutex<HashMap<String, (Instant, Rena
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn refactor_id() -> String {
-    use std::time::SystemTime;
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+    let seq = REFACTOR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    // ponytail: timestamp nanos is unique enough for our single-process use case.
-    // No uuid crate — saves a dependency for a 12-character ID.
-    format!("ref_{:016x}", nanos)
+    // Atomic counter + timestamp: collision-free under concurrent calls.
+    format!("ref_{:012x}_{:04x}", nanos, seq & 0xFFFF)
 }
 
 fn cleanup_expired_renames(lock: &mut HashMap<String, (Instant, RenamePlan)>) {
@@ -1084,7 +1086,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
 
     // ── Phase 2: apply by refactor_id ──
     if let Some(rid) = ref_id {
-        let mut lock = PENDING_RENAMES.lock().unwrap();
+        let mut lock = PENDING_RENAMES.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_expired_renames(&mut lock);
         let plan = match lock.remove(rid) {
             Some((_, plan)) => plan,
@@ -1208,7 +1210,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
 
     // Store plan for later apply
     {
-        let mut lock = PENDING_RENAMES.lock().unwrap();
+        let mut lock = PENDING_RENAMES.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_expired_renames(&mut lock);
         lock.insert(rid.clone(), (Instant::now(), plan));
     }
@@ -1375,20 +1377,23 @@ pub(crate) fn handler_node(args: &Value) -> ToolResponse {
 
 /// Check whether a node is a known entry point that static analysis can't see
 /// (framework-registered commands, constructors, test functions, etc.).
+
+/// Strip the trailing `:line_number` suffix from a location string.
+/// Handles Windows drive-letter paths (e.g. `C:\foo\bar.rs:42` → `C:\foo\bar.rs`).
+fn strip_loc_suffix(loc: &str) -> &str {
+    if let Some(pos) = loc.rfind(':') {
+        let maybe_line = &loc[pos + 1..];
+        if maybe_line.chars().all(|c| c.is_ascii_digit()) {
+            return &loc[..pos];
+        }
+    }
+    loc
+}
+
 fn is_entry_point(node: &Node) -> bool {
     let name = &node.name;
     let raw_loc = node.location.as_deref().unwrap_or("");
-    // Strip trailing ":line_number" suffix (e.g. ".../App.tsx:21")
-    let loc = if let Some(pos) = raw_loc.rfind(':') {
-        let maybe_line = &raw_loc[pos + 1..];
-        if maybe_line.chars().all(|c| c.is_ascii_digit()) {
-            &raw_loc[..pos]
-        } else {
-            raw_loc
-        }
-    } else {
-        raw_loc
-    };
+    let loc = strip_loc_suffix(raw_loc);
 
     // Binary entry points (main in any language)
     if name == "main" {
@@ -1845,29 +1850,21 @@ pub(crate) fn handler_list_flows(args: &Value) -> ToolResponse {
             .filter_map(|n| {
                 let flow = n.properties.get("flow")?;
                 let id = flow.get("id")?.as_u64()?;
-                let entry_kind = n.properties.get("kind")
+                let entry_kind = flow.get("entry_kind")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("")
+                    .unwrap_or("unknown")
                     .to_string();
+                let framework = flow.get("framework").and_then(|v| v.as_str());
 
                 // Apply kind filter
                 if let Some(kf) = kind_filter {
-                    // Map display kind to internal kind
-                    let matches = match kf {
-                        "framework_route" => entry_kind == "route",
-                        "naming_convention" => n.name == "main" || n.name.starts_with("handle"),
-                        _ => true,
-                    };
-                    if !matches {
+                    if entry_kind != kf {
                         return None;
                     }
                 }
 
-                let name = if let (Some(fw), Some(k)) = (
-                    flow.get("framework").and_then(|v| v.as_str()),
-                    n.properties.get("kind").and_then(|v| v.as_str()),
-                ) {
-                    if k == "route" {
+                let name = if let Some(fw) = framework {
+                    if entry_kind == "framework_route" {
                         format!("[{}] {}", fw, n.name)
                     } else {
                         n.name.clone()
@@ -1884,7 +1881,7 @@ pub(crate) fn handler_list_flows(args: &Value) -> ToolResponse {
                     "id": id,
                     "name": name,
                     "entry_point_id": n.id,
-                    "entry_kind": if entry_kind == "route" { "framework_route" } else { "naming_convention" },
+                    "entry_kind": entry_kind,
                     "criticality": criticality,
                     "depth": depth,
                     "node_count": node_count,
@@ -1986,14 +1983,29 @@ pub(crate) fn handler_get_flow(args: &Value) -> ToolResponse {
                 });
                 if include_source {
                     if let Some(loc) = &n.location {
-                        let file = if let Some(pos) = loc.rfind(':') {
-                            &loc[..pos]
+                        // Strip line suffix properly (handles Windows drive letters)
+                        let (file, line_num) = if let Some(pos) = loc.rfind(':') {
+                            let maybe_line = &loc[pos + 1..];
+                            if maybe_line.chars().all(|c| c.is_ascii_digit()) {
+                                (&loc[..pos], maybe_line.parse::<usize>().ok())
+                            } else {
+                                (loc.as_str(), None)
+                            }
                         } else {
-                            loc
+                            (loc.as_str(), None)
                         };
                         let full = project_root().join(file);
                         if let Ok(content) = std::fs::read_to_string(&full) {
-                            step["source_snippet"] = json!(content.lines().take(50).collect::<Vec<_>>().join("\n"));
+                            let lines: Vec<&str> = content.lines().collect();
+                            let start = line_num
+                                .map(|l| l.saturating_sub(10))
+                                .unwrap_or(0);
+                            let end = line_num
+                                .map(|l| (l + 10).min(lines.len()))
+                                .unwrap_or(lines.len().min(50));
+                            let snippet = lines[start.min(lines.len())..end.min(lines.len())]
+                                .join("\n");
+                            step["source_snippet"] = json!(snippet);
                         }
                     }
                 }
@@ -2050,14 +2062,16 @@ pub(crate) fn handler_affected_flows(args: &Value) -> ToolResponse {
         // Build set of nodes that belong to changed files
         let mut changed_set: HashSet<String> = changed_node_ids.into_iter().collect();
         for file_path in &files {
+            // Normalize the query path for comparison
+            let query_normalized = file_path.replace('\\', "/");
             for n in idx.nodes_iter() {
                 if let Some(loc) = &n.location {
-                    let node_file = if let Some(pos) = loc.rfind(':') {
-                        &loc[..pos]
-                    } else {
-                        loc
-                    };
-                    if node_file == file_path || loc.ends_with(file_path) {
+                    let node_file = strip_loc_suffix(loc);
+                    let node_normalized = node_file.replace('\\', "/");
+                    if node_normalized == query_normalized
+                        || node_normalized.ends_with(&format!("/{}", query_normalized))
+                        || node_normalized.ends_with(&format!("\\{}", file_path))
+                    {
                         changed_set.insert(n.id.clone());
                     }
                 }

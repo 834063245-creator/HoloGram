@@ -299,14 +299,14 @@ impl Engine {
         // through CALLS edges → criticality scoring → persisted as node properties.
         set_progress("执行流检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
-        let flows = detect_all_flows(&mut result);
+        let flow_count = detect_all_flows(&mut result);
         let flow_elapsed = stage_start.elapsed().as_secs_f64();
         eprintln!("[engine] stage: flows done in {:.1}s ({} flows)",
-            flow_elapsed, flows.len());
+            flow_elapsed, flow_count);
         stage_timings.push(StageTiming {
             name: "Flow Detection".into(),
             elapsed_secs: flow_elapsed,
-            detail: format!("{} flows", flows.len()),
+            detail: format!("{} flows", flow_count),
         });
 
         // 7.5. Build semantic vector index (fire-and-forget in background)
