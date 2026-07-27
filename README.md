@@ -8,11 +8,11 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-1000%2B%20total-brightgreen" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20Linux-blue" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange&style=for-the-badge" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-1400%2B%20total-brightgreen?style=for-the-badge" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20Linux-blue?style=for-the-badge" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge" /></a>
 </p>
 
 <br/>
@@ -136,11 +136,12 @@ hologram run graph_summary .                   # 项目概览
 hologram run trace_impact . --node_id src/main.rs:main  # 查影响面
 hologram run preflight_check . --files a.rs,b.rs        # 改前检查（exit code 表达 pass/fail）
 hologram run detect_cycles .                    # 检测循环依赖
+hologram run list_flows .                       # 列出执行流（按安全敏感度排序）
 ```
 
 > 💡 `preflight_check` 的 exit code：0=低风险，1=高风险（critical/high），适合 CI/CD 和 git hooks。
 
-### 🖥️ 方式二：桌面应用
+### 🖥️ 方式三：桌面应用
 
 [Releases](https://github.com/834063245-creator/HoloGram/releases) → 下载 `.msi` → 双击 → 选项目 → 自动出图。
 
@@ -153,10 +154,15 @@ hologram run detect_cycles .                    # 检测循环依赖
 | 能力 | 一句话 |
 |:-----|:-------|
 | 🎯 **改前查影响** | 改一个文件 → 立刻看到波及范围。Agent 在 `edit_file` / `write_file` 执行前**自动注入 ⚠️ 影响分析** |
+| 📋 **计划模式** | 探索 → 写计划 → 审批 → 执行。图引擎自动注入影响面，Agent 先想清楚再动手 |
 | 🚨 **自动抓越界** | 模块之间乱 import？自动标红。你定规则（glob/regex），它替你盯着 |
 | 💸 **给 Agent 省 token** | 一次调用拿结构化依赖数据，典型场景省 ~70% token |
 | 🌌 **3D 代码地图** | 代码库变星图，谁依赖谁一眼看穿。5000 文件不卡，GPU 加速布局 |
 | 🔄 **保存即刷新** | 代码保存 → 图自动更新。缓存过期检测，源文件更新时自动重分析 |
+| 🌊 **执行流分析** | 自动发现入口点（框架路由 / main / CLI），追踪完整调用链，按安全敏感度排序 |
+| 💡 **下一步建议** | 每个工具返回结果时自动附带推荐的后续工具——Agent 不用猜下一步查什么 |
+| 💬 **多 Agent 通信** | Agent 之间发消息、广播、查询、发现。拓扑无关、格式无关，有界 inbox 防背压 |
+| 🚀 **虚拟聊天渲染** | 虚拟列表 + 高度预测替代 DOM reflow，万条消息流畅滚动 |
 | 🌍 **26 门语言，零配置** | 打开项目直接出图。不需要配置文件、不需要标注 |
 
 ---
@@ -223,10 +229,13 @@ hologram run detect_cycles .                    # 检测循环依赖
 |:--|:--|
 | 🌌 **3D 代码星图** | Three.js + WebGPU，颜色按社区聚类，缩放旋转拖拽随心 |
 | 💬 **内置 Agent 面板** | 对话、文件操作、Git、Shell、Web 搜索，全在应用内 |
+| 📋 **计划模式** | 探索 → 写计划 → 审批卡片 → 执行，图引擎自动注入影响面 |
 | 📝 **Monaco 编辑器** | 点击节点 → 右侧直接打开源码 |
 | 🔗 **数据流面板** | 追踪变量读写路径，可视化数据流向 |
 | 🕐 **时间轴面板** | 变更历史 + 分析记录一览 |
 | 🍴 **子 Agent 并行** | git worktree 隔离，多 Agent 同时工作互不干扰 |
+| 💬 **多 Agent 通信** | Agent 间消息/广播/发现/合并，拓扑无关的通信层 |
+| 🚀 **虚拟聊天渲染** | 虚拟列表 + 高度预测，万条消息流畅滚动 |
 | 🧠 **记忆系统** | Markdown + AuraSDK 语义召回，跨会话记住上下文 |
 
 > 💡 桌面应用和 MCP 模式用的是**同一个引擎**——所有图分析能力完全一致。
@@ -248,21 +257,24 @@ hologram run detect_cycles .                    # 检测循环依赖
 
 ## 🗺️ 工具地图
 
-> 30 个图查询工具 + 50+ 个编码操作工具，覆盖「查依赖 → 改代码」完整链路。
+> 33 个图查询工具 + 47 个 Agent 编码/通信工具，覆盖「查依赖 → 改代码 → 多 Agent 协作」完整链路。
 
 | 类别 | 工具 | 你问 → 它答 |
 |:--|:--|:--|
 | 🔍 **日常查询** | `explore_deps` `search_symbols` `get_neighbors` `inspect_symbol` | "这个函数连了啥？" "谁在调它？" |
 | 💣 **风险评估** | `trace_impact` `preflight_check` `fragile_modules` `detect_cycles` | "改这里会炸吗？" "有没有循环依赖？" |
 | 🩺 **架构诊断** | `arch_blindspots` `thread_conflicts` `coupling_report` `check_boundaries` | "隐藏的架构问题？" "边界被偷越了吗？" |
+| 🌊 **执行流** | `list_flows` `get_flow` `get_affected_flows` | "项目核心流程是什么？" "改这个函数会影响哪些业务流程？" |
 | 🔗 **数据流** | `trace_dataflow` `async_edges` `find_dep_path` | "变量在哪被改了？" "A 怎么依赖到 B 的？" |
 | 🌍 **全局视野** | `graph_summary` `cluster_report` `project_health` `project_timeline` | "项目整体怎么样？" "有哪些子系统？" |
 | 🎯 **LSP 精确** | `resolve_call` `infer_type` `find_implementations` `find_references` | "这个调用到底调了哪个实现？" |
 | 🛠️ **工程** | `analyze_project` `validate_project` `graph_diff` `find_unused` `rename_symbol` | 全量分析、约束校验、找死代码、安全重命名 |
+| 💬 **多 Agent 通信** | `agent_message` `agent_reply` `agent_inbox` `agent_list` `agent_discover` `agent_lookup` `agent_merge` | "发给另一个 Agent" "谁能帮我？" "Agent 列表" |
+| 🍴 **子 Agent 编排** | `agent_spawn` `agent_kill` `agent_status` | 派发并行子 Agent、查看状态、终止 |
 
-**Agent 内置编码工具：** 文件读写 · Git 全套 · Shell · 搜索 · Web · 记忆 · 任务 · 子 Agent 分叉
+**Agent 内置编码工具：** 文件读写 · 目录操作 · Git 全套 · Shell (含 `bash_wait`) · 搜索 · Web · 记忆 · 任务 · 子 Agent 分叉 · 隔离合并
 
-> 💡 所有工具对 Agent 透明——统一调用。返回结构化 JSON，不是源文件——**省 token**。
+> 💡 所有工具对 Agent 透明——统一调用。返回结构化 JSON，不是源文件——**省 token**。每个响应自动附带下一步工具建议。
 
 ---
 
@@ -275,24 +287,26 @@ hologram run detect_cycles .                    # 检测循环依赖
  │  │  🌌 3D 星图  ·  💬 Agent 面板     │◄────►│  🛡️ 权限裁决     │ │
  │  │  📝 Monaco    ·  🔗 数据流面板    │      │  🏖️ OS 沙箱      │ │
  │  │  🕐 时间轴    ·  ⚛️ React UI      │      │  🍴 Agent 隔离   │ │
- │  │  ⚡ WebGPU    ·  🎯 LSP 客户端    │      │  📋 审计日志     │ │
+ │  │  📋 计划卡片  ·  💬 多Agent通信   │      │  📋 审计日志     │ │
+ │  │  ⚡ WebGPU    ·  🎯 LSP 客户端    │      │  🔐 文件所有权   │ │
  │  └───────────────────────────────────┘      └──────┬───────────┘ │
  └────────────────────────────────────────────────────┼─────────────┘
                                                       │ MCP stdio
        ┌──────────────────────────────────────────────▼──────────────┐
        │             🧠 Rust 引擎 (engine/)                          │
        │                                                              │
-       │   合并管线 · 边去重 625× · 30 图工具 · 四级过滤              │
+       │   合并管线 · 边去重 625× · 33 图工具 · 四级过滤              │
        │   MemoryIndex + SQLite FTS5 · 增量更新 · Leiden 社区发现     │
-       │   数据流引擎 (17 语言) · 18 框架路由 · LSP 按需 · 语义记忆   │
+       │   数据流引擎 (17 语言) · 24 框架路由 · LSP 按需 · 语义记忆   │
+       │   执行流检测 · 两阶段重命名 · 下一步建议 · 计划模式 Hook    │
        └──────────────────────────────────────────────────────────────┘
 ```
 
 | 层 | 目录 | 技术栈 |
 |:--|:--|:--|
-| 🧠 引擎 | `engine/` | Rust — 解析 · 图构建 · 分析 · 存储 · MCP |
-| 🐚 壳 | `src-tauri/` | Rust / Tauri 2 — 权限 · 沙箱 · 隔离 · 加密 |
-| 🎨 前端 | `src-ui/` | TypeScript — Three.js · React · Monaco · WebGPU |
+| 🧠 引擎 | `engine/` | Rust — 解析 · 图构建 · 分析 · 存储 · MCP · 执行流 |
+| 🐚 壳 | `src-tauri/` | Rust / Tauri 2 — 权限 · 沙箱 · 隔离 · 加密 · 文件所有权 |
+| 🎨 前端 | `src-ui/` | TypeScript — Three.js · React · Monaco · WebGPU · Agent 通信 |
 
 > 🔬 **自举验证：HoloGram 用自己的引擎分析自己的代码库。**
 
@@ -321,7 +335,7 @@ cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
 
 | 盲区 | 说明 | 状态 |
 |:--|:--|:--|
-| 字符串路由 | Express / Django 等路由字符串 → handler 映射 | ✅ 18 种框架已覆盖 |
+| 字符串路由 | Express / Django 等路由字符串 → handler 映射 | ✅ 24 种框架已覆盖 |
 | 动态 import | `import(variable)` / `require(expr)` | ✅ 动态导入站点已标记 |
 | 反射 / DI | getattr / @Autowired / @Injectable 等 | ✅ 10 语言已处理 |
 | 跨语言调用 | 子进程 / FFI / HTTP client → 运行时桥接点 | ✅ 8 语言已覆盖 |
@@ -433,16 +447,16 @@ Agent 功能需要你自己配置 LLM API key（支持 Anthropic / OpenAI 兼容
 ## 👩‍💻 开发
 
 ```bash
-cd engine && cargo test              # 462+ Rust 引擎测试
-cd src-tauri && cargo test           # 143+ Tauri 壳测试
-cd src-ui && npx vitest run          # 401+ 前端测试
+cd engine && cargo test              # 562+ Rust 引擎测试
+cd src-tauri && cargo test           # 197+ Tauri 壳测试
+cd src-ui && npx vitest run          # 675+ 前端测试
 cd engine && cargo build --release   # 编译引擎
 cargo tauri build                    # 打包桌面应用
 cd src-ui && npm run build           # 类型检查 + 打包前端
 ```
 
 ```
-  engine/         🧠 Rust 引擎 — 管线 · 过滤 · 数据流 · 路由 · LSP · 30 工具
+  engine/         🧠 Rust 引擎 — 管线 · 过滤 · 数据流 · 路由 · LSP · 33 工具
   src-tauri/      🐚 Tauri 壳 — 权限 · 沙箱 · 隔离 · PTY · 凭证 · 审计
   src-ui/         🎨 前端 — Three.js · React · Monaco · Agent · WebGPU
   assets/         🖼️ 图标 · 截图
@@ -451,7 +465,7 @@ cd src-ui && npm run build           # 类型检查 + 打包前端
 ```
 
 <details>
-<summary>📐 分析管道 (8 阶段)</summary>
+<summary>📐 分析管道 (10 阶段)</summary>
 <br/>
 
 | # | 阶段 | 说明 |
@@ -459,11 +473,14 @@ cd src-ui && npm run build           # 类型检查 + 打包前端
 | 1 | 文件发现 | 四级过滤 — 黑名单 + .gitignore + 扩展名 + 1 MB 上限 |
 | 2 | 并行解析 + 合并 | 200 文件/批，rayon 并行，全局去重 (625× 削减) |
 | 3 | 类型感知调用解析 | 8 语言 tree-sitter 类型级解析，30s 熔断 |
-| 4 | 跨文件解析 | import → 调用链连接 |
-| 5 | 耦合分析 | L1-L4 耦合深度赋值 |
-| 6 | 框架路由 | 18 种框架 URL→handler 映射 |
-| 7 | 动态调度合成 | addEventListener / .on() / .then() / .subscribe() |
-| 8 | 社区发现 + 持久化 | Leiden 层次聚类，MemoryIndex + SQLite |
+| 4 | 框架路由 | 24 种框架 URL→handler 映射 |
+| 5 | 跨文件解析 | import → 调用链连接 |
+| 5.1-5.8 | 动态调度合成 | React/Vue 组件边 · DI/反射 · 动态 import · eval · 跨语言调用 |
+| 6 | 耦合分析 | L1-L4 耦合深度赋值 |
+| 7 | 执行流检测 | 入口点发现 → BFS 前向追踪 → 安全敏感度评分 |
+| 8 | 社区发现 | Leiden（扁平）+ Louvain（层级）聚类 |
+| 9 | 语义向量索引 | usearch ANN 索引构建（后台线程） |
+| 10 | 持久化 | MemoryIndex + SQLite + FTS5 全文搜索 |
 
 </details>
 
@@ -473,9 +490,10 @@ cd src-ui && npm run build           # 类型检查 + 打包前端
 
 | 组件 | 特点 |
 |:--|:--|
-| MemoryIndex | 邻接表 + 倒排索引，O(degree) 查询 |
+| MemoryIndex | CSR 格式邻接表 + 倒排索引，O(degree) 查询 |
 | SqliteDb | hologram.db + FTS5 全文搜索 |
 | GraphStore | MemoryIndex + SqliteDb，`parking_lot::RwLock` N 路并发读 |
+| 执行流索引 | 入口点 BFS 前向追踪，安全敏感度评分持久化为节点属性 |
 | 增量更新 | watcher → 防抖 → 重解析 → diff → 边修复 → 原子 swap |
 
 </details>
@@ -484,15 +502,16 @@ cd src-ui && npm run build           # 类型检查 + 打包前端
 <summary>🧩 图数据模型</summary>
 <br/>
 
-**8 种节点：** Symbol · Function · Class · Module · File · Interface · Medium（存储/IO）· Temporal（异步任务）
+**9 种节点：** Symbol · Function · Class · Module · File · Interface · Variable · Medium（存储/IO）· Temporal（异步任务）
 ——每个节点携带 location、degree、community_id、3D 坐标。
 
-**10 种边：**
+**12 种边：**
 - 结构边：`imports` `calls` `inherits` `defines` — 管道预计算
 - 数据边：`reads` `writes` `shares` — 数据流引擎按需查询
 - 时序边：`triggers` `awaits` `sequences` — 含 `temporal_delay_sec`
+- 图边：`usage` `throws` — 引用关系与异常抛出
 
-每条边附加 coupling_depth (L1-L4)、cross_file、direction、lsp_resolved。
+每条边附加 coupling_depth (L1-L4)、cross_file、direction、lsp_resolved、is_synthesized。
 
 </details>
 
@@ -508,5 +527,5 @@ HoloGram © 2026 Wenbing Jing — [MIT](LICENSE)
 
 <p align="center">
   <br/>
-  <em>Built with ❤️ and Rust. One person, ~94,000 lines of code, 257 source files, 26 languages, 1000+ tests.</em>
+  <em>Built with ❤️ and Rust. One person, ~104,000 lines of code, 350 source files, 26 languages, 1400+ tests.</em>
 </p>
