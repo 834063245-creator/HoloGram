@@ -15,6 +15,7 @@ venv/
 node_modules/
 dist/
 !src-ui/dist/.gitkeep
+src-ui/bun.lock
 
 # Rust / Tauri
 target/
