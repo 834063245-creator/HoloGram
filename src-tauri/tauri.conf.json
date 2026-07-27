@@ -33,7 +33,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5RjAzQzNEMzlENTczMTAKUldRUWM5VTVQVHp3V1ZjUTZ0NDlJdkdlZlJ5R2JiOCtqQ1ZGS1NIYklpYlE1THVjbnBzQUJRWloK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFFNEQ0NjAxMjNBMkQ1NTMKUldSVDFhSWpBVVpOcmxXc1ZBN3Q4c0pzbEtrb3dWckk4RUU5c1ozNlJ0d1ZvYTZlOWFSTmVqQ0QK",
       "endpoints": [
         "https://github.com/834063245-creator/HoloGram/releases/latest/download/latest.json"
       ]

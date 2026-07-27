@@ -143,6 +143,10 @@ nul
 # SonarQube scanner working directory
 .scannerwork/
 
+# Tauri signing keys (private key = secret, public key = in tauri.conf.json)
+src-tauri/key
+src-tauri/key.pub
+
 # Tauri auto-generated schemas
 src-tauri/gen/schemas/
 
