@@ -260,6 +260,38 @@ mod tests {
     }
 
     #[test]
+    fn test_add_edge_validates_both_nodes_exist() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        let result = g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        assert!(result.is_ok(), "should accept edge when both nodes exist");
+        assert_eq!(g.edge_count(), 1);
+        assert_eq!(g.get_node("a").unwrap().out_degree, 1);
+        assert_eq!(g.get_node("b").unwrap().in_degree, 1);
+    }
+
+    #[test]
+    fn test_add_edge_rejects_missing_source() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        let result = g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("source node does not exist"));
+        assert_eq!(g.edge_count(), 0, "no edge should be inserted on error");
+    }
+
+    #[test]
+    fn test_add_edge_rejects_missing_target() {
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        let result = g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("target node does not exist"));
+        assert_eq!(g.edge_count(), 0, "no edge should be inserted on error");
+    }
+
+    #[test]
     fn test_remove_node_cascades_edges() {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));

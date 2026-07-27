@@ -1308,6 +1308,17 @@ where
     Err(format!("{}: unreachable", label))
 }
 
+/// Clamp depth to u8::MAX (255), logging a warning on overflow.
+/// Used by engine_neighbors/impact/path to prevent silent truncation.
+pub(crate) fn clamp_depth(depth: usize) -> u8 {
+    if depth > u8::MAX as usize {
+        tracing::warn!(depth, "depth clamped to 255");
+        u8::MAX
+    } else {
+        depth as u8
+    }
+}
+
 /// Find line in content containing query (fuzzy substring match).
 pub(crate) fn fuzzy_find(content: &str, query: &str) -> Option<(usize, String)> {
     let q = query.trim();
@@ -1348,5 +1359,20 @@ mod tests {
         assert!(!is_private_ip("1.1.1.1"));
         assert!(!is_private_ip("2606:4700:4700::1111"), "public ipv6 must pass");
         assert!(!is_private_ip("example.com"), "plain hostname is not an IP literal");
+    }
+
+    // ── depth clamp ──
+    #[test]
+    fn test_clamp_depth_normal() {
+        assert_eq!(clamp_depth(0), 0);
+        assert_eq!(clamp_depth(10), 10);
+        assert_eq!(clamp_depth(255), 255);
+    }
+
+    #[test]
+    fn test_clamp_depth_overflow() {
+        assert_eq!(clamp_depth(256), 255);
+        assert_eq!(clamp_depth(1000), 255);
+        assert_eq!(clamp_depth(usize::MAX), 255);
     }
 }
