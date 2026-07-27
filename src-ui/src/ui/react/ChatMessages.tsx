@@ -489,12 +489,11 @@ const SubReasoningBlock: React.FC<{
 const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: string) => void }> = ({ part, onNavigateToNode }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
-  const [expanded, setExpanded] = useState(part.status === 'running');
+  const [expanded, setExpanded] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (part.status === 'running' && !userOverridden.current) setExpanded(true);
-    else if (part.status !== 'running' && !userOverridden.current) setExpanded(false);
+    if (part.status !== 'running' && !userOverridden.current) setExpanded(false);
   }, [part.status]);
 
   // Auto-scroll body div to bottom as new content streams in.
