@@ -1088,7 +1088,7 @@ impl MemoryIndex {
                 let mut edge = Edge::new(eid, source.clone(), target, kind);
                 edge.coupling_depth = coupling_depth;
                 edge.temporal_delay_sec = temporal_delay;
-                graph.add_edge(edge);
+                graph.add_edge_unchecked(edge);
             }
         }
         graph
@@ -1425,7 +1425,7 @@ mod tests {
         let mut n2 = test_node("n2", "fn_b", Some("src/b.rs"));
         n2.location = Some("src/b.rs".into());
         g.add_node(n2);
-        g.add_edge(Edge::new("e1", "n1", "n2", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "n1", "n2", EdgeKind::Calls));
 
         let idx = MemoryIndex::from_existing_graph(g.nodes, g.edges);
         assert_eq!(idx.node_count(), 2);
@@ -1472,7 +1472,7 @@ mod tests {
                 let id = format!("{}::{}::{}", source, target, kind.as_str());
                 let mut edge = Edge::new(id, source.clone(), target, kind);
                 edge.coupling_depth = coupling_depth;
-                g.add_edge(edge);
+                g.add_edge_unchecked(edge);
             }
         }
         let mut cloned = MemoryIndex::from_existing_graph(g.nodes, g.edges);

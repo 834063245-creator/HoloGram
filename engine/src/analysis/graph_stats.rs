@@ -79,9 +79,9 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "a", "b", EdgeKind::Reads));
-        g.add_edge(Edge::new("e3", "a", "b", EdgeKind::Reads));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "a", "b", EdgeKind::Reads));
+        g.add_edge_unchecked(Edge::new("e3", "a", "b", EdgeKind::Reads));
 
         let s = graph_summary(&g);
         assert_eq!(s["edges_total"], 3);

@@ -162,10 +162,10 @@ mod tests {
         g.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
         let mut e1 = Edge::new("e1", "a", "b", EdgeKind::Calls);
         e1.coupling_depth = 1;
-        g.add_edge(e1);
+        g.add_edge_unchecked(e1);
         let mut e2 = Edge::new("e2", "a", "b", EdgeKind::Reads);
         e2.coupling_depth = 4;
-        g.add_edge(e2);
+        g.add_edge_unchecked(e2);
         let r = coupling_report(&g, "a");
         assert_eq!(r["L1"], 1);
         assert_eq!(r["L4"], 1);
@@ -179,7 +179,7 @@ mod tests {
         g.add_node(Node::new("y", "mod_y", NodeKind::Symbol));
         let mut e = Edge::new("e1", "x", "y", EdgeKind::Calls);
         e.coupling_depth = 3;
-        g.add_edge(e);
+        g.add_edge_unchecked(e);
         let r = coupling_report(&g, "x");
         assert_eq!(r["L3"], 1);
         let r2 = coupling_report(&g, "z");
@@ -193,7 +193,7 @@ mod tests {
         g.add_node(Node::new("y", "mod_y", NodeKind::Symbol));
         let mut e = Edge::new("e1", "x", "y", EdgeKind::Calls);
         e.coupling_depth = 2;
-        g.add_edge(e);
+        g.add_edge_unchecked(e);
         let r = coupling_report(&g, "y");
         assert_eq!(r["L2"], 1);
     }
@@ -205,10 +205,10 @@ mod tests {
         g.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
         let mut e1 = Edge::new("e1", "a", "b", EdgeKind::Calls);
         e1.coupling_depth = 1;
-        g.add_edge(e1);
+        g.add_edge_unchecked(e1);
         let mut e2 = Edge::new("e2", "a", "b", EdgeKind::Reads);
         e2.coupling_depth = 4;
-        g.add_edge(e2);
+        g.add_edge_unchecked(e2);
         let idx = MemoryIndex::from_existing_graph(g.nodes, g.edges);
         let r = coupling_report_from_index(&idx, "a");
         assert_eq!(r["L1"], 1);

@@ -134,7 +134,7 @@ fn graph_from_index(idx: &MemoryIndex) -> Graph {
             edge.coupling_depth = coupling_depth;
             edge.temporal_delay_sec = delay;
             edge.cross_file = cross_file;
-            g.add_edge(edge);
+            g.add_edge_unchecked(edge);
         }
     }
     g

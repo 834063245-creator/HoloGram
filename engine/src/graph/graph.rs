@@ -16,7 +16,7 @@ use super::{Edge, Node};
 /// let mut g = Graph::new();
 /// g.add_node(Node::new("a", "main", NodeKind::Symbol));
 /// g.add_node(Node::new("b", "helper", NodeKind::Symbol));
-/// g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+/// g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
 ///
 /// assert_eq!(g.node_count(), 2);
 /// assert_eq!(g.edge_count(), 1);
@@ -116,7 +116,20 @@ impl Graph {
 
     // ── Edge operations ──
 
-    pub fn add_edge(&mut self, edge: Edge) {
+    pub fn add_edge(&mut self, edge: Edge) -> Result<(), String> {
+        if !self.nodes.contains_key(&edge.source) {
+            return Err(format!("source node does not exist: {}", edge.source));
+        }
+        if !self.nodes.contains_key(&edge.target) {
+            return Err(format!("target node does not exist: {}", edge.target));
+        }
+        self.add_edge_unchecked(edge);
+        Ok(())
+    }
+
+    /// Insert an edge without validating node existence.
+    /// Use only when the caller guarantees both endpoints already exist.
+    pub fn add_edge_unchecked(&mut self, edge: Edge) {
         if let Some(src) = self.nodes.get_mut(&edge.source) {
             src.out_degree += 1;
         }
@@ -240,7 +253,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
 
         assert_eq!(g.get_node("a").unwrap().out_degree, 1);
         assert_eq!(g.get_node("b").unwrap().in_degree, 1);
@@ -251,7 +264,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
 
         g.remove_node("a");
         assert_eq!(g.node_count(), 1);
@@ -299,11 +312,11 @@ mod tests {
         before.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         before.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
         before.add_node(Node::new("c", "fn_c", NodeKind::Symbol));
-        before.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        before.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
 
         // After: a gains a new outgoing edge to c → a.out_degree and c.in_degree change
         let mut after = before.clone();
-        after.add_edge(Edge::new("e2", "a", "c", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e2", "a", "c", EdgeKind::Calls));
 
         let diff = before.diff(&after);
         let modified_ids: Vec<&str> = diff.modified_nodes.iter().map(|(_, n)| n.id.as_str()).collect();
@@ -340,7 +353,7 @@ mod tests {
         let mut original = Graph::new();
         original.add_node(Node::new("n1", "main", NodeKind::Symbol));
         original.add_node(Node::new("n2", "helper", NodeKind::Function));
-        original.add_edge(Edge::new("e1", "n1", "n2", EdgeKind::Calls));
+        original.add_edge_unchecked(Edge::new("e1", "n1", "n2", EdgeKind::Calls));
         let serialized = serde_json::to_string_pretty(&original).unwrap();
 
         let tmp = std::env::temp_dir().join("hologram_test_hashmap.json");

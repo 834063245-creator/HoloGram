@@ -4,25 +4,16 @@
 use std::collections::HashMap;
 
 use super::{Edge, Graph};
+use crate::engine::GRAMMAR_LOADER;
 
-/// Common source-code file extensions (lowercase).
-/// Used to distinguish file-extension segments from symbol-name segments
-/// when building short-name and stem indexes.
-///
-/// Synced manually with engine/src/adapter/tree_sitter.rs extensions +
-/// GRAMMAR_LOADER.supported_extensions(). If a new language grammar is added,
-/// add its extension here as well.
-const CODE_EXTENSIONS: &[&str] = &[
-    "rs", "py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
-    "go", "java", "kt", "kts", "cs", "cpp", "hpp", "cc", "hh", "cxx", "hxx",
-    "c", "h", "php", "rb", "swift", "dart", "lua", "zig", "r", "scala",
-    "ex", "exs", "erl", "hrl", "hs", "ml", "mli", "svelte", "vue", "css",
-    "scss", "less", "html", "htm", "xml", "json", "yaml", "yml", "toml",
-    "md", "txt", "sql", "sh", "bash", "ps1", "bat", "cmake", "make",
-];
+/// Source-code file extensions, derived dynamically from GRAMMAR_LOADER.
+/// Automatically includes newly installed grammar DLLs without code changes.
+fn code_extensions() -> Vec<String> {
+    GRAMMAR_LOADER.supported_extensions()
+}
 
 fn is_common_extension(s: &str) -> bool {
-    CODE_EXTENSIONS.contains(&s)
+    code_extensions().iter().any(|ext| ext == s)
 }
 
 /// Extract the file stem: filename without extension.
@@ -85,6 +76,7 @@ impl CrossFileResolver {
         let mut unresolved_count = 0usize;
         let mut new_edges: Vec<Edge> = Vec::new();
         let mut to_remove: Vec<String> = Vec::new();
+        let mut ambiguous_edges: Vec<String> = Vec::new();
 
         // ── Diagnostic: categorize unresolved edges ──
         let mut diag_no_short: usize = 0;        // short_name not in any index
@@ -159,6 +151,10 @@ impl CrossFileResolver {
                     } else {
                         diag_dotted_no_suffix += 1; // short exists, dotted, but suffix mismatch
                     }
+                    // Candidates existed but couldn't be uniquely resolved — mark as ambiguous
+                    if in_index || in_stem {
+                        ambiguous_edges.push(eid.clone());
+                    }
                 }
                 tracing::debug!(
                     edge_id = %eid,
@@ -191,20 +187,40 @@ impl CrossFileResolver {
             graph.remove_edge(eid);
         }
         for edge in new_edges {
-            if graph.nodes.contains_key(&edge.source) && graph.nodes.contains_key(&edge.target) {
-                graph.add_edge(edge);
+            if let Err(e) = graph.add_edge(edge) {
+                tracing::debug!("resolved edge not added: {}", e);
+            }
+        }
+
+        // Mark ambiguous edges for user/LSP resolution instead of deleting them.
+        for eid in &ambiguous_edges {
+            if let Some(edge) = graph.edges.get_mut(eid) {
+                edge.metadata = Some(serde_json::json!({
+                    "ambiguous": true,
+                    "original_target": edge.target.clone(),
+                }));
             }
         }
 
         // Cleanup: remove cross-file edges with non-existent endpoints.
         // Intra-file edges (Usage, Writes, same-file Calls) have bare-name
         // targets that aren't node IDs — they're valid as-is.
+        // Ambiguous edges (marked above) are preserved for user/LSP resolution.
         let orphan_edges: Vec<String> = graph
             .edges
             .iter()
             .filter(|(_, e)| {
-                e.cross_file
-                    && (!graph.nodes.contains_key(&e.source) || !graph.nodes.contains_key(&e.target))
+                if !e.cross_file {
+                    return false;
+                }
+                if graph.nodes.contains_key(&e.source) && graph.nodes.contains_key(&e.target) {
+                    return false;
+                }
+                // Preserve ambiguous edges
+                !e.metadata.as_ref()
+                    .and_then(|m| m.get("ambiguous"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -212,22 +228,26 @@ impl CrossFileResolver {
             graph.remove_edge(eid);
         }
 
-        if unresolved_count > 0 || !orphan_edges.is_empty() {
+        if unresolved_count > 0 || !orphan_edges.is_empty() || !ambiguous_edges.is_empty() {
             if unresolved_count > 0 {
                 tracing::warn!(
                     resolved,
                     unresolved = unresolved_count,
                     orphans = orphan_edges.len(),
-                    "cross-file resolver: {} edges unresolved, {} orphans cleaned",
+                    ambiguous = ambiguous_edges.len(),
+                    "cross-file resolver: {} edges unresolved, {} orphans cleaned, {} ambiguous (preserved)",
                     unresolved_count,
-                    orphan_edges.len()
+                    orphan_edges.len(),
+                    ambiguous_edges.len()
                 );
             } else {
                 tracing::debug!(
                     resolved,
                     orphans = orphan_edges.len(),
-                    "cross-file resolver: {} orphans cleaned (stale edges from prior runs)",
-                    orphan_edges.len()
+                    ambiguous = ambiguous_edges.len(),
+                    "cross-file resolver: {} orphans cleaned (stale edges), {} ambiguous (preserved)",
+                    orphan_edges.len(),
+                    ambiguous_edges.len()
                 );
             }
         }
@@ -395,7 +415,7 @@ fn resolve_name(
     // ── Strategy 5: dotted import → try appending file extensions ──
     // "app.models" → checks for "app.models.py", "utils.helpers" → "utils.helpers.py"
     if name.contains('.') {
-        for ext in CODE_EXTENSIONS {
+        for ext in code_extensions() {
             let with_ext = format!("{}.{}", name, ext);
             if graph.nodes.contains_key(&with_ext) {
                 return Some(with_ext);
@@ -491,7 +511,26 @@ fn best_bare_match(candidates: &[&String], graph: &Graph, source_lang: Option<&s
         })
         .collect();
 
-    scored.iter().min_by_key(|(_, score)| *score).map(|(c, _)| (**c).clone())
+    if scored.is_empty() {
+        return None;
+    }
+
+    let min_score = scored.iter().map(|(_, s)| *s).min().unwrap();
+    let tied: Vec<String> = scored.iter()
+        .filter(|(_, s)| *s == min_score)
+        .map(|(c, _)| (**c).clone())
+        .collect();
+
+    if tied.len() > 1 {
+        tracing::debug!(
+            candidates = ?tied.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            "best_bare_match: {} candidates with same score — ambiguous, returning None",
+            tied.len()
+        );
+        return None;
+    }
+
+    tied.first().cloned()
 }
 
 #[cfg(test)]
@@ -562,7 +601,7 @@ mod tests {
         // Edge: index → "User" (short name, needs resolution)
         let mut e = Edge::new("e1", "views.index", "User", EdgeKind::Calls);
         e.cross_file = true;
-        g.add_edge(e);
+        g.add_edge_unchecked(e);
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 1, "should resolve 1 edge");
@@ -576,7 +615,7 @@ mod tests {
         g.add_node(Node::new("lib.fn_a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("lib.fn_b", "fn_b", NodeKind::Symbol));
         // Both source and target need resolution
-        g.add_edge(cross_edge("e1", "fn_a", "fn_b", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e1", "fn_a", "fn_b", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 1);
@@ -593,7 +632,7 @@ mod tests {
         g.add_node(Node::new("shop.models.User", "User", NodeKind::Symbol));
         // Reference uses qualified name "models.User"
         g.add_node(Node::new("views.index", "index", NodeKind::Symbol));
-        g.add_edge(cross_edge("e1", "views.index", "models.User", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e1", "views.index", "models.User", EdgeKind::Calls));
 
         let _resolved = CrossFileResolver::resolve(&mut g);
         // Should resolve to auth.models.User (first registered, or best match)
@@ -607,7 +646,7 @@ mod tests {
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
         // Edge already has correct IDs
-        g.add_edge(cross_edge("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e1", "a", "b", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 0, "already-resolved edge should not count");
@@ -619,7 +658,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         // Edge to non-existent node
-        g.add_edge(cross_edge("e1", "a", "nonexistent", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e1", "a", "nonexistent", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         // Orphan edge should be cleaned, but NOT counted as resolved
@@ -632,7 +671,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         // Edge to a name that doesn't match anything
-        g.add_edge(cross_edge("e1", "a", "totally_unknown_name", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e1", "a", "totally_unknown_name", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         // Should be cleaned as orphan
@@ -656,7 +695,7 @@ mod tests {
         g.add_node(file_b);
 
         // Import edge: a.rs → "b" (bare module name from tree_sitter)
-        g.add_edge(cross_edge("imp_1", "a.rs", "b", EdgeKind::Imports));
+        g.add_edge_unchecked(cross_edge("imp_1", "a.rs", "b", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 1, "import edge should be resolved");
@@ -675,9 +714,9 @@ mod tests {
         g.add_node(Node::new("c.rs", "c.rs", NodeKind::File));
 
         // Cyclic imports: a → b → c → a
-        g.add_edge(cross_edge("e1", "a.rs", "b", EdgeKind::Imports));
-        g.add_edge(cross_edge("e2", "b.rs", "c", EdgeKind::Imports));
-        g.add_edge(cross_edge("e3", "c.rs", "a", EdgeKind::Imports));
+        g.add_edge_unchecked(cross_edge("e1", "a.rs", "b", EdgeKind::Imports));
+        g.add_edge_unchecked(cross_edge("e2", "b.rs", "c", EdgeKind::Imports));
+        g.add_edge_unchecked(cross_edge("e3", "c.rs", "a", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 3, "all 3 import edges should resolve");
@@ -711,9 +750,9 @@ mod tests {
         g.add_node(Node::new("c.rs.fn_c", "fn_c", NodeKind::Function));
 
         // Cross-file calls: fn_a → fn_b → fn_c → fn_a (bare names)
-        g.add_edge(cross_edge("e1", "a.rs.fn_a", "fn_b", EdgeKind::Calls));
-        g.add_edge(cross_edge("e2", "b.rs.fn_b", "fn_c", EdgeKind::Calls));
-        g.add_edge(cross_edge("e3", "c.rs.fn_c", "fn_a", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e1", "a.rs.fn_a", "fn_b", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e2", "b.rs.fn_b", "fn_c", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e3", "c.rs.fn_c", "fn_a", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 3);
@@ -737,7 +776,7 @@ mod tests {
         g.add_node(Node::new("b.rs", "b.rs", NodeKind::File));
 
         // Rust-style import: "crate::b" (with :: separators)
-        g.add_edge(cross_edge("e1", "a.rs", "crate::b", EdgeKind::Imports));
+        g.add_edge_unchecked(cross_edge("e1", "a.rs", "crate::b", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 1);
@@ -752,7 +791,7 @@ mod tests {
         g.add_node(Node::new("app.views.py", "app/views.py", NodeKind::File));
 
         // Python: "from app.models import User" → edge target "app.models"
-        g.add_edge(cross_edge("e1", "app.views.py", "app.models", EdgeKind::Imports));
+        g.add_edge_unchecked(cross_edge("e1", "app.views.py", "app.models", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 1);
@@ -767,7 +806,7 @@ mod tests {
         g.add_node(Node::new("main.py", "main.py", NodeKind::File));
 
         // "from utils.helpers import foo" → target "utils.helpers"
-        g.add_edge(cross_edge("e1", "main.py", "utils.helpers", EdgeKind::Imports));
+        g.add_edge_unchecked(cross_edge("e1", "main.py", "utils.helpers", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 1);
@@ -780,7 +819,7 @@ mod tests {
         g.add_node(Node::new("main.py", "main.py", NodeKind::File));
 
         // "import os" — os.py is not in the project graph
-        g.add_edge(cross_edge("e1", "main.py", "os", EdgeKind::Imports));
+        g.add_edge_unchecked(cross_edge("e1", "main.py", "os", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         // Edge should be cleaned as orphan (can't resolve stdlib)
@@ -799,7 +838,7 @@ mod tests {
         g.add_node(Node::new("some.module.render_var", "render", NodeKind::Variable));
         g.add_node(Node::new("views.index", "index", NodeKind::Function));
 
-        g.add_edge(cross_edge("e1", "views.index", "render", EdgeKind::Calls));
+        g.add_edge_unchecked(cross_edge("e1", "views.index", "render", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 1, "bare name with multiple candidates should resolve");
@@ -824,7 +863,7 @@ mod tests {
         g.add_node(Node::new(
             "D:.HoloGramHG.src-ui.src.ui.chat-store.ts.ChatStore.save",
             "save", NodeKind::Function));
-        g.add_edge(cross_edge("e1",
+        g.add_edge_unchecked(cross_edge("e1",
             "D:.HoloGramHG.src-ui.src.ui.chat-store.ts.ChatStore.save",
             "clear", EdgeKind::Calls));
 
@@ -849,7 +888,7 @@ mod tests {
         g.add_node(Node::new(
             "D:.HoloGramHG.engine.src.main.rs.main",
             "main", NodeKind::Function));
-        g.add_edge(cross_edge("e1",
+        g.add_edge_unchecked(cross_edge("e1",
             "D:.HoloGramHG.engine.src.main.rs.main",
             "start", EdgeKind::Calls));
 
@@ -865,16 +904,22 @@ mod tests {
     #[test]
     fn test_cross_language_filter_does_not_break_same_language() {
         let mut g = Graph::new();
+        // Two Python "render" candidates with different path depths — no tie.
+        // A TS "render" candidate should be filtered out by language.
         g.add_node(Node::new(
             "django.shortcuts.py.render",
-            "render", NodeKind::Function));
+            "render", NodeKind::Function));  // depth 4
         g.add_node(Node::new(
-            "flask.views.py.render",
+            "flask.render",                    // depth 2 — shorter path wins
+            "render", NodeKind::Function));
+        // Cross-language candidate that should be filtered out
+        g.add_node(Node::new(
+            "app.tsx.render",
             "render", NodeKind::Function));
         g.add_node(Node::new(
             "app.views.py.index",
             "index", NodeKind::Function));
-        g.add_edge(cross_edge("e1",
+        g.add_edge_unchecked(cross_edge("e1",
             "app.views.py.index",
             "render", EdgeKind::Calls));
 

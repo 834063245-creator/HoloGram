@@ -128,8 +128,8 @@ mod tests {
         g.add_node(Node::new("a", "A", NodeKind::Symbol));
         g.add_node(Node::new("b", "B", NodeKind::Symbol));
         g.add_node(Node::new("c", "C", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "c", EdgeKind::Calls));
         g
     }
 

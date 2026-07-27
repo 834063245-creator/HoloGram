@@ -736,15 +736,15 @@ mod tests {
             g.add_node(Node::new(format!("n{}", i), format!("Node{}", i), NodeKind::Symbol));
         }
         // Cluster 1: n0-n1-n2
-        g.add_edge(Edge::new("e01", "n0", "n1", EdgeKind::Calls));
-        g.add_edge(Edge::new("e12", "n1", "n2", EdgeKind::Calls));
-        g.add_edge(Edge::new("e02", "n0", "n2", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e01", "n0", "n1", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e12", "n1", "n2", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e02", "n0", "n2", EdgeKind::Calls));
         // Cluster 2: n3-n4-n5
-        g.add_edge(Edge::new("e34", "n3", "n4", EdgeKind::Calls));
-        g.add_edge(Edge::new("e45", "n4", "n5", EdgeKind::Calls));
-        g.add_edge(Edge::new("e35", "n3", "n5", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e34", "n3", "n4", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e45", "n4", "n5", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e35", "n3", "n5", EdgeKind::Calls));
         // Bridge
-        g.add_edge(Edge::new("e23", "n2", "n3", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e23", "n2", "n3", EdgeKind::Calls));
         g
     }
 
@@ -759,7 +759,7 @@ mod tests {
         for c in 0..n_communities {
             let base = c * community_size;
             for i in 0..(community_size - 1) {
-                g.add_edge(Edge::new(
+                g.add_edge_unchecked(Edge::new(
                     format!("intra_{}_{}", base + i, base + i + 1),
                     format!("n{}", base + i),
                     format!("n{}", base + i + 1),
@@ -769,7 +769,7 @@ mod tests {
         }
 
         for c in 0..(n_communities - 1) {
-            g.add_edge(Edge::new(
+            g.add_edge_unchecked(Edge::new(
                 format!("bridge_{}_{}", c, c + 1),
                 format!("n{}", c * community_size),
                 format!("n{}", (c + 1) * community_size),
@@ -842,7 +842,7 @@ mod tests {
         }
         for i in 0..5 {
             for j in (i + 1)..5 {
-                g.add_edge(Edge::new(
+                g.add_edge_unchecked(Edge::new(
                     format!("e{}{}", i, j),
                     format!("n{}", i),
                     format!("n{}", j),
@@ -885,7 +885,7 @@ mod tests {
             g.add_node(Node::new(format!("n{}", i), format!("Node{}", i), NodeKind::Symbol));
         }
         for i in 0..10 {
-            g.add_edge(Edge::new(
+            g.add_edge_unchecked(Edge::new(
                 format!("e{}", i),
                 format!("n{}", i),
                 format!("n{}", i + 10),

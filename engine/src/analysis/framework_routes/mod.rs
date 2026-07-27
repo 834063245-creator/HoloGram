@@ -475,7 +475,7 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framewo
         };
 
         graph.add_node(route_node);
-        graph.add_edge(edge);
+        graph.add_edge_unchecked(edge);
         added += 1;
     }
 

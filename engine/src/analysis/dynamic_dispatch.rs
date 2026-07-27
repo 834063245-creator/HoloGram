@@ -141,7 +141,7 @@ fn walk_js_ts_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, sour
                             is_synthesized: false,
                             metadata: None,
                         };
-                        graph.add_edge(edge);
+                        graph.add_edge_unchecked(edge);
                         added += 1;
                     }
                 }
@@ -305,7 +305,7 @@ fn walk_py_dispatch_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree
                             is_synthesized: false,
                             metadata: None,
                         };
-                        graph.add_edge(edge);
+                        graph.add_edge_unchecked(edge);
                         added += 1;
                     }
                 }

@@ -64,8 +64,8 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "a", EdgeKind::Calls));
 
         let r = classify_cycles(&g);
         assert_eq!(r["total"], 1);
@@ -78,8 +78,8 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("m", "db", NodeKind::Medium));
-        g.add_edge(Edge::new("e1", "a", "m", EdgeKind::Writes));
-        g.add_edge(Edge::new("e2", "m", "a", EdgeKind::Reads));
+        g.add_edge_unchecked(Edge::new("e1", "a", "m", EdgeKind::Writes));
+        g.add_edge_unchecked(Edge::new("e2", "m", "a", EdgeKind::Reads));
 
         let r = classify_cycles(&g);
         assert_eq!(r["total"], 1);

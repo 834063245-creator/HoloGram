@@ -183,16 +183,16 @@ pub(crate) fn engine_get_graph() -> Result<String, String> {
 
 #[tauri::command]
 pub(crate) fn engine_neighbors(node_id: String, depth: usize) -> Result<String, String> {
-    crate::utils::with_graph(move |g| {
-        let nb = query::neighbors(g, &node_id, depth);
+    crate::utils::with_index(move |idx| {
+        let nb = idx.neighbors(&node_id, depth as u8, None);
         serde_json::json!({"neighbors": nb.iter().map(|(s,t,d)| serde_json::json!([s,t,d])).collect::<Vec<_>>()})
     })
 }
 
 #[tauri::command]
 pub(crate) fn engine_path(from_id: String, to_id: String) -> Result<String, String> {
-    crate::utils::with_graph(move |g| {
-        match query::shortest_path(g, &from_id, &to_id) {
+    crate::utils::with_index(move |idx| {
+        match idx.shortest_path(&from_id, &to_id) {
             Some(p) => serde_json::json!({"path": p, "length": p.len()}),
             None => serde_json::json!({"path": null, "message": "no path"}),
         }
@@ -209,8 +209,8 @@ pub(crate) fn engine_search(query: String) -> Result<String, String> {
 
 #[tauri::command]
 pub(crate) fn engine_impact(node_id: String, max_depth: usize) -> Result<String, String> {
-    crate::utils::with_graph(move |g| {
-        let layers = query::impact(g, &node_id, max_depth);
+    crate::utils::with_index(move |idx| {
+        let layers = idx.impact(&node_id, max_depth);
         serde_json::json!({"layers": layers})
     })
 }

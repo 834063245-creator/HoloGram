@@ -11,6 +11,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use hologram_engine as engine;
 use engine::engine as engine_api;
 use engine::graph::Graph;
+use engine::storage::MemoryIndex;
 use crate::os_sandbox;
 use crate::workspace;
 use crate::permissions;
@@ -741,6 +742,15 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
 pub(crate) fn with_graph<F: Fn(&Graph) -> serde_json::Value>(f: F) -> Result<String, String> {
     engine_api::engine_read_graph(|g| {
         serde_json::to_string(&f(g)).unwrap_or_default()
+    })
+    .map_err(|e| format!("Engine error: {}", e))
+}
+
+/// Run a query on the MemoryIndex (CSR-based, O(1) adjacency).
+/// Preferred over with_graph for traversal queries.
+pub(crate) fn with_index<F: FnOnce(&MemoryIndex) -> serde_json::Value>(f: F) -> Result<String, String> {
+    engine_api::engine_read(|idx| {
+        serde_json::to_string(&f(idx)).unwrap_or_default()
     })
     .map_err(|e| format!("Engine error: {}", e))
 }

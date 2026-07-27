@@ -988,15 +988,15 @@ mod tests {
         // Edges
         let mut e1 = Edge::new("e1", "a", "b", EdgeKind::Calls);
         e1.coupling_depth = 1;
-        g.add_edge(e1);
+        g.add_edge_unchecked(e1);
 
         let mut e2 = Edge::new("e2", "c", "a", EdgeKind::Calls);
         e2.coupling_depth = 2;
-        g.add_edge(e2);
+        g.add_edge_unchecked(e2);
 
         let mut e3 = Edge::new("e3", "t1", "a", EdgeKind::Calls);
         e3.coupling_depth = 1;
-        g.add_edge(e3);
+        g.add_edge_unchecked(e3);
 
         // Protocol implementation
         let mut proto = Node::new("proto", "RequestProtocol", NodeKind::Symbol);
@@ -1005,7 +1005,7 @@ mod tests {
 
         let mut e4 = Edge::new("e4", "a", "proto", EdgeKind::Inherits);
         e4.coupling_depth = 1;
-        g.add_edge(e4);
+        g.add_edge_unchecked(e4);
 
         g
     }

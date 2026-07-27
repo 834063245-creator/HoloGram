@@ -356,7 +356,7 @@ mod tests {
             g.add_node(Node::new(*id, *name, *kind));
         }
         for (id, s, t, k) in edges {
-            g.add_edge(Edge::new(*id, *s, *t, *k));
+            g.add_edge_unchecked(Edge::new(*id, *s, *t, *k));
         }
         g
     }

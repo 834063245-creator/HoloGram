@@ -325,7 +325,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
 
         let r = run_full_check(&g, &g, &[], ".");
         assert!(r["passed"].as_bool().unwrap());
@@ -350,8 +350,8 @@ mod tests {
         b.location = Some("src/handler.rs".into());
         g.add_node(b);
         g.add_node(Node::new("c", "mod_c", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "c", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "c", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "c", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "c", "b", EdgeKind::Calls));
 
         let r = run_full_check(&g, &g, &["src/handler.rs".into()], ".");
         // BFS from a,b should include c within depth 3
@@ -383,9 +383,9 @@ mod tests {
         g.add_node(Node::new("a", "a", NodeKind::Symbol));
         g.add_node(Node::new("b", "b", NodeKind::Symbol));
         g.add_node(Node::new("c", "c", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
-        g.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e3", "c", "a", EdgeKind::Calls));
         let r = run_full_check(&g, &g, &[], ".");
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["violation_count"], 0);
@@ -412,24 +412,24 @@ mod tests {
         before.add_node(Node::new("x", "old_x", NodeKind::Symbol));
         before.add_node(Node::new("y", "old_y", NodeKind::Symbol));
         before.add_node(Node::new("z", "old_z", NodeKind::Symbol));
-        before.add_edge(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
-        before.add_edge(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
-        before.add_edge(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // 1 cycle: x→y→z→x
+        before.add_edge_unchecked(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
+        before.add_edge_unchecked(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
+        before.add_edge_unchecked(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // 1 cycle: x→y→z→x
 
         // ── "After re-analysis": bigger graph with 2 cycles ──
         let mut after = Graph::new();
         after.add_node(Node::new("x", "old_x", NodeKind::Symbol));
         after.add_node(Node::new("y", "old_y", NodeKind::Symbol));
         after.add_node(Node::new("z", "old_z", NodeKind::Symbol));
-        after.add_edge(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
-        after.add_edge(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
-        after.add_edge(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // cycle 1
+        after.add_edge_unchecked(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // cycle 1
         after.add_node(Node::new("a", "new_a", NodeKind::Symbol));
         after.add_node(Node::new("b", "new_b", NodeKind::Symbol));
         after.add_node(Node::new("c", "new_c", NodeKind::Symbol));
-        after.add_edge(Edge::new("e_ab", "a", "b", EdgeKind::Calls));
-        after.add_edge(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
-        after.add_edge(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // cycle 2
+        after.add_edge_unchecked(Edge::new("e_ab", "a", "b", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // cycle 2
 
         // No files changed — this should be quiet
         let r = run_full_check(&before, &after, &[], ".");
@@ -446,7 +446,7 @@ mod tests {
     fn test_stale_baseline_still_detects_with_real_changes() {
         let mut before = Graph::new();
         before.add_node(Node::new("x", "old_x", NodeKind::Symbol));
-        before.add_edge(Edge::new("e_self", "x", "x", EdgeKind::Calls));
+        before.add_edge_unchecked(Edge::new("e_self", "x", "x", EdgeKind::Calls));
 
         let mut after = Graph::new();
         let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
@@ -455,10 +455,10 @@ mod tests {
         after.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
         let mut e = Edge::new("e_ab", "a", "b", EdgeKind::Calls);
         e.coupling_depth = 4;
-        after.add_edge(e);
+        after.add_edge_unchecked(e);
         after.add_node(Node::new("c", "mod_c", NodeKind::Symbol));
-        after.add_edge(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
-        after.add_edge(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // 1 new cycle
+        after.add_edge_unchecked(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // 1 new cycle
 
         // WITH changed files → should still fire
         let r = run_full_check(&before, &after, &["src/new_module.rs".into()], ".");

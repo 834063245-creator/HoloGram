@@ -98,9 +98,9 @@ mod tests {
             g.add_node(Node::new(&tid, &tid, NodeKind::Symbol));
             let mut e = Edge::new(format!("ea{}", i), "a", &tid, EdgeKind::Calls);
             e.coupling_depth = 4;
-            g.add_edge(e);
+            g.add_edge_unchecked(e);
         }
-        g.add_edge(Edge::new("eb", "b", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("eb", "b", "a", EdgeKind::Calls));
         let result = fragile_nodes(&g, 2);
         assert_eq!(result[0]["node_id"], "a", "high coupling should rank first");
     }
@@ -137,10 +137,10 @@ mod tests {
             g.add_node(Node::new(&tid, &tid, NodeKind::Symbol));
             let mut e = Edge::new(format!("ea{}", i), "a", &tid, EdgeKind::Calls);
             e.coupling_depth = 4;
-            g.add_edge(e);
+            g.add_edge_unchecked(e);
         }
         // Node b has one low-coupling edge
-        g.add_edge(Edge::new("eb", "b", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("eb", "b", "a", EdgeKind::Calls));
         let idx = MemoryIndex::from_existing_graph(g.nodes, g.edges);
         let result = fragile_nodes_from_index(&idx, 2);
         assert_eq!(result.len(), 2);

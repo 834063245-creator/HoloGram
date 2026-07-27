@@ -102,8 +102,8 @@ mod tests {
         g.add_node(Node::new("a", "a", NodeKind::Symbol));
         g.add_node(Node::new("b", "b", NodeKind::Symbol));
         g.add_node(Node::new("c", "c", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "c", EdgeKind::Calls));
         assert!(detect_cycles(&g).is_empty());
     }
 
@@ -112,8 +112,8 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "a", NodeKind::Symbol));
         g.add_node(Node::new("b", "b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "a", EdgeKind::Calls));
         let cycles = detect_cycles(&g);
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0]["size"], 2);
@@ -125,9 +125,9 @@ mod tests {
         g.add_node(Node::new("a", "a", NodeKind::Symbol));
         g.add_node(Node::new("b", "b", NodeKind::Symbol));
         g.add_node(Node::new("c", "c", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
-        g.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e3", "c", "a", EdgeKind::Calls));
         let cycles = detect_cycles(&g);
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0]["size"], 3);
@@ -137,7 +137,7 @@ mod tests {
     fn test_cycles_self_loop() {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "a", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "a", EdgeKind::Calls));
         let cycles = detect_cycles(&g);
         assert_eq!(cycles.len(), 0, "self-loop SCC size=1 is filtered");
     }
@@ -155,12 +155,12 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "a", NodeKind::Symbol));
         g.add_node(Node::new("b", "b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "a", EdgeKind::Calls));
         g.add_node(Node::new("c", "c", NodeKind::Symbol));
         g.add_node(Node::new("d", "d", NodeKind::Symbol));
-        g.add_edge(Edge::new("e3", "c", "d", EdgeKind::Calls));
-        g.add_edge(Edge::new("e4", "d", "c", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e3", "c", "d", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e4", "d", "c", EdgeKind::Calls));
         let cycles = detect_cycles(&g);
         assert_eq!(cycles.len(), 2);
     }
@@ -170,8 +170,8 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "a", NodeKind::Symbol));
         g.add_node(Node::new("b", "b", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "a", EdgeKind::Calls));
         let idx = MemoryIndex::from_existing_graph(g.nodes, g.edges);
         let cycles = detect_cycles_from_index(&idx);
         assert_eq!(cycles.len(), 1);

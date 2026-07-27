@@ -63,8 +63,8 @@ mod tests {
         g.add_node(Node::new("c", "C", NodeKind::Symbol));
 
         // a → b → c (chain, increasing depth)
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "c", EdgeKind::Calls));
 
         compute_coupling(&mut g);
 
@@ -81,7 +81,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "A", NodeKind::Symbol));
         g.add_node(Node::new("db", "DB", NodeKind::Medium));
-        g.add_edge(Edge::new("e1", "a", "db", EdgeKind::Reads));
+        g.add_edge_unchecked(Edge::new("e1", "a", "db", EdgeKind::Reads));
 
         compute_coupling(&mut g);
 
@@ -94,7 +94,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "A", NodeKind::Symbol));
         g.add_node(Node::new("t", "Thread", NodeKind::Temporal));
-        g.add_edge(Edge::new("e1", "a", "t", EdgeKind::Triggers));
+        g.add_edge_unchecked(Edge::new("e1", "a", "t", EdgeKind::Triggers));
 
         compute_coupling(&mut g);
 

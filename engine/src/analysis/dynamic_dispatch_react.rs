@@ -88,7 +88,7 @@ fn synthesize_jsx_children(graph: &mut Graph, file: &str, source: &str) -> usize
         for nid in &node_ids {
             if let Some(node) = graph.nodes.get(nid) {
                 if node.name == tag && matches!(node.kind, NodeKind::Function | NodeKind::Class) {
-                    graph.add_edge(Edge::synthesized(
+                    graph.add_edge_unchecked(Edge::synthesized(
                         format!("jsx_{}_{}", parent_id, nid),
                         &parent_id, nid, EdgeKind::Calls, "jsx-child",
                     ));
@@ -121,7 +121,7 @@ fn synthesize_setstate_render(graph: &mut Graph, file: &str, source: &str) -> us
     let setter_id = find_first_in_file(graph, file);
     if let (Some(render_id), Some(setter_id)) = (render_id, setter_id) {
         if render_id != setter_id {
-            graph.add_edge(Edge::synthesized(
+            graph.add_edge_unchecked(Edge::synthesized(
                 format!("setstate_{}_{}", setter_id, render_id),
                 &setter_id, &render_id, EdgeKind::Triggers, "react-render",
             ));
@@ -152,7 +152,7 @@ fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize 
             if let Some(node) = graph.nodes.get(nid) {
                 if node.name == action && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller) = caller_id {
-                        graph.add_edge(Edge::synthesized(
+                        graph.add_edge_unchecked(Edge::synthesized(
                             format!("thunk_{}_{}", caller, nid),
                             caller, nid, EdgeKind::Calls, "redux-thunk",
                         ));
@@ -186,7 +186,7 @@ fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
             if let Some(node) = graph.nodes.get(nid) {
                 if node.name.contains(&endpoint) && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller) = caller_id {
-                        graph.add_edge(Edge::synthesized(
+                        graph.add_edge_unchecked(Edge::synthesized(
                             format!("rtkq_{}_{}", caller, nid),
                             caller, nid, EdgeKind::Calls, "rtk-query",
                         ));
@@ -225,7 +225,7 @@ fn synthesize_nextjs_data_fetch(graph: &mut Graph, file: &str, source: &str) -> 
                 if node.name == func_name && node.kind == NodeKind::Function {
                     if let Some(ref loc) = node.location {
                         if loc.starts_with(file) {
-                            graph.add_edge(Edge::synthesized(
+                            graph.add_edge_unchecked(Edge::synthesized(
                                 format!("nextjs_{}_{}", file_id, nid),
                                 &file_id, nid, EdgeKind::Calls, "nextjs-data-fetch",
                             ));
@@ -271,7 +271,7 @@ fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usiz
                 if node.name == "create" && node.kind == NodeKind::Function {
                     if seen_create_target.contains(nid) { continue; }
                     seen_create_target.insert(nid.clone());
-                    graph.add_edge(Edge::synthesized(
+                    graph.add_edge_unchecked(Edge::synthesized(
                         format!("zustand_{}_{}", file_id, nid),
                         &file_id, nid, EdgeKind::Calls, "zustand-store",
                     ));

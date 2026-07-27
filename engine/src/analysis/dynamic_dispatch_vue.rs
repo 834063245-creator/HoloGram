@@ -74,7 +74,7 @@ fn synthesize_vue_handlers(graph: &mut Graph, file: &str, source: &str) -> usize
             if let Some(node) = graph.nodes.get(nid) {
                 if node.name == fn_name && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller_id) = caller {
-                        graph.add_edge(Edge::synthesized(
+                        graph.add_edge_unchecked(Edge::synthesized(
                             format!("vue_handler_{}_{}", caller_id, nid),
                             caller_id, nid, EdgeKind::Calls, "vue-handler",
                         ));
@@ -106,7 +106,7 @@ fn synthesize_vue_composables(graph: &mut Graph, file: &str, source: &str) -> us
             if let Some(node) = graph.nodes.get(nid) {
                 if node.name == composable && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller_id) = caller {
-                        graph.add_edge(Edge::synthesized(
+                        graph.add_edge_unchecked(Edge::synthesized(
                             format!("vue_composable_{}_{}", caller_id, nid),
                             caller_id, nid, EdgeKind::Calls, "vue-composable",
                         ));
@@ -138,7 +138,7 @@ fn synthesize_vuex_dispatch(graph: &mut Graph, file: &str, source: &str) -> usiz
             if let Some(node) = graph.nodes.get(nid) {
                 if node.name == action && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller_id) = caller {
-                        graph.add_edge(Edge::synthesized(
+                        graph.add_edge_unchecked(Edge::synthesized(
                             format!("vuex_{}_{}", caller_id, nid),
                             caller_id, nid, EdgeKind::Calls, "vuex-dispatch",
                         ));
@@ -170,7 +170,7 @@ fn synthesize_pinia(graph: &mut Graph, file: &str, source: &str) -> usize {
             if let Some(node) = graph.nodes.get(nid) {
                 if node.name == store_fn_name && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller_id) = caller {
-                        graph.add_edge(Edge::synthesized(
+                        graph.add_edge_unchecked(Edge::synthesized(
                             format!("pinia_{}_{}", caller_id, nid),
                             caller_id, nid, EdgeKind::Calls, "pinia-store",
                         ));

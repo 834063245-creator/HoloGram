@@ -154,7 +154,7 @@ mod tests {
         after.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
         let mut e = Edge::new("e1", "a", "b", EdgeKind::Calls);
         e.coupling_depth = 4;
-        after.add_edge(e);
+        after.add_edge_unchecked(e);
         let signals = gen.generate(&before, &after, &["src/a.rs".into()], 1, 0, None);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 4);
@@ -168,9 +168,9 @@ mod tests {
         after.add_node(Node::new("a", "a", NodeKind::Symbol));
         after.add_node(Node::new("b", "b", NodeKind::Symbol));
         after.add_node(Node::new("c", "c", NodeKind::Symbol));
-        after.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        after.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
-        after.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e3", "c", "a", EdgeKind::Calls));
         let signals = gen.generate(&before, &after, &[], 0, 1, None);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 2);
@@ -183,9 +183,9 @@ mod tests {
         g.add_node(Node::new("a", "a", NodeKind::Symbol));
         g.add_node(Node::new("b", "b", NodeKind::Symbol));
         g.add_node(Node::new("c", "c", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
-        g.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e3", "c", "a", EdgeKind::Calls));
         let signals = gen.generate(&g, &g, &[], 0, 1, None);
         assert!(signals.is_empty(), "same graph should not re-alert on existing cycles");
     }
@@ -200,7 +200,7 @@ mod tests {
         g.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
         let mut e = Edge::new("e1", "a", "b", EdgeKind::Writes);
         e.coupling_depth = 3;
-        g.add_edge(e);
+        g.add_edge_unchecked(e);
 
         let signals = gen.generate(&g, &g, &["src/handler.rs".into()], 0, 0, None);
         assert_eq!(signals.len(), 1);
@@ -215,12 +215,12 @@ mod tests {
         after.add_node(Node::new("a", "a", NodeKind::Symbol));
         after.add_node(Node::new("b", "b", NodeKind::Symbol));
         after.add_node(Node::new("c", "c", NodeKind::Symbol));
-        after.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
-        after.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
-        after.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e2", "b", "c", EdgeKind::Calls));
+        after.add_edge_unchecked(Edge::new("e3", "c", "a", EdgeKind::Calls));
         let mut l4 = Edge::new("e4", "a", "b", EdgeKind::Calls);
         l4.coupling_depth = 4;
-        after.add_edge(l4);
+        after.add_edge_unchecked(l4);
         let signals = gen.generate(&before, &after,
             &["migrations/init.py".into(), "config.toml".into()],
             1, 1, None);

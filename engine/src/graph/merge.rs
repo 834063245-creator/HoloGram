@@ -77,7 +77,10 @@ impl GraphMerger {
             edge_kind_id(&edge.kind),
         );
         if self.edge_index.insert(key) {
-            self.graph.add_edge(edge);
+            // Merge intentionally allows edges with unresolved bare-name targets
+            // (e.g. "db" from `from db import ...`). The cross-file resolver
+            // later resolves these to actual node IDs.
+            self.graph.add_edge_unchecked(edge);
             true
         } else {
             false
@@ -219,7 +222,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(make_node("n1", "fn_a", "src/a.rs", NodeKind::Symbol));
         g.add_node(make_node("n2", "fn_b", "src/b.rs", NodeKind::Symbol));
-        g.add_edge(Edge::new("e1", "n1", "n2", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e1", "n1", "n2", EdgeKind::Calls));
 
         let added = merger.merge(g);
         assert_eq!(added, 2);
@@ -279,11 +282,11 @@ mod tests {
         let mut g1 = Graph::new();
         g1.add_node(make_node("a", "src_a", "src/a.rs", NodeKind::Symbol));
         g1.add_node(make_node("b", "src_b", "src/b.rs", NodeKind::Symbol));
-        g1.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        g1.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
 
         let mut g2 = Graph::new();
         g2.add_node(make_node("c", "src_c", "src/c.rs", NodeKind::Symbol));
-        g2.add_edge(Edge::new("e2", "c", "a", EdgeKind::Calls));
+        g2.add_edge_unchecked(Edge::new("e2", "c", "a", EdgeKind::Calls));
 
         merger.merge(g1);
         merger.merge(g2);
@@ -331,8 +334,10 @@ mod tests {
         // Add source and target nodes so add_edge can update degrees
         let src = Node::new("a.foo", "foo", NodeKind::Function);
         let tgt = Node::new("b.helper", "helper", NodeKind::Function);
+        let other = Node::new("c.other", "other", NodeKind::Function);
         merger.graph.add_node(src);
         merger.graph.add_node(tgt);
+        merger.graph.add_node(other);
 
         let nodes: Vec<Node> = vec![];
         let edges: Vec<Edge> = vec![
