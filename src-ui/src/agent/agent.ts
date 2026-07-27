@@ -277,6 +277,13 @@ export class Agent {
     this._planInjector = injector;
   }
 
+  /** 从持久化快照恢复 plan 状态 — 在 agent load 后调用 */
+  restorePlanState(snapshot: import('./plan/plan-state').PlanStateSnapshot | null | undefined, projectPath: string): void {
+    if (this._planState) {
+      this._planState.fromSnapshot(snapshot ?? null, projectPath);
+    }
+  }
+
   setUiSessionId(sid: number): void {
     this._uiSessionId = sid;
   }
@@ -551,6 +558,7 @@ export class Agent {
   async saveState(status: AgentRecord['status'] = 'running'): Promise<void> {
     if (!this.agentStore) return;
     try {
+      const planSnapshot = this._planState?.toSnapshot() ?? undefined;
       await this.agentStore.save(
         this.id,
         {
@@ -558,6 +566,7 @@ export class Agent {
           description: this.id === 'main' ? '主Agent' : `子Agent (depth ${this._subagentDepth})`,
           status,
           subagentDepth: this._subagentDepth,
+          planSnapshot,
         },
         this.session,
       );

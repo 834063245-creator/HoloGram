@@ -19,6 +19,8 @@ export interface AgentRecord {
   createdAt: number;
   updatedAt: number;
   subagentDepth: number;
+  /** Plan mode snapshot — { active, id } for session resume. null/undefined = not in plan mode. */
+  planSnapshot?: { active: boolean; id: string | null } | null;
 }
 
 export interface AgentLoadResult {

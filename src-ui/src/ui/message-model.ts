@@ -81,7 +81,28 @@ export interface SubAgentPart {
   version: number;
 }
 
-export type AssistantPart = ReasonPart | TextPart | ToolCallPart | SubAgentPart;
+/** Plan review card — rendered as a full-width card with markdown content + approve/revise/reject buttons. */
+export interface PlanPart {
+  type: 'plan';
+  planId: string;
+  planFilePath: string;
+  content: string;
+  options?: { label: string; description: string }[];
+  status: 'pending' | 'approved' | 'revise' | 'rejected';
+  /** Selected option label when user picks from multiple approaches. */
+  selectedLabel?: string;
+  /** Feedback text when user requests revision. */
+  feedback?: string;
+  /** Callback to resolve the approval — stored at creation, invoked when user clicks a button. */
+  _callback?: (
+    response:
+      | { decision: 'approved'; selectedLabel?: string }
+      | { decision: 'revise'; feedback: string }
+      | { decision: 'rejected' },
+  ) => void;
+}
+
+export type AssistantPart = ReasonPart | TextPart | ToolCallPart | SubAgentPart | PlanPart;
 
 // ── Messages ─────────────────────────────────────────────
 

@@ -164,51 +164,6 @@ export function createBuilderDeps(storeId: string): import('../agent/runtime/age
     onAskUser: (req) => {
       bus.emit('prompt:ask', req);
     },
-    onPlanReview: (req) => {
-      // 复用 prompt:ask — 把计划审批包装成 ask_user 弹窗
-      // 计划内容太长不适合放 question 字段，放到一个 option 的 description 里
-      // 简化方案：question 放计划摘要，用户选「批准/修改/拒绝」
-      const id = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      const options = [
-        { label: '✅ 批准', description: '批准计划，切换到执行模式' },
-        { label: '📝 修改', description: '提出修改意见，留在规划模式' },
-        { label: '❌ 拒绝', description: '拒绝计划，留在规划模式' },
-      ];
-      if (req.options) {
-        // 多方案时，在选项前加上各方案
-        const planOptions = req.options.map((o) => ({
-          label: o.label,
-          description: o.description,
-        }));
-        options.unshift(...planOptions);
-      }
-      bus.emit('prompt:ask', {
-        id,
-        question: req.planContent.slice(0, 2000),
-        header: '计划审批',
-        options,
-        multiSelect: false,
-        callback: (answer) => {
-          if (!answer || answer.length === 0) {
-            req.callback({ decision: 'rejected' });
-            return;
-          }
-          const choice = answer[0];
-          if (choice === '✅ 批准') {
-            req.callback({ decision: 'approved' });
-          } else if (choice === '📝 修改') {
-            // 修改模式：反馈内容简化为「用户要求修改」（无法在 ask_user 中输入长文本）
-            // 实际使用时用户可以在对话中继续说明修改意见
-            req.callback({ decision: 'revise', feedback: '用户要求修改计划，请在对话中查看具体修改意见' });
-          } else if (choice === '❌ 拒绝') {
-            req.callback({ decision: 'rejected' });
-          } else {
-            // 选了某个方案 → 批准 + 选定方案
-            req.callback({ decision: 'approved', selectedLabel: choice });
-          }
-        },
-      });
-    },
     onDataflowSaved: () => {
       bus.emit('dataflow:saved');
     },

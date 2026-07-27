@@ -13,7 +13,7 @@ import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { autoTitleSessionIfDefault } from './chat-session';
 import { bumpChat, getChatStore } from './chat-store';
 import type { StarGraph } from './graph';
-import type { AssistantMessage, ChatMessage, FileAttachment, MessageId, UserMessage } from './message-model';
+import type { AssistantMessage, ChatMessage, FileAttachment, MessageId, PlanPart, UserMessage } from './message-model';
 import { createAssistantMessage, createNoticeMessage, createUserMessage } from './message-model';
 import { applyEventToParts } from './part-mutator';
 
@@ -382,6 +382,24 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
 
     case EventKind.SessionChanged:
       _streamingBump(ctx);
+      break;
+
+    case EventKind.PlanReview:
+      if (ev.plan) {
+        const p = ev.plan;
+        const planPart: PlanPart = {
+          type: 'plan',
+          planId: `plan-card-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          planFilePath: p.planFilePath,
+          content: p.planContent,
+          options: p.options,
+          status: 'pending',
+          _callback: p.callback,
+        };
+        const assistant = _streamingAssistant(ctx);
+        assistant.parts.push(planPart);
+        _streamingBump(ctx);
+      }
       break;
 
     default:

@@ -17,6 +17,7 @@ export enum EventKind {
   Usage = 'usage',
   Notice = 'notice',
   SessionChanged = 'session_changed',
+  PlanReview = 'plan_review',
 }
 
 export interface ToolEvent {
@@ -30,6 +31,13 @@ export interface ToolEvent {
   truncated?: boolean;
 }
 
+export interface PlanReviewEvent {
+  planFilePath: string;
+  planContent: string;
+  options?: { label: string; description: string }[];
+  callback: (response: import('./plan/plan-tools').PlanApprovalResponse) => void;
+}
+
 export interface AgentEvent {
   kind: EventKind;
   text?: string;
@@ -40,6 +48,7 @@ export interface AgentEvent {
   session_hit?: number;
   session_miss?: number;
   level?: 'info' | 'warn' | 'error';
+  plan?: PlanReviewEvent;
 }
 
 export interface Pricing {

@@ -21,6 +21,7 @@ import type {
   AssistantMessage,
   AssistantPart,
   NoticeMessage,
+  PlanPart,
   SubAgentPart,
   TextPart,
   ToolCallPart,
@@ -477,6 +478,162 @@ const SubReasoningBlock: React.FC<{
   );
 };
 
+// ── Plan review card — full-width markdown content + approve/revise/reject ──
+
+const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeId }) => {
+  const [feedbackText, setFeedbackText] = React.useState('');
+  const [showFeedback, setShowFeedback] = React.useState(false);
+  const [collapsed, setCollapsed] = React.useState(false);
+
+  const respond = (decision: 'approved' | 'revise' | 'rejected', selectedLabel?: string) => {
+    if (decision === 'revise') {
+      setShowFeedback(true);
+      if (!feedbackText.trim()) return; // 等用户输入反馈
+    }
+    part.status = decision === 'approved' ? 'approved' : decision === 'revise' ? 'revise' : 'rejected';
+    part.selectedLabel = selectedLabel;
+    part.feedback = decision === 'revise' ? feedbackText : undefined;
+    // 提交变更到消息存储 — 触发重渲染
+    if (storeId) {
+      getMessagesStore(storeId).getState().bump();
+    }
+    // 回调通知 Agent 工具 — 按判别联合类型构造响应
+    if (decision === 'approved') {
+      part._callback?.({ decision: 'approved', selectedLabel });
+    } else if (decision === 'revise') {
+      part._callback?.({ decision: 'revise', feedback: feedbackText });
+    } else {
+      part._callback?.({ decision: 'rejected' });
+    }
+  };
+
+  const statusIcon =
+    part.status === 'approved' ? '✅' : part.status === 'revise' ? '📝' : part.status === 'rejected' ? '❌' : '📋';
+  const isPending = part.status === 'pending';
+
+  return (
+    <div className="msg-plan-card" style={{
+      border: '1px solid var(--border-color, #444)',
+      borderRadius: '8px',
+      padding: '12px 16px',
+      margin: '8px 0',
+      background: 'var(--bg-secondary, #1a1a2e)',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+        <span style={{ fontSize: '16px' }}>{statusIcon}</span>
+        <strong style={{ fontSize: '14px' }}>计划审批</strong>
+        {part.options && part.options.length >= 2 && (
+          <span style={{ fontSize: '12px', color: 'var(--text-secondary, #888)' }}>（{part.options.length} 个方案）</span>
+        )}
+        <span style={{ marginLeft: 'auto', fontSize: '12px', color: 'var(--text-secondary, #888)', cursor: 'pointer' }} onClick={() => setCollapsed(!collapsed)}>
+          {collapsed ? '展开' : '折叠'}
+        </span>
+      </div>
+
+      {/* Plan content — full markdown */}
+      {!collapsed && (
+        <div className="plan-card__content" style={{ maxHeight: '400px', overflow: 'auto', marginBottom: '12px' }}>
+          <MarkdownContent text={part.content} streaming={false} />
+        </div>
+      )}
+
+      {/* Options (if multiple approaches) */}
+      {!collapsed && part.options && part.options.length >= 2 && (
+        <div style={{ marginBottom: '12px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary, #888)', marginBottom: '6px' }}>选择方案：</div>
+          {part.options.map((opt) => (
+            <button
+              key={opt.label}
+              disabled={!isPending}
+              onClick={() => respond('approved', opt.label)}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left',
+                padding: '8px 12px', marginBottom: '4px',
+                border: '1px solid var(--border-color, #444)',
+                borderRadius: '6px', background: 'transparent',
+                cursor: isPending ? 'pointer' : 'default',
+                opacity: isPending ? 1 : 0.6,
+                color: 'var(--text-primary, #eee)',
+              }}
+            >
+              <strong>{opt.label}</strong>
+              {opt.description && <span style={{ marginLeft: '8px', fontSize: '12px', color: 'var(--text-secondary, #888)' }}>{opt.description}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Feedback input (for revise) */}
+      {showFeedback && isPending && (
+        <div style={{ marginBottom: '12px' }}>
+          <textarea
+            placeholder="输入修改意见…"
+            value={feedbackText}
+            onChange={(e) => setFeedbackText(e.target.value)}
+            rows={3}
+            style={{
+              width: '100%', padding: '8px',
+              border: '1px solid var(--border-color, #444)',
+              borderRadius: '6px', background: 'var(--bg-primary, #111)',
+              color: 'var(--text-primary, #eee)',
+              resize: 'vertical', fontSize: '13px',
+            }}
+          />
+          <button
+            onClick={() => respond('revise')}
+            disabled={!feedbackText.trim()}
+            style={{
+              marginTop: '4px', padding: '6px 16px',
+              border: '1px solid var(--border-color, #444)',
+              borderRadius: '6px', background: 'var(--accent, #4a9eff)',
+              color: '#fff', cursor: 'pointer',
+              opacity: feedbackText.trim() ? 1 : 0.5,
+            }}
+          >
+            提交修改意见
+          </button>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      {isPending && !showFeedback && (
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {!part.options || part.options.length < 2 ? (
+            <button
+              onClick={() => respond('approved')}
+              style={{ padding: '6px 16px', border: '1px solid #2a5', borderRadius: '6px', background: 'rgba(40,120,60,0.3)', color: '#4a9', cursor: 'pointer' }}
+            >
+              ✅ 批准
+            </button>
+          ) : null}
+          <button
+            onClick={() => setShowFeedback(true)}
+            style={{ padding: '6px 16px', border: '1px solid var(--border-color, #444)', borderRadius: '6px', background: 'transparent', color: 'var(--text-primary, #eee)', cursor: 'pointer' }}
+          >
+            📝 修改
+          </button>
+          <button
+            onClick={() => respond('rejected')}
+            style={{ padding: '6px 16px', border: '1px solid #a44', borderRadius: '6px', background: 'transparent', color: '#a66', cursor: 'pointer' }}
+          >
+            ❌ 拒绝
+          </button>
+        </div>
+      )}
+
+      {/* Resolved status */}
+      {!isPending && (
+        <div style={{ fontSize: '12px', color: 'var(--text-secondary, #888)' }}>
+          {part.status === 'approved' && (part.selectedLabel ? `已批准：${part.selectedLabel}` : '已批准')}
+          {part.status === 'revise' && `已要求修改${part.feedback ? `：${part.feedback.slice(0, 100)}` : ''}`}
+          {part.status === 'rejected' && '已拒绝'}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ── Sub-agent block ──
 // Renders a nested collapsible group for sub-agent output inside an assistant message.
 // Auto-expands while running; auto-collapses on done (respects user manual toggle).
@@ -710,6 +867,7 @@ const AssistantBubble: React.FC<{
   onCopy?: () => void;
   onRetry?: () => void;
   onNavigateToNode?: (name: string) => void;
+  panelId?: string;
 }> = React.memo(
   ({
     msg,
@@ -720,6 +878,7 @@ const AssistantBubble: React.FC<{
     onCopy,
     onRetry,
     onNavigateToNode,
+    panelId,
   }) => {
   const streaming = msg.status === 'streaming';
 
@@ -737,6 +896,7 @@ const AssistantBubble: React.FC<{
     | { kind: 'reasoning'; text: string; idx: number }
     | { kind: 'text'; text: string; finalised: boolean; idx: number }
     | { kind: 'subagent'; part: SubAgentPart }
+    | { kind: 'plan'; part: PlanPart }
   > = [];
   let i = 0;
   while (i < msg.parts.length) {
@@ -759,6 +919,9 @@ const AssistantBubble: React.FC<{
       i++;
     } else if (p.type === 'subagent') {
       groups.push({ kind: 'subagent', part: p as SubAgentPart });
+      i++;
+    } else if (p.type === 'plan') {
+      groups.push({ kind: 'plan', part: p as PlanPart });
       i++;
     } else {
       i++;
@@ -835,6 +998,10 @@ const AssistantBubble: React.FC<{
 
           if (g.kind === 'subagent') {
             return <SubAgentBlock key={gi} part={g.part} onNavigateToNode={onNavigateToNode} />;
+          }
+
+          if (g.kind === 'plan') {
+            return <PlanCard key={gi} part={g.part} storeId={panelId} />;
           }
 
           return null;
@@ -1101,6 +1268,7 @@ export const ChatMessagesApp: React.FC<{
                   onToggleTool={toggleTool}
                   onExpandAllTools={expandAllTools}
                   onCollapseAllTools={collapseAllTools}
+                  panelId={panelId}
                   onCopy={
                     callbacks.onCopyText
                       ? () => {

@@ -413,7 +413,8 @@ export class AgentRuntime implements RuntimePort {
 
     // 2c. Register plan tools (readOnly: true → survive planRegistry filtering)
     r.register(createEnterPlanModeTool(planState, config.projectPath));
-    r.register(createExitPlanModeTool(planState, this._deps?.onPlanReview));
+    // exit_plan_mode uses eventSink to push PlanReview event into chat stream
+    r.register(createExitPlanModeTool(planState, config.eventSink));
 
     // 3. Plan mode: filter to read-only, but allow plan file writes
     const effR =

@@ -4,9 +4,12 @@
 // Plan 模式工具 — enter_plan_mode + exit_plan_mode
 //
 // 两个工具都声明 readOnly: true，确保在任何模式下都存活。
-// exit_plan_mode 用 ask_user 同款的 Promise + callback 模式做交互式审批。
+// exit_plan_mode 通过 EventSink 发 PlanReview 事件到聊天流，
+// 由 chat-stream 创建 PlanPart 卡片（不是弹窗），用户在卡片上审批。
 
 import { rpc } from '../../bridge';
+import type { EventSink } from '../agent-types';
+import { EventKind } from '../agent-types';
 import type { Tool } from '../tool';
 import type { PlanStateManager } from './plan-state';
 
@@ -57,7 +60,7 @@ export function createEnterPlanModeTool(
 
 export function createExitPlanModeTool(
   planState: PlanStateManager,
-  onReview?: (req: PlanReviewRequest) => void,
+  eventSink?: EventSink,
 ): Tool {
   return {
     name: () => 'exit_plan_mode',
@@ -94,7 +97,6 @@ export function createExitPlanModeTool(
       let planContent: string;
       try {
         planContent = await rpc<string>('read_file_content', { filePath: planPath });
-        // 去掉行号前缀（HoloGram read_file_content 会加行号）
         planContent = planContent.replace(/^\s*\d+\t/gm, '');
       } catch {
         return `错误：计划文件不存在。先用 write_file 写计划到 ${planPath}，再调 exit_plan_mode。`;
@@ -106,39 +108,41 @@ export function createExitPlanModeTool(
       const options = (args.options as { label: string; description: string }[]) || undefined;
       const validOptions = options && options.length >= 2 ? options : undefined;
 
-      // 有 onReview 回调 → 走交互式审批
-      if (onReview) {
+      // 有 eventSink → 发 PlanReview 事件到聊天流，UI 创建 PlanPart 卡片
+      if (eventSink) {
         return new Promise<string>((resolve) => {
-          onReview({
-            planFilePath: planPath,
-            planContent,
-            options: validOptions,
-            callback: (response) => {
-              switch (response.decision) {
-                case 'approved':
-                  planState.exit();
-                  resolve(
-                    `计划已批准。${
-                      response.selectedLabel ? `选定方案：${response.selectedLabel}。只执行选中的方案。` : ''
-                    }\n已切换到执行模式，所有工具恢复可用。\n\n## 已批准计划：\n${planContent}`,
-                  );
-                  break;
-                case 'revise':
-                  // 不退出 plan 模式，把反馈注入回去
-                  resolve(
-                    `用户要求修改计划。反馈：${response.feedback}\n请根据反馈修改计划文件，然后重新调 exit_plan_mode。`,
-                  );
-                  break;
-                case 'rejected':
-                  resolve('用户拒绝了计划。规划模式仍然激活。可以重新探索并修改计划。');
-                  break;
-              }
+          eventSink({
+            kind: EventKind.PlanReview,
+            plan: {
+              planFilePath: planPath,
+              planContent,
+              options: validOptions,
+              callback: (response) => {
+                switch (response.decision) {
+                  case 'approved':
+                    planState.exit();
+                    resolve(
+                      `计划已批准。${
+                        response.selectedLabel ? `选定方案：${response.selectedLabel}。只执行选中的方案。` : ''
+                      }\n已切换到执行模式，所有工具恢复可用。\n\n## 已批准计划：\n${planContent}`,
+                    );
+                    break;
+                  case 'revise':
+                    resolve(
+                      `用户要求修改计划。反馈：${response.feedback}\n请根据反馈修改计划文件，然后重新调 exit_plan_mode。`,
+                    );
+                    break;
+                  case 'rejected':
+                    resolve('用户拒绝了计划。规划模式仍然激活。可以重新探索并修改计划。');
+                    break;
+                }
+              },
             },
           });
         });
       }
 
-      // 无 onReview 回调（headless 子 Agent 等）→ 自动批准
+      // 无 eventSink（headless 子 Agent 等）→ 自动批准
       planState.exit();
       return `计划已自动批准（无用户审批 UI）。已切换到执行模式。\n\n## 计划：\n${planContent}`;
     },
