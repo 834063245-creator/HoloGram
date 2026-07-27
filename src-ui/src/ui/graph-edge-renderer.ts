@@ -74,7 +74,7 @@ export class GraphEdgeRenderer {
       }
       const g = groups.get(k)!;
       g.verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
+      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile, d.ambiguous);
       g.colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
     }
     const resolution = new THREE.Vector2(this.host.container.clientWidth, this.host.container.clientHeight);
@@ -144,6 +144,7 @@ export class GraphEdgeRenderer {
         edgeType: e.type || '',
         direction: (e as any).direction || '',
         crossFile: nodeFile.get(s) !== nodeFile.get(t),
+        ambiguous: !!(e.metadata as any)?.ambiguous,
       });
     }
     this.host.deg = deg;
@@ -202,7 +203,7 @@ export class GraphEdgeRenderer {
     for (const ei of edges) {
       const d = this.host.edgeDataList[ei];
       verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
+      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile, d.ambiguous);
       const nearB = 2.5 * degNorm * 0.3;
       const farB = 2.5 * degNorm;
       if (d.s === nodeIdx) {

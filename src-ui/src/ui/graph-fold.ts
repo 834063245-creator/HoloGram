@@ -27,6 +27,7 @@ interface EdgeData {
   edgeType: string;
   direction: string;
   crossFile: boolean;
+  ambiguous: boolean;
 }
 interface CommunityData {
   id: string;
@@ -865,7 +866,7 @@ export class GraphFold {
       const gt = tc ? this.galaxyMeta.find((g) => g.id === tc) : null;
       if (!gs || !gt) continue;
       verts.push(gs.centroid.x, gs.centroid.y, gs.centroid.z, gt.centroid.x, gt.centroid.y, gt.centroid.z);
-      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
+      const c = edgeColorByType(d.edgeType, d.direction, d.crossFile, d.ambiguous);
       colors.push(c.r * 1.2, c.g * 1.2, c.b * 1.2, c.r * 1.2, c.g * 1.2, c.b * 1.2);
     }
     this._addLineSegments(verts, colors, 0.08);

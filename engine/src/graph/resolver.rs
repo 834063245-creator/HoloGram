@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use super::{Edge, Graph};
 use crate::engine::GRAMMAR_LOADER;
 
 /// Source-code file extensions, derived dynamically from GRAMMAR_LOADER.
 /// Automatically includes newly installed grammar DLLs without code changes.
-fn code_extensions() -> Vec<String> {
-    GRAMMAR_LOADER.supported_extensions()
+/// Cached via OnceLock — `supported_extensions()` is only called once.
+fn code_extensions() -> &'static [String] {
+    static EXT: OnceLock<Vec<String>> = OnceLock::new();
+    EXT.get_or_init(|| GRAMMAR_LOADER.supported_extensions())
 }
 
 fn is_common_extension(s: &str) -> bool {
@@ -926,5 +929,25 @@ mod tests {
         let _resolved = CrossFileResolver::resolve(&mut g);
         assert!(g.get_edge("e1_resolved").is_some(),
             "same-language resolution must still work");
+    }
+
+    #[test]
+    fn test_best_bare_match_returns_none_on_tie() {
+        // Two candidates with identical depth → tie → ambiguous (preserved, not resolved)
+        let mut g = Graph::new();
+        // Two "render" functions at same depth — neither is better
+        g.add_node(Node::new("mod_a.render", "render", NodeKind::Function));
+        g.add_node(Node::new("mod_b.render", "render", NodeKind::Function));
+        g.add_node(Node::new("caller.py.index", "index", NodeKind::Function));
+        g.add_edge_unchecked(cross_edge("e1",
+            "caller.py.index",
+            "render", EdgeKind::Calls));
+
+        let resolved = CrossFileResolver::resolve(&mut g);
+        // Should NOT resolve (tie) — edge should be preserved as ambiguous
+        assert_eq!(resolved, 0, "tie should not produce a resolved edge");
+        let edge = g.get_edge("e1").expect("ambiguous edge should be preserved");
+        let meta = edge.metadata.as_ref().expect("ambiguous edge must have metadata");
+        assert_eq!(meta["ambiguous"], true, "ambiguous flag must be set");
     }
 }

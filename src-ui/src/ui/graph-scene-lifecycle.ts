@@ -199,13 +199,14 @@ export class GraphSceneLifecycle {
         deg[s]++;
         deg[t]++;
         const crossFile = nodeFile.get(s) !== nodeFile.get(t);
-        eData.push({
+                eData.push({
           s,
           t,
           couplingDepth: ((e as any).coupling_depth as number) || 0,
           edgeType: e.type || '',
           direction: (e as any).direction || '',
           crossFile,
+          ambiguous: !!(e.metadata as any)?.ambiguous,
         });
       }
     }

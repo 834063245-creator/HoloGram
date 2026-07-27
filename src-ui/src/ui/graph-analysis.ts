@@ -26,6 +26,7 @@ interface EdgeData {
   edgeType: string;
   direction: string;
   crossFile: boolean;
+  ambiguous: boolean;
 }
 
 // ── AnalysisHost — GraphAnalysis 需要从 StarGraph 访问的成员 ──

@@ -369,7 +369,7 @@ export class GraphFocusController {
     for (const d of this.host.edgeDataList) {
       if (visible.has(d.s) && visible.has(d.t)) {
         verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2], pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
-        const c = edgeColorByType(d.edgeType, d.direction, d.crossFile);
+        const c = edgeColorByType(d.edgeType, d.direction, d.crossFile, d.ambiguous);
         colors.push(c.r * degNorm, c.g * degNorm, c.b * degNorm, c.r * degNorm, c.g * degNorm, c.b * degNorm);
       }
     }

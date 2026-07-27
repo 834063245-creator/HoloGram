@@ -32,6 +32,8 @@ export interface EdgeData {
   edgeType: string;
   direction: string;
   crossFile: boolean;
+  /** Resolver couldn't uniquely identify target — heuristic match, may need manual review. */
+  ambiguous: boolean;
 }
 export interface CommunityData {
   id: string;

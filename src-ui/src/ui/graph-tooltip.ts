@@ -28,6 +28,7 @@ interface EdgeData {
   edgeType: string;
   direction: string;
   crossFile: boolean;
+  ambiguous: boolean;
 }
 
 export interface TooltipHost {

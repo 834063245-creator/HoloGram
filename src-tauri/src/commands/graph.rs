@@ -183,8 +183,14 @@ pub(crate) fn engine_get_graph() -> Result<String, String> {
 
 #[tauri::command]
 pub(crate) fn engine_neighbors(node_id: String, depth: usize) -> Result<String, String> {
+    let depth_u8 = if depth > u8::MAX as usize {
+        tracing::warn!(depth, "engine_neighbors depth clamped to 255");
+        u8::MAX
+    } else {
+        depth as u8
+    };
     crate::utils::with_index(move |idx| {
-        let nb = idx.neighbors(&node_id, depth as u8, None);
+        let nb = idx.neighbors(&node_id, depth_u8, None);
         serde_json::json!({"neighbors": nb.iter().map(|(s,t,d)| serde_json::json!([s,t,d])).collect::<Vec<_>>()})
     })
 }

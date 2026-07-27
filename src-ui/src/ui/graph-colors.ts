@@ -96,9 +96,12 @@ const _EDGE_COLORS: Record<string, number> = {
   data: 0xff5566,
   temporal: 0xff8833,
   structural: 0x4a9adf,
+  /** Resolver couldn't uniquely resolve target — amber warning. */
+  ambiguous: 0xf0a030,
 };
 
-export function edgeColorByType(edgeType: string, direction: string, crossFile = false): THREE.Color {
+export function edgeColorByType(edgeType: string, direction: string, crossFile = false, ambiguous = false): THREE.Color {
+  if (ambiguous) return new THREE.Color(_EDGE_COLORS.ambiguous);
   const et = edgeType.toLowerCase();
   if (et === 'data') return new THREE.Color(direction === 'write' ? _EDGE_COLORS.writes : _EDGE_COLORS.reads);
   if (et === 'structural') return new THREE.Color(_EDGE_COLORS.calls);
