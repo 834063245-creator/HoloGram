@@ -615,6 +615,7 @@ export class Workspace {
 
     // ── Build tool registry (via agent-builder, zero UI imports) ──
     const builderDeps: BuilderDeps = createBuilderDeps(this._storeId);
+    runtime.setDeps(builderDeps);
     const agentRef = { current: null as Agent | null };
 
     const registry = await buildToolRegistry({
