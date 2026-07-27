@@ -8,6 +8,7 @@
 // 推理块：流式时展开，流结束自动折叠（用户手动 toggle 后尊重用户选择）
 // 流式截断：推理文本只保留末尾 12,000 字符 / 240 行
 
+import { useVirtualizer } from '@tanstack/react-virtual';
 import hljs from 'highlight.js';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -15,6 +16,7 @@ import remarkGfm from 'remark-gfm';
 import { useStore } from 'zustand';
 import { iconSvg } from '../icons';
 import { computeSimpleDiff, formatToolResult } from '../chat-utils';
+import { estimateMessageHeight, getMessageGap } from '../message-height';
 import type {
   AssistantMessage,
   AssistantPart,
@@ -909,6 +911,36 @@ export const ChatMessagesApp: React.FC<{
   // Resolve the actual scrollable element (外部指定或自身)
   const scrollEl = scrollContainer ?? listEl;
 
+  // ── Virtual list setup ──
+  // Pretext provides estimated heights; measureElement corrects after render.
+  const containerWidthRef = useRef(300);
+  useEffect(() => {
+    if (!scrollEl) return;
+    const update = () => { containerWidthRef.current = scrollEl.clientWidth; };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(scrollEl);
+    return () => ro.disconnect();
+  }, [scrollEl]);
+
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  const estimateSize = useCallback((i: number) => {
+    const msgs = messagesRef.current;
+    return msgs[i] ? estimateMessageHeight(msgs[i], containerWidthRef.current) : 60;
+  }, []);
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollEl,
+    estimateSize,
+    overscan: 4,
+    gap: getMessageGap(),
+  });
+  const virtualizerRef = useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
+
   // Reset stick-to-bottom when switching sessions — don't inherit the
   // scroll position (and stickRef state) from the previous session.
   // Also reset lastMsgCount so the messages-length effect doesn't mistake
@@ -939,12 +971,10 @@ export const ChatMessagesApp: React.FC<{
       autoScrollRaf.current = requestAnimationFrame(() => {
         autoScrollRaf.current = null;
         if (!stickRef.current) return;
-        if (scrollEl) {
-          scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' });
-        }
+        virtualizerRef.current.scrollToIndex(messages.length - 1, { align: 'end' });
       });
     },
-    [scrollEl?.style, messages.length, messages, scrollEl] as const,
+    [scrollEl?.style, messages.length, messages] as const,
   ); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll during streaming — MutationObserver catches incremental DOM
@@ -959,7 +989,10 @@ export const ChatMessagesApp: React.FC<{
       autoScrollRaf.current = requestAnimationFrame(() => {
         autoScrollRaf.current = null;
         if (!stickRef.current) return;
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+        const lastIdx = messagesRef.current.length - 1;
+        if (lastIdx >= 0) {
+          virtualizerRef.current.scrollToIndex(lastIdx, { align: 'end' });
+        }
       });
     });
 
@@ -1033,45 +1066,63 @@ export const ChatMessagesApp: React.FC<{
 
   return (
     <div className="chat-messages" ref={setListEl}>
-      {messages.map((msg) => {
-        switch (msg.role) {
-          case 'user':
-            return (
-              <UserBubble
-                key={msg._id}
-                msg={msg}
-                onEdit={callbacks.onEditUserMessage}
-                onResend={callbacks.onResendUserMessage}
-              />
-            );
-          case 'assistant':
-            return (
-              <AssistantBubble
-                key={msg._id}
-                msg={msg}
-                expandedTools={expandedTools}
-                onToggleTool={toggleTool}
-                onExpandAllTools={expandAllTools}
-                onCollapseAllTools={collapseAllTools}
-                onCopy={
-                  callbacks.onCopyText
-                    ? () => {
-                        const text = msg.parts
-                          .filter((p): p is TextPart => p.type === 'text')
-                          .map((p) => p.text)
-                          .join('\n');
-                        callbacks.onCopyText?.(text);
-                      }
-                    : undefined
-                }
-                onRetry={callbacks.onRetryAssistant ? () => callbacks.onRetryAssistant?.(msg) : undefined}
-                onNavigateToNode={callbacks.onNavigateToNode}
-              />
-            );
-          case 'notice':
-            return <NoticeBubble key={msg._id} msg={msg} />;
-        }
-      })}
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: '100%',
+          position: 'relative',
+        }}
+      >
+        {virtualizer.getVirtualItems().map((vItem) => {
+          const msg = messages[vItem.index];
+          if (!msg) return null;
+          return (
+            <div
+              key={msg._id}
+              data-index={vItem.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${vItem.start}px)`,
+              }}
+            >
+              {msg.role === 'user' && (
+                <UserBubble
+                  msg={msg}
+                  onEdit={callbacks.onEditUserMessage}
+                  onResend={callbacks.onResendUserMessage}
+                />
+              )}
+              {msg.role === 'assistant' && (
+                <AssistantBubble
+                  msg={msg}
+                  expandedTools={expandedTools}
+                  onToggleTool={toggleTool}
+                  onExpandAllTools={expandAllTools}
+                  onCollapseAllTools={collapseAllTools}
+                  onCopy={
+                    callbacks.onCopyText
+                      ? () => {
+                          const text = msg.parts
+                            .filter((p): p is TextPart => p.type === 'text')
+                            .map((p) => p.text)
+                            .join('\n');
+                          callbacks.onCopyText?.(text);
+                        }
+                      : undefined
+                  }
+                  onRetry={callbacks.onRetryAssistant ? () => callbacks.onRetryAssistant?.(msg) : undefined}
+                  onNavigateToNode={callbacks.onNavigateToNode}
+                />
+              )}
+              {msg.role === 'notice' && <NoticeBubble msg={msg} />}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 });

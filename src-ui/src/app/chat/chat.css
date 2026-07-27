@@ -665,9 +665,6 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   flex: 1;
   overflow-y: auto;
   padding: calc(14px * var(--font-scale));
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   scroll-behavior: smooth;
 }
 

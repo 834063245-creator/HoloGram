@@ -24,6 +24,8 @@ jobs:
         working-directory: src-ui
       - run: npx vite build
         working-directory: src-ui
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
   engine:
     strategy:
@@ -73,5 +75,7 @@ jobs:
 
       - run: npm ci && npx vite build
         working-directory: src-ui
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
       - run: cargo check --release
         working-directory: src-tauri
