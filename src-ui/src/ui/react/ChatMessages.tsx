@@ -104,13 +104,16 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
   const _lang = match?.[1];
   const isBlock = match !== null || text.includes('\n');
 
-  // Re-highlight on every render — hljs skips already-highlighted elements.
-  // This ensures new code blocks appended during streaming get highlighted.
+  // Highlight code blocks — skip already-highlighted elements via data attribute.
+  // During streaming, the completed portion re-renders react-markdown on every
+  // paragraph boundary crossing. Without this guard, hljs rescans every <pre code>
+  // on each re-render even if the content hasn't changed.
   useEffect(() => {
     if (!ref.current) return;
-    ref.current.querySelectorAll('pre code').forEach((block) => {
+    ref.current.querySelectorAll('pre code:not([data-highlighted])').forEach((block) => {
       try {
         hljs.highlightElement(block as HTMLElement);
+        block.setAttribute('data-highlighted', 'true');
       } catch {
         /* noop */
       }
@@ -977,28 +980,24 @@ export const ChatMessagesApp: React.FC<{
     [scrollEl?.style, messages.length, messages] as const,
   ); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-scroll during streaming — MutationObserver catches incremental DOM
-  // additions when message parts are mutated in-place (no version bump).
+  // Auto-scroll during streaming — driven by messages reference change.
+  // Previously used MutationObserver, but with virtualization the DOM node
+  // count is ~10, and the messages array already changes on every streaming
+  // bump (via _streamingBump's reference swap). The effect above already
+  // handles scroll on messages.length change; this covers in-place text
+  // mutations that don't change length (same message, growing text).
   useEffect(() => {
-    const el = scrollEl;
-    if (!el) return;
-
-    const observer = new MutationObserver(() => {
+    if (!stickRef.current) return;
+    if (autoScrollRaf.current !== null) return;
+    autoScrollRaf.current = requestAnimationFrame(() => {
+      autoScrollRaf.current = null;
       if (!stickRef.current) return;
-      if (autoScrollRaf.current !== null) return;
-      autoScrollRaf.current = requestAnimationFrame(() => {
-        autoScrollRaf.current = null;
-        if (!stickRef.current) return;
-        const lastIdx = messagesRef.current.length - 1;
-        if (lastIdx >= 0) {
-          virtualizerRef.current.scrollToIndex(lastIdx, { align: 'end' });
-        }
-      });
+      const lastIdx = messagesRef.current.length - 1;
+      if (lastIdx >= 0) {
+        virtualizerRef.current.scrollToIndex(lastIdx, { align: 'end' });
+      }
     });
-
-    observer.observe(el, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
-  }, [scrollEl]);
+  }, [messages]);
 
   useEffect(() => {
     return () => {
