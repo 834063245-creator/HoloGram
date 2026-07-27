@@ -79,10 +79,3 @@ export function clearPretextCache(): void {
   prepareCache.clear();
   clearCache();
 }
-
-// Clear cache for a specific message (when its text changes during streaming)
-export function invalidateMessage(_msg: unknown): void {
-  // No-op: prepare() cache handles dedup internally.
-  // layout() is cheap enough (~0.0002ms) that we just call prepare() fresh
-  // each time text changes — the cache prevents redundant segmentation.
-}
