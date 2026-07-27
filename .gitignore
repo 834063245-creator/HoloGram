@@ -106,6 +106,9 @@ specs/
 #   HANDOFF_*.md  （设备间交接文档，双机开发刚需）
 # 新增开发文档请优先放 docs/ 下，自动纳入同步。
 
+# Proma 对比分析 — 本地参考，不公开
+PROMA_GAP_ANALYSIS.md
+
 # Internal design notes — historical one-offs, keep local
 CODE_OF_CONDUCT.md
 REACT_MIGRATION.md

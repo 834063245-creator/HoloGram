@@ -48,6 +48,8 @@ export interface BuilderDeps {
     multiSelect: boolean;
     callback: (answer: string[] | null) => void;
   }) => void;
+  /** exit_plan_mode 工具的计划审批回调（UI 展示计划审批 banner） */
+  onPlanReview?: (req: import('../plan/plan-tools').PlanReviewRequest) => void;
   /** dataflow_save 后的通知（UI 面板刷新） */
   onDataflowSaved?: () => void;
   /** LSP 诊断数据源（用于 state hooks） */
@@ -160,7 +162,24 @@ export function buildSystemPrompt(
   const modeBlock = collaborationMode === 'plan'
     ? `
 ## 规划模式（当前激活）
-你只有只读工具。不能写文件、跑命令、改代码、Git 操作。用户让你"修"时输出方案，用 ask_user 请用户切到正常模式再执行。`
+你只有只读工具 + 写计划文件的权限。不能写其他文件、跑命令、Git 操作。
+
+### 工作流程
+1. **探索** — 用 read_file / search_content / glob / explore_deps / trace_impact / fragile_modules 充分理解代码
+2. **设计** — 确定最佳方案，考虑权衡
+3. **写计划** — 用 write_file 写到计划文件（路径见 enter_plan_mode 返回值）
+4. **提交** — 调 exit_plan_mode 提交计划给用户审批
+
+### 计划要求
+- 列出具体步骤，引用真实文件名和函数名
+- 包含「影响面分析」部分（图引擎会自动注入辅助数据）
+- 如有多方案，用 exit_plan_mode 的 options 参数列出
+- 不要用 ask_user 问「计划行不行」— 那是 exit_plan_mode 的事
+
+### 图引擎辅助
+- 读文件时自动显示该文件的下游依赖和脆弱度
+- 写计划文件时自动追加影响面分析
+- 主动调 trace_impact / explore_deps / fragile_modules 查依赖关系`
     : `
 ## 执行模式
 你有写文件、跑命令、Git 的全部工具。用户说"修"就直接修，修完跑测试验证。`;
@@ -393,9 +412,48 @@ export function registerCompactionTools(agent: Agent, reg: ToolRegistry): void {
 
 // ── Plan mode registry ──
 
-export function planRegistry(base: ToolRegistry): ToolRegistry {
+export function planRegistry(
+  base: ToolRegistry,
+  planState?: import('../plan/plan-state').PlanStateManager,
+): ToolRegistry {
   const out = new ToolRegistry();
   for (const t of base.filterReadOnly()) out.register(t);
+
+  // plan 模式下额外允许 write_file / edit_file，但仅限计划文件
+  if (planState?.state.active) {
+    const writeFile = base.get('write_file');
+    const editFile = base.get('edit_file');
+    if (writeFile) {
+      out.register({
+        name: () => writeFile.name(),
+        description: () => writeFile.description(),
+        parameters: () => writeFile.parameters(),
+        readOnly: () => false,
+        execute: async (args, onProgress) => {
+          const fp = String(args.filePath || '');
+          if (planState.isPlanFile(fp)) {
+            return writeFile.execute(args, onProgress);
+          }
+          return `[已拦截] 规划模式下只能写计划文件 (${planState.state.planFilePath})。`;
+        },
+      });
+    }
+    if (editFile) {
+      out.register({
+        name: () => editFile.name(),
+        description: () => editFile.description(),
+        parameters: () => editFile.parameters(),
+        readOnly: () => false,
+        execute: async (args, onProgress) => {
+          const fp = String(args.filePath || '');
+          if (planState.isPlanFile(fp)) {
+            return editFile.execute(args, onProgress);
+          }
+          return `[已拦截] 规划模式下只能编辑计划文件 (${planState.state.planFilePath})。`;
+        },
+      });
+    }
+  }
   return out;
 }
 

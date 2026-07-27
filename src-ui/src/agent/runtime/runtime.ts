@@ -64,6 +64,10 @@ import {
   planRegistry,
   registerCompactionTools,
 } from './agent-builder';
+import { PlanModeInjector } from '../plan/plan-injection';
+import { PlanStateManager } from '../plan/plan-state';
+import { createEnterPlanModeTool, createExitPlanModeTool } from '../plan/plan-tools';
+import { createPlanExploreHook, createPlanWriteHook } from '../plan/plan-graph-hook';
 
 import type { AgentConfig, AgentHandle, AgentStatus, AgentSummary, RuntimeNotifier, RuntimePort } from './types';
 
@@ -139,6 +143,8 @@ class AgentHandleImpl implements AgentHandle {
 export class AgentRuntime implements RuntimePort {
   private agents = new Map<string, AgentHandleImpl>();
   private notifier: RuntimeNotifier | null = null;
+  /** BuilderDeps — UI 层注入的回调（askUser, onPlanReview 等） */
+  private _deps: BuilderDeps | null = null;
   /** 全局 MessageBus 实例 */
   private _bus: MessageBus;
   /** 会话级 TaskBoard 实例 — 按 sessionId 隔离 */
@@ -181,6 +187,11 @@ export class AgentRuntime implements RuntimePort {
   /** 注入 UI 通知器 — 由 UI 层在启动时设置 */
   setNotifier(n: RuntimeNotifier): void {
     this.notifier = n;
+  }
+
+  /** 注入 BuilderDeps — UI 层在启动时设置（askUser, onPlanReview 等回调） */
+  setDeps(deps: BuilderDeps): void {
+    this._deps = deps;
   }
 
   /** 获取全局 MessageBus 实例 */
@@ -394,8 +405,19 @@ export class AgentRuntime implements RuntimePort {
     const r = new ToolRegistry();
     for (const t of config.tools.all()) r.register(t);
 
-    // 3. Plan mode: filter to read-only
-    const effR = config.collaborationMode === 'plan' ? planRegistry(r) : r;
+    // 2b. Plan mode state — created before planRegistry so tools can reference it
+    const planState = new PlanStateManager();
+    if (config.collaborationMode === 'plan') {
+      planState.enter(config.projectPath);
+    }
+
+    // 2c. Register plan tools (readOnly: true → survive planRegistry filtering)
+    r.register(createEnterPlanModeTool(planState, config.projectPath));
+    r.register(createExitPlanModeTool(planState, this._deps?.onPlanReview));
+
+    // 3. Plan mode: filter to read-only, but allow plan file writes
+    const effR =
+      config.collaborationMode === 'plan' ? planRegistry(r, planState) : r;
 
     // 4. Create Agent instance
     const execState = config.execState ?? createExecState();
@@ -497,7 +519,7 @@ export class AgentRuntime implements RuntimePort {
     // 8. Register compaction tools on the agent's effective registry
     registerCompactionTools(newAgent, effR);
 
-    // 9. Wire hooks (graph context + state + board tracking)
+    // 9. Wire hooks (graph context + state + board tracking + plan)
     const hooks = new HookRegistry();
     const preflightHooks = new PreflightHookRegistry();
     if (config.graphContext) {
@@ -510,11 +532,21 @@ export class AgentRuntime implements RuntimePort {
       if (this._diagSource) {
         preflightHooks.register(createStatePreflightHook(this._diagSource));
       }
+      // Plan 模式图增强 hook — 探索时注入影响面，写计划时追加分析
+      hooks.register(createPlanExploreHook(config.graphContext, planState));
+      hooks.register(createPlanWriteHook(config.graphContext, planState));
     }
     // Board tracking hook — always register when board is available
     hooks.register(createBoardTrackingHook(agentId, taskProxy as any));
     newAgent.setHooks(hooks);
     newAgent.setPreflightHooks(preflightHooks);
+
+    // 9b. Wire plan mode — injector for runLoop reminders + state notifications
+    const planInjector = new PlanModeInjector();
+    newAgent.setPlanState(planState, planInjector);
+    planState.onChange((s) => {
+      this.notifier?.onPlanModeChange?.(agentId, s.active, s.planFilePath);
+    });
 
     // 10. Wire pre-run hook (AuraSDK semantic recall)
     if (config.preRunHook) {

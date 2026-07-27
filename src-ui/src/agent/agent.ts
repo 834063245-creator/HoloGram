@@ -265,6 +265,18 @@ export class Agent {
     this.preflightHooks = hooks;
   }
 
+  /** Plan 模式状态 + 注入器 — 由 Runtime 在 createAgent 时设置 */
+  private _planState: import('./plan/plan-state').PlanStateManager | null = null;
+  private _planInjector: import('./plan/plan-injection').PlanModeInjector | null = null;
+
+  setPlanState(
+    state: import('./plan/plan-state').PlanStateManager,
+    injector: import('./plan/plan-injection').PlanModeInjector,
+  ): void {
+    this._planState = state;
+    this._planInjector = injector;
+  }
+
   setUiSessionId(sid: number): void {
     this._uiSessionId = sid;
   }
@@ -729,6 +741,8 @@ export class Agent {
     }
     if (input) {
       this.session.push({ role: 'user', content: input });
+      // 用户发新消息 → 重置 plan 提醒计数（下一轮注入全量提醒）
+      this._planInjector?.resetOnUserInput();
     }
     await this.runLoop(signal);
     // Fire onSessionPersisted callback (memory bundle ingest, git refresh, turn-start block)
@@ -1035,6 +1049,30 @@ ${resumeNote}
       // Step 0 skips the clear: run() may have already pushed the preRunHook
       // (aura recall) result into _transientReminders before calling runLoop.
       if (step > 0) this._transientReminders = [];
+
+      // Plan 模式提醒注入 — 去重逻辑在 PlanModeInjector 内部
+      if (this._planState && this._planInjector) {
+        let planContent = '';
+        if (this._planState.state.active && this._planState.state.planFilePath) {
+          try {
+            const raw = await rpc<string>('read_file_content', {
+              filePath: this._planState.state.planFilePath,
+              isAgent: false,
+            });
+            planContent = raw.replace(/^\s*\d+\t/gm, '');
+          } catch {
+            /* plan file not written yet — normal */
+          }
+        }
+        const reminder = this._planInjector.getReminder(
+          step,
+          this._planState.state,
+          planContent,
+        );
+        if (reminder) {
+          this._transientReminders.push(`<system-reminder>\n${reminder}\n</system-reminder>`);
+        }
+      }
 
       // Abort check — signal covers user stop + session replacement (via this._execState.stop)
       if (signal.aborted) throw new Error('aborted');

@@ -48,6 +48,8 @@ export interface RuntimeNotifier {
   onProgress(agentId: string, step: number, toolName: string): void;
   /** LifecycleManager 告警（泄漏检测、TTL 清理） */
   onLifecycleAlert?(agentId: string, level: 'info' | 'warn' | 'error', text: string): void;
+  /** Plan 模式状态变更（UI 更新 plan 模式指示器） */
+  onPlanModeChange?(agentId: string, active: boolean, planFilePath: string | null): void;
 }
 
 // ── 子 Agent 启动信息 ──
