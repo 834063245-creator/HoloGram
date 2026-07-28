@@ -1,12 +1,24 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
+//! # HoloGram Engine — 代码依赖拓扑分析引擎入口
+//!
+//! 本文件是引擎的可执行入口（binary crate），负责：
+//! - 启动 TCP RPC 服务器（默认模式，供 Tauri 前端 / Unity 调用）
+//! - 启动 MCP JSON-RPC 服务器（通过 stdio 与 AI 助手通信）
+//! - 执行压力测试与基准评估
+//! - 运行 CLI 一站式工具调用（`engine.exe run <tool>`）
+//!
+
+// 在 Windows 上隐藏控制台窗口（作为 GUI 子系统运行，避免弹出黑色终端）
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-// ponytail: mimalloc — 20-30% boost for multi-threaded small-alloc workloads (graph build, LSP)
+// 全局分配器：使用 mimalloc 替代系统默认分配器
+// 对于多线程小对象密集型负载（图构建、LSP 解析），可提升 20-30% 性能
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+// ── 引擎内部模块导入 ──
 use hologram_engine::analysis::{fragile_nodes, detect_cycles, coupling_report, graph_summary, find_blindspots};
 use hologram_engine::community::{detect_communities, detect_hierarchical_communities};
 use hologram_engine::graph::{query, Graph, EdgeKind};
@@ -21,12 +33,22 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tracing::{info, debug, warn};
 
+/// 程序入口。根据命令行参数分发到不同运行模式：
+///
+/// | 模式 | 命令示例 | 说明 |
+/// |------|---------|------|
+/// | TCP RPC | `engine.exe` | 默认，在 127.0.0.1:9777 上监听 |
+/// | MCP serve | `engine.exe serve [--project-root <path>]` | 通过 stdio 运行 MCP JSON-RPC |
+/// | 压力测试 | `engine.exe --stress <size>` | 合成图基准测试 |
+/// | 真实基准 | `engine.exe --stress-real <path> [N]` | 对真实项目做基准测试 |
+/// | CLI 工具 | `engine.exe run <tool> [project] [--key val]` | 一次性执行工具 |
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // ponytail: adaptive rayon pool — leave 1 core for UI responsiveness.
-    // Stress mode uses all cores (benchmark accuracy > interactivity).
-    // On 4-core: 3 threads (75%). On 32-core: 31 threads (97%).
-    // rayon's global pool is lazily initialized; we must build it before any par_iter().
+    // ── 初始化 rayon 线程池 ──
+    // 自适应策略：普通模式保留 1 个核心给 UI 保证响应性；压力测试模式使用全部核心追求精度。
+    // 4 核机器：普通模式 3 线程（75%），压力测试 4 线程（100%）
+    // 32 核机器：普通模式 31 线程（97%），压力测试 32 线程（100%）
+    // 注意：rayon 全局线程池是惰性初始化的，必须在任何 par_iter() 之前完成构建
     let n_cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
@@ -37,8 +59,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_global()
         .expect("rayon global pool already initialized — move this call earlier");
 
-    // ── --version / --help ──
+    // ── 收集命令行参数 ──
     let args: Vec<String> = std::env::args().collect();
+
+    // ── --version / --help：打印版本信息后退出 ──
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("HoloGram Engine v4.0");
         println!("Copyright (c) 2026 Wenbing Jing. MIT License.");
@@ -50,23 +74,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Copyright (c) 2026 Wenbing Jing. MIT License.");
         println!();
         println!("USAGE:");
-        println!("  engine.exe                    Start TCP RPC server (default, 127.0.0.1:9777)");
-        println!("  engine.exe serve              Start MCP JSON-RPC server over stdio");
-        println!("  engine.exe serve --project-root <path>  MCP serve with project auto-analyze");
-        println!("  engine.exe --stress <size>    Run stress test (small|medium|large|xlarge|<N>)");
-        println!("  engine.exe --stress-suite     Run full stress suite (small→large)");
-        println!("  engine.exe --stress-real <path> [N]  Benchmark real project (default 3 iterations)");
-        println!("  engine.exe --stress-full <path> [N]  Full pipeline: structure + Dataflow + LSP");
-        println!("  engine.exe --stress-dataflow <path> [N]  Dataflow-only benchmark");
-        println!("  engine.exe --stress-lsp <path> [N] [ext]  LSP-only benchmark (ext: py,rs,ts,go,...)");
-        println!("  engine.exe run <tool> [project_path] [--key value ...]  Run a tool one-shot");
-        println!("  engine.exe run --list                                 List available tools");
-        println!("  engine.exe --version          Print version and copyright");
-        println!("  engine.exe --help             Show this help");
+        println!("  engine.exe                    启动 TCP RPC 服务器（默认，127.0.0.1:9777）");
+        println!("  engine.exe serve              启动 MCP JSON-RPC 服务器（通过 stdio）");
+        println!("  engine.exe serve --project-root <path>  MCP 服务模式，附带项目自动分析");
+        println!("  engine.exe --stress <size>    运行压力测试 (small|medium|large|xlarge|<N>)");
+        println!("  engine.exe --stress-suite     运行完整压力测试套件 (small→large)");
+        println!("  engine.exe --stress-real <path> [N]  对真实项目做基准测试（默认 3 轮）");
+        println!("  engine.exe --stress-full <path> [N]  完整管线: 结构 + Dataflow + LSP");
+        println!("  engine.exe --stress-dataflow <path> [N]  仅 Dataflow 基准测试");
+        println!("  engine.exe --stress-lsp <path> [N] [ext]  仅 LSP 基准测试 (ext: py,rs,ts,go,...)");
+        println!("  engine.exe run <tool> [project_path] [--key value ...]  一次性执行工具");
+        println!("  engine.exe run --list                                 列出所有可用工具");
+        println!("  engine.exe --version          打印版本和版权信息");
+        println!("  engine.exe --help             显示此帮助信息");
         return Ok(());
     }
 
-    // ── Stress test mode ──
+    // ── 压力测试模式：合成图基准 ──
+    // 用法：engine.exe --stress <size>，size 可选 small/medium/large/xlarge 或数字
     if let Some(pos) = args.iter().position(|a| a == "--stress") {
         let size_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or("small");
         match StressSize::from_str(size_str) {
@@ -75,12 +100,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             None => {
-                eprintln!("[stress] Unknown size '{}'. Use: small, medium, large, xlarge, or a number.", size_str);
+                eprintln!("[stress] 未知规模 '{}'。可选: small, medium, large, xlarge, 或数字", size_str);
                 std::process::exit(1);
             }
         }
     }
-    // ── Real project benchmark ──
+    // ── 真实项目基准测试 ──
+    // 用法：engine.exe --stress-real <path> [iterations]
     if let Some(pos) = args.iter().position(|a| a == "--stress-real") {
         let path_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or(".");
         let iterations: usize = args.get(pos + 2)
@@ -94,7 +120,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stress::run_stress_real(&root, iterations);
         return Ok(());
     }
-    // ── Full pipeline benchmark (structure + Dataflow + LSP) ──
+    // ── 完整管线基准测试（结构 + Dataflow + LSP）──
+    // 用法：engine.exe --stress-full <path> [iterations] [ext_filter]
     if let Some(pos) = args.iter().position(|a| a == "--stress-full") {
         let path_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or(".");
         let iterations: usize = args.get(pos + 2)
@@ -112,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stress::run_stress_full(&root, iterations, &ext_slice);
         return Ok(());
     }
-    // ── Dataflow-only benchmark ──
+    // ── 仅 Dataflow 基准测试 ──
     if let Some(pos) = args.iter().position(|a| a == "--stress-dataflow") {
         let path_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or(".");
         let iterations: usize = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(3);
@@ -121,7 +148,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stress::run_stress_dataflow(&root, iterations);
         return Ok(());
     }
-    // ── LSP-only benchmark ──
+    // ── 仅 LSP 基准测试 ──
+    // 用法：engine.exe --stress-lsp <path> [iterations] [ext_filter]
+    // ext_filter 为逗号分隔的扩展名列表（如 "py,rs"），不传则分析全部语言
     if let Some(pos) = args.iter().position(|a| a == "--stress-lsp") {
         let path_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or(".");
         let iterations: usize = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(3);
@@ -135,51 +164,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stress::run_stress_lsp(&root, iterations, &ext_slice);
         return Ok(());
     }
+    // ── 压力测试套件：依次运行 small→large 全部规模 ──
     if args.iter().any(|a| a == "--stress-suite") {
         stress::run_stress_suite();
         return Ok(());
     }
 
-    // ── CLI one-shot mode: `engine.exe run <tool> [project_path] [--key value ...]` ──
+    // ── CLI 一站式工具调用模式 ──
+    // 用法：engine.exe run <tool> [project_path] [--key value ...]
+    // 复用 ToolRegistry::dispatch，与 GUI/MCP 使用同一套引擎逻辑
     if let Some(pos) = args.iter().position(|a| a == "run") {
         return cli_run(&args[pos + 1..]);
     }
 
-    // ── MCP serve mode ──
+    // ── MCP 服务模式（通过 stdio 运行 JSON-RPC）──
+    // 由 mcp::parse_serve_args() 解析 `serve [--project-root <path>]`
     if let Some(project_root_opt) = mcp::parse_serve_args() {
         let log_root = project_root_opt.as_deref().map(PathBuf::from);
         let _log_guard = logging::init_logging(log_root.as_deref());
 
         match project_root_opt {
             Some(project_root) => {
-                // Serve with --project-root: auto-analyze + watcher
+                // ── 带 --project-root 的 MCP 服务：初始化引擎，延迟分析 ──
                 let root = PathBuf::from(&project_root);
                 if !root.exists() {
-                    eprintln!("[engine] ERROR: project root not found: {}", project_root);
+                    eprintln!("[engine] 错误: 项目根目录不存在: {}", project_root);
                     std::process::exit(1);
                 }
                 info!(project_root = %project_root, "engine starting in MCP serve mode (with project)");
 
-                // Initialize the storage engine (GraphStore + SQLite) lazily.
-                // Actual analysis is deferred to the first analyze_project MCP call.
-                // Watcher is also deferred — Windows notify can emit spurious events
-                // during startup, triggering re-analysis loops (622MB, 195 CPU seen).
+                // 惰性初始化存储引擎（GraphStore + SQLite）
+                // 实际分析延迟到首次 analyze_project MCP 调用时执行
+                // 文件监视器也延迟启动——Windows notify 在启动阶段会发出大量虚假事件，
+                // 可能触发反复重分析循环（曾观测到 622MB 内存、195% CPU 占用）
                 if let Err(e) = hologram_engine::engine::engine_init(&root) {
-                    warn!("[main] Engine init failed (non-fatal): {}", e);
+                    warn!("[main] 引擎初始化失败（非致命）: {}", e);
                 }
 
                 info!("engine MCP serve ready — analysis + watcher deferred to first analyze_project");
 
-                // Send ready signal for Tauri McpManager — it expects {"method":"ready"}
-                // before sending initialize + tools/list. Without this, read_ready() times out.
+                // 向 Tauri McpManager 发送就绪信号
+                // 它期望在发送 initialize + tools/list 之前先收到 {"method":"ready"}
+                // 缺少此信号会导致 read_ready() 超时
                 println!(r#"{{"jsonrpc":"2.0","method":"ready"}}"#);
 
                 let server = McpServer::new(&root);
                 server.run_stdio();
             }
             None => {
-                // Serve without --project-root: lazy startup
-                // First analyze_project call loads the graph.
+                // ── 不带 --project-root 的 MCP 服务：惰性启动 ──
+                // 首次 analyze_project 调用时才加载图数据
                 info!("engine starting in MCP serve mode (lazy — no project)");
                 let server = McpServer::new(std::path::Path::new("."));
                 server.run_stdio();
@@ -188,7 +222,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // ── TCP RPC server mode (default) ──
+    // ── TCP RPC 服务器模式（默认）──
+    // 在 127.0.0.1:9777 上监听，供 Tauri 前端 / Unity 等客户端调用
     let _log_guard = logging::init_logging(None);
     let listener = TcpListener::bind("127.0.0.1:9777").await?;
     info!("TCP server listening on 127.0.0.1:9777");
@@ -197,9 +232,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (mut socket, addr) = listener.accept().await?;
         debug!(%addr, "client connected");
 
-        // Spawn each connection into its own task so the accept loop never blocks.
-        // Keep-alive: loop to handle multiple requests per connection.
-        // Heavy CPU work (analyze, check) is offloaded to spawn_blocking.
+        // 每个连接 spawn 一个独立 task，确保 accept 循环不会被阻塞
+        // 连接保持（keep-alive）：内层循环处理同一连接的多个请求
+        // CPU 密集型工作（analyze、check）通过 spawn_blocking 卸载到阻塞线程池
         tokio::spawn(async move {
             loop {
             let mut buf = vec![0u8; 4096];
@@ -212,11 +247,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let req_owned = request.to_string();
             debug!(request_len = req_owned.len(), "received request");
 
+            // ── 根据请求前缀路由到对应的处理函数 ──
+            // 命令格式：<command>[:<args>]
             let response = if req_owned.starts_with("check:") || req_owned.starts_with("preflight:") || req_owned.starts_with("health:") {
+                // 检查模式：执行提交前预检（preflight check），CPU 密集型，卸载到阻塞线程
                 let req = req_owned.clone();
                 tokio::task::spawn_blocking(move || handle_check(req.trim()))
                     .await.unwrap_or_else(|_| b"{\"error\":\"check panicked\"}".to_vec())
             } else if req_owned.starts_with("blindspots") {
+                // 盲点检测：结合耦合报告和环检测，识别架构盲区
                 let arg = req_owned.trim().strip_prefix("blindspots:").unwrap_or("");
                 let threshold: usize = arg.parse().unwrap_or(0);
                 handle_simple("blindspots", arg, move |g, _| {
@@ -229,41 +268,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 })
             } else if req_owned.starts_with("timeline") {
+                // 时间线：查询最近 50 条引擎事件记录
                 handle_simple("timeline", req_owned.trim(), |_g, _a| {
                     json!(hologram_engine::engine::engine_query_timeline(50).unwrap_or_default())
                 })
             } else if req_owned.starts_with("analyze:") {
+                // 全量分析：解析项目源码并构建依赖图，CPU 密集型，卸载到阻塞线程
                 let path = req_owned.trim().strip_prefix("analyze:").unwrap_or(".").trim().to_string();
                 tokio::task::spawn_blocking(move || handle_analyze(&path))
                     .await.unwrap_or_else(|_| b"{\"error\":\"analyze panicked\"}".to_vec())
             } else if req_owned.starts_with("fragile:") {
+                // 脆弱节点检测：找出高扇入/高扇出的关键节点
                 handle_simple("fragile:", req_owned.trim(), |g, a| json!(fragile_nodes(g, a.parse().unwrap_or(10))))
             } else if req_owned.starts_with("cycle") {
+                // 环检测：发现依赖图中的循环依赖
                 handle_simple("cycle", req_owned.trim(), |g, _| json!(detect_cycles(g)))
             } else if req_owned.starts_with("coupling_report:") {
+                // 耦合报告：按层级（L0-L4）统计耦合度
                 handle_simple("coupling_report:", req_owned.trim(), coupling_report)
             } else if req_owned.starts_with("graph_summary") {
+                // 图摘要：节点/边数量、类型分布等概要信息
                 handle_simple("graph_summary", req_owned.trim(), |g, _| graph_summary(g))
             } else if req_owned.starts_with("community_report") {
+                // 社区检测报告：使用 Louvain 算法（seed=42）识别模块化社区
                 handle_simple("community_report", req_owned.trim(), |g, _| {
                     let communities = detect_communities(g, 42);
                     json!(communities.iter().enumerate().map(|(i,c)| json!({"id":format!("comm_{}",i),"size":c.len(),"node_ids":c})).collect::<Vec<_>>())
                 })
             } else if req_owned.starts_with("community:") {
+                // 查询指定节点所属的社区，返回同社区节点列表（最多 50 个）
                 handle_simple("community:", req_owned.trim(), |g, a| {
                     let communities = detect_communities(g, 42);
                     let found = communities.iter().find(|c| c.contains(&a.to_string()));
                     json!(found.map(|c| c.iter().take(50).collect::<Vec<_>>()))
                 })
             } else if req_owned.starts_with("diff:") {
+                // 变更对比：与基线图比较，输出新增/删除/修改的节点和边
                 let baseline_path = req_owned.trim().strip_prefix("diff:").unwrap_or("").trim().to_string();
                 handle_diff(&baseline_path)
             } else if req_owned.starts_with("history:") {
+                // 节点详情：按 ID 查询节点的名称、类型、入度、出度
                 handle_simple("history:", req_owned.trim(), |g, a| {
                     g.get_node(a).map(|n| json!({"id":n.id,"name":n.name,"type":n.kind.as_str(),"out_degree":n.out_degree,"in_degree":n.in_degree}))
                         .unwrap_or(json!({"error":"not found"}))
                 })
             } else if req_owned.starts_with("delayed") {
+                // 延迟边查询：筛选 Triggers/Awaits/Sequences 类型的时序边
                 handle_simple("delayed", req_owned.trim(), |g, _| {
                     let delayed: Vec<_> = g.edges.values().filter(|e| matches!(e.kind, EdgeKind::Triggers|EdgeKind::Awaits|EdgeKind::Sequences))
                         .map(|e| json!({"source":e.source,"target":e.target,"type":e.kind.as_str()}))
@@ -271,11 +321,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     json!(delayed)
                 })
             } else if req_owned.starts_with("neighbors:") {
+                // 邻居查询：获取指定节点的 N 跳邻居
                 handle_query(req_owned.trim(), "neighbors:")
             } else if req_owned.starts_with("path:") {
+                // 最短路径查询：查找两个节点之间的最短依赖路径
                 handle_query(req_owned.trim(), "path:")
             } else if req_owned.starts_with("search:") {
-                // Parse "search:query:limit" — limit is optional
+                // 节点搜索：按名称模糊搜索，格式 "search:query:limit"（limit 可选，默认 50）
                 let args = req_owned.trim().strip_prefix("search:").unwrap_or("");
                 let (query_str, limit): (&str, usize) = match args.rfind(':') {
                     Some(pos) if pos > 0 => {
@@ -290,9 +342,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     json!({"results": truncated, "total": results.len(), "limit": limit})
                 })
             } else if req_owned.starts_with("impact:") {
+                // 影响分析：评估指定节点的变更对周围 N 层节点的影响
                 handle_query(req_owned.trim(), "impact:")
             } else if req_owned.starts_with("rename:") {
-                // Parse "rename:old_name:new_name:dry_run:node_id"
+                // 重命名预检：解析 "rename:old_name:new_name:dry_run:node_id"
+                // dry_run=true 时仅返回匹配结果，不实际执行重命名
                 let args = req_owned.trim().strip_prefix("rename:").unwrap_or("");
                 let parts: Vec<&str> = args.splitn(4, ':').collect();
                 let old_name = parts.first().copied().unwrap_or("");
@@ -308,27 +362,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if dry_run {
                         json!({"dry_run": true, "matched_count": matched.len(), "matched": matched.iter().map(|n| json!({"id": n.id, "name": n.name})).collect::<Vec<_>>()})
                     } else {
+                        // TCP 模式下仅支持内存级重命名，完整重命名请使用 MCP 工具
                         json!({"dry_run": false, "renamed_count": matched.len(), "old_name": old_name, "new_name": new_name, "note": "TCP rename: in-memory only. Use MCP tool for full rename support."})
                     }
                 })
             } else if req_owned.contains("get_graph") {
+                // 获取完整图数据（节点+边），供前端渲染
                 handle_get_graph()
             } else if req_owned.contains("ping") {
+                // 心跳检测
                 b"{\"ok\":true}".to_vec()
             } else {
+                // 未知命令
                 b"{\"error\":\"unknown command\"}".to_vec()
             };
 
+            // 用 4 字节小端长度前缀封装响应并写回
             let framed = frame_response(&response);
             if let Err(e) = socket.write_all(&framed).await {
                 debug!(%addr, "write error: {}", e);
                 return;
             }
-            } // end keep-alive loop
+            } // keep-alive 循环结束
         });
     }
 }
 
+/// 处理全量分析请求。
+///
+/// 流程：初始化引擎 → 执行分析 → 记录时间线 → 序列化完整图数据（含社区检测）为 JSON。
+/// 返回的 JSON 包含节点、边、社区、层级社区、耗时等字段，供前端（Unity/Tauri）消费。
 fn handle_analyze(path: &str) -> Vec<u8> {
     let root = PathBuf::from(path);
     if !root.exists() {
@@ -339,7 +402,7 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         .unwrap_or_default();
     }
 
-    // Initialize engine and run analysis
+    // 初始化引擎（打开 GraphStore + SQLite）
     if let Err(e) = hologram_engine::engine::engine_init(&root) {
         return serde_json::to_vec(&serde_json::json!({
             "error": format!("engine init failed: {}", e),
@@ -347,19 +410,21 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         }))
         .unwrap_or_default();
     }
+    // 执行全量分析（解析源码 → 构建依赖图）
     let result = match hologram_engine::engine::engine_analyze(&root) {
         Ok(r) => r,
         Err(e) => return serde_json::to_vec(&serde_json::json!({"error": e})).unwrap_or_default(),
     };
 
-    // Record timeline event
+    // 记录时间线事件
     let _ = hologram_engine::engine::engine_record_timeline(
         "analyze",
         None::<&str>,
         &format!("全量分析完成：{} 节点, {} 边, {:.1}s", result.node_count, result.edge_count, result.elapsed_secs),
     );
 
-    // Serialize full graph for Unity consumption
+    // ── 序列化完整图数据，供前端消费 ──
+    // 节点：ID、名称、类型、位置、入度、出度、属性、位置坐标、社区 ID
     let nodes: Vec<serde_json::Value> = result.graph.nodes.values().map(|n| {
         serde_json::json!({
             "id": n.id, "name": n.name, "type": n.kind.as_str(),
@@ -369,6 +434,7 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         })
     }).collect();
 
+    // 边：ID、源节点、目标节点、类型、耦合深度、是否跨文件、时序延迟
     let edges: Vec<serde_json::Value> = result.graph.edges.values().map(|e| {
         serde_json::json!({
             "id": e.id, "source": e.source, "target": e.target,
@@ -378,7 +444,8 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         })
     }).collect();
 
-    // Detect communities for serialization
+    // ── 社区检测（扁平结构）──
+    // 使用 Louvain 算法（随机种子 42），将节点聚类为模块化社区
     let communities = detect_communities(&result.graph, 42);
     let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
         .map(|(i, c)| serde_json::json!({
@@ -386,7 +453,8 @@ fn handle_analyze(path: &str) -> Vec<u8> {
             "size": c.len(), "node_ids": c
         }))
         .collect();
-    // Hierarchical communities (Level 0 + Level 1+ super-communities)
+    // ── 层级社区检测（Level 0 + Level 1+ 超级社区）──
+    // 提供多粒度的社区视图，便于前端做折叠/展开
     let hcommunities = detect_hierarchical_communities(&result.graph, 42);
     let hcommunities_json: Vec<serde_json::Value> = hcommunities.iter()
         .map(|hc| serde_json::json!({
@@ -408,8 +476,13 @@ fn handle_analyze(path: &str) -> Vec<u8> {
     .unwrap_or_default()
 }
 
+/// 处理提交前预检（preflight check）请求。
+///
+/// 解析请求格式 `check:<path>` 或 `check:<path>\n<json_files>`，
+/// 如果引擎尚未加载图数据则自动执行分析，然后运行完整约束检查并与基线对比。
+/// 检查完成后保存新基线，并将结果记录到时间线。
 fn handle_check(request: &str) -> Vec<u8> {
-    // Parse "check:<path>" or "check:<path>\n<json_files>"
+    // 解析 "check:<path>" 或 "check:<path>\n<变更文件列表JSON>"
     let body = request.strip_prefix("check:").unwrap_or(".");
     let (path, changed_files): (&str, Vec<String>) = if let Some((p, files_json)) = body.split_once('\n') {
         let files: Vec<String> = serde_json::from_str(files_json.trim()).unwrap_or_default();
@@ -419,12 +492,12 @@ fn handle_check(request: &str) -> Vec<u8> {
     };
     let root = PathBuf::from(path);
 
-    // Guard: project must exist
+    // 前置检查：项目路径必须存在
     if !root.exists() {
         return b"{\"error\":\"project not found\"}".to_vec();
     }
 
-    // Auto-analyze if no graph loaded
+    // 如果图尚未加载（节点和边都为 0），自动初始化并分析
     if !hologram_engine::engine::engine_read_graph(|g| g.node_count() > 0 || g.edge_count() > 0).unwrap_or(false) {
         if let Err(e) = hologram_engine::engine::engine_init(&root) {
             tracing::warn!("auto engine_init failed: {e}");
@@ -434,15 +507,18 @@ fn handle_check(request: &str) -> Vec<u8> {
         }
     }
 
+    // 获取当前（分析后）的图快照
     let after = match hologram_engine::engine::engine_read_graph(|g| g.clone()) {
         Ok(g) => g,
         Err(_) => return b"{\"error\":\"analysis failed\"}".to_vec(),
     };
 
+    // 加载之前的基线图，运行完整约束检查，然后保存新基线
     let before = load_baseline(&root);
     let result = run_full_check(&before, &after, &changed_files, path);
     save_baseline(&root, &after);
 
+    // 将检查结果记录到时间线（仅在非静默或首次建立基线时记录）
     let quiet = result.get("quiet").and_then(|v| v.as_bool()).unwrap_or(false);
     let baseline_seed = result.get("baseline_seed").and_then(|v| v.as_bool()).unwrap_or(false);
     if !quiet || baseline_seed {
@@ -465,8 +541,14 @@ fn handle_check(request: &str) -> Vec<u8> {
     serde_json::to_vec(&result).unwrap_or_default()
 }
 
+/// 通用图查询处理函数。
+///
+/// 从请求中剥离前缀提取参数，检查引擎是否就绪（已加载图数据），
+/// 然后调用闭包 `f` 对图执行操作并返回 JSON 结果。
+/// 引擎未初始化时返回错误提示。
 fn handle_simple<F: FnOnce(&Graph, &str) -> serde_json::Value>(prefix: &str, request: &str, f: F) -> Vec<u8> {
     let arg = request.strip_prefix(prefix).unwrap_or("");
+    // 检查引擎状态：Ready 或已加载部分节点时才允许查询
     let state = hologram_engine::engine::engine_state();
     let is_ready = matches!(state, hologram_engine::engine::EngineState::Ready { .. })
         || matches!(state, hologram_engine::engine::EngineState::Loading { nodes_loaded, .. } if nodes_loaded > 0);
@@ -482,12 +564,18 @@ fn handle_simple<F: FnOnce(&Graph, &str) -> serde_json::Value>(prefix: &str, req
     }
 }
 
+/// 处理变更对比请求。
+///
+/// 将当前图与磁盘上的基线图进行 diff，返回新增/删除/修改的节点和边。
+/// 如果基线文件不存在，则将当前图保存为基线并提示用户。
 fn handle_diff(baseline_path: &str) -> Vec<u8> {
+    // 获取当前图快照
     let current = match hologram_engine::engine::engine_read_graph(|g| g.clone()) {
         Ok(g) if g.node_count() > 0 || g.edge_count() > 0 => g,
         _ => return b"{\"error\":\"no graph loaded, run analyze first\"}".to_vec(),
     };
 
+    // 基线路径默认为 .hologram/baseline.json
     let baseline_path = if baseline_path.is_empty() {
         ".hologram/baseline.json".to_string()
     } else {
@@ -496,6 +584,7 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
 
     match Graph::from_json_file(&baseline_path) {
         Ok(baseline) => {
+            // 基线存在：执行 diff 并返回差异
             let d = baseline.diff(&current);
             let added_nodes: Vec<_> = d.added_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
             let removed_nodes: Vec<_> = d.removed_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
@@ -512,6 +601,7 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
             })).unwrap_or_default()
         }
         Err(_) => {
+            // 基线不存在：将当前图保存为基线，提示下次再对比
             if let Some(parent) = std::path::Path::new(&baseline_path).parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -528,6 +618,10 @@ fn handle_diff(baseline_path: &str) -> Vec<u8> {
     }
 }
 
+/// 处理图查询请求（neighbors / path / search / impact）。
+///
+/// 从请求中剥离前缀后解析参数，在当前图上执行对应的查询操作。
+/// 所有查询都要求图已加载（节点或边数量 > 0）。
 fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
     let args = request.strip_prefix(prefix).unwrap_or("");
     let graph = match hologram_engine::engine::engine_read_graph(|g| g.clone()) {
@@ -537,6 +631,8 @@ fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
 
     let result = match prefix {
         "neighbors:" => {
+            // 格式: neighbors:<node_id>:<depth>
+            // depth 可选，默认 1 跳
             let parts: Vec<&str> = args.split(':').collect();
             let node_id = parts[0];
             let depth: usize = parts.get(1).and_then(|d| d.parse().ok()).unwrap_or(1);
@@ -544,6 +640,8 @@ fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
             serde_json::json!({ "neighbors": nb.iter().map(|(s,t,d)| json!([s,t,d])).collect::<Vec<_>>() })
         }
         "path:" => {
+            // 格式: path:<from>:<to>
+            // 查找两个节点之间的最短路径
             let parts: Vec<&str> = args.split(':').collect();
             if parts.len() < 2 { serde_json::json!({"error":"usage: path:from:to"}) }
             else {
@@ -554,10 +652,14 @@ fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
             }
         }
         "search:" => {
+            // 格式: search:<query>
+            // 按名称模糊搜索节点
             let results = query::search_nodes(&graph, args);
             serde_json::json!({ "results": results.iter().map(|n| json!({"id":n.id,"name":n.name})).collect::<Vec<_>>() })
         }
         "impact:" => {
+            // 格式: impact:<node_id>:<max_depth>
+            // 评估指定节点变更的影响范围，max_depth 默认 3 层
             let parts: Vec<&str> = args.split(':').collect();
             let node_id = parts[0];
             let max_depth: usize = parts.get(1).and_then(|d| d.parse().ok()).unwrap_or(3);
@@ -570,6 +672,10 @@ fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
     serde_json::to_vec(&result).unwrap_or_default()
 }
 
+/// 获取完整图数据（所有节点和边）。
+///
+/// 返回 JSON 格式：{"nodes": [...], "edges": [...]}，
+/// 供前端进行整体渲染。引擎未初始化时返回空数组。
 fn handle_get_graph() -> Vec<u8> {
     match hologram_engine::engine::engine_read_graph(|g| {
         let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| {
@@ -596,10 +702,13 @@ fn handle_get_graph() -> Vec<u8> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Protocol helpers (testable)
+// 协议辅助函数（可独立测试）
+// TCP 通信使用 4 字节小端长度前缀 + JSON payload 的帧协议
 // ═══════════════════════════════════════════════════════════════
 
-/// Frame a payload with 4-byte little-endian length prefix.
+/// 用 4 字节小端长度前缀封装 payload。
+///
+/// 帧格式: `[len: u32 LE][payload bytes]`
 fn frame_response(payload: &[u8]) -> Vec<u8> {
     let len = payload.len() as u32;
     let mut framed = Vec::with_capacity(4 + payload.len());
@@ -608,7 +717,7 @@ fn frame_response(payload: &[u8]) -> Vec<u8> {
     framed
 }
 
-/// Parse a framed message: returns (payload, bytes_consumed) or None.
+/// 解析帧消息：返回 (payload, 消耗的字节数)，数据不足时返回 None。
 #[allow(dead_code)]
 fn unframe(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
     if buf.len() < 4 { return None; }
@@ -618,18 +727,27 @@ fn unframe(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CLI one-shot mode — `engine.exe run <tool> [project_path] [--key value ...]`
-// Reuses ToolRegistry::dispatch — same engine, same baseline, same config as GUI.
+// CLI 一站式工具调用模式 — `engine.exe run <tool> [project_path] [--key value ...]`
+// 复用 ToolRegistry::dispatch —— 与 GUI / MCP 使用同一套引擎、基线和配置
 // ═══════════════════════════════════════════════════════════════
 
-/// Parse `--key value` pairs (and positional project_path) into a JSON object.
-/// Returns (tool_name, project_path, args_json).
+/// 解析命令行参数 `--key value` 对（以及位置参数 project_path）为 JSON 对象。
+///
+/// 返回三元组：(工具名, 项目路径, 参数 JSON)
+///
+/// 支持的类型推断：
+/// - 逗号分隔 → JSON 数组（如 `--files a.rs,b.rs` → `["a.rs","b.rs"]`）
+/// - `true` / `false` → 布尔值
+/// - `null` → JSON null
+/// - 纯数字 → i64
+/// - 浮点数 → f64
+/// - 其他 → 字符串
 fn parse_cli_args(rest: &[String]) -> Result<(String, String, serde_json::Value), String> {
     if rest.is_empty() {
-        return Err("Usage: engine.exe run <tool> [project_path] [--key value ...]".into());
+        return Err("用法: engine.exe run <tool> [project_path] [--key value ...]".into());
     }
 
-    // --list: special — no tool to parse
+    // --list 是特殊标志，不需要解析工具名
     if rest[0] == "--list" {
         return Ok(("--list".into(), String::new(), json!({})));
     }
@@ -642,9 +760,10 @@ fn parse_cli_args(rest: &[String]) -> Result<(String, String, serde_json::Value)
     while i < rest.len() {
         let arg = &rest[i];
         if arg.starts_with("--") {
+            // 解析 --key value 对
             let key = arg.strip_prefix("--").unwrap_or(arg);
-            let value = rest.get(i + 1).ok_or_else(|| format!("Missing value for --{}", key))?;
-            // Comma-separated values → JSON array (handlers expect arrays for list params)
+            let value = rest.get(i + 1).ok_or_else(|| format!("缺少 --{} 的值", key))?;
+            // 逗号分隔的值 → JSON 数组（处理器期望列表参数为数组）
             let parsed = if value.contains(',') {
                 let arr: Vec<&str> = value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
                 json!(arr)
@@ -664,26 +783,32 @@ fn parse_cli_args(rest: &[String]) -> Result<(String, String, serde_json::Value)
             args_map.insert(key.to_string(), parsed);
             i += 2;
         } else if project_path.is_empty() {
+            // 第一个非 -- 参数视为项目路径
             project_path = arg.clone();
             i += 1;
         } else {
-            return Err(format!("Unexpected positional argument: {}", arg));
+            return Err(format!("多余的位置参数: {}", arg));
         }
     }
 
+    // 项目路径默认为当前目录 "."
     let project_path = if project_path.is_empty() { ".".into() } else { project_path };
     Ok((tool, project_path, json!(args_map)))
 }
 
-/// Extract the tool result text from an MCP JSON-RPC envelope.
-/// Returns (text, is_error).
+/// 从 MCP JSON-RPC 响应信封中提取工具结果文本。
+///
+/// 返回 (文本内容, 是否为错误)。
+///
+/// 错误格式: `{"jsonrpc":"2.0","error":{"code":...,"message":"..."}}`
+/// 成功格式: `{"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"..."}]}}`
 fn extract_mcp_result(envelope: &serde_json::Value) -> (String, bool) {
-    // Error response: {"jsonrpc":"2.0","id":...,"error":{"code":...,"message":...}}
+    // 错误响应：直接提取 error.message
     if let Some(err) = envelope.get("error") {
         let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
         return (msg.to_string(), true);
     }
-    // Success response: {"jsonrpc":"2.0","id":...,"result":{"content":[{"type":"text","text":"..."}]}}
+    // 成功响应：从 result.content[0].text 中提取文本
     let text = envelope
         .get("result")
         .and_then(|r| r.get("content"))
@@ -695,7 +820,10 @@ fn extract_mcp_result(envelope: &serde_json::Value) -> (String, bool) {
     (text.to_string(), false)
 }
 
-/// Entry point for `engine.exe run` CLI mode.
+/// CLI 一站式模式的入口函数。
+///
+/// 流程：解析参数 → 初始化引擎 → （如需要）自动分析 → 通过 ToolRegistry 分发工具调用
+/// → 提取结果 → 根据 tool 类型决定退出码
 fn cli_run(rest: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let (tool, project_path, args_json) = match parse_cli_args(rest) {
         Ok(v) => v,
@@ -705,7 +833,7 @@ fn cli_run(rest: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // --list: print all available tool names
+    // --list：列出所有可用工具名称及描述
     if tool == "--list" {
         let tools = ToolRegistry::global().tools_list();
         for t in &tools {
@@ -718,46 +846,47 @@ fn cli_run(rest: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let root = PathBuf::from(&project_path);
     if !root.exists() {
-        eprintln!("[cli] Project path not found: {}", project_path);
+        eprintln!("[cli] 项目路径不存在: {}", project_path);
         std::process::exit(2);
     }
 
-    // Initialize engine (opens GraphStore + SQLite, same as GUI/MCP)
+    // 初始化引擎（打开 GraphStore + SQLite，与 GUI/MCP 一致）
     if let Err(e) = hologram_engine::engine::engine_init(&root) {
-        eprintln!("[cli] Engine init failed (non-fatal): {}", e);
+        eprintln!("[cli] 引擎初始化失败（非致命）: {}", e);
     }
 
-    // Auto-analyze when the graph is empty — mirrors handle_check behavior.
-    // Skip for tools that don't need a graph (engine_status) or when the tool
-    // itself triggers analysis (analyze_project, validate_project).
+    // 图为空时自动分析——与 handle_check 的行为保持一致
+    // 跳过两种情况：
+    //   1. engine_status：不需要图数据
+    //   2. analyze_project / validate_project：工具自身会触发分析
     let self_analyzing = tool == "analyze_project" || tool == "validate_project";
     if tool != "engine_status" && !self_analyzing {
         let has_graph = hologram_engine::engine::engine_read_graph(|g| g.node_count() > 0 || g.edge_count() > 0)
             .unwrap_or(false);
         if !has_graph {
-            eprintln!("[cli] Graph is empty, analyzing project…");
+            eprintln!("[cli] 图为空，正在分析项目…");
             match hologram_engine::engine::engine_analyze(&root) {
-                Ok(result) => info!("[cli] Auto-analysis complete: {} nodes, {} edges", result.node_count, result.edge_count),
+                Ok(result) => info!("[cli] 自动分析完成: {} 节点, {} 边", result.node_count, result.edge_count),
                 Err(e) => {
-                    eprintln!("[cli] Analysis failed: {}", e);
+                    eprintln!("[cli] 分析失败: {}", e);
                     std::process::exit(1);
                 }
             }
         }
     }
 
-    // analyze_project: run analysis before dispatching (fills the graph)
+    // analyze_project：在分发前先执行分析（填充图数据）
     if tool == "analyze_project" {
         match hologram_engine::engine::engine_analyze(&root) {
-            Ok(result) => info!("[cli] Analysis complete: {} nodes, {} edges", result.node_count, result.edge_count),
+            Ok(result) => info!("[cli] 分析完成: {} 节点, {} 边", result.node_count, result.edge_count),
             Err(e) => {
-                eprintln!("[cli] Analysis failed: {}", e);
+                eprintln!("[cli] 分析失败: {}", e);
                 std::process::exit(1);
             }
         }
     }
 
-    // Dispatch through the same registry as MCP and Tauri
+    // 通过 ToolRegistry 分发工具调用——与 MCP / Tauri 使用同一套注册表
     let id = json!(1);
     let envelope = ToolRegistry::dispatch(&tool, &args_json, &id);
     let (text, is_error) = extract_mcp_result(&envelope);
@@ -767,10 +896,10 @@ fn cli_run(rest: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // Print result to stdout (raw tool JSON, jq-friendly)
+    // 将工具结果输出到 stdout（原始 JSON，兼容 jq 管道处理）
     println!("{}", text);
 
-    // For validate_project: exit 1 if constraints not passed
+    // validate_project：约束未通过时退出码 1（供 CI/CD 使用）
     if tool == "validate_project" {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
             if !v.get("passed").and_then(|p| p.as_bool()).unwrap_or(false) {
@@ -779,7 +908,7 @@ fn cli_run(rest: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // For preflight_check: exit 1 if risk is critical or high
+    // preflight_check：风险等级为 critical 或 high 时退出码 1
     if tool == "preflight_check" {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
             let risk = v.get("risk_level").and_then(|r| r.as_str()).unwrap_or("low");
@@ -796,15 +925,17 @@ fn cli_run(rest: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use hologram_engine::graph::{EdgeKind, Node, NodeKind};
-    
 
-    // Mutex to serialize CACHED_GRAPH access in bin tests
+    // 互斥锁：串行化测试中对全局 CACHED_GRAPH 的访问，避免并发冲突
     static BIN_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// 获取全局互斥锁，确保测试串行执行图操作
     fn lock_bin() -> std::sync::MutexGuard<'static, ()> {
         BIN_MUTEX.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// 加载测试图：创建临时目录、初始化引擎、插入 2 个节点和 1 条边
+    /// 返回互斥锁 guard，保持期间图数据有效
     fn load_test_graph() -> std::sync::MutexGuard<'static, ()> {
         let guard = lock_bin();
         let tmp = std::env::temp_dir().join("hologram_bin_test");
@@ -823,14 +954,14 @@ mod tests {
     }
 
     fn clear_graph() {
-        // Remove all graph data while keeping engine alive.
+        // 清空所有图数据，但保持引擎存活（不销毁引擎实例）
         let _ = hologram_engine::engine::engine_write(|idx| {
             let ids: Vec<String> = { idx.nodes_iter().map(|n| n.id.clone()).collect() };
             for id in &ids { idx.remove_node(id); }
         });
     }
 
-    // ── Framing protocol ──
+    // ═══ 帧协议测试 ═══
 
     #[test]
     fn test_frame_roundtrip() {
@@ -865,7 +996,7 @@ mod tests {
         assert!(unframe(&framed[..2]).is_none()); // truncated
     }
 
-    // ── handle_get_graph ──
+    // ═══ handle_get_graph 测试 ═══
 
     #[test]
     fn test_handle_get_graph_returns_empty_when_no_cache() {
@@ -899,7 +1030,7 @@ mod tests {
         assert_eq!(v["edges"][0]["source"], "a");
     }
 
-    // ── handle_simple ──
+    // ═══ handle_simple 测试 ═══
 
     #[test]
     fn test_handle_simple_with_graph() {
@@ -935,7 +1066,7 @@ mod tests {
         assert!(v.is_array());
     }
 
-    // ── handle_query ──
+    // ═══ handle_query 测试 ═══
 
     #[test]
     fn test_handle_query_neighbors() {
@@ -986,7 +1117,7 @@ mod tests {
         assert_eq!(v["error"], "no graph loaded, run analyze first");
     }
 
-    // ── handle_analyze (smoke test with temp project) ──
+    // ═══ handle_analyze 冒烟测试（使用临时项目）═══
 
     #[test]
     fn test_handle_analyze_valid_project() {
@@ -1016,7 +1147,7 @@ mod tests {
         assert_eq!(v["error"], "path not found");
     }
 
-    // ── handle_check ──
+    // ═══ handle_check 测试 ═══
 
     #[test]
     fn test_handle_check_no_project() {
@@ -1028,7 +1159,7 @@ mod tests {
         assert_eq!(v["error"], "project not found");
     }
 
-    // ── CLI arg parsing ──
+    // ═══ CLI 参数解析测试 ═══
 
     #[test]
     fn test_parse_cli_args_basic() {
@@ -1098,7 +1229,7 @@ mod tests {
         assert_eq!(tool, "--list");
     }
 
-    // ── MCP result extraction ──
+    // ═══ MCP 结果提取测试 ═══
 
     #[test]
     fn test_extract_mcp_result_success() {

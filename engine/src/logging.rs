@@ -1,23 +1,27 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// HoloGram structured logging — tracing-based, NDJSON to .hologram/logs/engine.log
+//! # HoloGram 结构化日志模块
+//!
+//! 基于 `tracing` 框架，以 NDJSON 格式写入 `.hologram/logs/engine.log`。
+//! 在 MCP stdio 模式下故意不输出到 stderr，避免干扰客户端的 stdout 读取器。
+
 use std::path::Path;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, Layer, EnvFilter, Registry};
 
-/// Initialize logging. Returns a `WorkerGuard` that must be held for the
-/// lifetime of the process — dropping it flushes and shuts down the writer.
+/// 初始化日志系统。返回 `WorkerGuard`，必须在进程生命周期内持有
+/// ——丢弃它会触发 flush 并关闭写入器。
 ///
-/// If `project_root` is provided, writes JSON logs to
-/// `<project_root>/.hologram/logs/engine.log` in addition to stderr.
+/// 如果提供了 `project_root`，则将 JSON 日志写入
+/// `<project_root>/.hologram/logs/engine.log`（不额外输出到 stderr）。
 pub fn init_logging(project_root: Option<&Path>) -> WorkerGuard {
     let mut layers = Vec::new();
 
-    // JSON file layer — primary sink. When we have a project root, logs go
-    // to .hologram/logs/engine.log. We deliberately do NOT add a stderr
-    // layer: in MCP stdio mode stderr can interfere with the client's
-    // stdout reader on Windows, causing response parse failures.
+    // JSON 文件层——主要日志输出。有项目根目录时，日志写入
+    // .hologram/logs/engine.log。故意不添加 stderr 层：
+    // 在 MCP stdio 模式下 stderr 可能干扰 Windows 上客户端的 stdout 读取器，
+    // 导致响应解析失败。
     let guard = if let Some(root) = project_root {
         let log_dir = root.join(".hologram").join("logs");
         let _ = std::fs::create_dir_all(&log_dir);
@@ -37,13 +41,13 @@ pub fn init_logging(project_root: Option<&Path>) -> WorkerGuard {
 
         guard
     } else {
-        // No project root — log to a sink only. stderr would interfere
-        // with MCP stdio. Devs can tail the file or set RUST_LOG + run
-        // the TCP server instead.
+        // 无项目根目录——仅写入空 sink。stderr 会干扰 MCP stdio。
+        // 开发者可以 tail 日志文件，或设置 RUST_LOG + 运行 TCP 服务器来查看输出。
         let (_, guard) = tracing_appender::non_blocking(std::io::sink());
         guard
     };
 
+    // 日志级别过滤：优先从环境变量 RUST_LOG 读取，默认 info
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 

@@ -1,15 +1,24 @@
-// LSP Manager — long-lived LSP server pool for on-demand call resolution.
-// Architecture:
-//   LspManager (lazy singleton) → ServerPool → per-language LSP processes
-//   Each server: stdio JSON-RPC, started on first use, kept alive forever.
-//
-// Lifetime:
-//   Index complete → pool.warm(project_root)  → spawn servers in background
-//   Agent query    → pool.resolve(file, l, c) → JSON-RPC textDocument/definition
-//   UI blast radius → pool.references(file,l,c)→ JSON-RPC textDocument/references
-//
-// Fallback: if a server can't start (not installed / spawn failed / timeout),
-// falls through to existing handwritten adapters transparently.
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
+//! # LSP 管理器 —— 长生命周期的 LSP 服务器池
+//!
+//! 用于按需解析函数调用关系。
+//!
+//! ## 架构
+//! ```text
+//! LspManager（惰性单例）→ ServerPool → 每种语言一个 LSP 进程
+//! 每个服务器：通过 stdio JSON-RPC 通信，首次使用时启动，永久存活
+//! ```
+//!
+//! ## 生命周期
+//! - 索引完成 → `pool.warm(project_root)` → 后台启动所有服务器
+//! - Agent 查询 → `pool.resolve(file, l, c)` → JSON-RPC textDocument/definition
+//! - UI 影响范围 → `pool.references(file, l, c)` → JSON-RPC textDocument/references
+//!
+//! ## 降级策略
+//! 如果服务器无法启动（未安装 / spawn 失败 / 超时），
+//! 透明降级到现有的手写适配器。
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -19,12 +28,16 @@ use std::sync::{Arc, Mutex, RwLock};
 use serde_json::{json, Value};
 
 // ═══════════════════════════════════════════════════════════════
-// LSP server process handle
+// LSP 服务器进程句柄
 // ═══════════════════════════════════════════════════════════════
 
-/// Default LSP request timeout.
+/// 默认 LSP 请求超时时间。
 const LSP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// 单个 LSP 服务器进程的句柄。
+///
+/// 持有子进程的 stdin/stdout/stderr，维护自增的请求 ID，
+/// 通过 LSP Content-Length 帧协议读写 JSON-RPC 消息。
 struct LspProcess {
     process: Child,
     stdin: ChildStdin,
@@ -36,6 +49,13 @@ struct LspProcess {
 }
 
 impl LspProcess {
+    /// 发送 JSON-RPC 请求并等待响应。
+    ///
+    /// LSP 服务器会在请求/响应周期之间异步发送诊断和日志通知——
+    /// 这些消息会被跳过，只等待与请求 id 匹配的响应。
+    ///
+    /// 使用独立线程读取响应以实现超时控制。
+    /// 超时后 reader 丢失，下次调用会触发 get_or_warm_server 重建进程。
     fn send_request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
@@ -46,14 +66,14 @@ impl LspProcess {
             "params": params,
         });
         let body = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+        // LSP 帧协议：Content-Length 头 + 空行 + JSON body
         let header = format!("Content-Length: {}\r\n\r\n", body.len());
         self.stdin.write_all(header.as_bytes()).map_err(|e| format!("write: {}", e))?;
         self.stdin.write_all(body.as_bytes()).map_err(|e| format!("write body: {}", e))?;
         self.stdin.flush().map_err(|e| format!("flush: {}", e))?;
 
-        // Read responses in a spawned thread so we can enforce a timeout.
-        // LSP servers send diagnostics/log notifications asynchronously
-        // between request/response cycles — skip those, wait for our id.
+        // 在独立线程中读取响应以实现超时控制
+        // LSP 服务器会异步发送诊断/日志通知——跳过这些，等待匹配 id 的响应
         let mut reader = self.reader.take()
             .ok_or("LSP reader lost (previous call timed out) — server will be recreated")?;
 
@@ -68,7 +88,7 @@ impl LspProcess {
                             }
                             break Ok(response);
                         }
-                        // notification or stale response → skip
+                        // 通知或过期响应 → 跳过
                     }
                     Err(e) => break Err(format!("LSP read error: {}", e)),
                 }
@@ -82,8 +102,8 @@ impl LspProcess {
                 result
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // Thread still alive but we're done waiting.
-                // Reader is lost — next call fails → get_or_warm_server recreates.
+                // 线程仍然存活但我们不再等待
+                // reader 已丢失——下次调用失败 → get_or_warm_server 重建
                 Err(format!(
                     "LSP timeout after {:?} waiting for {}(id {})",
                     self.timeout, method, id,
@@ -95,7 +115,7 @@ impl LspProcess {
         }
     }
 
-    /// Send a notification (no id, no response expected).
+    /// 发送通知消息（无 id，不期望响应）。
     fn send_notification(&mut self, method: &str, params: Value) -> Result<(), String> {
         let notif = json!({"jsonrpc": "2.0", "method": method, "params": params});
         let body = serde_json::to_string(&notif).map_err(|e| e.to_string())?;
@@ -106,24 +126,26 @@ impl LspProcess {
         Ok(())
     }
 
-    /// Read a single JSON-RPC message and return its (id, body).
-    /// Static so it can be called from the timeout thread without borrowing self.
+    /// 读取单条 JSON-RPC 消息并返回 (id, body)。
+    ///
+    /// 设为 static 方法以便在超时线程中调用而无需借用 self。
+    /// 解析 LSP 帧协议：逐行读取 header 直到空行，然后按 Content-Length 读取 body。
     fn read_one_message(reader: &mut BufReader<std::process::ChildStdout>) -> Result<(Option<u64>, Value), String> {
         let mut content_length: Option<usize> = None;
         loop {
             let mut line = String::new();
             let n = reader.read_line(&mut line).map_err(|e| format!("read: {}", e))?;
             if n == 0 {
-                // EOF — server exited without sending headers
+                // EOF —— 服务器未发送 header 就退出了
                 break;
             }
             let trimmed = line.trim();
-            // Skip leading noise (startup banners, stray log output, etc.)
+            // 跳过启动横幅、杂散日志等噪声
             if trimmed.is_empty() {
                 if content_length.is_some() { break; }
                 continue;
             }
-            // Match "Content-Length: N" with flexible whitespace
+            // 匹配 "Content-Length: N"，容忍空白字符差异
             let lower = trimmed.to_lowercase();
             if let Some(val) = lower.strip_prefix("content-length:") {
                 content_length = val.trim().parse().ok();
@@ -138,6 +160,10 @@ impl LspProcess {
         Ok((id, msg))
     }
 
+    /// LSP initialize 握手：发送 initialize 请求 + initialized 通知。
+    ///
+    /// 声明客户端能力（definition、references、hover），
+    /// 等待服务器返回能力声明后发送 initialized 通知。
     fn initialize(&mut self, root: &str) -> Result<(), String> {
         let params = json!({
             "processId": std::process::id(),
@@ -156,7 +182,7 @@ impl LspProcess {
         });
         let resp = self.send_request("initialize", params)
             .map_err(|e| {
-                // Try to read stderr for diagnostics
+                // 尝试读取 stderr 以获取诊断信息
                 let mut extra = String::new();
                 if let Some(ref mut stderr) = self.stderr {
                     let mut buf = [0u8; 512];
@@ -171,18 +197,19 @@ impl LspProcess {
             })?;
         let _capabilities = resp.get("result").ok_or("no capabilities")?;
 
-        // initialized is a notification, not a request
+        // initialized 是通知，不是请求
         self.send_notification("initialized", json!({}))?;
 
-        // Drain any post-init diagnostics/log notifications
-        // ponytail: 100ms should be enough for startup messages
+        // 排空初始化后的诊断/日志通知
+        // 100ms 应该足够等待启动消息
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         Ok(())
     }
 
+    /// 通知服务器打开文件（textDocument/didOpen）。
     fn open_file(&mut self, uri: &str, text: &str, language: &str) -> Result<(), String> {
-        // didOpen is a notification — no id, no response expected
+        // didOpen 是通知——无 id，不期望响应
         self.send_notification("textDocument/didOpen", json!({
             "textDocument": {
                 "uri": uri,
@@ -193,6 +220,7 @@ impl LspProcess {
         }))
     }
 
+    /// 查询指定位置的定义（textDocument/definition）。
     fn definition(
         &mut self,
         uri: &str,
@@ -208,6 +236,9 @@ impl LspProcess {
         parse_definition_results(&result)
     }
 
+    /// 查询指定位置的实现（textDocument/implementation）。
+    ///
+    /// 用于查找接口/trait 的所有具体实现。
     fn implementation(
         &mut self,
         uri: &str,
@@ -223,6 +254,9 @@ impl LspProcess {
         parse_definition_results(&result)
     }
 
+    /// 查询指定位置的悬停信息（textDocument/hover）。
+    ///
+    /// 用于获取类型信息、文档等。
     fn hover(
         &mut self,
         uri: &str,
@@ -238,13 +272,13 @@ impl LspProcess {
         if result.is_null() {
             return Ok(String::new());
         }
-        // Hover result: { contents: MarkupContent | MarkedString | MarkedString[] }
+        // hover 结果格式: { contents: MarkupContent | MarkedString | MarkedString[] }
         let contents = result.get("contents").cloned().unwrap_or(Value::Null);
         match contents {
             Value::String(s) => Ok(s),
             Value::Object(ref m) => m.get("value").and_then(|v| v.as_str()).map(|s| s.to_string()).ok_or("no hover value".into()),
             Value::Array(ref arr) => {
-                // MarkedString[] — take the first language-tagged one
+                // MarkedString[] —— 取第一个带语言标签的
                 for item in arr {
                     if let Some(s) = item.as_str() { return Ok(s.to_string()); }
                     if let Some(v) = item.get("value").and_then(|v| v.as_str()) { return Ok(v.to_string()); }
@@ -255,6 +289,9 @@ impl LspProcess {
         }
     }
 
+    /// 查询指定位置符号的所有引用（textDocument/references）。
+    ///
+    /// 用于 UI 的影响范围分析。
     fn references(
         &mut self,
         uri: &str,
@@ -274,6 +311,7 @@ impl LspProcess {
 
 impl Drop for LspProcess {
     fn drop(&mut self) {
+        // 尝试优雅关闭：发送 shutdown 请求后 kill 进程
         let _ = self.stdin.write_all(
             json!({"jsonrpc":"2.0","method":"shutdown","params":null}).to_string().as_bytes(),
         );
@@ -282,9 +320,10 @@ impl Drop for LspProcess {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Location parsing
+// 位置解析
 // ═══════════════════════════════════════════════════════════════
 
+/// LSP 位置信息：URI + 范围（起止行列）。
 #[derive(Debug, Clone)]
 pub struct LspLocation {
     pub uri: String,
@@ -294,18 +333,28 @@ pub struct LspLocation {
     pub range_end_char: u32,
 }
 
-/// Convert file:/// URI to absolute path.
+/// 将 file:/// URI 转换为绝对路径。
+///
+/// 在 Windows 上将正斜杠转回反斜杠。
 pub fn uri_to_path(uri: &str) -> String {
     uri.strip_prefix("file:///")
         .unwrap_or(uri)
         .replace('/', if cfg!(windows) { "\\" } else { "/" })
 }
 
+/// 解析 definition/references 的返回结果。
+///
+/// LSP 返回格式可能是：
+/// - null（无结果）
+/// - 单个 Location `{uri, range}`
+/// - Location 数组 `[{uri, range}, ...]`
+/// - LocationLink 数组 `[{targetUri, targetRange, ...}, ...]`
+/// - 单个 LocationLink
 fn parse_definition_results(value: &Value) -> Result<Vec<LspLocation>, String> {
     if value.is_null() {
         return Ok(vec![]);
     }
-    // LocationLink[] — has targetUri + targetRange
+    // LocationLink[] —— 含 targetUri + targetRange
     if let Some(arr) = value.as_array() {
         if let Some(first) = arr.first() {
             if first.get("targetUri").is_some() {
@@ -314,29 +363,32 @@ fn parse_definition_results(value: &Value) -> Result<Vec<LspLocation>, String> {
         }
         return arr.iter().map(parse_one_location).collect();
     }
-    // Single Location
+    // 单个 Location
     if value.get("uri").is_some() {
         return Ok(vec![parse_one_location(value)?]);
     }
-    // Single LocationLink
+    // 单个 LocationLink
     if value.get("targetUri").is_some() {
         return Ok(vec![parse_location_link(value)?]);
     }
     Ok(vec![])
 }
 
+/// 解析 LocationLink（含 targetUri + targetSelectionRange/targetRange）。
 fn parse_location_link(v: &Value) -> Result<LspLocation, String> {
     let uri = v.get("targetUri").and_then(|u| u.as_str()).ok_or("missing targetUri")?.to_string();
     let range = v.get("targetSelectionRange").or(v.get("targetRange")).ok_or("missing range")?;
     parse_range(uri, range)
 }
 
+/// 解析单个 Location（含 uri + range）。
 fn parse_one_location(v: &Value) -> Result<LspLocation, String> {
     let uri = v.get("uri").and_then(|u| u.as_str()).ok_or("missing uri")?.to_string();
     let range = v.get("range").ok_or("missing range")?;
     parse_range(uri, range)
 }
 
+/// 从 range JSON 中提取起止行列，构造 LspLocation。
 fn parse_range(uri: String, range: &Value) -> Result<LspLocation, String> {
     let start = range.get("start").ok_or("missing start")?;
     let end = range.get("end").unwrap_or(start);
@@ -350,24 +402,28 @@ fn parse_range(uri: String, range: &Value) -> Result<LspLocation, String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Server config per language
+// 每种语言的 LSP 服务器配置
 // ═══════════════════════════════════════════════════════════════
 
+/// 单种语言的 LSP 服务器配置。
 struct LspServerConfig {
-    /// Command to spawn (e.g. "rust-analyzer")
+    /// 启动命令（如 "rust-analyzer"）
     command: &'static str,
-    /// CLI args
+    /// 命令行参数
     args: &'static [&'static str],
-    /// LSP language ID (e.g. "rust", "python")
+    /// LSP 语言 ID（如 "rust"、"python"）
     language_id: &'static str,
-    /// File extensions handled by this server
+    /// 此服务器处理的文件扩展名
     extensions: &'static [&'static str],
-    /// Configuration file that marks the correct workspace root.
-    /// If present and not found at project root, we search one level
-    /// of subdirectories and use the first match's parent as rootUri.
+    /// 标记正确工作区根目录的配置文件。
+    /// 如果在项目根目录下未找到，则搜索一级子目录，
+    /// 使用第一个匹配项的父目录作为 rootUri。
     config_marker: &'static [&'static str],
 }
 
+/// 所有支持的 LSP 服务器配置表。
+///
+/// 覆盖 9 种语言：Rust、Go、Python、TypeScript/JavaScript、C/C++、Java、C#、PHP、Kotlin。
 const SERVER_CONFIGS: &[LspServerConfig] = &[
     LspServerConfig {
         command: "rust-analyzer",
@@ -435,26 +491,38 @@ const SERVER_CONFIGS: &[LspServerConfig] = &[
 ];
 
 // ═══════════════════════════════════════════════════════════════
-// Server pool
+// 服务器池
 // ═══════════════════════════════════════════════════════════════
 
+/// 服务器池类型：命令名 → LSP 进程的 Arc<Mutex<Option<>>>。
+///
+/// Option<None> 表示进程已失败/被销毁，需要重建。
 type PoolMap = HashMap<&'static str, Arc<Mutex<Option<LspProcess>>>>;
 
+/// LSP 管理器：全局单例，管理所有语言的 LSP 服务器进程。
+///
+/// 使用 RwLock 保护内部状态，支持并发读取。
+/// 通过 `LspManager::global()` 获取全局实例。
 pub struct LspManager {
+    /// 服务器池：命令名 → 进程句柄
     pool: RwLock<PoolMap>,
+    /// 项目根目录
     project_root: RwLock<Option<String>>,
+    /// 是否已初始化（warm 已调用）
     initialized: RwLock<bool>,
-    /// Last warm error, keyed by command name. Queryable for diagnostics.
+    /// 每个命令的最后一次预热错误，用于诊断
     last_warm_errors: RwLock<HashMap<String, String>>,
 }
 
 impl LspManager {
+    /// 获取全局单例实例。
     pub fn global() -> &'static Self {
         use std::sync::LazyLock;
         static MANAGER: LazyLock<LspManager> = LazyLock::new(LspManager::new);
         &MANAGER
     }
 
+    /// 检查 LSP 池是否已初始化（warm 已调用）。
     pub fn is_initialized() -> bool {
         *Self::global().initialized.read().unwrap()
     }
@@ -468,10 +536,11 @@ impl LspManager {
         }
     }
 
-    /// Warm the pool — spawn ALL configured LSP servers in parallel.
-    /// No extension scanning, no filtering: if a server is installed on PATH,
-    /// we try to start it. Slow starters don't block fast ones. Failures are
-    /// recorded in `last_warm_errors` for diagnostics. Call after index completes.
+    /// 预热服务器池——并行启动所有已配置的 LSP 服务器。
+    ///
+    /// 不做扩展名扫描和过滤：如果服务器在 PATH 上存在就尝试启动。
+    /// 启动慢的不阻塞启动快的。失败记录到 `last_warm_errors` 中供诊断。
+    /// 应在索引完成后调用。
     pub fn warm(project_root: &str) {
         let mgr = Self::global();
         *mgr.project_root.write().unwrap() = Some(project_root.to_string());
@@ -506,14 +575,16 @@ impl LspManager {
         }
     }
 
-    /// Warm the pool synchronously — blocks until ALL servers are started
-    /// or failed. Returns (started_count, failed_count). Used by stress tests.
+    /// 同步预热服务器池——阻塞直到所有服务器启动或失败。
+    ///
+    /// 返回 (已启动数, 失败数)。供压力测试使用。
     pub fn warm_blocking(project_root: &str) -> (usize, usize) {
         Self::warm_blocking_filtered(project_root, &[])
     }
 
-    /// Warm the pool synchronously, only starting servers whose extension
-    /// list overlaps with `ext_filter`. If `ext_filter` is empty, starts all.
+    /// 同步预热服务器池，仅启动扩展名与 `ext_filter` 有交集的服务器。
+    ///
+    /// 如果 `ext_filter` 为空则启动全部。供压力测试按语言过滤使用。
     pub fn warm_blocking_filtered(project_root: &str, ext_filter: &[&str]) -> (usize, usize) {
         let mgr = Self::global();
         *mgr.project_root.write().unwrap() = Some(project_root.to_string());
@@ -523,7 +594,7 @@ impl LspManager {
         let mut handles = Vec::new();
 
         for cfg in SERVER_CONFIGS {
-            // Apply extension filter if non-empty
+            // 应用扩展名过滤
             if !ext_filter.is_empty() {
                 let has_match = ext_filter.iter()
                     .any(|e| cfg.extensions.contains(e));
@@ -575,19 +646,19 @@ impl LspManager {
         (started, failed)
     }
 
-    /// Find the correct workspace root for an LSP server.
-    /// Searches for any of the config_marker files in the project root,
-    /// then one level of subdirectories. Returns the directory containing
-    /// the first match, or the project root if nothing found.
+    /// 为 LSP 服务器查找正确的工作区根目录。
+    ///
+    /// 在项目根目录下搜索 config_marker 文件，如果未找到则搜索一级子目录。
+    /// 返回包含第一个匹配项的目录，如果都未找到则返回项目根目录。
     fn resolve_workspace_root(project_root: &str, markers: &[&str]) -> String {
         if markers.is_empty() {
             return project_root.to_string();
         }
-        // Check project root first
+        // 先检查项目根目录
         if Self::dir_has_marker(project_root, markers) {
             return project_root.to_string();
         }
-        // Search immediate subdirectories
+        // 搜索一级子目录
         if let Ok(entries) = std::fs::read_dir(project_root) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -600,16 +671,17 @@ impl LspManager {
                 }
             }
         }
-        // Fallback: project root
+        // 回退到项目根目录
         project_root.to_string()
     }
 
-    /// Check whether a directory contains any of the given marker files.
-    /// Supports literal names and extension globs (e.g. "*.sln").
+    /// 检查目录中是否包含任意一个给定的标记文件。
+    ///
+    /// 支持字面文件名和扩展名通配（如 "*.sln"）。
     fn dir_has_marker(dir: &str, markers: &[&str]) -> bool {
         for marker in markers {
             if marker.starts_with("*.") {
-                // Extension glob: check if any file with this extension exists
+                // 扩展名通配：检查是否存在任何带此扩展名的文件
                 let ext = &marker[1..]; // ".sln", ".csproj"
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
@@ -625,7 +697,7 @@ impl LspManager {
                     }
                 }
             } else {
-                // Literal filename
+                // 字面文件名
                 let full = std::path::Path::new(dir).join(marker);
                 if full.exists() {
                     return true;
@@ -635,10 +707,10 @@ impl LspManager {
         false
     }
 
-    /// Diagnose common LSP spawn failures and return actionable guidance.
+    /// 诊断常见的 LSP 启动失败并返回可操作的指导信息。
     fn diagnose_error(cmd: &str, raw: &str) -> String {
         let lower = raw.to_lowercase();
-        // npm global package corruption — node_modules missing
+        // npm 全局包损坏——node_modules 缺失
         if lower.contains("cannot find module") && lower.contains("node_modules") {
             return format!(
                 "{} — npm package appears corrupted. Reinstall: npm uninstall -g {} && npm install -g {}",
@@ -647,33 +719,34 @@ impl LspManager {
                 cmd.replace("-langserver", "").replace("-language-server", ""),
             );
         }
-        // rustup proxy without the actual component
+        // rustup 代理缺少实际组件
         if cmd == "rust-analyzer" && lower.contains("unknown binary") && lower.contains("toolchain") {
             return format!(
                 "{} — rust-analyzer not installed for your Rust toolchain. Run: rustup component add rust-analyzer",
                 raw,
             );
         }
-        // gopls not installed
+        // gopls 未安装
         if cmd == "gopls" && (lower.contains("not found") || lower.contains("no such file")) {
             return format!(
                 "{} — gopls not found. Install: go install golang.org/x/tools/gopls@latest",
                 raw,
             );
         }
-        // Generic "not found"
+        // 通用的 "not found"
         if lower.contains("program not found") || lower.contains("no such file") {
             return format!(
                 "{} — {} is not installed or not on PATH. See 安装指南 for install instructions.",
                 raw, cmd,
             );
         }
-        // Pass through with no modification
+        // 原样返回
         raw.to_string()
     }
 
-    /// Try to warm a single LSP server by extension. Used as a lazy retry
-    /// when resolve_definition finds no server in the pool.
+    /// 按扩展名尝试预热单个 LSP 服务器。
+    ///
+    /// 当 resolve_definition 发现池中无服务器时作为惰性重试使用。
     fn try_warm_one(ext: &str) -> bool {
         let cfg = match SERVER_CONFIGS.iter().find(|c| c.extensions.contains(&ext)) {
             Some(c) => c,
@@ -707,9 +780,12 @@ impl LspManager {
         }
     }
 
+    /// 启动单个 LSP 服务器进程并完成 initialize 握手。
+    ///
+    /// Windows 上 npm 全局工具是 .cmd 包装器，需要通过 cmd.exe /c 运行。
     fn spawn_server(cfg: &LspServerConfig, root: &str) -> Result<LspProcess, String> {
-        // Resolve full path — on Windows npm-global tools are .cmd wrappers.
-        // .cmd/.bat files must be run via cmd.exe /c (they're scripts, not PE executables).
+        // 解析完整路径——Windows 上 npm 全局工具是 .cmd 包装器
+        // .cmd/.bat 文件必须通过 cmd.exe /c 运行（它们是脚本，不是 PE 可执行文件）
         let exe = Self::resolve_cmd_path(cfg.command)
             .unwrap_or_else(|| std::path::PathBuf::from(cfg.command));
         let (program, args_vec) = {
@@ -736,11 +812,11 @@ impl LspManager {
         c.args(&args_vec)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped()); // capture stderr for diagnostics
+            .stderr(Stdio::piped()); // 捕获 stderr 用于诊断
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            c.creation_flags(0x08000000); // CREATE_NO_WINDOW —— 不弹出控制台窗口
         }
         let mut child = c.spawn()
             .map_err(|e| format!("spawn {}: {}", cfg.command, e))?;
@@ -763,7 +839,7 @@ impl LspManager {
         Ok(process)
     }
 
-    /// Find the LSP server for a file extension.
+    /// 按文件扩展名查找对应的 LSP 服务器。
     fn get_server(ext: &str) -> Option<Arc<Mutex<Option<LspProcess>>>> {
         let mgr = Self::global();
         let pool = mgr.pool.read().unwrap();
@@ -775,8 +851,9 @@ impl LspManager {
         None
     }
 
-    /// Get server, with a lazy warm retry if it's missing from the pool.
-    /// Returns Ok(server_arc) or Err(reason).
+    /// 获取服务器，如果池中不存在则尝试惰性预热。
+    ///
+    /// 返回 Ok(server_arc) 或 Err(原因)。
     fn get_or_warm_server(ext: &str) -> Result<Arc<Mutex<Option<LspProcess>>>, String> {
         if let Some(arc) = Self::get_server(ext) {
             return Ok(arc);
@@ -788,9 +865,10 @@ impl LspManager {
         Self::get_server(ext).ok_or_else(|| format!("no server for .{} after warm", ext))
     }
 
-    /// Resolve a call at (file, line, column) using an LSP server.
-    /// Lock the server, run f, and if f fails clear the pool entry so the
-    /// next call warms a fresh process.
+    /// 在 LSP 进程上执行操作。
+    ///
+    /// 锁定服务器，执行闭包 f，如果 f 失败则清空池条目，
+    /// 使下次调用时重新预热新进程。
     fn with_process<T>(
         server_arc: &Arc<Mutex<Option<LspProcess>>>,
         f: impl FnOnce(&mut LspProcess) -> Result<T, String>,
@@ -800,13 +878,21 @@ impl LspManager {
         match f(process) {
             Ok(v) => Ok(v),
             Err(e) => {
-                *guard = None; // kill broken process, force recreate next call
+                *guard = None; // 销毁损坏的进程，下次调用强制重建
                 Err(e)
             }
         }
     }
 
-    /// Returns the definition location, or Err if no server available.
+    /// 解析指定位置的函数定义。
+    ///
+    /// 参数：
+    /// - `file_path`: 文件路径（相对或绝对）
+    /// - `source`: 文件源码文本
+    /// - `line`/`column`: 0-based 行列号
+    /// - `ext`: 文件扩展名（用于选择 LSP 服务器）
+    ///
+    /// 返回定义位置列表，或 Err（无可用服务器）。
     pub fn resolve_definition(
         file_path: &str,
         source: &str,
@@ -835,7 +921,7 @@ impl LspManager {
         })
     }
 
-    /// Resolve the type at (file, line, column) via hover.
+    /// 通过 hover 解析指定位置的类型信息。
     pub fn resolve_type(
         file_path: &str,
         source: &str,
@@ -852,7 +938,7 @@ impl LspManager {
         })
     }
 
-    /// Find all implementations of the interface/trait at (file, line, column).
+    /// 查找指定位置接口/trait 的所有实现。
     pub fn find_implementations(
         file_path: &str,
         source: &str,
@@ -869,7 +955,7 @@ impl LspManager {
         })
     }
 
-    /// Find all references to the symbol at (file, line, column).
+    /// 查找指定位置符号的所有引用。
     pub fn find_references(
         file_path: &str,
         source: &str,
@@ -886,7 +972,7 @@ impl LspManager {
         })
     }
 
-    /// Helper: resolve uri + lang_id from file path and ext.
+    /// 辅助函数：从文件路径和扩展名解析 URI 和语言 ID。
     fn prepare(file_path: &str, ext: &str) -> Result<(String, String), String> {
         let abs_path = if PathBuf::from(file_path).is_absolute() {
             file_path.to_string()
@@ -906,8 +992,9 @@ impl LspManager {
         Ok((uri, lang_id))
     }
 
-    /// Check if LSP is available for a given file extension.
-    /// Returns true only if a server process is actually running in the pool.
+    /// 检查指定文件扩展名是否有可用的 LSP 服务器。
+    ///
+    /// 仅当池中有服务器进程实际运行时返回 true。
     pub fn is_available(ext: &str) -> bool {
         Self::get_server(ext)
             .and_then(|arc| {
@@ -916,16 +1003,18 @@ impl LspManager {
             .unwrap_or(false)
     }
 
-    /// Return last warm errors for diagnostic display.
-    /// Returns a map of command name → error message.
+    /// 返回最近一次预热错误，用于诊断显示。
+    ///
+    /// 返回命令名 → 错误消息的映射。
     pub fn warm_errors() -> HashMap<String, String> {
         Self::global().last_warm_errors.read().unwrap().clone()
     }
 
-    /// Resolve a command to its full path on the filesystem.
-    /// On Windows, checks .exe/.cmd/.bat first — npm global tools have
-    /// extensionless Unix scripts alongside .cmd wrappers; the extensionless
-    /// file is a shell script that can't be spawned directly.
+    /// 在文件系统上解析命令的完整路径。
+    ///
+    /// Windows 上优先检查 .exe/.cmd/.bat——npm 全局工具
+    /// 有无扩展名的 Unix 脚本和 .cmd 包装器并存；
+    /// 无扩展名的文件是 shell 脚本，不能直接 spawn。
     fn resolve_cmd_path(cmd: &str) -> Option<std::path::PathBuf> {
         if let Ok(paths) = std::env::var("PATH") {
             for dir in std::env::split_paths(&paths) {
@@ -938,7 +1027,7 @@ impl LspManager {
                         }
                     }
                 }
-                // Fallback: extensionless (Unix) or non-Windows
+                // 回退：无扩展名（Unix）或非 Windows
                 let full = dir.join(cmd);
                 if full.exists() {
                     return Some(full);
@@ -948,16 +1037,17 @@ impl LspManager {
         None
     }
 
-    /// Check whether a command exists on PATH without spawning it.
-    /// Always works — no warm() required. Used by lsp_status() to
-    /// distinguish "not started" from "not installed".
+    /// 检查命令是否在 PATH 上存在（不启动进程）。
+    ///
+    /// 始终可用——不需要 warm()。供 lsp_status() 区分"未启动"和"未安装"。
     fn find_on_path(cmd: &str) -> bool {
         Self::resolve_cmd_path(cmd).is_some()
     }
 
-    /// Full LSP status for the settings panel / engine_status.
-    /// Returns per-server availability + install hints.
-    /// `installed` is checked via PATH — works even when warm() hasn't run.
+    /// 完整的 LSP 状态，供设置面板 / engine_status 使用。
+    ///
+    /// 返回每个服务器的可用性 + 安装提示。
+    /// `installed` 通过 PATH 检查——即使 warm() 未运行也可用。
     pub fn lsp_status() -> Vec<Value> {
         let mgr = Self::global();
         let errors = mgr.last_warm_errors.read().unwrap().clone();
@@ -969,7 +1059,7 @@ impl LspManager {
                     .and_then(|arc| arc.lock().ok().map(|g| g.is_some()))
                     .unwrap_or(false);
                 let error = errors.get(cfg.command).cloned();
-                // Always check PATH — independent of warm state
+                // 始终检查 PATH——独立于 warm 状态
                 let installed = available || Self::find_on_path(cfg.command);
                 json!({
                     "command": cfg.command,
@@ -985,7 +1075,7 @@ impl LspManager {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Tests
+// 测试
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -994,6 +1084,7 @@ mod tests {
 
     #[test]
     fn test_parse_single_location() {
+        // 单个 Location 应正确解析
         let json = json!({
             "uri": "file:///src/main.rs",
             "range": {
@@ -1009,13 +1100,14 @@ mod tests {
 
     #[test]
     fn test_parse_null_result() {
+        // null 结果应返回空列表
         let locs = parse_definition_results(&Value::Null).unwrap();
         assert!(locs.is_empty());
     }
 
     #[test]
     fn test_server_configs_complete() {
-        // Every extension in the engine's LSP match should have a config
+        // 验证所有主要语言的扩展名都在配置表中
         let covered: Vec<&str> = SERVER_CONFIGS
             .iter()
             .flat_map(|c| c.extensions.iter().copied())
@@ -1030,10 +1122,10 @@ mod tests {
         assert!(covered.contains(&"kt"));
     }
 
-    // ── helpers ──
+    // ── 辅助函数 ──
 
 
-    /// Spawn cmd that hangs for 60s — used for timeout test.
+    /// 启动一个会挂起 60 秒的进程——用于超时测试。
     fn spawn_hanging_process() -> LspProcess {
         #[cfg(windows)]
         let mut cmd = {
@@ -1063,14 +1155,15 @@ mod tests {
             reader: Some(BufReader::new(stdout)),
             stderr: None,
             next_id: 0,
-            timeout: std::time::Duration::from_secs(2),
+            timeout: std::time::Duration::from_secs(2), // 测试用 2 秒超时
         }
     }
 
-    // ── timeout ──
+    // ── 超时测试 ──
 
     #[test]
     fn test_send_request_timeout() {
+        // 挂起进程的请求应在超时后返回错误，而非永久阻塞
         let mut process = spawn_hanging_process();
         let start = std::time::Instant::now();
         let result = process.send_request(
@@ -1078,17 +1171,16 @@ mod tests {
             json!({"textDocument":{"uri":"file:///x.rs"},"position":{"line":0,"character":0}}),
         );
         let elapsed = start.elapsed();
-        // Should not hang — must return within 5s (timeout is set to 2s)
+        // 不应挂起——必须在 5 秒内返回（超时设为 2 秒）
         assert!(elapsed < std::time::Duration::from_secs(5),
             "send_request should not block forever, took {:?}, result: {:?}", elapsed, result);
         assert!(result.is_err(), "expected error from hanging process, got {:?}", result);
     }
 
-    // ── E2E: real rust-analyzer ──
+    // ── E2E: 真实 rust-analyzer ──
 
-    // NOTE: a rust-analyzer E2E test was attempted but is unreliable in CI:
-    // cargo check timing varies wildly per machine. The timeout mechanism is
-    // proven by test_send_request_timeout; real LSP calls are exercised by
-    // every engine run (indexing + agent queries via MCP tools).
+    // 注意：曾尝试 rust-analyzer E2E 测试，但在 CI 中不可靠：
+    // cargo check 的耗时因机器而异波动很大。超时机制已由 test_send_request_timeout 验证；
+    // 真实 LSP 调用在每次引擎运行时被测试（索引 + 通过 MCP 工具的 agent 查询）。
 
 }

@@ -1,21 +1,23 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Stress test harness for the HoloGram analysis engine.
+//! # HoloGram 压力测试框架
 //!
-//! Synthetic project generation + real project benchmarking.
-//! Uses `Engine::analyze()` and reports per-stage timing from `AnalyzeResult.stage_timings`.
+//! 合成项目生成 + 真实项目基准评估。
+//! 使用 `Engine::analyze()` 执行分析，从 `AnalyzeResult.stage_timings` 获取每阶段耗时。
 //!
-//! Usage:
-//!   engine --stress small          (500 files, ~8K symbols)
-//!   engine --stress medium         (2000 files, ~32K symbols)
-//!   engine --stress large          (10000 files, ~160K symbols)
-//!   engine --stress xlarge         (50000 files, ~800K symbols)
-//!   engine --stress <N>            (N files, auto-scaled)
-//!   engine --stress-suite          Run small→medium→large comparison
-//!   engine --stress-real <path>    Benchmark a real project (3 iterations)
-//!   engine --stress-real <path> <N>  Benchmark N iterations
-//!   engine --stress-full <path> <N>  Full pipeline: structure + Dataflow + LSP
+//! ## 用法
+//! ```text
+//! engine --stress small          (500 文件, ~8K 符号)
+//! engine --stress medium         (2000 文件, ~32K 符号)
+//! engine --stress large          (10000 文件, ~160K 符号)
+//! engine --stress xlarge         (50000 文件, ~800K 符号)
+//! engine --stress <N>            (N 个文件, 自动缩放)
+//! engine --stress-suite          运行 small→medium→large 对比
+//! engine --stress-real <path>    对真实项目基准测试（3 轮）
+//! engine --stress-real <path> <N>  N 轮基准测试
+//! engine --stress-full <path> <N>  完整管线: 结构 + Dataflow + LSP
+//! ```
 
 use std::fs;
 use std::io::Write;
@@ -30,9 +32,13 @@ use serde_json::json;
 use crate::engine::{Engine, StageTiming};
 
 // ═══════════════════════════════════════════════════════════════
-// Preset sizes
+// 预设规模
 // ═══════════════════════════════════════════════════════════════
 
+/// 压力测试规模预设。
+///
+/// 对应不同的合成项目规模，从 Small（500 文件）到 XLarge（50000 文件）。
+/// Custom 允许指定任意文件数。
 #[derive(Debug, Clone, Copy)]
 pub enum StressSize {
     Small,
@@ -43,6 +49,9 @@ pub enum StressSize {
 }
 
 impl StressSize {
+    /// 从字符串解析规模。
+    ///
+    /// 支持 "small"/"s"、"medium"/"m"、"large"/"l"、"xlarge"/"xl" 和数字。
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "small" | "s" => Some(StressSize::Small),
@@ -53,6 +62,7 @@ impl StressSize {
         }
     }
 
+    /// 返回对应的文件数量。
     pub fn file_count(&self) -> usize {
         match self {
             StressSize::Small => 500,
@@ -63,6 +73,7 @@ impl StressSize {
         }
     }
 
+    /// 返回可读的规模标签。
     pub fn label(&self) -> String {
         match self {
             StressSize::Small => "small (500 files)".into(),
@@ -73,21 +84,27 @@ impl StressSize {
         }
     }
 
-    /// Estimated node count based on file_count and average density.
+    /// 根据文件数量估算节点数。
+    ///
+    /// 平均每文件 3.5 个类 × 5 个方法 + 2 个顶层函数 ≈ 19.5 个符号，
+    /// 每个符号约 1 个节点，加上 ~50% 的内置/属性节点。
     pub fn estimated_nodes(&self) -> usize {
-        // avg 3.5 classes/file × 5 methods/class + 2 top-level funcs = ~19.5 symbols
-        // each symbol → roughly 1 node, plus ~50% extra from builtins/attributes
         (self.file_count() as f64 * 19.5 * 1.5) as usize
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Synthetic project generator
+// 合成项目生成器
 // ═══════════════════════════════════════════════════════════════
 
+/// 合成 Python 项目生成器。
+///
+/// 生成具有真实结构的 Python 代码：类、方法、跨模块导入和调用，
+/// 用于压力测试引擎的解析和图构建性能。
 struct ProjectGenerator {
     rng: StdRng,
-    file_plan: Vec<(String, usize, usize, usize)>, // (dir, file_idx, class_count, top_func_count)
+    /// 文件计划：(目录名, 文件序号, 类数量, 顶层函数数量)
+    file_plan: Vec<(String, usize, usize, usize)>,
     class_names: Vec<String>,
     func_names: Vec<String>,
 }
@@ -102,11 +119,18 @@ impl ProjectGenerator {
         }
     }
 
+    /// 生成合成项目。
+    ///
+    /// 流程分两阶段：
+    /// 1. 规划所有文件和符号（确定类名/方法名/函数名）
+    /// 2. 写入文件（生成 import、类定义、方法体、函数体）
+    ///
+    /// 返回生成的符号总数。
     fn generate(&mut self, root: &Path, file_count: usize) -> usize {
         let _ = fs::remove_dir_all(root);
         fs::create_dir_all(root).unwrap();
 
-        // More directories for deeper hierarchy at scale
+        // 规模越大，目录层级越深
         let dirs = [
             "models", "services", "controllers", "utils", "core", "api",
             "dal", "middleware", "handlers", "schemas",
@@ -118,7 +142,7 @@ impl ProjectGenerator {
         let files_per_dir = (file_count as f64 / dirs.len() as f64).ceil() as usize;
         let show_progress = file_count >= 1000;
 
-        // Phase 1: plan all files and generate all symbols
+        // 阶段 1：规划所有文件并生成所有符号名
         if show_progress { eprint!("  Phase 1 (plan)... "); }
         for dir_idx in 0..dirs.len() {
             let dir = dirs[dir_idx];
@@ -126,7 +150,7 @@ impl ProjectGenerator {
                 if (dir_idx * files_per_dir + file_idx) >= file_count {
                     break;
                 }
-                // Density: 3-8 classes per file, 2-3 top-level funcs
+                // 密度：每文件 3-8 个类，2-3 个顶层函数
                 let class_count = self.rng.gen_range(3..=8);
                 let top_func_count = self.rng.gen_range(2..=4);
                 self.file_plan.push((dir.to_string(), file_idx, class_count, top_func_count));
@@ -134,7 +158,7 @@ impl ProjectGenerator {
                 for c in 0..class_count {
                     let class_name = format!("{}_{}C{}", dir, file_idx, c);
                     self.class_names.push(class_name);
-                    // 3-10 methods per class
+                    // 每类 3-10 个方法
                     let method_count = self.rng.gen_range(3..=10);
                     for m in 0..method_count {
                         self.func_names.push(format!(
@@ -154,7 +178,7 @@ impl ProjectGenerator {
             .map(|(d, fi, _, _)| format!("{}.mod_{}", d, fi))
             .collect();
 
-        // Phase 2: write files
+        // 阶段 2：写入文件
         let file_plan = self.file_plan.clone();
         let class_names = self.class_names.clone();
         let func_names = self.func_names.clone();
@@ -172,7 +196,7 @@ impl ProjectGenerator {
             let path = root.join(dir).join(format!("mod_{}.py", file_idx));
             let mut f = fs::File::create(&path).unwrap();
 
-            // Imports — 2-5 cross-module imports for denser call graph
+            // 导入——2-5 个跨模块导入，制造更密集的调用图
             let import_count = self.rng.gen_range(2..=5);
             let mut imports: Vec<String> = Vec::new();
             for _ in 0..import_count {
@@ -192,12 +216,14 @@ impl ProjectGenerator {
                 class_idx += 1;
 
                 writeln!(f, "\nclass {}:", class_name).unwrap();
+                // 2-5 个实例属性
                 let attr_count = self.rng.gen_range(2..=5);
                 writeln!(f, "    def __init__(self):").unwrap();
                 for a in 0..attr_count {
                     writeln!(f, "        self.attr_{} = {}", a, self.rng.gen_range(0..100)).unwrap();
                 }
 
+                // 计算此类的方法数（从 func_names 中连续匹配）
                 let method_count = {
                     let cn = &class_names[class_idx - 1];
                     let mut c = 0;
@@ -209,18 +235,22 @@ impl ProjectGenerator {
                 for _m in 0..method_count {
                     let func_name = &func_names[symbol_idx];
                     symbol_idx += 1;
+                    // 0-3 个参数
                     let param_count = self.rng.gen_range(0..=3);
                     let params: Vec<String> = (0..param_count).map(|i| format!("p{}", i)).collect();
                     writeln!(f, "    def {}(self, {}):", func_name, params.join(", ")).unwrap();
+                    // 3-10 行方法体（调用表达式）
                     for _bl in 0..self.rng.gen_range(3..=10) {
                         writeln!(f, "        {}", self.gen_call_expr(&module_names)).unwrap();
                     }
+                    // 70% 概率有返回语句
                     if self.rng.gen_bool(0.7) {
                         writeln!(f, "        {}", self.gen_ret_expr(&module_names)).unwrap();
                     }
                 }
             }
 
+            // 顶层函数
             for _tf in 0..*top_func_count {
                 let func_name = &func_names[symbol_idx];
                 symbol_idx += 1;
@@ -230,12 +260,13 @@ impl ProjectGenerator {
                 for _bl in 0..self.rng.gen_range(3..=8) {
                     writeln!(f, "    {}", self.gen_call_expr(&module_names)).unwrap();
                 }
+                // 60% 概率有返回值
                 if self.rng.gen_bool(0.6) {
                     writeln!(f, "    return {}", self.gen_ret_value()).unwrap();
                 }
             }
 
-            // Prepend imports
+            // 将导入语句前置到文件开头
             let mut content = String::new();
             for imp in &imports { content.push_str(imp); }
             content.push_str(&fs::read_to_string(&path).unwrap());
@@ -246,14 +277,20 @@ impl ProjectGenerator {
         self.func_names.len()
     }
 
+    /// 生成随机的调用表达式。
+    ///
+    /// 模式分布：类实例化调用(30%)、函数调用(30%)、方法调用(20%)、
+    /// 内置函数(10%)、属性链(10%)、赋值语句(10%)。
     fn gen_call_expr(&mut self, _module_names: &[String]) -> String {
         match self.rng.gen_range(0..=10) {
             0..=2 => {
+                // 类实例化调用
                 if self.class_names.is_empty() { return "pass".into(); }
                 let class = self.class_names.choose(&mut self.rng).unwrap();
                 format!("{}().do_work()", class.rsplit('_').next().unwrap_or("Unknown"))
             }
             3..=5 => {
+                // 函数调用
                 if self.func_names.is_empty() { return "pass".into(); }
                 let f = self.func_names.choose(&mut self.rng).unwrap();
                 let short = f.rsplit('.').next().unwrap_or(f);
@@ -262,23 +299,27 @@ impl ProjectGenerator {
                 format!("{}({})", short, args.join(", "))
             }
             6..=7 => {
+                // self 方法调用
                 if self.func_names.is_empty() { return "pass".into(); }
                 let f = self.func_names.choose(&mut self.rng).unwrap();
                 format!("self.{}()", f.rsplit('.').next().unwrap_or(f))
             }
             8 => {
+                // 内置函数调用
                 let builtins = ["len", "str", "int", "list", "dict", "sum", "max", "min", "sorted", "print"];
                 format!("{}(x)", builtins.choose(&mut self.rng).unwrap())
             }
-            9 => "obj.prop.nested.leaf".into(),
-            _ => format!("x{} = {}", self.rng.gen_range(0..10), self.rng.gen_range(0..100)),
+            9 => "obj.prop.nested.leaf".into(), // 属性链
+            _ => format!("x{} = {}", self.rng.gen_range(0..10), self.rng.gen_range(0..100)), // 赋值
         }
     }
 
+    /// 生成随机的返回表达式。
     fn gen_ret_expr(&mut self, _module_names: &[String]) -> String {
         match self.rng.gen_range(0..=4) {
-            0 => self.gen_ret_value(),
+            0 => self.gen_ret_value(),           // 随机数值
             1 => {
+                // 函数调用
                 if self.func_names.is_empty() { return "None".into(); }
                 let f = self.func_names.choose(&mut self.rng).unwrap();
                 format!("{}(p0)", f.rsplit('.').next().unwrap_or(f))
@@ -289,15 +330,19 @@ impl ProjectGenerator {
         }
     }
 
+    /// 生成随机的返回值（0-999 的数字）。
     fn gen_ret_value(&mut self) -> String {
         format!("{}", self.rng.gen_range(0..1000))
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Memory tracking
+// 内存跟踪
 // ═══════════════════════════════════════════════════════════════
 
+/// 获取当前进程的 RSS（物理内存占用），单位 MB。
+///
+/// Windows 使用 PowerShell，Linux 读取 /proc/self/status。
 fn get_rss_mb() -> f64 {
     #[cfg(target_os = "windows")]
     {
@@ -318,12 +363,13 @@ fn get_rss_mb() -> f64 {
     }
     #[cfg(not(target_os = "windows"))]
     {
+        // Linux: 从 /proc/self/status 读取 VmRSS
         if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
             for line in status.lines() {
                 if line.starts_with("VmRSS:") {
                     return line.split_whitespace().nth(1)
                         .and_then(|s| s.parse::<f64>().ok())
-                        .unwrap_or(0.0) / 1024.0;
+                        .unwrap_or(0.0) / 1024.0; // KB → MB
                 }
             }
         }
@@ -332,9 +378,12 @@ fn get_rss_mb() -> f64 {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Report
+// 报告
 // ═══════════════════════════════════════════════════════════════
 
+/// 压力测试报告。
+///
+/// 包含每阶段耗时、图统计（节点/边/社区数）、峰值内存等信息。
 #[derive(Debug, Clone)]
 pub struct StressReport {
     pub label: String,
@@ -346,11 +395,12 @@ pub struct StressReport {
     pub node_count: usize,
     pub edge_count: usize,
     pub community_count: usize,
-    /// Number of iterations (1 for synthetic, N for real-project benchmarking)
+    /// 迭代次数（合成测试为 1，真实项目基准测试为 N）
     pub iterations: usize,
 }
 
 impl StressReport {
+    /// 以表格形式打印报告到终端。
     fn print(&self) {
         println!();
         println!("╔══════════════════════════════════════════════════════════════════════╗");
@@ -370,6 +420,7 @@ impl StressReport {
         let total = self.total_secs.max(0.001);
         for stage in &self.stages {
             let pct = (stage.elapsed_secs / total) * 100.0;
+            // 进度条：每个 █ 代表 2.5%
             let bar = "█".repeat(((pct / 2.5) as usize).min(20));
             println!("║  {:30}  {:>7.2}s  {:>5.1}%  {} {:<16}║",
                 stage.name, stage.elapsed_secs, pct, bar, stage.detail);
@@ -382,7 +433,7 @@ impl StressReport {
         println!("║  Nodes: {:>6}  Edges: {:>6}  Communities: {:>4}  RSS: {:>7.1} MB       ║",
             self.node_count, self.edge_count, self.community_count, self.peak_rss_mb);
 
-        // Throughput
+        // 吞吐量统计
         if total > 0.0 && self.node_count > 0 {
             println!("║  Throughput: {:>6.0} nodes/s  {:>6.0} edges/s  {:>6.1} files/s           ║",
                 self.node_count as f64 / total,
@@ -393,6 +444,7 @@ impl StressReport {
         println!();
     }
 
+    /// 将报告序列化为 JSON。
     pub fn to_json(&self) -> serde_json::Value {
         let stages: Vec<serde_json::Value> = self.stages.iter().map(|s| {
             json!({ "name": s.name, "elapsed_secs": s.elapsed_secs, "detail": s.detail })
@@ -413,9 +465,12 @@ impl StressReport {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Synthetic stress runner
+// 合成压力测试运行器
 // ═══════════════════════════════════════════════════════════════
 
+/// 运行合成项目压力测试。
+///
+/// 流程：生成合成 Python 项目 → 初始化引擎 → 执行分析 → 收集报告。
 pub fn run_stress(size: StressSize) -> StressReport {
     let file_count = size.file_count();
     let label = size.label();
@@ -426,12 +481,14 @@ pub fn run_stress(size: StressSize) -> StressReport {
     eprintln!("══ HoloGram Stress: {} ══", label);
     eprintln!("Estimated: ~{} nodes, {} files", size.estimated_nodes(), file_count);
 
+    // 生成合成项目
     eprint!("Generating {} files... ", file_count);
     let gen_start = Instant::now();
     let mut generator = ProjectGenerator::new(42);
     let symbol_count = generator.generate(&root, file_count);
     eprintln!("done in {:.1}s ({} symbols)", gen_start.elapsed().as_secs_f64(), symbol_count);
 
+    // 初始化引擎并执行分析
     let mut engine = Engine::new();
     engine.init(&root).expect("engine init failed");
 
@@ -456,11 +513,12 @@ pub fn run_stress(size: StressSize) -> StressReport {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Real project benchmark
+// 真实项目基准测试
 // ═══════════════════════════════════════════════════════════════
 
-/// Benchmark a real project. Runs `Engine::analyze()` N times and reports
-/// per-stage min/mean/max + throughput statistics.
+/// 对真实项目进行基准测试。
+///
+/// 运行 `Engine::analyze()` N 次，报告每阶段的 min/mean/max + 吞吐量统计。
 pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
     let root = project_path.to_path_buf();
     let file_count = count_source_files(&root);
@@ -470,7 +528,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
     eprintln!("Source files: {}  |  Iterations: {}", file_count, iterations);
     eprintln!();
 
-    // Collect per-stage timings across all iterations
+    // 收集所有迭代的每阶段耗时
     let mut all_stage_names: Vec<String> = Vec::new();
     let mut all_timings: Vec<Vec<f64>> = Vec::new(); // [iteration][stage]
     let mut all_totals: Vec<f64> = Vec::new();
@@ -487,7 +545,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
         let result = engine.analyze(&root).expect("analysis failed");
         let iter_elapsed = iter_start.elapsed().as_secs_f64();
 
-        // Collect stage timings
+        // 收集阶段耗时
         if all_stage_names.is_empty() {
             all_stage_names = result.stage_timings.iter().map(|s| s.name.clone()).collect();
         }
@@ -510,7 +568,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
             i + 1, iterations, iter_elapsed, node_count, edge_count, community_count, rss);
     }
 
-    // Compute min/mean/max per stage
+    // 计算每阶段的 min/mean/max
     let stage_count = all_stage_names.len();
     let mut summary_stages: Vec<StageTiming> = Vec::with_capacity(stage_count);
 
@@ -521,7 +579,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
         let max_t = times.last().copied().unwrap_or(0.0);
         let mean_t = times.iter().sum::<f64>() / times.len() as f64;
 
-        // Report mean, with detail showing range if variance > 5%
+        // 报告均值，方差 > 5% 时在 detail 中显示范围
         let range_pct = if mean_t > 0.0 { (max_t - min_t) / mean_t * 100.0 } else { 0.0 };
         let detail = if iterations > 1 && range_pct > 5.0 {
             format!("mean={:.2}s  min={:.2}s  max={:.2}s", mean_t, min_t, max_t)
@@ -536,7 +594,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
         });
     }
 
-    // Total: use mean
+    // 总耗时取均值
     let mean_total = all_totals.iter().sum::<f64>() / all_totals.len() as f64;
 
     let label = format!("{} ({})", root.file_name().unwrap_or_default().to_string_lossy(), root.display());
@@ -544,7 +602,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
     let report = StressReport {
         label,
         file_count,
-        symbol_count: 0, // unknown for real projects
+        symbol_count: 0, // 真实项目符号数未知
         stages: summary_stages,
         total_secs: mean_total,
         peak_rss_mb: peak_rss,
@@ -557,7 +615,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
     println!();
     report.print();
 
-    // Print stability note
+    // 打印稳定性报告
     if iterations > 1 {
         let mut sorted_totals = all_totals.clone();
         sorted_totals.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -572,7 +630,10 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
     report
 }
 
-/// Count source files in a project directory.
+/// 统计项目目录中的源代码文件数量。
+///
+/// 过滤掉 .git、node_modules、__pycache__、target 等目录，
+/// 仅统计 37 种支持的源代码扩展名。
 fn count_source_files(root: &Path) -> usize {
     let exts = ["py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
         "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
@@ -598,7 +659,9 @@ fn count_source_files(root: &Path) -> usize {
     count
 }
 
-/// Collect source file paths in a project directory.
+/// 收集项目目录中所有源代码文件路径。
+///
+/// 过滤规则与 count_source_files 相同。
 fn collect_source_files(root: &Path) -> Vec<std::path::PathBuf> {
     let exts = ["py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
         "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
@@ -625,11 +688,13 @@ fn collect_source_files(root: &Path) -> Vec<std::path::PathBuf> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Full pipeline benchmark: structure + Dataflow + LSP
+// 完整管线基准测试：结构 + Dataflow + LSP
 // ═══════════════════════════════════════════════════════════════
 
-/// Benchmark the full analysis pipeline: structure analysis (Engine::analyze)
-/// + dataflow analysis (query_dataflow_files) + LSP warm (warm_blocking).
+/// 完整管线基准测试：结构分析（Engine::analyze）
+/// + Dataflow 分析（query_dataflow_files）+ LSP 预热（warm_blocking）。
+///
+/// 每轮迭代依次执行三个阶段，收集每阶段耗时并汇总统计。
 pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&str]) -> StressReport {
     let root = project_path.to_path_buf();
     let file_count = count_source_files(&root);
@@ -640,13 +705,13 @@ pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&st
     eprintln!("Pipeline: Structure + Dataflow + LSP warm");
     eprintln!();
 
-    // Gather source files once (walkdir is fast, negligible in timing)
+    // 预先收集源文件列表（walkdir 很快，不计时）
     let source_files = collect_source_files(&root);
     eprintln!("Collected {} source files for dataflow", source_files.len());
 
+    // 额外阶段名称（在结构分析阶段之后）
     let all_extra_names: [&str; 2] = ["Dataflow", "LSP Warm"];
 
-    // Per-iteration: structure stages + dataflow + LSP
     let mut all_stage_names: Vec<String> = Vec::new();
     let mut all_timings: Vec<Vec<f64>> = Vec::new();
     let mut all_totals: Vec<f64> = Vec::new();
@@ -660,11 +725,11 @@ pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&st
         let mut engine = Engine::new();
         engine.init(&root).expect("engine init failed");
 
-        // Phase 1: structure pipeline
+        // 阶段 1：结构分析管线
         let result = engine.analyze(&root).expect("analysis failed");
         let struct_elapsed = iter_start.elapsed().as_secs_f64();
 
-        // Phase 2: Dataflow
+        // 阶段 2：Dataflow 分析
         let df_start = Instant::now();
         let df_results = crate::analysis::dataflow_engine::query_dataflow_files(&source_files);
         let df_scopes: usize = df_results.iter()
@@ -676,7 +741,7 @@ pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&st
         let df_success = df_results.iter().filter(|r| r.result.is_ok()).count();
         let df_elapsed = df_start.elapsed().as_secs_f64();
 
-        // Phase 3: LSP warm
+        // 阶段 3：LSP 预热
         let lsp_start = Instant::now();
         let (lsp_started, lsp_failed) = if ext_filter.is_empty() {
             crate::lsp_manager::LspManager::warm_blocking(&root.to_string_lossy())
@@ -687,19 +752,19 @@ pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&st
 
         let iter_elapsed = iter_start.elapsed().as_secs_f64();
 
-        // Build stage timings
+        // 构建阶段耗时列表
         if all_stage_names.is_empty() {
-            // First iteration: copy structure stage names, then append extras
+            // 首轮：复制结构分析阶段名，追加额外阶段
             all_stage_names = result.stage_timings.iter().map(|s| s.name.clone()).collect();
             all_stage_names.extend(all_extra_names.iter().map(|s| s.to_string()));
         }
 
         let mut stage_times: Vec<f64> = Vec::with_capacity(all_stage_names.len());
-        // Structure stages — use the detail from result (fresh each iter)
+        // 结构分析阶段
         for s in &result.stage_timings {
             stage_times.push(s.elapsed_secs);
         }
-        // Extra stages
+        // 额外阶段：Dataflow + LSP
         stage_times.push(df_elapsed);
         stage_times.push(lsp_elapsed);
 
@@ -723,7 +788,7 @@ pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&st
         );
     }
 
-    // Compute min/mean/max per stage
+    // 计算每阶段的 min/mean/max
     let stage_count = all_stage_names.len();
     let mut summary_stages: Vec<StageTiming> = Vec::with_capacity(stage_count);
 
@@ -783,9 +848,12 @@ pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&st
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Dataflow-only benchmark
+// 仅 Dataflow 基准测试
 // ═══════════════════════════════════════════════════════════════
 
+/// 仅对 Dataflow 分析进行基准测试。
+///
+/// 不执行结构分析和 LSP 预热，仅测量 `query_dataflow_files` 的耗时。
 pub fn run_stress_dataflow(project_path: &Path, iterations: usize) -> StressReport {
     let root = project_path.to_path_buf();
     let source_files = collect_source_files(&root);
@@ -859,9 +927,12 @@ pub fn run_stress_dataflow(project_path: &Path, iterations: usize) -> StressRepo
 }
 
 // ═══════════════════════════════════════════════════════════════
-// LSP-only benchmark
+// 仅 LSP 基准测试
 // ═══════════════════════════════════════════════════════════════
 
+/// 仅对 LSP 服务器预热进行基准测试。
+///
+/// 测量 `warm_blocking_filtered` 的耗时和成功率。
 pub fn run_stress_lsp(project_path: &Path, iterations: usize, ext_filter: &[&str]) -> StressReport {
     let root = project_path.to_path_buf();
     let filter_label = if ext_filter.is_empty() { "all".to_string() } else { ext_filter.join(",") };
@@ -930,14 +1001,16 @@ pub fn run_stress_lsp(project_path: &Path, iterations: usize, ext_filter: &[&str
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Suite runner
+// 套件运行器
 // ═══════════════════════════════════════════════════════════════
 
+/// 运行完整压力测试套件（small→medium→large），并打印对比表和缩放分析。
 pub fn run_stress_suite() {
     let sizes = [StressSize::Small, StressSize::Medium, StressSize::Large];
     let mut reports: Vec<StressReport> = Vec::new();
 
     for (i, size) in sizes.iter().enumerate() {
+        // 清理上一规模的临时项目目录
         if i > 0 {
             let prev = std::env::temp_dir()
                 .join("hologram_stress")
@@ -947,7 +1020,7 @@ pub fn run_stress_suite() {
         reports.push(run_stress(*size));
     }
 
-    // Comparison table
+    // 对比表
     println!();
     println!("╔══════════════╦═════════╦══════════╦══════════╦══════════╦══════════╦════════╗");
     println!("║ Size         ║  Files  ║  Symbols ║  Nodes   ║  Edges   ║   Time   ║  RSS   ║");
@@ -960,7 +1033,7 @@ pub fn run_stress_suite() {
     }
     println!("╚══════════════╩═════════╩══════════╩══════════╩══════════╩══════════╩════════╝");
 
-    // Scaling
+    // 缩放分析
     if reports.len() >= 2 {
         let first = &reports[0];
         let last = &reports[reports.len() - 1];
@@ -982,7 +1055,7 @@ pub fn run_stress_suite() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Tests
+// 测试
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -991,6 +1064,7 @@ mod tests {
 
     #[test]
     fn test_stress_size_parsing() {
+        // 字符串和数字都应正确解析
         assert!(matches!(StressSize::from_str("small"), Some(StressSize::Small)));
         assert!(matches!(StressSize::from_str("MEDIUM"), Some(StressSize::Medium)));
         assert!(matches!(StressSize::from_str("500"), Some(StressSize::Custom(500))));
@@ -999,6 +1073,7 @@ mod tests {
 
     #[test]
     fn test_generator_small() {
+        // 小规模生成器应产生符号和目录结构
         let base = std::env::temp_dir().join("hologram_test_stress_gen");
         let root = base.join("gen_small");
         let _ = fs::remove_dir_all(&base);
@@ -1013,10 +1088,11 @@ mod tests {
 
     #[test]
     fn test_stress_small_pipeline() {
+        // 5 个文件的完整管线应快速完成并产生图数据
         let report = run_stress(StressSize::Custom(5));
         assert!(report.node_count > 0, "should produce nodes: {:?}", report.node_count);
         assert!(report.total_secs < 10.0, "5 files should finish quickly");
-        // Must have per-stage timings
+        // 必须有每阶段耗时
         assert!(!report.stages.is_empty(), "should have stage timings");
         let stage_names: Vec<&str> = report.stages.iter().map(|s| s.name.as_str()).collect();
         assert!(stage_names.contains(&"Core Parse"), "should have Core Parse stage, got: {:?}", stage_names);
@@ -1025,6 +1101,7 @@ mod tests {
 
     #[test]
     fn test_report_json() {
+        // JSON 序列化应包含所有字段
         let report = StressReport {
             label: "test".into(),
             file_count: 10,
@@ -1044,6 +1121,7 @@ mod tests {
 
     #[test]
     fn test_count_source_files() {
+        // 应正确统计源代码文件，忽略非源码文件
         let tmp = std::env::temp_dir().join("hologram_test_count");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("src")).unwrap();
