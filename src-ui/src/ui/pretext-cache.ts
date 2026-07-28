@@ -23,7 +23,7 @@ function fontScale(): number {
 // Body font for user + assistant text parts
 export function bodyFont(): string {
   const s = Math.round(11 * fontScale());
-  return `${s}px "Noto Sans SC", system-ui, sans-serif`;
+  return `${s}px "LXGW WenKai", "Noto Sans SC", system-ui, sans-serif`;
 }
 
 // Body line-height: CSS uses 1.6 for .msg-bubble

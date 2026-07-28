@@ -40,7 +40,7 @@
   /* 字体栈（fontsource 自托管） */
   --obs-font-serif: "Fraunces Variable", "Noto Serif SC", serif;
   --obs-font-mono: "JetBrains Mono", "Cascadia Code", monospace;
-  --obs-font-body: "Noto Sans SC", system-ui, sans-serif;
+  --obs-font-body: "LXGW WenKai", "Noto Sans SC", system-ui, sans-serif;
 
   /* 动效 */
   --obs-snap: 0.12s cubic-bezier(0.23, 1, 0.32, 1);

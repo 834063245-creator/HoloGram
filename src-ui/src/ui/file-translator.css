@@ -238,7 +238,7 @@
   padding: 0 12px;
   min-height: 20px;
   align-items: flex-start;
-  font-family: var(--obs-font-body, "Noto Sans SC", sans-serif);
+  font-family: var(--obs-font-body, "LXGW WenKai", sans-serif);
   font-size: calc(11px * var(--font-scale));
   line-height: 20px;
   cursor: default;
@@ -263,7 +263,7 @@
   padding: 0 12px;
   min-height: 20px;
   align-items: flex-start;
-  font-family: var(--obs-font-body, "Noto Sans SC", sans-serif);
+  font-family: var(--obs-font-body, "LXGW WenKai", sans-serif);
   font-size: calc(10px * var(--font-scale));
   line-height: 20px;
   cursor: default;
