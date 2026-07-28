@@ -336,7 +336,10 @@ const ConstraintsPanelApp: React.FC<{
       <div className="cs-content-wrap">
         {/* ── Routing ── */}
         <div className="cs-section">
-          <div className="cs-section-title">🔀 路由开关</div>
+          <div
+            className="cs-section-title"
+            dangerouslySetInnerHTML={{ __html: `${iconHtml('route', 10)} 路由开关` }}
+          />
           {Object.entries(ROUTING_LABELS).map(([key, label]) => (
             <label key={key} className="cs-toggle">
               <span className="cs-toggle-label">{label}</span>
@@ -353,7 +356,10 @@ const ConstraintsPanelApp: React.FC<{
 
         {/* ── Thresholds ── */}
         <div className="cs-section">
-          <div className="cs-section-title">📏 阈值</div>
+          <div
+            className="cs-section-title"
+            dangerouslySetInnerHTML={{ __html: `${iconHtml('threshold', 10)} 阈值` }}
+          />
           {Object.entries(THRESHOLD_LABELS).map(([key, label]) => (
             <div key={key} className="cs-field">
               <label className="cs-field-label">{label}</label>

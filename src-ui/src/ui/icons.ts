@@ -87,6 +87,14 @@ const icons: Record<string, IconDef> = {
     label: '约束',
     path: '<rect x="5" y="10" width="14" height="10" rx="1"/><path d="M8 10 L8 7 A4 4 0 0 1 16 7 L16 10"/><circle cx="12" cy="14.5" r="1.2" fill="currentColor"/>',
   },
+  route: {
+    label: '路由开关',
+    path: '<circle cx="5" cy="7" r="1.5" fill="currentColor"/><circle cx="5" cy="17" r="1.5" fill="currentColor"/><circle cx="19" cy="7" r="1.5" fill="currentColor"/><circle cx="19" cy="17" r="1.5" fill="currentColor"/><line x1="6.5" y1="7" x2="17.5" y2="17"/><line x1="6.5" y1="17" x2="17.5" y2="7"/>',
+  },
+  threshold: {
+    label: '阈值',
+    path: '<path d="M4 15 A8 8 0 0 1 20 15"/><line x1="12" y1="15" x2="16.5" y2="9.5"/><circle cx="12" cy="15" r="1" fill="currentColor"/><line x1="4" y1="19" x2="20" y2="19"/>',
+  },
   terminal: {
     label: '终端',
     path: '<rect x="3" y="4" width="18" height="16" rx="1"/><line x1="3" y1="8" x2="21" y2="8"/><polyline points="7,11 10,14 7,17"/><line x1="12" y1="17" x2="16" y2="17"/>',
