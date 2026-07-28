@@ -1244,7 +1244,7 @@ mod tests {
         let args: Vec<String> = vec!["trace_impact".into(), "--node_id".into()];
         let result = parse_cli_args(&args);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Missing value"));
+        assert!(result.unwrap_err().contains("缺少"));
     }
 
     #[test]
