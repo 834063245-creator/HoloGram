@@ -177,6 +177,7 @@
   border: 1px solid transparent;
   cursor: pointer;
   transition: all var(--obs-snap);
+  -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
 }
 .prompt-shelf__perm-btn--session {

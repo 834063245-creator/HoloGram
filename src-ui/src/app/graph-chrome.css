@@ -512,6 +512,11 @@
   border-radius: 9px;
 }
 
+/* no-bf: WebKitGTK 无 backdrop-filter 降级 */
+html.no-bf #graph-tooltip {
+  background: rgba(4, 10, 24, 0.94);
+}
+
 #detail-card {
   border-color: var(--obs-line);
   border-radius: 12px;

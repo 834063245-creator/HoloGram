@@ -9,6 +9,13 @@
 
 import * as THREE from 'three';
 import { GLOW_COLORS, NODE_COLORS } from './graph-colors';
+import {
+  disposeGlowInstanced,
+  type GlowPointsLike,
+  IS_WEBKITGTK,
+  makeGlowInstancedMaterial,
+  makeGlowInstancedMesh,
+} from './graph-glow-instanced';
 import { makeCoreFresnelMaterial, makeGlowPointMaterial } from './graph-shaders';
 import type { CommunityData, GraphJSON, GraphNode } from './graph-types';
 
@@ -20,8 +27,9 @@ export interface NodeRendererHost {
   sphereGeo: THREE.SphereGeometry;
   glowTex: THREE.Texture;
   nodeCoresInstanced: THREE.InstancedMesh;
-  nodeGlowsPoints: THREE.Points;
-  nodeGlows2Points: THREE.Points;
+  // WebKitGTK 上为 InstancedMesh（graph-glow-instanced），其余平台为 THREE.Points —— 接口一致
+  nodeGlowsPoints: GlowPointsLike;
+  nodeGlows2Points: GlowPointsLike;
 
   // CPU 侧缓冲
   _coreScales: Float32Array;
@@ -273,7 +281,10 @@ export class GraphNodeRenderer {
     glowGeo.setAttribute('color', new THREE.BufferAttribute(this.host._glowRgba, 4));
     glowGeo.setAttribute('size', new THREE.BufferAttribute(this.host._glowSizes, 1));
     addAnimAttrs(glowGeo);
-    this.host.nodeGlowsPoints = new THREE.Points(glowGeo, makeGlowPointMaterial(this.host.glowTex, 1.5, 1.0));
+    // WebKitGTK 不尊重 gl_PointSize → InstancedMesh 广告牌；其余平台保持 Points 路径
+    this.host.nodeGlowsPoints = IS_WEBKITGTK
+      ? makeGlowInstancedMesh(glowGeo, makeGlowInstancedMaterial(this.host.glowTex, 1.5, 1.0))
+      : new THREE.Points(glowGeo, makeGlowPointMaterial(this.host.glowTex, 1.5, 1.0));
     this.host.nodeGlowsPoints.frustumCulled = false;
     this.host.nodeGlowsPoints.renderOrder = 1;
     this.host.nodeGroup.add(this.host.nodeGlowsPoints);
@@ -284,7 +295,9 @@ export class GraphNodeRenderer {
       g2Geo.setAttribute('color', new THREE.BufferAttribute(this.host._glow2Rgba, 4));
       g2Geo.setAttribute('size', new THREE.BufferAttribute(this.host._glow2Sizes, 1));
       addAnimAttrs(g2Geo);
-      this.host.nodeGlows2Points = new THREE.Points(g2Geo, makeGlowPointMaterial(this.host.glowTex, 0.55, 0.85));
+      this.host.nodeGlows2Points = IS_WEBKITGTK
+        ? makeGlowInstancedMesh(g2Geo, makeGlowInstancedMaterial(this.host.glowTex, 0.55, 0.85))
+        : new THREE.Points(g2Geo, makeGlowPointMaterial(this.host.glowTex, 0.55, 0.85));
       this.host.nodeGlows2Points.frustumCulled = false;
       this.host.nodeGlows2Points.renderOrder = 1;
       this.host.nodeGroup.add(this.host.nodeGlows2Points);
@@ -381,13 +394,16 @@ export class GraphNodeRenderer {
 
     (this.host.nodeGlowsPoints.material as THREE.Material)?.dispose();
     oldGlowGeo.dispose();
+    disposeGlowInstanced(this.host.nodeGlowsPoints);
     this.host.nodeGroup.remove(this.host.nodeGlowsPoints);
     const glowGeo = new THREE.BufferGeometry();
     glowGeo.setAttribute('position', new THREE.BufferAttribute(glowPosArr, 3));
     glowGeo.setAttribute('color', new THREE.BufferAttribute(this.host._glowRgba, 4));
     glowGeo.setAttribute('size', new THREE.BufferAttribute(this.host._glowSizes, 1));
     addAnimAttrs(glowGeo);
-    this.host.nodeGlowsPoints = new THREE.Points(glowGeo, makeGlowPointMaterial(this.host.glowTex, 1.5, 1.0));
+    this.host.nodeGlowsPoints = IS_WEBKITGTK
+      ? makeGlowInstancedMesh(glowGeo, makeGlowInstancedMaterial(this.host.glowTex, 1.5, 1.0))
+      : new THREE.Points(glowGeo, makeGlowPointMaterial(this.host.glowTex, 1.5, 1.0));
     this.host.nodeGlowsPoints.frustumCulled = false;
     this.host.nodeGlowsPoints.renderOrder = 1;
     this.host.nodeGroup.add(this.host.nodeGlowsPoints);
@@ -395,13 +411,16 @@ export class GraphNodeRenderer {
     if (this.host.nodeGlows2Points) {
       (this.host.nodeGlows2Points.material as THREE.Material)?.dispose();
       this.host.nodeGlows2Points.geometry.dispose();
+      disposeGlowInstanced(this.host.nodeGlows2Points);
       this.host.nodeGroup.remove(this.host.nodeGlows2Points);
       const g2Geo = new THREE.BufferGeometry();
       g2Geo.setAttribute('position', new THREE.BufferAttribute(glow2PosArr, 3));
       g2Geo.setAttribute('color', new THREE.BufferAttribute(this.host._glow2Rgba, 4));
       g2Geo.setAttribute('size', new THREE.BufferAttribute(this.host._glow2Sizes, 1));
       addAnimAttrs(g2Geo);
-      this.host.nodeGlows2Points = new THREE.Points(g2Geo, makeGlowPointMaterial(this.host.glowTex, 0.55, 0.85));
+      this.host.nodeGlows2Points = IS_WEBKITGTK
+        ? makeGlowInstancedMesh(g2Geo, makeGlowInstancedMaterial(this.host.glowTex, 0.55, 0.85))
+        : new THREE.Points(g2Geo, makeGlowPointMaterial(this.host.glowTex, 0.55, 0.85));
       this.host.nodeGlows2Points.frustumCulled = false;
       this.host.nodeGlows2Points.renderOrder = 1;
       this.host.nodeGroup.add(this.host.nodeGlows2Points);
@@ -543,7 +562,7 @@ export class GraphNodeRenderer {
     this.host.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
     if (this.host.nodeCoresInstanced.instanceColor) this.host.nodeCoresInstanced.instanceColor.needsUpdate = true;
     this.host.nodeCoresInstanced.boundingSphere = null;
-    const markAll = (p: THREE.Points) => {
+    const markAll = (p: GlowPointsLike) => {
       const g = p.geometry;
       for (const k of Object.keys(g.attributes)) g.attributes[k].needsUpdate = true;
     };

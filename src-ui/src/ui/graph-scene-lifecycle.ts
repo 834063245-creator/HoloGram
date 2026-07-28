@@ -19,6 +19,7 @@ import type { GraphDiffOverlay } from './graph-diff-overlay';
 import type { GraphEdgeRenderer } from './graph-edge-renderer';
 import type { GraphFocusController } from './graph-focus-controller';
 import { GraphFold } from './graph-fold';
+import { disposeGlowInstanced, type GlowPointsLike } from './graph-glow-instanced';
 import type { GraphHighlight } from './graph-highlight';
 import type { GraphInteractionController } from './graph-interaction-controller';
 import type { GraphLabelSystem } from './graph-labels';
@@ -68,8 +69,9 @@ export interface LifecycleHost {
 
   // GPU 缓冲
   nodeCoresInstanced: THREE.InstancedMesh;
-  nodeGlowsPoints: THREE.Points;
-  nodeGlows2Points: THREE.Points;
+  // WebKitGTK 上为 InstancedMesh（graph-glow-instanced），其余平台为 THREE.Points —— 接口一致
+  nodeGlowsPoints: GlowPointsLike;
+  nodeGlows2Points: GlowPointsLike;
   _coreScales: Float32Array;
   _nodeMagCache: Float32Array;
   _glowRgba: Float32Array;
@@ -681,11 +683,13 @@ export class GraphSceneLifecycle {
     if (this.host.nodeGlowsPoints) {
       (this.host.nodeGlowsPoints.material as THREE.Material)?.dispose();
       this.host.nodeGlowsPoints.geometry?.dispose();
+      disposeGlowInstanced(this.host.nodeGlowsPoints);
       this.host.nodeGroup.remove(this.host.nodeGlowsPoints);
     }
     if (this.host.nodeGlows2Points) {
       (this.host.nodeGlows2Points.material as THREE.Material)?.dispose();
       this.host.nodeGlows2Points.geometry?.dispose();
+      disposeGlowInstanced(this.host.nodeGlows2Points);
       this.host.nodeGroup.remove(this.host.nodeGlows2Points);
     }
     // Any remaining stray children in nodeGroup (shouldn't be any, but paranoia).
@@ -984,6 +988,8 @@ export class GraphSceneLifecycle {
       um.uPulseTime.value = this.host.pulseTime;
       um.uHoveredIdx.value = hIdx;
       um.uHoverScale.value = this.host.hoverScale;
+      // InstancedMesh 辉光（WebKitGTK）需要绘制缓冲高度做像素→世界换算
+      if (um.uViewportH) um.uViewportH.value = this.host.renderer.domElement.height;
     }
     if (this.host.nodeGlows2Points) {
       const um = (this.host.nodeGlows2Points.material as THREE.ShaderMaterial).uniforms;
@@ -991,6 +997,7 @@ export class GraphSceneLifecycle {
       um.uPulseTime.value = this.host.pulseTime;
       um.uHoveredIdx.value = hIdx;
       um.uHoverScale.value = this.host.hoverScale;
+      if (um.uViewportH) um.uViewportH.value = this.host.renderer.domElement.height;
     }
 
     // ── Mode-driven override: blast/path/filter set once on mode change, not per-frame ──
@@ -1105,10 +1112,12 @@ export class GraphSceneLifecycle {
     if (this.host.nodeGlowsPoints) {
       (this.host.nodeGlowsPoints.material as THREE.Material)?.dispose();
       this.host.nodeGlowsPoints.geometry?.dispose();
+      disposeGlowInstanced(this.host.nodeGlowsPoints);
     }
     if (this.host.nodeGlows2Points) {
       (this.host.nodeGlows2Points.material as THREE.Material)?.dispose();
       this.host.nodeGlows2Points.geometry?.dispose();
+      disposeGlowInstanced(this.host.nodeGlows2Points);
     }
     for (const lines of this.host.edgeLineGroups) {
       lines.geometry?.dispose();

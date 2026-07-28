@@ -31,6 +31,7 @@ import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
 import { GraphInteraction } from './ui/graph-interaction';
 import { getPanelStore } from './ui/panel-store';
+import { installResizeZones } from './ui/resize-zones';
 import type { CheckResult } from './ui/react/CheckPanel';
 import { isSamePath, Workspace } from './workspace';
 import { WorkspaceStateMachine } from './lifecycle/state-machine';
@@ -114,7 +115,18 @@ const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButton
 
 // ── State ──
 let workspace: Workspace | null = null;
-const starGraph: StarGraph = new StarGraph(graphEl);
+// WebGL2 不可用时（旧 WebKitGTK / GPU 被驱动拉黑）构造会抛——
+// 兜底成提示层，保住 React shell 与其余 UI，不再整窗黑屏
+let starGraph: StarGraph | null = null;
+try {
+  starGraph = new StarGraph(graphEl);
+} catch (err) {
+  console.error('[init] StarGraph 初始化失败（WebGL2 不可用）:', err);
+  const tip = document.createElement('div');
+  tip.className = 'gl-fallback';
+  tip.textContent = '3D 星图初始化失败：当前 WebView 不支持 WebGL2，请升级 WebKitGTK（≥ 2.40）后重启应用';
+  graphEl.appendChild(tip);
+}
 let agentViz: AgentVisualizer | null = null;
 // Unified state machine — replaces ad-hoc _switching boolean.
 // Guards all workspace transitions (open, deactivate, switch, reanalyze).
@@ -140,6 +152,10 @@ async function pickFolder(): Promise<string | null> {
 // ═══════════════════════════════════════════════════════════════
 
 async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; cachedGraph?: any }): Promise<void> {
+  if (!starGraph) {
+    pushStatus('3D 渲染不可用（WebGL2 初始化失败），无法打开项目');
+    return;
+  }
   if (wsMachine.isBusy) {
     pushStatus('正在切换工作区，请稍候…');
     return;
@@ -292,7 +308,7 @@ async function runCheck(): Promise<void> {
 
 function doSearch(query: string): void {
   const q = query.trim();
-  if (!q) return;
+  if (!q || !starGraph) return;
   const found = starGraph.focusNode(q);
   if (!found) {
     pushStatus(`未找到 "${q}"`);
@@ -308,6 +324,7 @@ function doSearch(query: string): void {
 let _diffActive = false;
 async function toggleDiff(): Promise<void> {
   const store = useShellStore.getState();
+  if (!starGraph) return;
   if (_diffActive) {
     starGraph.clearDiff();
     _diffActive = false;
@@ -341,6 +358,7 @@ async function toggleDiff(): Promise<void> {
 // ── Re-analyze — 原地重分析，不切换工作区 ──
 
 async function reanalyze(): Promise<void> {
+  if (!starGraph) return;
   if (wsMachine.isBusy) {
     pushStatus('正在切换工作区，请稍候…');
     return;
@@ -383,15 +401,15 @@ async function reanalyze(): Promise<void> {
 
 function escLayer(): void {
   // Graph-internal Escape states (was in graph.ts keydown, now unified)
-  if (starGraph.handleEscape()) return;
+  if (starGraph?.handleEscape()) return;
   // Global UI layers
   const dock = useDockStore.getState();
-  if (starGraph.isInsideGalaxy) starGraph.exitGalaxy();
+  if (starGraph?.isInsideGalaxy) starGraph.exitGalaxy();
   else if (dock.isOpen('check')) dock.closePanel('check');
   else if (dock.isOpen('constraints')) dock.closePanel('constraints');
   else if (chatPanel.isOpen()) chatPanel.close();
   else if (FV()?.get().isOpen) FV().get().close();
-  else starGraph.clearAgentHighlight();
+  else starGraph?.clearAgentHighlight();
 }
 
 // ── Helper: set up agent with placeholder workspace (no project loaded) ──
@@ -419,7 +437,7 @@ async function init(): Promise<void> {
 
   setLang(loadSettings().display.language);
   document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
-  starGraph.resize(); // CSS custom props changed → container shrunk → canvas must follow
+  starGraph?.resize(); // CSS custom props changed → container shrunk → canvas must follow
 
   // Tauri 事件监听 — 纯浏览器 dev(mock) 环境无 __TAURI_INTERNALS__，
   // listen 会抛错并中断 init；降级为静默跳过（权限卡在 mock 下不会出现）
@@ -590,17 +608,17 @@ async function init(): Promise<void> {
   // Chat core（无头）+ React 信标视图（经 core-instance 注入 App 树）
   chatPanel = new ChatCore();
   useCoreStore.getState().setChatCore(chatPanel);
-  chatPanel.setStarGraph(starGraph);
+  if (starGraph) chatPanel.setStarGraph(starGraph);
 
   // Agent visualizer
-  agentViz = new AgentVisualizer(starGraph);
+  agentViz = starGraph ? new AgentVisualizer(starGraph) : null;
   chatPanel.setOnTrailToggle(() => agentViz?.toggleTrail());
 
   // Graph interaction
   const _graphInteraction = new GraphInteraction(); // ponytail: side-effect constructor, event bus listeners
 
   // Dock 面板外部依赖注入（组件已收编进 App 树，这里只写配置槽）
-  setDockStarGraph(starGraph);
+  if (starGraph) setDockStarGraph(starGraph);
 
   // Wire NL→symbol fallback: if heuristic parser fails, use Agent to resolve
   setDataflowQueryParser(async (nl: string): Promise<string[]> => {
@@ -634,14 +652,14 @@ async function init(): Promise<void> {
 
   // ── AppShell wiring — replaces bus commands with explicit dispatch ──
   shell.wire({
-    navigateToNode: (name) => starGraph.focusNode(name),
+    navigateToNode: (name) => starGraph?.focusNode(name),
     navigateToFile: async (path, line) => {
       await loadFileViewer();
       FV().get().open(path, { line });
     },
-    highlightFile: (path) => starGraph.highlightFile(path),
-    highlightFolder: (path) => starGraph.highlightFolder(path),
-    clearHighlight: () => starGraph.clearFileHighlight(),
+    highlightFile: (path) => starGraph?.highlightFile(path),
+    highlightFolder: (path) => starGraph?.highlightFolder(path),
+    clearHighlight: () => starGraph?.clearFileHighlight(),
     queryAgent: (question) => {
       const dock = useDockStore.getState();
       if (dock.isOpen('constraints')) dock.closePanel('constraints');
@@ -669,6 +687,7 @@ async function init(): Promise<void> {
       icon: 'fold',
       kbd: 'F',
       run: () => {
+        if (!starGraph) return;
         starGraph.toggleFold();
         useShellStore.getState().setFolded(starGraph.isFolded);
       },
@@ -679,7 +698,7 @@ async function init(): Promise<void> {
       label: '复位摄像机视角',
       icon: 'reset-cam',
       kbd: 'R',
-      run: () => starGraph.resetCamera(),
+      run: () => starGraph?.resetCamera(),
     },
     {
       id: 'blast-toggle',
@@ -687,7 +706,7 @@ async function init(): Promise<void> {
       label: '切换 Blast 模式',
       icon: 'blast',
       kbd: 'B',
-      run: () => starGraph.handleBlastToggle(),
+      run: () => starGraph?.handleBlastToggle(),
     },
     { id: 'toggle-diff', group: '操作', label: '变更回看着色', icon: 'diff', kbd: 'ctrl D', run: () => toggleDiff() },
     { id: 'search', group: '操作', label: '搜索符号', icon: 'search', run: (q) => doSearch(q || '') },
@@ -778,7 +797,7 @@ async function init(): Promise<void> {
   // Settings（保存后的 agent 重建链必须保住）
   setOnSettingsSave(async () => {
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
-    starGraph.resize();
+    starGraph?.resize();
     if (workspace) {
       // Save current conversation BEFORE re-initializing agent — avoids data loss
       await chatPanel.saveActiveSession(workspace.path).catch((e) => console.error('[settings] saveActiveSession failed:', e));
@@ -853,7 +872,7 @@ async function init(): Promise<void> {
       const root: string = graph.meta?.source_root || '';
       if (!root) {
         // Graph exists but no path — render without workspace
-        starGraph.render(graph);
+        starGraph?.render(graph);
         pushStatus('⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目');
         useDockStore.getState().setProjectPath(null);
         setLoading(false);
@@ -880,11 +899,16 @@ async function init(): Promise<void> {
   await setupPlaceholderAgent();
 }
 
-// ── 平台标记：方便 CSS 针对不同操作系统做差异化处理 ──
+// ── 平台标记 + 渲染能力检测：方便 CSS 针对平台/引擎能力做差异化处理 ──
 {
   const ua = navigator.userAgent;
   const plat = ua.includes('Linux') ? 'linux' : ua.includes('Windows') ? 'windows' : ua.includes('Mac') ? 'macos' : 'unknown';
   document.documentElement.setAttribute('data-platform', plat);
+  // WebKitGTK <2.46 / 软件渲染下 backdrop-filter 不可靠 — 全局降级为不透明玻璃（tokens.css html.no-bf）
+  const bfOk = CSS.supports('backdrop-filter', 'blur(1px)') || CSS.supports('-webkit-backdrop-filter', 'blur(1px)');
+  if (!bfOk) document.documentElement.classList.add('no-bf');
+  // Linux 无边框窗口无 WM 边缘缩放 — 铺 Tauri 缩放热区（内部自检平台）
+  installResizeZones();
 }
 
 // ── React 壳引导（P1：CommandBar/DockRail/StatusBar/命令面板/快捷键浮层）──

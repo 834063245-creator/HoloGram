@@ -13,6 +13,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import type { GraphAnalysis } from './graph-analysis';
 import { edgeColorByType, edgeOpacityByDepth, edgeWidthByDepth } from './graph-colors';
 import type { GraphFocusController } from './graph-focus-controller';
+import type { GlowPointsLike } from './graph-glow-instanced';
 import type { EdgeData, GraphJSON, GraphNode } from './graph-types';
 
 // ── EdgeRendererHost — GraphEdgeRenderer 需要从 StarGraph 访问的成员 ──
@@ -34,8 +35,8 @@ export interface EdgeRendererHost {
   _nodeCount: number;
   _deadIndices: Set<number>;
   _nodeMagCache: Float32Array;
-  nodeGlowsPoints: THREE.Points;
-  nodeGlows2Points: THREE.Points;
+  nodeGlowsPoints: GlowPointsLike;
+  nodeGlows2Points: GlowPointsLike;
 
   _analysis: GraphAnalysis;
   focusSubgraphActive: boolean;

@@ -382,6 +382,10 @@
   display: flex;
   justify-content: center;
 }
+/* no-bf: WebKitGTK 无 backdrop-filter 降级 */
+html.no-bf .pal-veil {
+  background: rgba(3, 5, 10, 0.92);
+}
 .pal-box {
   margin-top: 15vh;
   width: 560px;
@@ -587,4 +591,88 @@
 .dr-right .dr-btn.on::before {
   left: auto;
   right: -3px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   WebGL 兜底提示（WebGL2 初始化失败 / 上下文丢失时盖住画布）
+   ═══════════════════════════════════════════════════════════════ */
+.gl-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  text-align: center;
+  font-family: var(--obs-font-mono);
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--obs-text-2);
+  background: rgba(5, 8, 15, 0.88);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Linux 无边框窗口缩放热区（仅 linux 安装，见 ui/resize-zones.ts）
+   z-index 101：压在 100 的栏/轨之上，边缘手势优先给缩放
+   ═══════════════════════════════════════════════════════════════ */
+.rz-zone {
+  position: fixed;
+  z-index: 101;
+}
+.rz-n {
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 6px;
+  cursor: n-resize;
+}
+.rz-s {
+  bottom: 0;
+  left: 12px;
+  right: 12px;
+  height: 6px;
+  cursor: s-resize;
+}
+.rz-w {
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+  cursor: w-resize;
+}
+.rz-e {
+  right: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+  cursor: e-resize;
+}
+.rz-ne {
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  cursor: ne-resize;
+}
+.rz-nw {
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  cursor: nw-resize;
+}
+.rz-se {
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  cursor: se-resize;
+}
+.rz-sw {
+  bottom: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  cursor: sw-resize;
 }

@@ -5,8 +5,8 @@
   "build": {
     "frontendDist": "../src-ui/dist",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeDevCommand": "cd /d D:\\HoloGramHG\\src-ui && npm run dev",
-    "beforeBuildCommand": "cd /d D:\\HoloGramHG\\src-ui && npm run build"
+    "beforeDevCommand": "npm --prefix ../src-ui run dev",
+    "beforeBuildCommand": "npm --prefix ../src-ui run build"
   },
   "app": {
     "windows": [
@@ -14,6 +14,8 @@
         "title": "全息观测站",
         "width": 1000,
         "height": 700,
+        "minWidth": 880,
+        "minHeight": 600,
         "resizable": true,
         "center": true,
         "decorations": false

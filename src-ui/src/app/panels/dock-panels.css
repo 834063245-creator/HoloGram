@@ -3286,6 +3286,11 @@
   transform-origin: left center;
   animation: th-bloom 0.38s cubic-bezier(0.34, 1.4, 0.64, 1);
 }
+
+/* no-bf: WebKitGTK 无 backdrop-filter 降级 */
+html.no-bf .th-bubble {
+  background: rgba(8, 12, 22, 0.95);
+}
 @keyframes th-bloom {
   from {
     opacity: 0;
@@ -3530,6 +3535,7 @@
   border-radius: 0 0 8px 8px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   background: rgba(12, 17, 28, 0.97);
+  -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
 }
 

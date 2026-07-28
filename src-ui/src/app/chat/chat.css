@@ -525,6 +525,11 @@ body:has(#welcome:not(.hidden)) .chat-panel.chat-pill {
   animation: hist-fade-in 0.15s ease;
 }
 
+/* no-bf: WebKitGTK 无 backdrop-filter 降级 */
+html.no-bf .chat-history-backdrop {
+  background: rgba(0, 0, 0, 0.92);
+}
+
 .chat-history-panel {
   position: fixed;
   top: 50%;

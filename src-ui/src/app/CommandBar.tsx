@@ -132,7 +132,7 @@ export function CommandBar() {
     // 用 Tauri 原生拖拽
     const ta = tauri();
     if (ta?.invoke) {
-      ta.invoke('plugin:window|start_dragging', { label: winLabel() }).catch(() => {});
+      ta.invoke('plugin:window|start_dragging', { label: winLabel() }).catch((e) => console.warn('start_dragging failed', e));
     }
   }, []);
 

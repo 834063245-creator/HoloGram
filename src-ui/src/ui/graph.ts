@@ -154,6 +154,19 @@ export class StarGraph {
     this.renderer.toneMappingExposure = 1.4;
     container.appendChild(this.renderer.domElement);
 
+    // WebKitGTK GPU 进程崩溃后上下文不会自动恢复 — 盖层提示，避免画布永久黑屏
+    this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      if (container.querySelector('.gl-fallback')) return;
+      const tip = document.createElement('div');
+      tip.className = 'gl-fallback';
+      tip.textContent = '图形上下文已丢失（WebGL context lost）— 请重新加载窗口';
+      container.appendChild(tip);
+    });
+
+    // 窗口跨屏移动（HiDPI↔普通屏）时 DPR 变化不触发 resize — 监听并重设，否则画布发虚
+    this.watchDpr();
+
     // ── Post-processing pipeline ──
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
@@ -626,6 +639,20 @@ export class StarGraph {
   /** Public resize — call after CSS layout changes (e.g. --font-scale, --toolbar-h) */
   resize(): void {
     this.onResize();
+  }
+
+  // DPR 监听：matchMedia 的 resolution query 一次性失效，变化后按新 DPR 重挂
+  private watchDpr(): void {
+    const q = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    q.addEventListener(
+      'change',
+      () => {
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.onResize();
+        this.watchDpr();
+      },
+      { once: true },
+    );
   }
 
   private onResize = (): void => {

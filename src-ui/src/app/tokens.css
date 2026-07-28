@@ -51,3 +51,10 @@
   --obs-status-h: 28px;
   --obs-rail-w: 46px;
 }
+
+/* backdrop-filter 不可用（WebKitGTK <2.46 / 软件渲染）时的降级：
+   玻璃整体提到近乎不透明，保住面板文字可读性。main.ts 检测后给 <html> 加 .no-bf */
+html.no-bf {
+  --obs-glass: rgba(11, 15, 26, 0.92);
+  --obs-glass-hi: rgba(14, 19, 32, 0.96);
+}

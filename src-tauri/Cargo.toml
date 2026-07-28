@@ -31,6 +31,7 @@ tracing-appender = "0.2"
 base64 = "0.22"
 hologram-engine = { path = "../engine" }
 tauri-plugin-updater = "2.10.1"
+tauri-plugin-window-state = "2"
 
 [features]
 default = ["custom-protocol"]

@@ -72,6 +72,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // 窗口位置/尺寸持久化 — Linux 无边框窗口每次启动不再回退到居中 1000x700
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .manage(workspace_state)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
