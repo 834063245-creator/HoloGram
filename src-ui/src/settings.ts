@@ -11,7 +11,9 @@ export interface ProviderSettings {
   baseUrl: string;
   model: string;
   thinking?: string; // Anthropic extended thinking
-  maxTokens?: number; // 0 = provider default (32000)
+  /** @deprecated 已移除——max_tokens 现在由 provider 默认值 + 模型目录上限自动决定。
+   *  旧 localStorage 数据里的此字段会被忽略。 */
+  maxTokens?: number;
 }
 
 export interface AgentSettings {
@@ -184,7 +186,6 @@ export function addProvider(s: AppSettings, name: string, kind: 'anthropic' | 'o
         apiKey: '',
         baseUrl,
         model: '',
-        maxTokens: 0,
       },
     ],
   };

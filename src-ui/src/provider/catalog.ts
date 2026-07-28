@@ -90,6 +90,15 @@ export function getModel(modelId: string): ModelDescriptor | undefined {
   return loadCatalog().modelMap.get(modelId);
 }
 
+/** Clamp a requested max_tokens to the model's catalog output cap.
+ *  An out-of-range max_tokens makes strict providers reject every request with
+ *  400 before any token is generated (DeepSeek: valid range [1, 393216]).
+ *  Unknown models (no catalog entry) pass through unclamped. */
+export function clampMaxTokens(modelId: string, requested: number): number {
+  const cap = getModel(modelId)?.maxTokens;
+  return cap && cap > 0 ? Math.min(requested, cap) : requested;
+}
+
 /** Fuzzy search models by id or display name (case-insensitive substring match). */
 export function searchModels(query: string): ModelDescriptor[] {
   const { allModels } = loadCatalog();

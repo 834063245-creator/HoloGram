@@ -460,20 +460,6 @@ const SettingsPanelApp: React.FC<{
                 />
               </div>
               <div className="sp-field">
-                <label className="sp-label">
-                  Max Tokens <span className="sp-hint-sub">（0 = 默认 32000）</span>
-                </label>
-                <input
-                  type="number"
-                  className="sp-input sp-input-num"
-                  value={active?.maxTokens || 0}
-                  min={0}
-                  step={1000}
-                  onChange={(e) => updateProvider('maxTokens', parseInt(e.target.value, 10) || 0)}
-                  placeholder="0"
-                />
-              </div>
-              <div className="sp-field">
                 <label className="sp-label">Base URL</label>
                 <input
                   type="text"

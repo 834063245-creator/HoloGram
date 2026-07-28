@@ -670,7 +670,8 @@ export class Workspace {
         pricing: defaultPricing(act.kind, act.model),
         temperature: agentOpts.temperature ?? 0.7,
         contextWindow: agentOpts.contextWindow || Math.min(getModel(act.model)?.contextWindow ?? 200000, 200000),
-        maxTokens: act.maxTokens ?? 0,
+        // max_tokens 不再开放给用户设置——provider 默认 32000，发送前按模型目录上限钳制
+        maxTokens: 0,
         preRunHook: this.memoryManager
           ? async (input: string) => {
               if (!this.memoryManager!.auraReady) return null;

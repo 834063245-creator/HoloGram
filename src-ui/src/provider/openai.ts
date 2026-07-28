@@ -4,6 +4,7 @@
 // OpenAI-compatible provider — DeepSeek, MiMo, and any OpenAI-compatible endpoint
 // 手写 fetch() + SSE 解析，零第三方 SDK
 
+import { clampMaxTokens } from './catalog';
 import { sendWithRetry } from './retry';
 import { extractWritePreview, fetchJsonWithTimeout, prewarmEndpoint, sseEvents } from './shared';
 import {
@@ -199,7 +200,7 @@ function buildChatRequest(
     model,
     messages: chatMsgs,
     tools: chatTools,
-    max_tokens: maxTok > 0 ? maxTok : DEFAULT_MAX_TOKENS,
+    max_tokens: clampMaxTokens(model, maxTok > 0 ? maxTok : DEFAULT_MAX_TOKENS),
     stream: true,
     stream_options: { include_usage: true },
     thinking,

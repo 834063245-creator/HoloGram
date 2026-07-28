@@ -3,6 +3,7 @@
 
 // Anthropic Messages API provider — 手写 fetch() + SSE 解析，零第三方 SDK
 
+import { clampMaxTokens } from './catalog';
 import { sendWithRetry } from './retry';
 import { extractWritePreview, fetchJsonWithTimeout, prewarmEndpoint, sseEvents } from './shared';
 import {
@@ -271,7 +272,7 @@ function buildRequest(
 
   const r: AnthRequest = {
     model,
-    max_tokens: maxTok > 0 ? maxTok : DEFAULT_MAX_TOKENS,
+    max_tokens: clampMaxTokens(model, maxTok > 0 ? maxTok : DEFAULT_MAX_TOKENS),
     system: system.length > 0 ? system : undefined,
     messages: anthMsgs,
     tools: anthTools.length > 0 ? anthTools : undefined,

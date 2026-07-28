@@ -398,7 +398,10 @@ export class Agent {
     await this.loadCompactionTracker();
     const config = await this.loadCompactionConfig();
     if (!config) return null;
-    this.contextWindow = 1_000_000;
+    // NOTE: do NOT touch contextWindow here — it is derived from the active
+    // model at agent creation. compactRatio/recentKeep are dimensionless and
+    // apply to whatever window the model has. (The old `contextWindow = 1M`
+    // hardcode silently overrode the per-model cap on every new agent.)
     this.compactRatio = config.compactRatio;
     this.recentKeep = config.recentKeep;
     log.info('agent', 'auto-tune applied', {
@@ -1577,6 +1580,10 @@ ${resumeNote}
   /** Check if an error looks like a context-length exceedance. */
   private isContextLengthError(err: Error): boolean {
     const msg = (err.message || String(err)).toLowerCase();
+    // Completion-budget errors ("Invalid max_tokens value…") are request-parameter
+    // bugs, not prompt overflow — compacting the prompt can never fix them, and
+    // misclassifying them causes a compact→retry→400 loop on every input.
+    if (msg.includes('max_tokens') || msg.includes('max_output_tokens')) return false;
     return (
       msg.includes('prompt is too long') ||
       msg.includes('context length') ||
@@ -1605,18 +1612,48 @@ ${resumeNote}
     try {
       const msgs = this.session;
       const head = msgs.length > 0 && msgs[0].role === 'system' ? 1 : 0;
-      // Keep last N messages verbatim (tail), compact the middle
+      // Keep last N messages verbatim (tail), compact the middle.
+      // Guard on the UN-clamped region size — the old `Math.max(head + 4, …)`
+      // clamp made `start - head < 4` unreachable, so even a 2-message session
+      // got "compacted" (the user's own message was replaced by its summary).
       const tailCount = Math.max(4, this.recentKeep);
-      const start = Math.max(head + 4, msgs.length - tailCount); // at least 4 compactable messages
-      if (start - head < 4) {
+      const regionEnd = msgs.length - tailCount;
+      if (regionEnd - head <= 0) {
+        // Nothing between head and tail — compaction can do nothing here.
+        // Mark stuck so the reactive path stops retrying compaction and the
+        // real error surfaces instead of looping.
+        this.compactStuck = true;
+        this.recordCompactionEvent({
+          ts: Date.now(),
+          regionMsgCount: 0,
+          regionTokensEst: 0,
+          summaryInputTokens: 0,
+          summaryOutputTokens: 0,
+          tailMsgCount: msgs.length - head,
+          preTokens: this.tokenCountWithEstimation(),
+          postTokens: this.tokenCountWithEstimation(),
+          outcome: 'stuck',
+        });
+        this._sink({
+          kind: EventKind.Notice,
+          level: 'warn',
+          text: '对话太短，无法压缩。若上下文确实已满，请用 /new 开启新会话。',
+        });
+        return 'stuck';
+      }
+      if (regionEnd - head < 4) {
         // ponytail: not enough messages to summarize but context is too long → force-truncate
+        // Don't split a tool-call group: if the tail would begin with orphaned
+        // tool results, pull them into the dropped region.
+        let tailStart = Math.max(head, regionEnd);
+        while (tailStart < msgs.length && msgs[tailStart].role === 'tool') tailStart++;
         const truncated: Message[] = [
           ...msgs.slice(0, head),
           {
             role: 'user' as const,
             content: '<truncated-context>\n前面的消息因上下文过长已被截断。\n</truncated-context>',
           },
-          ...msgs.slice(Math.max(head, msgs.length - tailCount)),
+          ...msgs.slice(tailStart),
         ];
         this.session = truncated;
         this._execState.bumpVersion();
@@ -1642,6 +1679,10 @@ ${resumeNote}
         });
         return 'truncated';
       }
+      // Don't split a tool-call group at the region boundary: if the tail would
+      // begin with orphaned tool results, pull them into the summarized region.
+      let start = regionEnd;
+      while (start < msgs.length && msgs[start].role === 'tool') start++;
       const region = msgs.slice(head, start);
       let summary: string | null = null;
       try {
@@ -1651,13 +1692,15 @@ ${resumeNote}
       }
       if (!summary) {
         // ponytail: summarization failed, force-truncate as fallback
+        let tailStart = Math.max(head, regionEnd);
+        while (tailStart < msgs.length && msgs[tailStart].role === 'tool') tailStart++;
         const truncated: Message[] = [
           ...msgs.slice(0, head),
           {
             role: 'user' as const,
             content: '<truncated-context>\n前面的消息因压缩失败已被截断。\n</truncated-context>',
           },
-          ...msgs.slice(Math.max(head, msgs.length - tailCount)),
+          ...msgs.slice(tailStart),
         ];
         this.session = truncated;
         this._execState.bumpVersion();
@@ -1671,7 +1714,7 @@ ${resumeNote}
           regionTokensEst: estimateTokens(region.reduce((s, m) => s + (m.content?.length || 0), 0)),
           summaryInputTokens: 0,
           summaryOutputTokens: 0,
-          tailMsgCount: msgs.length - Math.max(head, msgs.length - tailCount),
+          tailMsgCount: msgs.length - tailStart,
           preTokens: this.tokenCountWithEstimation(),
           postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
           outcome: 'truncated',
@@ -1760,8 +1803,10 @@ ${resumeNote}
     const genAtStart = this._execState.bumpVersion();
     const head = msgs.length > 0 && msgs[0].role === 'system' ? 1 : 0;
     const tailCount = Math.max(4, this.recentKeep);
-    const start = Math.max(head + 4, msgs.length - tailCount);
-    if (start - head < 4) {
+    // Guard on the UN-clamped region size (see compactNow) — otherwise even a
+    // 2-message session would get "compacted" once the ratio trips.
+    const regionEnd = msgs.length - tailCount;
+    if (regionEnd - head < 4) {
       this.compactStuck = true;
       this.compactRunning = false;
       this.recordCompactionEvent({
@@ -1770,7 +1815,7 @@ ${resumeNote}
         regionTokensEst: 0,
         summaryInputTokens: 0,
         summaryOutputTokens: 0,
-        tailMsgCount: tailCount,
+        tailMsgCount: Math.max(0, msgs.length - head),
         preTokens: estimated,
         postTokens: estimated,
         outcome: 'stuck',
@@ -1783,6 +1828,9 @@ ${resumeNote}
       return;
     }
 
+    // Don't split a tool-call group at the region boundary (see compactNow).
+    let start = regionEnd;
+    while (start < msgs.length && msgs[start].role === 'tool') start++;
     const region = msgs.slice(head, start);
     const abortCtrl = new AbortController();
     this.summarizeRegion(abortCtrl.signal, region)
