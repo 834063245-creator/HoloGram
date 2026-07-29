@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 pub mod louvain;
+pub use louvain::assign_communities_to_new_nodes;
 pub use louvain::detect_communities;
 pub use louvain::detect_communities_and_hierarchy;
 pub use louvain::detect_communities_from_index;
 pub use louvain::detect_hierarchical_communities;
 pub use louvain::detect_hierarchical_communities_from_index;
 pub use louvain::detect_hierarchical_communities_with_base;
+pub use louvain::match_communities_to_previous;
 pub use louvain::HierarchicalCommunity;

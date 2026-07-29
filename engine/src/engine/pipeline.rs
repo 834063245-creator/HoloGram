@@ -271,7 +271,27 @@ impl Engine {
         // 7. Community detection (Leiden flat + Louvain hierarchical)
         set_progress("社区检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
+
+        // Load previous community assignments for stable ID matching.
+        // This prevents community IDs from shifting across re-analyses:
+        // communities that retain most of their members inherit the old ID.
+        let old_assignment: std::collections::HashMap<String, usize> = {
+            let store_guard = self.store.lock()
+                .map_err(|e| format!("Store lock poisoned: {}", e))?;
+            store_guard.as_ref()
+                .map(|s| s.index.read().nodes_iter()
+                    .filter_map(|n| n.community_id.map(|cid| (n.id.clone(), cid)))
+                    .collect())
+                .unwrap_or_default()
+        };
+
         let (communities, hierarchical) = detect_communities_and_hierarchy(&result.graph, 42);
+
+        // Match new communities to old ones — stable IDs instead of position indices
+        let stable_ids = crate::community::match_communities_to_previous(
+            &communities, &old_assignment,
+        );
+
         let community_count = communities.len();
         let hc_count = hierarchical.iter().filter(|c| c.level > 0).count();
         let leiden_elapsed = stage_start.elapsed().as_secs_f64();
@@ -286,10 +306,10 @@ impl Engine {
         if cancel.load(Ordering::Relaxed) {
             return Err("分析已被新的重分析请求取消".to_string());
         }
-        for (comm_idx, comm) in communities.iter().enumerate() {
+        for (comm, &stable_id) in communities.iter().zip(stable_ids.iter()) {
             for node_id in comm {
                 if let Some(node) = result.graph.nodes.get_mut(node_id) {
-                    node.community_id = Some(comm_idx);
+                    node.community_id = Some(stable_id);
                 }
             }
         }

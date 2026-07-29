@@ -12,7 +12,6 @@ use tracing::{info, warn};
 
 use super::Engine;
 use crate::analysis::coupling::compute_coupling;
-use crate::community::louvain::detect_communities_and_hierarchy;
 use crate::engine::GRAMMAR_LOADER;
 use crate::storage::incremental::IncrementalUpdater;
 use crate::storage::memory::MemoryIndex;
@@ -232,29 +231,19 @@ impl Engine {
                 IncrementalUpdater::update(&paths, &store.index.read(), root, &store.db)?;
 
             // ── Post-incremental synthesis ──
-            // ponytail: the incremental updater only does re-parse + diff + edge repair.
-            // Synthesis stages (community detection, coupling analysis) that operate on
-            // graph structure, not files, are re-run here so the incremental result
-            // matches the full-pipeline result for these dimensions.
-            // Stages that need parse_cache (dynamic dispatch, framework routes, snippets)
-            // are still skipped — they fall back to full re-analysis when needed.
+            // The incremental updater preserves community_id for matched nodes.
+            // New nodes (community_id = None) get assigned via neighbor majority vote,
+            // avoiding full re-clustering that would destabilize existing IDs.
             let synth_start = std::time::Instant::now();
             let mut graph = new_idx.to_graph();
-            let (communities, _hierarchical) = detect_communities_and_hierarchy(&graph, 42);
-            for (comm_idx, comm) in communities.iter().enumerate() {
-                for node_id in comm {
-                    if let Some(node) = graph.nodes.get_mut(node_id) {
-                        node.community_id = Some(comm_idx);
-                    }
-                }
-            }
+            crate::community::assign_communities_to_new_nodes(&mut graph);
             compute_coupling(&mut graph);
             let final_idx =
                 MemoryIndex::from_existing_graph(graph.nodes, graph.edges);
             let synth_ms = synth_start.elapsed().as_millis();
             info!(
-                "[engine watcher] post-incremental synthesis: {} communities, {}ms",
-                communities.len(), synth_ms
+                "[engine watcher] post-incremental synthesis (neighbor vote): {}ms",
+                synth_ms
             );
 
             store.swap_index(final_idx);

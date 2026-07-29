@@ -721,6 +721,119 @@ pub fn detect_communities_and_hierarchy(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Stable community ID matching
+// ═══════════════════════════════════════════════════════════════
+
+/// Match new communities to previous ones via greedy maximum overlap.
+///
+/// Given the new community partition and the old `node_id → community_id`
+/// mapping, returns a stable ID for each new community. Communities that
+/// overlap significantly with an old community inherit that old community's
+/// ID. Truly new communities get fresh IDs (continuing the counter).
+///
+/// Algorithm: greedy matching by descending overlap count. Each old ID is
+/// claimed at most once, ensuring a 1:1 mapping.
+pub fn match_communities_to_previous(
+    new_communities: &[Community],
+    old_assignment: &HashMap<String, usize>,
+) -> Vec<usize> {
+    use std::collections::HashSet;
+
+    // Build overlap pairs: (overlap_count, new_idx, old_id)
+    let mut pairs: Vec<(usize, usize, usize)> = Vec::new();
+    for (new_idx, comm) in new_communities.iter().enumerate() {
+        let mut overlap: HashMap<usize, usize> = HashMap::new();
+        for node_id in comm {
+            if let Some(&old_cid) = old_assignment.get(node_id) {
+                *overlap.entry(old_cid).or_default() += 1;
+            }
+        }
+        for (&old_id, &count) in &overlap {
+            pairs.push((count, new_idx, old_id));
+        }
+    }
+
+    // Greedy matching: highest overlap first
+    pairs.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut result = vec![usize::MAX; new_communities.len()];
+    let mut used_old: HashSet<usize> = HashSet::new();
+
+    for &(_, new_idx, old_id) in &pairs {
+        if result[new_idx] != usize::MAX || used_old.contains(&old_id) {
+            continue;
+        }
+        result[new_idx] = old_id;
+        used_old.insert(old_id);
+    }
+
+    // Assign fresh IDs to unmatched communities
+    let mut next_id = old_assignment.values().copied().max()
+        .map(|m| m.saturating_add(1))
+        .unwrap_or(0);
+    for id in result.iter_mut() {
+        if *id == usize::MAX {
+            *id = next_id;
+            next_id += 1;
+        }
+    }
+
+    result
+}
+
+/// Assign `community_id` to nodes that don't have one, based on neighbor
+/// majority vote. Used in the incremental update path to avoid full
+/// re-clustering which would destabilize existing community IDs.
+///
+/// Nodes that already have a `community_id` are left untouched. New nodes
+/// (community_id = None) inherit the most common community among their
+/// graph neighbors. Nodes with no community-bearing neighbors are left
+/// unassigned — they'll get a community on the next full analysis.
+pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) {
+    use std::collections::{HashMap, HashSet};
+
+    let new_ids: HashSet<String> = graph.nodes.iter()
+        .filter(|(_, n)| n.community_id.is_none())
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    if new_ids.is_empty() { return; }
+
+    // Single pass over edges — accumulate community votes per new node
+    let mut votes: HashMap<String, HashMap<usize, usize>> = HashMap::new();
+    for edge in graph.edges.values() {
+        if new_ids.contains(&edge.source) {
+            if let Some(nbr) = graph.nodes.get(&edge.target) {
+                if let Some(cid) = nbr.community_id {
+                    *votes.entry(edge.source.clone()).or_default().entry(cid).or_default() += 1;
+                }
+            }
+        }
+        if new_ids.contains(&edge.target) {
+            if let Some(nbr) = graph.nodes.get(&edge.source) {
+                if let Some(cid) = nbr.community_id {
+                    *votes.entry(edge.target.clone()).or_default().entry(cid).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    for (nid, v) in &votes {
+        // Pick community with most votes; ties broken by lower ID (older = more stable)
+        if let Some(&best_cid) = v.iter()
+            .max_by(|(cid_a, cnt_a), (cid_b, cnt_b)| {
+                cnt_a.cmp(cnt_b).then(cid_b.cmp(cid_a))
+            })
+            .map(|(cid, _)| cid)
+        {
+            if let Some(node) = graph.nodes.get_mut(nid) {
+                node.community_id = Some(best_cid);
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════
 
@@ -1054,5 +1167,172 @@ mod tests {
         let mut expected: Vec<String> = g.nodes.keys().cloned().collect();
         expected.sort();
         assert_eq!(covered, expected);
+    }
+
+    // ── Stable community ID matching ─────────────────────────────────
+
+    #[test]
+    fn test_match_first_run_empty_old() {
+        // First run: no old assignment → sequential IDs 0, 1, 2, ...
+        let comms = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["d".to_string(), "e".to_string()],
+        ];
+        let old: HashMap<String, usize> = HashMap::new();
+        let ids = match_communities_to_previous(&comms, &old);
+        assert_eq!(ids, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_match_same_graph_rerun_preserves_ids() {
+        // Same communities, rerun → same IDs
+        let comms = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["d".to_string(), "e".to_string()],
+        ];
+        let mut old: HashMap<String, usize> = HashMap::new();
+        old.insert("a".into(), 5);
+        old.insert("b".into(), 5);
+        old.insert("c".into(), 5);
+        old.insert("d".into(), 3);
+        old.insert("e".into(), 3);
+
+        let ids = match_communities_to_previous(&comms, &old);
+        // Community {a,b,c} should get ID 5, community {d,e} should get ID 3
+        assert!(ids.contains(&5));
+        assert!(ids.contains(&3));
+    }
+
+    #[test]
+    fn test_match_reordered_communities_preserve_ids() {
+        // Same content, different sort order → same IDs
+        let comms_v1 = vec![
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["d".to_string(), "e".to_string()],
+        ];
+        let comms_v2 = vec![
+            vec!["d".to_string(), "e".to_string()],
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        ];
+        let mut old: HashMap<String, usize> = HashMap::new();
+        old.insert("a".into(), 0);
+        old.insert("b".into(), 0);
+        old.insert("c".into(), 0);
+        old.insert("d".into(), 1);
+        old.insert("e".into(), 1);
+
+        let ids_v1 = match_communities_to_previous(&comms_v1, &old);
+        let ids_v2 = match_communities_to_previous(&comms_v2, &old);
+
+        // The community {a,b,c} should get ID 0 in both cases
+        // The community {d,e} should get ID 1 in both cases
+        assert_eq!(ids_v1[0], 0); // {a,b,c} is first in v1
+        assert_eq!(ids_v1[1], 1); // {d,e} is second in v1
+        assert_eq!(ids_v2[0], 1); // {d,e} is first in v2
+        assert_eq!(ids_v2[1], 0); // {a,b,c} is second in v2
+    }
+
+    #[test]
+    fn test_match_new_community_gets_fresh_id() {
+        let comms = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["c".to_string(), "d".to_string()],
+            vec!["e".to_string(), "f".to_string()],  // new community
+        ];
+        let mut old: HashMap<String, usize> = HashMap::new();
+        old.insert("a".into(), 0);
+        old.insert("b".into(), 0);
+        old.insert("c".into(), 1);
+        old.insert("d".into(), 1);
+        // e, f are new — not in old assignment
+
+        let ids = match_communities_to_previous(&comms, &old);
+        assert_eq!(ids[0], 0); // {a,b} → 0
+        assert_eq!(ids[1], 1); // {c,d} → 1
+        assert_eq!(ids[2], 2); // {e,f} → fresh ID 2
+    }
+
+    #[test]
+    fn test_match_community_disappears_others_stable() {
+        let comms = vec![
+            vec!["a".to_string(), "b".to_string()],
+            // community {c,d} disappeared
+        ];
+        let mut old: HashMap<String, usize> = HashMap::new();
+        old.insert("a".into(), 0);
+        old.insert("b".into(), 0);
+        old.insert("c".into(), 7);
+        old.insert("d".into(), 7);
+
+        let ids = match_communities_to_previous(&comms, &old);
+        assert_eq!(ids[0], 0); // {a,b} keeps ID 0
+        // ID 7 is now orphaned but that's fine — it's just unused
+    }
+
+    // ── Neighbor voting for incremental path ─────────────────────────
+
+    #[test]
+    fn test_assign_communities_to_new_nodes_basic() {
+        let mut g = Graph::new();
+        // Existing nodes with community_id
+        let mut n0 = Node::new("n0", "A", NodeKind::Symbol);
+        n0.community_id = Some(0);
+        let mut n1 = Node::new("n1", "B", NodeKind::Symbol);
+        n1.community_id = Some(0);
+        let mut n2 = Node::new("n2", "C", NodeKind::Symbol);
+        n2.community_id = Some(1);
+        // New node — no community_id
+        let n3 = Node::new("n3", "D", NodeKind::Symbol);
+
+        g.add_node(n0);
+        g.add_node(n1);
+        g.add_node(n2);
+        g.add_node(n3);
+
+        // n3 connected to n0 (comm 0) and n1 (comm 0) and n2 (comm 1)
+        g.add_edge_unchecked(Edge::new("e1", "n3", "n0", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e2", "n3", "n1", EdgeKind::Calls));
+        g.add_edge_unchecked(Edge::new("e3", "n3", "n2", EdgeKind::Calls));
+
+        assign_communities_to_new_nodes(&mut g);
+
+        // n3 should join community 0 (2 votes vs 1)
+        assert_eq!(g.nodes.get("n3").unwrap().community_id, Some(0));
+    }
+
+    #[test]
+    fn test_assign_communities_no_neighbors_keeps_none() {
+        let mut g = Graph::new();
+        let mut n0 = Node::new("n0", "A", NodeKind::Symbol);
+        n0.community_id = Some(0);
+        let n1 = Node::new("n1", "B", NodeKind::Symbol); // new, no community
+
+        g.add_node(n0);
+        g.add_node(n1);
+        // No edges between n0 and n1
+
+        assign_communities_to_new_nodes(&mut g);
+
+        // n1 has no neighbors with community_id → stays None
+        assert_eq!(g.nodes.get("n1").unwrap().community_id, None);
+    }
+
+    #[test]
+    fn test_assign_communities_preserves_existing() {
+        let mut g = Graph::new();
+        let mut n0 = Node::new("n0", "A", NodeKind::Symbol);
+        n0.community_id = Some(5);
+        let n1 = Node::new("n1", "B", NodeKind::Symbol); // new
+
+        g.add_node(n0);
+        g.add_node(n1);
+        g.add_edge_unchecked(Edge::new("e1", "n0", "n1", EdgeKind::Calls));
+
+        assign_communities_to_new_nodes(&mut g);
+
+        // n0 keeps its community_id = 5
+        assert_eq!(g.nodes.get("n0").unwrap().community_id, Some(5));
+        // n1 inherits community 5 from n0
+        assert_eq!(g.nodes.get("n1").unwrap().community_id, Some(5));
     }
 }
