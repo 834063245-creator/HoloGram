@@ -731,8 +731,9 @@ pub fn detect_communities_and_hierarchy(
 /// overlap significantly with an old community inherit that old community's
 /// ID. Truly new communities get fresh IDs (continuing the counter).
 ///
-/// Algorithm: greedy matching by descending overlap count. Each old ID is
-/// claimed at most once, ensuring a 1:1 mapping.
+/// Algorithm: greedy matching by descending overlap count (ties broken by
+/// old ID, then new index — fully deterministic). Each old ID is claimed
+/// at most once, ensuring a 1:1 mapping.
 pub fn match_communities_to_previous(
     new_communities: &[Community],
     old_assignment: &HashMap<String, usize>,
@@ -753,8 +754,10 @@ pub fn match_communities_to_previous(
         }
     }
 
-    // Greedy matching: highest overlap first
-    pairs.sort_by(|a, b| b.0.cmp(&a.0));
+    // Greedy matching: highest overlap first. Ties broken deterministically
+    // by old ID then new index — equal-overlap merges always inherit the
+    // lowest old ID, so results don't depend on HashMap iteration order.
+    pairs.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)).then(a.1.cmp(&b.1)));
 
     let mut result = vec![usize::MAX; new_communities.len()];
     let mut used_old: HashSet<usize> = HashSet::new();
@@ -789,7 +792,10 @@ pub fn match_communities_to_previous(
 /// (community_id = None) inherit the most common community among their
 /// graph neighbors. Nodes with no community-bearing neighbors are left
 /// unassigned — they'll get a community on the next full analysis.
-pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) {
+///
+/// Returns the IDs of nodes that were assigned a community, so callers
+/// can persist the change (swap_index only replaces the in-memory index).
+pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
 
     let new_ids: HashSet<String> = graph.nodes.iter()
@@ -797,7 +803,7 @@ pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) {
         .map(|(id, _)| id.clone())
         .collect();
 
-    if new_ids.is_empty() { return; }
+    if new_ids.is_empty() { return Vec::new(); }
 
     // Single pass over edges — accumulate community votes per new node
     let mut votes: HashMap<String, HashMap<usize, usize>> = HashMap::new();
@@ -818,6 +824,7 @@ pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) {
         }
     }
 
+    let mut assigned = Vec::new();
     for (nid, v) in &votes {
         // Pick community with most votes; ties broken by lower ID (older = more stable)
         if let Some(&best_cid) = v.iter()
@@ -828,9 +835,11 @@ pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) {
         {
             if let Some(node) = graph.nodes.get_mut(nid) {
                 node.community_id = Some(best_cid);
+                assigned.push(nid.clone());
             }
         }
     }
+    assigned
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1334,5 +1343,63 @@ mod tests {
         assert_eq!(g.nodes.get("n0").unwrap().community_id, Some(5));
         // n1 inherits community 5 from n0
         assert_eq!(g.nodes.get("n1").unwrap().community_id, Some(5));
+    }
+
+    #[test]
+    fn test_match_merge_equal_overlap_deterministic() {
+        // Two old communities merge into one new community with EQUAL overlap
+        // counts — the lowest old ID must always win, regardless of HashMap
+        // iteration order.
+        let comms = vec![
+            vec!["x".to_string(), "y".to_string(), "z".to_string(), "w".to_string()],
+        ];
+        let mut old: HashMap<String, usize> = HashMap::new();
+        old.insert("x".into(), 0);
+        old.insert("y".into(), 0);
+        old.insert("z".into(), 1);
+        old.insert("w".into(), 1);
+
+        // Overlap is 2 with old ID 0 and 2 with old ID 1 → tie → lowest wins
+        let ids = match_communities_to_previous(&comms, &old);
+        assert_eq!(ids, vec![0]);
+    }
+
+    #[test]
+    fn test_match_split_competition_exclusive() {
+        // Old community 5 splits into two new communities — only the bigger
+        // remnant claims ID 5; the smaller one gets a fresh ID (1:1 mapping).
+        let comms = vec![
+            vec!["a".to_string(), "b".to_string()],                     // overlap 2 with 5
+            vec!["c".to_string(), "d".to_string(), "e".to_string()],    // overlap 3 with 5
+        ];
+        let mut old: HashMap<String, usize> = HashMap::new();
+        old.insert("a".into(), 5);
+        old.insert("b".into(), 5);
+        old.insert("c".into(), 5);
+        old.insert("d".into(), 5);
+        old.insert("e".into(), 5);
+
+        let ids = match_communities_to_previous(&comms, &old);
+        assert_eq!(ids[1], 5); // bigger remnant keeps the ID
+        assert_eq!(ids[0], 6); // smaller remnant gets fresh ID (max old + 1)
+    }
+
+    #[test]
+    fn test_assign_communities_returns_assigned_ids() {
+        let mut g = Graph::new();
+        let mut n0 = Node::new("n0", "A", NodeKind::Symbol);
+        n0.community_id = Some(2);
+        let n1 = Node::new("n1", "B", NodeKind::Symbol); // new, gets assigned
+        let n2 = Node::new("n2", "C", NodeKind::Symbol); // new, no neighbors
+
+        g.add_node(n0);
+        g.add_node(n1);
+        g.add_node(n2);
+        g.add_edge_unchecked(Edge::new("e1", "n0", "n1", EdgeKind::Calls));
+
+        let assigned = assign_communities_to_new_nodes(&mut g);
+
+        // Only n1 was assigned — callers persist exactly these nodes
+        assert_eq!(assigned, vec!["n1".to_string()]);
     }
 }

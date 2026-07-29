@@ -234,16 +234,27 @@ impl Engine {
             // The incremental updater preserves community_id for matched nodes.
             // New nodes (community_id = None) get assigned via neighbor majority vote,
             // avoiding full re-clustering that would destabilize existing IDs.
+            // Voted assignments are upserted to SQLite so they survive restarts —
+            // swap_index() only replaces the in-memory index.
             let synth_start = std::time::Instant::now();
             let mut graph = new_idx.to_graph();
-            crate::community::assign_communities_to_new_nodes(&mut graph);
+            let voted_ids = crate::community::assign_communities_to_new_nodes(&mut graph);
             compute_coupling(&mut graph);
+            if !voted_ids.is_empty() {
+                let voted_nodes: Vec<&crate::graph::Node> = voted_ids
+                    .iter()
+                    .filter_map(|id| graph.nodes.get(id))
+                    .collect();
+                if let Err(e) = store.db.batch_upsert_nodes(&voted_nodes) {
+                    warn!("[engine watcher] persist voted community_ids failed: {}", e);
+                }
+            }
             let final_idx =
                 MemoryIndex::from_existing_graph(graph.nodes, graph.edges);
             let synth_ms = synth_start.elapsed().as_millis();
             info!(
-                "[engine watcher] post-incremental synthesis (neighbor vote): {}ms",
-                synth_ms
+                "[engine watcher] post-incremental synthesis (neighbor vote): {} assigned, {}ms",
+                voted_ids.len(), synth_ms
             );
 
             store.swap_index(final_idx);
