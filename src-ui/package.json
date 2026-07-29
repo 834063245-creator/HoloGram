@@ -19,7 +19,7 @@
     "@fontsource-variable/fraunces": "^5.2.9",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/lxgw-wenkai": "^5.3.0",
-    "@fontsource/noto-serif-sc": "^5.2.9",
+    "@fontsource/noto-serif-sc": "^5.3.0",
     "@tanstack/react-virtual": "^3.14.8",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
