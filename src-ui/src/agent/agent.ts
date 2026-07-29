@@ -22,9 +22,9 @@ import {
   type CompactionEvent,
   type CompactionSessionStats,
   CompactionTracker,
-  estimateTokens,
   maybeTune,
 } from './compaction-model';
+import { countMessage, countMessages, countText, countTexts, countToolSchemas } from './token-counter';
 import { type ExecStateInstance, createExecState, execState } from './execution-state';
 import type { GoalManager, GoalRecord } from './goal-manager';
 import { HookRegistry, type PreflightHookRegistry } from './hooks';
@@ -1112,6 +1112,58 @@ ${resumeNote}
       // Inject new discoveries from other agents
       this._injectDiscoveries();
 
+      // ── Pre-flight context window validation ──
+      // Check BEFORE sending to the API — catches the gap between end-of-last-turn
+      // (where maybeCompact() triggers at 0.55) and the danger zone (0.88).
+      // Without this, massive tool results + injections can 400 on the next turn.
+      if (this.contextWindow > 0) {
+        const preFlight = this.tokenCountWithEstimation();
+        const preFlightRatio = preFlight / this.contextWindow;
+        if (preFlightRatio >= 0.88) {
+          if (this.compactStuck) {
+            log.warn('agent', 'pre-flight skipped: compact stuck', {
+              estimated: preFlight,
+              ratio: preFlightRatio.toFixed(2),
+            });
+            this._sink({
+              kind: EventKind.Notice,
+              level: 'warn',
+              text: `上下文使用率 ${(preFlightRatio * 100).toFixed(0)}%，但压缩已卡住。建议 /new。`,
+            });
+          } else if (this.compactRunning) {
+            log.info('agent', 'pre-flight skipped: compact already running', {
+              estimated: preFlight,
+              ratio: preFlightRatio.toFixed(2),
+            });
+          } else {
+            log.info('agent', 'pre-flight compaction triggered', {
+              estimated: preFlight,
+              ratio: preFlightRatio.toFixed(2),
+              contextWindow: this.contextWindow,
+            });
+            this._sink({
+              kind: EventKind.Notice,
+              level: 'warn',
+              text: `上下文使用率 ${(preFlightRatio * 100).toFixed(0)}%，发送前压缩…`,
+            });
+            try {
+              const outcome = await this.compactNow(signal);
+              if (outcome === 'stuck') {
+                this._sink({
+                  kind: EventKind.Notice,
+                  level: 'warn',
+                  text: '压缩无法减少上下文——消息太少。建议 /new。',
+                });
+              }
+            } catch {
+              // compactNow already emitted its own error — continue and let the
+              // API error handler (reactive compact in stream()) catch it
+              log.warn('agent', 'pre-flight compaction failed, falling through to API call');
+            }
+          }
+        }
+      }
+
       // ---- Stream (with streaming tool executor + hooks) ----
       this.compactionTracker.recordTurn();
       const executor = new StreamingToolExecutor(
@@ -1503,24 +1555,17 @@ ${resumeNote}
   private compactRunning = false;
   // ⚡ sessionGen migrated to ExecutionState.sessionVersion
 
-  /** Estimate token count from message character count.
-   *  ponytail: ~3.5 chars/token is conservative for CJK+code mix.
-   *  Used when API hasn't returned usage yet, so compaction can trigger
-   *  BEFORE sending the request — prevents 400 "prompt too long" errors. */
+  /** Accurately count tokens using cl100k_base tokenizer (gpt-tokenizer).
+   *  Replaces the old chars/2.5 heuristic which was off by 30-60%.
+   *  Cl100k_base matches GPT-4, DeepSeek, and most OpenAI-compatible models.
+   *  Anthropic's tokenizer differs slightly (< 8% error), safe for compaction. */
   private tokenCountWithEstimation(): number {
-    let totalChars = 0;
-    for (const m of this.session) {
-      if (typeof m.content === 'string') totalChars += m.content.length;
-      if (m.tool_calls) {
-        for (const tc of m.tool_calls) {
-          totalChars += (tc.name?.length || 0) + (tc.arguments?.length || 0);
-        }
-      }
-      if (m.reasoning_content) totalChars += m.reasoning_content.length;
-    }
-    // Transient reminders are also sent to the LLM this turn — count them
-    for (const r of this._transientReminders) totalChars += r.length;
-    return Math.ceil(totalChars / 2.5);
+    let total = countMessages(this.session);
+    // Count transient reminders — sent to LLM but not in session
+    total += countTexts(this._transientReminders);
+    // Count tool schemas — sent with every request
+    total += countToolSchemas(this.tools.schemas());
+    return total;
   }
 
   /** Diagnostic: breakdown token consumption by component.
@@ -1528,47 +1573,41 @@ ${resumeNote}
    *  Filter with: jq 'select(.module=="agent" and .message=="token breakdown") | .ctx' */
   private _diagTokenBreakdown(apiUsage: Usage | undefined): void {
     try {
-      const est = (chars: number) => Math.ceil(chars / 2.5);
       const T = this.tools.schemas();
-      const toolSchemaChars = T.reduce((s, t) => s + t.name.length + t.description.length + JSON.stringify(t.parameters).length, 0);
+      const schemaTokens = countToolSchemas(T);
 
-      let sysChars = 0, userChars = 0, reminderChars = 0, assistantChars = 0, toolChars = 0;
+      let sysTokens = 0, userTokens = 0, reminderTokens = 0, assistantTokens = 0, toolTokens = 0;
       let reminderCount = 0, inboxInjCount = 0;
-      let transientChars = 0, transientCount = 0;
+      let sysMsgCount = 0, userMsgCount = 0, assistantMsgCount = 0, toolMsgCount = 0;
 
       for (const m of this.session) {
-        const chars = (typeof m.content === 'string' ? m.content.length : 0) +
-          (m.tool_calls?.reduce((s, tc) => s + (tc.name?.length || 0) + (tc.arguments?.length || 0), 0) || 0);
-
-        if (m.role === 'system') { sysChars += chars; }
+        const tok = countMessage(m);
+        if (m.role === 'system') { sysTokens += tok; sysMsgCount++; }
         else if (m.role === 'user') {
           if (typeof m.content === 'string' && m.content.includes('<system-reminder>')) {
-            reminderChars += chars; reminderCount++;
+            reminderTokens += tok; reminderCount++;
             if (m.content.includes('📬')) inboxInjCount++;
-          } else { userChars += chars; }
+          } else { userTokens += tok; userMsgCount++; }
         }
-        else if (m.role === 'assistant') { assistantChars += chars; }
-        else if (m.role === 'tool') { toolChars += chars; }
+        else if (m.role === 'assistant') { assistantTokens += tok; assistantMsgCount++; }
+        else if (m.role === 'tool') { toolTokens += tok; toolMsgCount++; }
       }
 
-      // Transient reminders — sent to LLM but not in session
-      for (const r of this._transientReminders) {
-        transientChars += r.length;
-        transientCount++;
-      }
+      const transientTokens = countTexts(this._transientReminders);
+      const estimatedTotal = sysTokens + userTokens + reminderTokens + transientTokens + assistantTokens + toolTokens;
 
       const diag = {
         turn_session_msgs: this.session.length,
         // ── cost centres ──
-        system_prompt: { tokens: est(sysChars), msgs: this.session.filter(m => m.role === 'system').length },
-        user_real:    { tokens: est(userChars), msgs: this.session.filter(m => m.role === 'user' && typeof m.content === 'string' && !m.content.includes('<system-reminder>')).length },
-        reminders:    { tokens: est(reminderChars), msgs: reminderCount, inbox: inboxInjCount },
-        transient_reminders: { tokens: est(transientChars), msgs: transientCount },
-        assistant:    { tokens: est(assistantChars), msgs: this.session.filter(m => m.role === 'assistant').length },
-        tool_results: { tokens: est(toolChars), msgs: this.session.filter(m => m.role === 'tool').length },
-        tool_schemas: { tokens: est(toolSchemaChars), count: T.length },
+        system_prompt: { tokens: sysTokens, msgs: sysMsgCount },
+        user_real:    { tokens: userTokens, msgs: userMsgCount },
+        reminders:    { tokens: reminderTokens, msgs: reminderCount, inbox: inboxInjCount },
+        transient_reminders: { tokens: transientTokens, msgs: this._transientReminders.length },
+        assistant:    { tokens: assistantTokens, msgs: assistantMsgCount },
+        tool_results: { tokens: toolTokens, msgs: toolMsgCount },
+        tool_schemas: { tokens: schemaTokens, count: T.length },
         // ── totals ──
-        estimated_total: est(sysChars + userChars + reminderChars + transientChars + assistantChars + toolChars),
+        estimated_total: estimatedTotal,
         api_reported: apiUsage ? { prompt: apiUsage.prompt_tokens, completion: apiUsage.completion_tokens, total: apiUsage.total_tokens } : null,
         cache: apiUsage ? { hit: apiUsage.cache_hit_tokens, miss: apiUsage.cache_miss_tokens } : null,
       };
@@ -1669,7 +1708,7 @@ ${resumeNote}
           summaryOutputTokens: 0,
           tailMsgCount: Math.min(tailCount, msgs.length - head),
           preTokens: this.tokenCountWithEstimation(),
-          postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
+          postTokens: countMessages(truncated),
           outcome: 'stuck',
         });
         this._sink({
@@ -1711,12 +1750,12 @@ ${resumeNote}
         this.recordCompactionEvent({
           ts: Date.now(),
           regionMsgCount: region.length,
-          regionTokensEst: estimateTokens(region.reduce((s, m) => s + (m.content?.length || 0), 0)),
+          regionTokensEst: countMessages(region),
           summaryInputTokens: 0,
           summaryOutputTokens: 0,
           tailMsgCount: msgs.length - tailStart,
           preTokens: this.tokenCountWithEstimation(),
-          postTokens: estimateTokens(truncated.reduce((s, m) => s + (m.content?.length || 0), 0)),
+          postTokens: countMessages(truncated),
           outcome: 'truncated',
         });
         this._sink({
@@ -1746,18 +1785,17 @@ ${resumeNote}
       this.compactStuck = false;
 
       // ── Compaction model instrumentation ──
-      const regionChars = region.reduce((s, m) => s + (m.content?.length || 0), 0);
-      const preChars = msgs.reduce((s, m) => s + (m.content?.length || 0), 0);
-      const postChars = compacted.reduce((s, m) => s + (m.content?.length || 0), 0);
+      const preTokens = countMessages(msgs);
+      const postTokens = countMessages(compacted);
       this.recordCompactionEvent({
         ts: Date.now(),
         regionMsgCount: region.length,
-        regionTokensEst: estimateTokens(regionChars),
-        summaryInputTokens: estimateTokens(regionChars), // approximate
-        summaryOutputTokens: estimateTokens(summary.length),
+        regionTokensEst: countMessages(region),
+        summaryInputTokens: countMessages(region), // approximate
+        summaryOutputTokens: countText(summary),
         tailMsgCount: msgs.length - start,
-        preTokens: estimateTokens(preChars),
-        postTokens: estimateTokens(postChars),
+        preTokens,
+        postTokens,
         outcome: 'summary',
       });
       this._sink({
@@ -1877,17 +1915,16 @@ ${resumeNote}
         this.compactRunning = false;
 
         // ── Compaction model instrumentation ──
-        const regionChars = region.reduce((s, m) => s + (m.content?.length || 0), 0);
-        const postChars = compacted.reduce((s, m) => s + (m.content?.length || 0), 0);
+        const postTokens = countMessages(compacted);
         this.recordCompactionEvent({
           ts: Date.now(),
           regionMsgCount: region.length,
-          regionTokensEst: estimateTokens(regionChars),
-          summaryInputTokens: estimateTokens(regionChars),
-          summaryOutputTokens: estimateTokens(summary.length),
+          regionTokensEst: countMessages(region),
+          summaryInputTokens: countMessages(region),
+          summaryOutputTokens: countText(summary),
           tailMsgCount: msgs.length - start,
           preTokens: estimated,
-          postTokens: estimateTokens(postChars),
+          postTokens,
           outcome: 'summary',
         });
         this._sink({
