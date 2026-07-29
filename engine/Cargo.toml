@@ -47,7 +47,7 @@ tree-sitter-css = "0.25"
 tree-sitter-yaml = "0.7"
 tree-sitter-zig = "1.1"
 tree-sitter-elixir = "0.3"
-tree-sitter-erlang = "0.19"
+tree-sitter-erlang = "0.20"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
