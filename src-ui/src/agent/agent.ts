@@ -1594,7 +1594,7 @@ ${resumeNote}
       }
 
       const transientTokens = countTexts(this._transientReminders);
-      const estimatedTotal = sysTokens + userTokens + reminderTokens + transientTokens + assistantTokens + toolTokens;
+      const estimatedTotal = sysTokens + userTokens + reminderTokens + transientTokens + assistantTokens + toolTokens + schemaTokens;
 
       const diag = {
         turn_session_msgs: this.session.length,
@@ -1725,7 +1725,7 @@ ${resumeNote}
       const region = msgs.slice(head, start);
       // Accumulated compression: if a previous compaction left a summary,
       // include it so the LLM merges rather than re-summarizes from scratch.
-      const priorSummary = extractCompactedContext(msgs, head);
+      const priorSummary = extractCompactedContext(region);
       let summary: string | null = null;
       try {
         summary = await this.summarizeRegion(signal, region, priorSummary);
@@ -1874,7 +1874,7 @@ ${resumeNote}
     while (start < msgs.length && msgs[start].role === 'tool') start++;
     const region = msgs.slice(head, start);
     // Accumulated compression: merge previous summary if present
-    const priorSummary = extractCompactedContext(msgs, head);
+    const priorSummary = extractCompactedContext(region);
     const abortCtrl = new AbortController();
     this.summarizeRegion(abortCtrl.signal, region, priorSummary)
       .then((summary) => {
@@ -1964,7 +1964,7 @@ ${resumeNote}
       ? `\n以下是在本次压缩之前生成的会话背景简报。新消息可能覆盖或补充其中的内容——合并时以新消息为准，未变的旧事实直接保留：\n\n<previous-summary>\n${priorSummary}\n</previous-summary>`
       : '';
 
-    const summaryPrompt = `你是对话压缩器。把以下编码 Agent 的对话历史浓缩为一份简报。Agent 只会保留你的摘要（原始消息会被丢弃），因此必须能从摘要中恢复任务。${mergeInstruction}
+    const summaryPrompt = `你是对话压缩器。把以下编码 Agent 的对话历史浓缩为一份简报。Agent 只会保留你的摘要（原始消息会被丢弃），因此必须能从摘要中恢复任务。
 
 按这些标题写（没有内容的标题可以省略）：
 
@@ -1986,7 +1986,7 @@ ${resumeNote}
 ## 待办与下一步
 仍在进行中或未开始的工作，以及最具体的下一个行动。
 
-规则：简洁——用要点和片段而非散文。准确保留标识符、路径和数字。不编造任何不存在于消息中的内容。`;
+规则：简洁——用要点和片段而非散文。准确保留标识符、路径和数字。不编造任何不存在于消息中的内容。${mergeInstruction}`;
 
     const transcript = renderTranscript(msgs);
 
@@ -2465,23 +2465,24 @@ function finishReasonMessage(u?: Usage): string | undefined {
   }
 }
 
-/** Check if session messages[head] is a previous compaction summary.
+/** Scan the compaction region for a previous `<compacted-context>` summary.
  *  Returns its text content (without the XML wrapper) so the next compaction
  *  can merge it with new messages instead of re-summarizing from scratch. */
-function extractCompactedContext(msgs: Message[], head: number): string | null {
-  if (head >= msgs.length) return null;
-  const content = msgs[head]?.content;
-  if (typeof content !== 'string') return null;
+function extractCompactedContext(region: readonly Message[]): string | null {
   const startTag = '<compacted-context>';
   const endTag = '</compacted-context>';
-  const openIdx = content.indexOf(startTag);
-  if (openIdx === -1) return null;
-  const bodyStart = openIdx + startTag.length;
-  const bodyEnd = content.indexOf(endTag, bodyStart);
-  if (bodyEnd === -1) return null;
-  // Skip past the opening line break after the tag
-  const body = content.slice(bodyStart, bodyEnd).trimStart();
-  return body || null;
+  for (const m of region) {
+    const content = m.content;
+    if (typeof content !== 'string') continue;
+    const openIdx = content.indexOf(startTag);
+    if (openIdx === -1) continue;
+    const bodyStart = openIdx + startTag.length;
+    const bodyEnd = content.indexOf(endTag, bodyStart);
+    if (bodyEnd === -1) continue;
+    const body = content.slice(bodyStart, bodyEnd).trimStart();
+    if (body) return body;
+  }
+  return null;
 }
 
 function renderTranscript(msgs: Message[]): string {

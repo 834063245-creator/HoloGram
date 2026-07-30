@@ -73,16 +73,6 @@ const DEFAULT_C_OUT = 15.0; // $15/1M output
  *  0.25 extra turns — agent usually recovers quickly, not a full turn. */
 const LOSS_FACTOR_PER_EVENT = 0.25;
 
-// ── Token estimation ──
-
-import { encode } from 'gpt-tokenizer';
-
-/** Count tokens in a text string using cl100k_base tokenizer.
- *  Replaces the old chars/2.5 heuristic which was off by 30-60%. */
-export function estimateTokens(text: string): number {
-  return encode(text).length;
-}
-
 // ── Compaction cost model ──
 
 export interface CompactionParams {

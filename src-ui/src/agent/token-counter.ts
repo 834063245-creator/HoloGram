@@ -33,6 +33,9 @@ export function countMessage(m: Message): number {
   if (m.reasoning_content) {
     total += encode(m.reasoning_content).length;
   }
+  if (m.name) {
+    total += encode(m.name).length;
+  }
 
   return total;
 }
@@ -64,9 +67,7 @@ export function countToolSchemas(schemas: readonly ToolSchema[]): number {
     total += encode(s.name).length;
     total += encode(s.description).length;
     try {
-      const params = typeof s.parameters === 'string'
-        ? s.parameters
-        : JSON.stringify(s.parameters);
+      const params = typeof s.parameters === 'string' ? s.parameters : JSON.stringify(s.parameters);
       total += encode(params).length;
     } catch {
       // ignore un-stringifiable parameters

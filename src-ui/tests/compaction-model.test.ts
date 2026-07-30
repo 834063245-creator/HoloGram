@@ -9,7 +9,6 @@ import {
   breakevenTurns,
   CompactionTracker,
   estimateLoss,
-  estimateTokens,
   formatCompactionReport,
   netBenefit,
   optimalRecentKeep,
@@ -168,15 +167,6 @@ describe('optimalRecentKeep', () => {
     const r2 = optimalRecentKeep(100, 500, 2.0, 0.3, 15);
     // More expensive input → smaller optimal k
     expect(r2.k).toBeLessThanOrEqual(r1.k);
-  });
-});
-
-// ── estimateTokens ──
-
-describe('estimateTokens', () => {
-  it('roughly chars/2.5', () => {
-    expect(estimateTokens(1000)).toBe(400);
-    expect(estimateTokens(0)).toBe(0);
   });
 });
 
