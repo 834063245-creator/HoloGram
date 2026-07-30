@@ -673,6 +673,7 @@ html.no-bf .chat-history-backdrop {
   /* 不要加 scroll-behavior: smooth —— 虚拟列表的 scrollToIndex/锚定补偿
      走 behavior:'auto'，会被 CSS smooth 拦截成动画，导致流式滚动游动、
      会话切换飞屏、向上翻历史时位置漂移。 */
+}
 
 .chat-messages::-webkit-scrollbar {
   width: 5px;
