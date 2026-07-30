@@ -855,6 +855,32 @@ impl LspManager {
             timeout: LSP_TIMEOUT,
         };
 
+        // 快速死亡检测：如果进程在几百毫秒内就退出了（典型：版本不兼容），
+        // 立即报错而不是等 initialize 超时 30 秒。
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        if let Ok(Some(status)) = process.process.try_wait() {
+            let mut stderr_output = String::new();
+            if let Some(ref mut stderr) = process.stderr {
+                use std::io::Read;
+                let _ = stderr.read_to_string(&mut stderr_output);
+            }
+            let hint = if stderr_output.is_empty() {
+                format!(
+                    "exited with code {} immediately after spawn (no stderr) — \
+                     likely a version incompatibility between {} and its language runtime",
+                    status, cfg.command,
+                )
+            } else {
+                format!(
+                    "exited with code {} immediately after spawn: {}",
+                    status, stderr_output.trim(),
+                )
+            };
+            // 进程已死，清理
+            let _ = process.process.kill();
+            return Err(hint);
+        }
+
         process.initialize(root)?;
 
         Ok(process)
@@ -1082,6 +1108,14 @@ impl LspManager {
                 let error = errors.get(cfg.command).cloned();
                 // 始终检查 PATH——独立于 warm 状态
                 let installed = available || Self::find_on_path(cfg.command);
+                // 兜底：已安装但不可用且无错误记录 → warm 可能在进行中或静默失败
+                let error = if installed && !available && error.is_none()
+                    && *mgr.initialized.read().unwrap()
+                {
+                    Some("warm in progress or silent failure — retry if persists".to_string())
+                } else {
+                    error
+                };
                 json!({
                     "command": cfg.command,
                     "language_id": cfg.language_id,
