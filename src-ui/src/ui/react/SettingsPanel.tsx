@@ -141,15 +141,22 @@ const SettingsPanelApp: React.FC<{
     lspLoaded.current = true;
     setLspLoading(true);
 
+    let pollCount = useRef(0);
+    const MAX_POLLS = 15; // 30s max
+
     const fetchStatus = () => {
       invoke<string>('rpc', { method: 'hologram_call', params: { tool: 'engine_status', args: {} } })
         .then((raw) => {
           const parsed = JSON.parse(raw);
           if (parsed?.lsp?.servers) {
             setLspStatus(parsed.lsp);
-            // Stop polling once at least one server is running
-            const hasRunning = parsed.lsp.servers.some((s: any) => s.available);
-            if (hasRunning && lspPollTimer.current) {
+            // Stop when all installed servers have resolved (running or error),
+            // or we've polled enough times.
+            pollCount.current += 1;
+            const allResolved = parsed.lsp.servers.every(
+              (s: any) => s.available || s.error || !s.installed,
+            );
+            if ((allResolved || pollCount.current >= MAX_POLLS) && lspPollTimer.current) {
               clearInterval(lspPollTimer.current);
               lspPollTimer.current = null;
             }
@@ -160,7 +167,7 @@ const SettingsPanelApp: React.FC<{
     };
 
     fetchStatus();
-    // Poll every 2s until servers come up (max ~30s = 15 attempts)
+    // Poll every 2s until all installed servers report their final state.
     lspPollTimer.current = setInterval(fetchStatus, 2000);
     return () => {
       if (lspPollTimer.current) clearInterval(lspPollTimer.current);

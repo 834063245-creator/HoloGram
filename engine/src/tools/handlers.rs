@@ -1233,9 +1233,8 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
 }
 
 pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
-    // Always warm LSP pool — ensures servers are bound to the current
-    // project root even after workspace switch. Old processes are killed
-    // automatically when their Arc is replaced in the pool.
+    // Warm LSP pool only when uninitialized or project root changed.
+    // (Don't restart healthy servers on every engine_status poll.)
     {
         let proj = project_root();
         let root = if proj.as_os_str().is_empty() {
@@ -1244,9 +1243,13 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
             proj
         };
         let root_str = root.to_string_lossy().to_string();
-        std::thread::spawn(move || {
-            crate::lsp_manager::LspManager::warm(&root_str);
-        });
+        if !crate::lsp_manager::LspManager::is_initialized()
+            || crate::lsp_manager::LspManager::root_changed(&root_str)
+        {
+            std::thread::spawn(move || {
+                crate::lsp_manager::LspManager::warm(&root_str);
+            });
+        }
     }
     // LSP status is independent of engine state — always collect it
     let lsp = crate::lsp_manager::LspManager::lsp_status();

@@ -527,6 +527,14 @@ impl LspManager {
         *Self::global().initialized.read().unwrap()
     }
 
+    /// 检查项目根目录是否与上次 warm 时不同（工作区切换）。
+    pub fn root_changed(new_root: &str) -> bool {
+        match Self::global().project_root.read().unwrap().as_ref() {
+            Some(old) => old != new_root,
+            None => true,
+        }
+    }
+
     fn new() -> Self {
         Self {
             pool: RwLock::new(HashMap::new()),
@@ -548,11 +556,24 @@ impl LspManager {
 
         let root = project_root.to_string();
         for cfg in SERVER_CONFIGS {
-            let root = Self::resolve_workspace_root(&root, cfg.config_marker);
             let cmd = cfg.command;
+            // Skip servers already running in the pool — avoids killing
+            // healthy processes on repeated warm calls (e.g. engine_status poll).
+            {
+                let pool = mgr.pool.read().unwrap();
+                if let Some(arc) = pool.get(cmd) {
+                    if let Ok(guard) = arc.lock() {
+                        if guard.is_some() {
+                            tracing::debug!(cmd, "[lsp_manager] already running, skip warm");
+                            continue;
+                        }
+                    }
+                }
+            }
+            let ws_root = Self::resolve_workspace_root(&root, cfg.config_marker);
             let cfg: &'static LspServerConfig = cfg; // const slice → 'static
             std::thread::spawn(move || {
-                match Self::spawn_server(cfg, &root) {
+                match Self::spawn_server(cfg, &ws_root) {
                     Ok(process) => {
                         tracing::info!(cmd, "[lsp_manager] server started");
                         mgr.pool
