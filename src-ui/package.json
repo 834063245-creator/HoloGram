@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite",
     "dev:mock": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && cross-env NODE_OPTIONS=--max-old-space-size=4096 vite build",
     "format": "biome format --write .",
     "lint": "biome check --fix .",
     "check": "biome ci .",
@@ -50,6 +50,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@webgpu/types": "^0.1.70",
+    "cross-env": "^10.1.0",
     "jsdom": "^29.1.1",
     "tsx": "^4.22.4",
     "typescript": "^7.0.2",
