@@ -1,14 +1,13 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Streaming tool executor — execute tool calls as they arrive from the stream.
-// Instead of waiting for the entire stream to finish before executing tools,
-// this starts execution immediately when a tool_use block is complete.
+// 流式工具执行器 — 工具调用到达即执行，无需等待整个流结束。
+// 在 tool_use 块完成时立即开始执行。
 //
-// Hooks (GraphContextHook / PreflightHook) are run here — preflight before
-// execution, post-tool enrichment after — so they aren't bypassed by streaming.
+// 钩子（GraphContextHook / PreflightHook）在此运行 — 执行前预检，
+// 工具后富化 — 这样它们不会被流式执行绕过。
 //
-// CC ref: StreamingToolExecutor, query.ts:1366-1408
+// CC 参考：StreamingToolExecutor, query.ts:1366-1408
 
 import type { ToolCall } from '../provider/types';
 import { type AgentEvent, EventKind } from './agent-types';
@@ -29,18 +28,18 @@ interface PendingResult {
 }
 
 /**
- * StreamingToolExecutor — manages concurrent tool execution during stream.
+ * StreamingToolExecutor — 管理流期间的并发工具执行。
  *
- * Usage in the agent loop:
+ * 在 agent 循环中的用法：
  *   const executor = new StreamingToolExecutor(tools, emitEvent, hooks, preflightHooks);
  *   for await (const chunk of stream) {
  *     if chunk is ToolCall → executor.addTool(chunk.tool_call);
- *     // poll completed results each iteration
+ *     // 每次迭代轮询已完成的结果
  *     for (const result of executor.pollCompleted()) {
  *       results.push(result);
  *     }
  *   }
- *   // stream ended — collect remaining
+ *   // 流结束 — 收集剩余
  *   for await (const result of executor.awaitRemaining()) {
  *     results.push(result);
  *   }
@@ -53,11 +52,11 @@ export class StreamingToolExecutor {
   private pending = new Map<string, Promise<PendingResult>>();
   private completed: PendingResult[] = [];
   private toolIndex = 0;
-  /** Track dispatched tool IDs to prevent duplicate dispatch on stream retry. */
+  /** 追踪已分发的工具 ID，防止流式重试时重复分发。 */
   private dispatchedIds = new Set<string>();
 
   private agentId: string | null;
-  /** Abort signal — when set, awaitRemaining races each pending promise against it. */
+  /** AbortSignal — 设置后，awaitRemaining 将每个 pending promise 与其竞速。 */
   private signal: AbortSignal | null;
 
   constructor(
@@ -76,15 +75,15 @@ export class StreamingToolExecutor {
     this.signal = signal ?? null;
   }
 
-  /** Add a tool call from the stream. Execution starts immediately.
-   *  Skips tool IDs already dispatched (can happen on stream retry). */
+  /** 从流中添加工具调用。立即开始执行。
+   *  跳过已分发的工具 ID（流式重试时可能出现）。 */
   addTool(call: ToolCall): void {
     if (this.dispatchedIds.has(call.id)) return;
     this.dispatchedIds.add(call.id);
     const tool = this.tools.get(call.name);
     const idx = this.toolIndex++;
 
-    // Emit dispatch event
+    // 发出分发事件
     this.emit({
       kind: EventKind.ToolDispatch,
       tool: {
@@ -104,27 +103,25 @@ export class StreamingToolExecutor {
         truncated: false,
       };
       this.completed.push(result);
-      // Unknown tools never reach executeTool, so emit the ToolResult here —
-      // without it the sub-agent activity tracker keeps the hallucinated call
-      // as currentTool forever (false ⚠️ 疑似卡死 after 120s) and the UI tool
-      // part spins indefinitely.
+      // 未知工具不会到达 executeTool，所以在此发出 ToolResult —
+      // 否则子 agent 活动跟踪器会永远将该幻觉调用保持为
+      // currentTool（120s 后误报 ⚠️ 疑似卡死），UI 工具
+      // 部分无限旋转。
       this.emitResult(call, null, result);
       return;
     }
 
-    // Start execution immediately — don't wait for stream to end
+    // 立即开始执行 — 不等待流结束
     const promise = this.executeTool(call, tool, idx);
     this.pending.set(call.id, promise);
   }
 
-  /** Wait for all remaining tool executions to complete.
-   *  Also drains sync-completed results (unknown tool etc.) that were pushed
-   *  to this.completed during addTool (e.g. unknown tool name).
-   *  If an abort signal is set, races each pending promise against it so
-   *  that a never-resolving tool (e.g. stuck Tauri invoke) doesn't hang the
-   *  loop indefinitely. */
+  /** 等待所有剩余工具执行完成。
+   *  同时排出在 addTool 期间同步完成的结果（如未知工具名）。
+   *  如设置了中止信号，将每个 pending promise 与其竞速，
+   *  使永不解决的工具（如卡住的 Tauri invoke）不会无限阻塞循环。 */
   async awaitRemaining(): Promise<PendingResult[]> {
-    // If already aborted, discard everything immediately
+    // 如已中止，立即丢弃所有
     if (this.signal?.aborted) {
       this.discard();
       return [];
@@ -138,11 +135,11 @@ export class StreamingToolExecutor {
           : await promise;
         remaining.push(result);
       } catch (e: any) {
-        // Abort — discard remaining and stop collecting
+        // 中止 — 丢弃剩余并停止收集
         if (e?.name === 'AbortError' || this.signal?.aborted) {
           break;
         }
-        // Other errors shouldn't happen — executeTool catches all
+        // 其他错误不应发生 — executeTool 捕获所有
       }
     }
     this.pending.clear();
@@ -154,8 +151,8 @@ export class StreamingToolExecutor {
     return [...syncCompleted, ...remaining];
   }
 
-  /** Race a tool promise against the abort signal. Rejects with AbortError
-   *  if the signal fires before the promise settles. */
+  /** 将工具 promise 与中止信号竞速。信号在 promise 完成前触发时
+   *  以 AbortError 拒绝。 */
   private _raceWithAbort(promise: Promise<PendingResult>): Promise<PendingResult> {
     const sig = this.signal!;
     if (sig.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
@@ -172,7 +169,7 @@ export class StreamingToolExecutor {
     });
   }
 
-  /** Discard all pending executions (e.g., on abort). */
+  /** 丢弃所有待处理执行（如中止时）。 */
   discard(): void {
     this.pending.clear();
     this.completed = [];
@@ -183,7 +180,7 @@ export class StreamingToolExecutor {
     return this.pending.size > 0;
   }
 
-  /** Execute a single tool — with preflight + post-tool hooks applied. */
+  /** 执行单个工具 — 应用预检 + 工具后钩子。 */
   private async executeTool(call: ToolCall, tool: Tool, _idx: number): Promise<PendingResult> {
     let args: Record<string, unknown>;
     try {
@@ -199,17 +196,17 @@ export class StreamingToolExecutor {
       return result;
     }
 
-    // ── Preflight hook: warn before destructive writes ──
+    // ── 预检钩子：破坏性写入前警告 ──
     let preflightWarning: string | null = null;
     if (this.preflightHooks) {
       try {
         preflightWarning = this.preflightHooks.check(call.name, args);
       } catch (_e: any) {
-        // Silent degrade — don't block execution
+        // 静默降级 — 不阻止执行
       }
     }
 
-    // ── Architecture gate: HIGH risk → return blocked result, don't execute ──
+    // ── 架构门禁：HIGH 风险 → 返回阻止结果，不执行 ──
     if (preflightWarning?.includes('风险等级: HIGH')) {
       const forceGate = args._forceGate === true || args._forceGate === 'true';
       if (!forceGate) {
@@ -228,12 +225,12 @@ export class StreamingToolExecutor {
       }
     }
 
-    // ponytail: inject _callId for agent_spawn so sub-agent events can correlate
+    // ponytail: 注入 _callId 使子 agent 事件可关联
     if (call.name === 'agent_spawn') {
       args._callId = call.id;
     }
 
-    // Inject _agent_id for isolation — tells Rust backend which worktree to use
+    // 注入 _agent_id 用于隔离 — 告诉 Rust 后端使用哪个工作树
     if (this.agentId) {
       args._agent_id = this.agentId;
     }
@@ -255,21 +252,21 @@ export class StreamingToolExecutor {
         });
       });
 
-      // ── Post-tool hook: enrich result with graph context ──
+      // ── 工具后钩子：用图上下文富化结果 ──
       if (this.hooks) {
         try {
           output = await this.hooks.apply(call.name, args, output);
         } catch (_e: any) {
-          // Silent degrade — don't break the result
+          // 静默降级 — 不破坏结果
         }
       }
 
-      // Prepend preflight warning at top of result
+      // 在结果顶部前置预检警告
       if (preflightWarning) {
         output = preflightWarning + '\n\n' + '─'.repeat(40) + '\n\n' + output;
       }
 
-      // ── Truncate output to cap token consumption (50KB / 2000 lines) ──
+      // ── 截断输出以限制 token 消耗（50KB / 2000 行）──
       const trunc = truncateToolOutput(call.name, output);
 
       const result: PendingResult = {
@@ -281,7 +278,7 @@ export class StreamingToolExecutor {
       return result;
     } catch (e: any) {
       if (e?.name === 'AbortError' || e?.message?.includes('aborted')) {
-        throw e; // Don't catch abort — let caller handle
+        throw e; // 不捕获中止 — 交给调用方处理
       }
       const errMsg = e.message ? e.message.split('\n')[0] : String(e);
       const result: PendingResult = {

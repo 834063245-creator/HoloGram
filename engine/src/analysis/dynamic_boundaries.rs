@@ -1,35 +1,35 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Dynamic boundary detection — scans source code at flow breakpoints
-//! for dynamic dispatch patterns that static analysis cannot resolve.
+//! 动态边界检测 — 在流断点处扫描源码，
+//! 查找静态分析无法解析的动态分派模式。
 //!
-//! When explore_deps' BFS cannot find a complete path between named symbols,
-//! this module scans the breakpoint symbol's source for known patterns
-//! (computed calls, reflection, event dispatch, etc.) and lists candidate targets.
+//! 当 explore_deps 的 BFS 无法在命名符号之间找到完整路径时，
+//! 此模块扫描断点符号的源码，查找已知模式
+//!（计算调用、反射、事件分派等）并列出候选目标。
 
 use std::collections::HashSet;
 
-/// A detected dynamic boundary at a flow breakpoint.
+/// 流断点处检测到的动态边界。
 #[derive(Debug, Clone)]
 pub struct BoundaryMatch {
-    /// Pattern form identifier (e.g. "computed-call", "reflection")
+    /// 模式标识符（如 "computed-call"、"reflection"）
     pub form: String,
-    /// Human-readable label
+    /// 人类可读的标签
     pub label: String,
-    /// One line of source code at the dispatch site
+    /// 分派点处的一行源码
     pub snippet: String,
-    /// Absolute line number (1-based, within file)
+    /// 绝对行号（从 1 开始，文件内）
     pub line: usize,
-    /// Statically visible key/name, if extractable
+    /// 静态可见的键/名称（如可提取）
     pub key: Option<String>,
-    /// Whether the key is a type name
+    /// 该键是否为类型名
     pub key_is_type: bool,
-    /// Count of additional dispatch sites of the same form
+    /// 同一模式的额外分派点数量
     pub more_sites: usize,
 }
 
-/// Pattern definitions for each language.
+/// 每种语言的模式定义。
 struct FormDef {
     id: &'static str,
     label: &'static str,
@@ -38,48 +38,48 @@ struct FormDef {
 }
 
 const FORMS: &[FormDef] = &[
-    // computed-call: obj[key](...)
+    // computed-call：obj[key](...)
     FormDef {
         id: "computed-call", label: "computed member call",
         langs: &[], regex: r#"[\w$)\]]\s*\[([^\[\]\n]{1,80})\]\s*\("#,
     },
-    // reflection: .invoke / .getMethod / MethodByName / Class.forName
+    // reflection：.invoke / .getMethod / MethodByName / Class.forName
     FormDef {
         id: "reflection", label: "reflective dispatch",
         langs: &["java", "go", "csharp", "kt"],
         regex: r#"\.(?:invoke|get(?:Declared)?Method|GetMethod|MethodByName|Activator\.CreateInstance|Class\.forName)"#,
     },
-    // proxy-reflect: Proxy/Reflect in JS
+    // proxy-reflect：JS 中的 Proxy/Reflect
     FormDef {
         id: "proxy-reflect", label: "Proxy/Reflect",
         langs: &["javascript", "typescript", "tsx", "jsx"],
         regex: r#"\bnew\s+Proxy\s*\(|\bReflect\.(?:get|apply|construct)\s*\("#,
     },
-    // typed-bus: .Send/.Publish/.Dispatch/.Execute/.Emit with typed arg
+    // typed-bus：带类型参数的 .Send/.Publish/.Dispatch/.Execute/.Emit
     FormDef {
         id: "typed-bus", label: "typed message dispatch",
         langs: &[],
         regex: r#"\.(?:[Ss]end|[Pp]ublish|[Dd]ispatch|[Ee]xecute|[Ee]mit)(?:Async)?\s*\(\s*new\s+([A-Z]\w*)"#,
     },
-    // var-key-dispatch: .emit/.dispatch/.trigger/.fire/.publish/.broadcast with var key
+    // var-key-dispatch：带变量键的 .emit/.dispatch/.trigger/.fire/.publish/.broadcast
     FormDef {
         id: "var-key-dispatch", label: "string-keyed dispatch",
         langs: &[],
         regex: r#"\.(?:emit|dispatch|trigger|fire|publish|broadcast)\s*\(\s*[A-Za-z_$][\w$]*(?:\.[\w$]+){0,3}\s*[,)]"#,
     },
-    // getattr-call: Python getattr immediate call
+    // getattr-call：Python getattr 直接调用
     FormDef {
         id: "getattr-call", label: "getattr dispatch",
         langs: &["python"],
         regex: r#"getattr\s*\(\s*\w+\s*,\s*['\"][^'\"]+['\"]\s*\)\s*\("#,
     },
-    // getattr-assign: Python getattr assigned then called
+    // getattr-assign：Python getattr 赋值后调用
     FormDef {
         id: "getattr-assign", label: "getattr dispatch (assigned)",
         langs: &["python"],
         regex: r#"\w+\s*=\s*getattr\s*\(\s*\w+\s*,\s*['\"]([^'\"]+)['\"]"#,
     },
-    // dynamic-import: JS import() / Python importlib
+    // dynamic-import：JS import() / Python importlib
     FormDef {
         id: "dynamic-import", label: "dynamic import",
         langs: &[],
@@ -87,10 +87,10 @@ const FORMS: &[FormDef] = &[
     },
 ];
 
-/// Scan source code for dynamic dispatch patterns.
-/// `language` is the language identifier (lowercase, e.g. "python", "javascript").
-/// `file_start_line` is the absolute line number of the first line in `body` (1-based).
-/// Returns up to 3 boundary matches (deduped by form + key).
+/// 扫描源码中的动态分派模式。
+/// `language` 是语言标识符（小写，如 "python"、"javascript"）。
+/// `file_start_line` 是 `body` 中第一行的绝对行号（从 1 开始）。
+/// 返回最多 3 个边界匹配（按 form + key 去重）。
 pub fn scan_dynamic_boundaries(
     body: &str,
     language: &str,
@@ -98,11 +98,11 @@ pub fn scan_dynamic_boundaries(
 ) -> Vec<BoundaryMatch> {
     let lang_lower = language.to_lowercase();
     let mut results: Vec<BoundaryMatch> = Vec::new();
-    // Track (form, key) dedup — max 1 match per unique pair
+    // 跟踪 (form, key) 去重 — 每个唯一对最多 1 个匹配
     let mut seen: HashSet<(String, String)> = HashSet::new();
 
     for form_def in FORMS {
-        // Language gate: empty = ALL, else must contain this language
+        // 语言门控：空 = 全部，否则必须包含此语言
         if !form_def.langs.is_empty() && !form_def.langs.contains(&lang_lower.as_str()) {
             continue;
         }
@@ -115,19 +115,19 @@ pub fn scan_dynamic_boundaries(
         for (line_idx, line) in body.lines().enumerate() {
             if let Some(caps) = re.captures(line) {
                 sites_in_form += 1;
-                if sites_in_form > 10 { break; } // cap per-form scanning
+                if sites_in_form > 10 { break; } // 限制每种模式的扫描数量
 
                 let key = caps.get(1).map(|m| m.as_str().to_string());
 
                 if best_match.is_none() {
-                    // Prefer matches with extractable keys
+                    // 优先选择有可提取键的匹配
                     best_match = Some(BoundaryMatch {
                         form: form_def.id.to_string(),
                         label: form_def.label.to_string(),
                         snippet: line.trim().to_string(),
                         line: file_start_line + line_idx,
                         key_is_type: form_def.id == "typed-bus",
-                        more_sites: 0, // will fill later
+                        more_sites: 0, // 稍后填充
                         key,
                     });
                 }
@@ -147,8 +147,8 @@ pub fn scan_dynamic_boundaries(
     results
 }
 
-/// Given a key extracted from a boundary match, search the graph for candidate targets.
-/// Returns candidate node names (up to 10), sorted by name containment score.
+/// 根据从边界匹配中提取的键，在 Graph 中搜索候选目标。
+/// 返回候选节点名称（最多 10 个），按名称包含度评分排序。
 pub fn boundary_candidates(
     graph: &crate::graph::Graph,
     key: &str,
@@ -163,7 +163,7 @@ pub fn boundary_candidates(
     let candidates = query::search_nodes(graph, key);
     let mut scored: Vec<(usize, String)> = candidates.iter()
         .filter(|n| {
-            // If key is a type, prefer exact matches
+            // 如果键是类型，优先精确匹配
             if key_is_type {
                 n.name == key || n.name.ends_with(&format!(".{}", key)) || n.name.ends_with(&format!("::{}", key))
             } else {
@@ -171,7 +171,7 @@ pub fn boundary_candidates(
             }
         })
         .map(|n| {
-            // Score: prefer names containing the key as a word
+            // 评分：优先名称中包含该键作为单词的
             let score = if n.name == key { 100 }
                 else if n.name.contains(key) { 50 }
                 else { 10 };

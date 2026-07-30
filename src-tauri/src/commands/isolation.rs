@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Agent isolation — worktree-based sandbox (create, diff, merge, discard, status, prune).
+// Agent 隔离 — 基于 worktree 的沙箱（创建、差异、合并、丢弃、状态、清理）。
 
 use crate::agent_isolation::{AgentIsolation, IsolationKind};
 
@@ -95,7 +95,7 @@ pub(crate) fn agent_isolation_discard(
         .get_isolation(Some(&agent_id))
         .ok_or("没有活跃的隔离环境")?;
 
-    // discard may fail (corrupted/missing directory) — always clear registry
+    // discard 可能失败（目录损坏/缺失）— 始终清除注册表
     match isolation.discard() {
         Ok(()) => {
             ctx.clear_isolation(&agent_id);
@@ -158,15 +158,15 @@ pub(crate) fn agent_isolation_force_purge(
     let project_path = crate::utils::workspace_path(&state)?;
     let main_path = std::path::PathBuf::from(&project_path);
 
-    // Try normal discard first (may succeed)
+    // 先尝试正常丢弃（可能成功）
     if let Some(isolation) = ctx.get_isolation(Some(&agent_id)) {
         let _ = isolation.discard();
     }
 
-    // Always clear registry entry
+    // 始终清除注册表条目
     ctx.clear_isolation(&agent_id);
 
-    // Run git worktree prune to clean stale metadata
+    // 运行 git worktree prune 清理过期元数据
     let _ = crate::agent_isolation::git_cmd()
         .args(["-C", &main_path.to_string_lossy().replace('\\', "/"), "worktree", "prune"])
         .output();

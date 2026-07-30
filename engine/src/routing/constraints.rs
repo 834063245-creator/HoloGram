@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// Root of hologram.constraints.yaml.
+/// hologram.constraints.yaml 的根结构。
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ConstraintsFile {
     #[serde(default)]
@@ -95,7 +95,7 @@ struct DenylistBlock {
 fn default_true() -> bool { true }
 fn default_blast_radius() -> usize { 50 }
 
-/// Runtime constraint config — flattened from the YAML structure.
+/// 运行时约束配置 — 从 YAML 结构展平而来。
 pub struct ConstraintConfig {
     pub routing_l4: bool,
     pub routing_l3: bool,
@@ -115,8 +115,8 @@ impl ConstraintConfig {
         }
     }
 
-    /// Load from a hologram.constraints.yaml file.
-    /// Falls back to defaults() if the file is missing or malformed.
+    /// 从 hologram.constraints.yaml 文件加载。
+    /// 文件缺失或格式错误时回退到 defaults()。
     pub fn from_yaml_file(project_root: &Path) -> Self {
         let yaml_path = project_root.join("hologram.constraints.yaml");
         match std::fs::read_to_string(&yaml_path) {
@@ -144,8 +144,8 @@ impl ConstraintConfig {
     }
 
     fn from_parsed(f: &ConstraintsFile) -> Self {
-        // Merge modules and files from allowlist into a single patterns list.
-        // Both use substring matching in check_constraints.
+        // 将 allowlist 中的 modules 和 files 合并为统一的模式列表。
+        // 两者在 check_constraints 中均使用子串匹配。
         let mut allowlist_files: Vec<String> = f.constraints
             .allowlist
             .files
@@ -153,7 +153,7 @@ impl ConstraintConfig {
         allowlist_files.extend(f.constraints.allowlist.modules.iter().cloned());
 
         let mut denylist = f.constraints.denylist.keywords.clone();
-        // Always keep the built-in dangerous keywords
+        // 始终保留内置的危险关键词
         for kw in &["DROP ", "DELETE ", "rm -rf", "shutdown"] {
             if !denylist.iter().any(|d| d.contains(kw)) {
                 denylist.push(kw.to_string());
@@ -188,12 +188,12 @@ pub fn check_constraints(signals: &[Value], config: &ConstraintConfig) -> Value 
     let denylist: Vec<&str> = config.denylist_keywords.iter().map(|s| s.as_str()).collect();
     for s in signals {
         let level = s["level"].as_u64().unwrap_or(0) as u8;
-        // Description may be at s.signal.description (SignalGenerator) or s.desc (test flat format)
+        // description 可能位于 s.signal.description（SignalGenerator）或 s.desc（测试扁平格式）
         let desc = s.get("signal").and_then(|sig| sig.get("description")).and_then(|v| v.as_str())
             .or_else(|| s.get("desc").and_then(|v| v.as_str()))
             .unwrap_or("");
         let denied = !denylist.is_empty() && denylist.iter().any(|k| desc.contains(k));
-        // Affected nodes may be at s.signal.affected_nodes (SignalGenerator) or absent (flat format)
+        // affected_nodes 可能位于 s.signal.affected_nodes（SignalGenerator）或不存在（扁平格式）
         let files: Vec<&str> = s.get("signal")
             .and_then(|sig| sig.get("affected_nodes"))
             .and_then(|v| v.as_array())
@@ -231,8 +231,8 @@ mod tests {
         let v = json!({"routing": {"l4_silent": false}});
         let c = ConstraintConfig::from_json(&v);
         assert!(!c.routing_l4);
-        assert!(c.routing_l3); // unchanged
-        assert!(c.routing_l2); // unchanged
+        assert!(c.routing_l3); // 未改变
+        assert!(c.routing_l2); // 未改变
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_from_yaml_parses_real_config() {
-        // Simulate the real hologram.constraints.yaml structure
+        // 模拟真实的 hologram.constraints.yaml 结构
         let yaml = r#"
 constraints:
   routing:
@@ -329,7 +329,7 @@ constraints:
         assert_eq!(c.allowlist_files, vec!["docs/*.md", "tests/*.py"]);
         assert!(c.denylist_keywords.contains(&"password".to_string()));
         assert!(c.denylist_keywords.contains(&"secret".to_string()));
-        // Built-in dangerous keywords always appended
+        // 内置危险关键词始终追加
         assert!(c.denylist_keywords.contains(&"rm -rf".to_string()));
     }
 
@@ -338,12 +338,12 @@ constraints:
         let yaml = "constraints: {}";
         let f: ConstraintsFile = serde_yaml::from_str(yaml).unwrap();
         let c = ConstraintConfig::from_parsed(&f);
-        // Should have all defaults
+        // 应使用全部默认值
         assert!(c.routing_l4);
         assert!(c.routing_l3);
         assert!(c.routing_l2);
         assert_eq!(c.blast_radius_max, 50);
         assert!(c.allowlist_files.is_empty());
-        assert!(!c.denylist_keywords.is_empty()); // built-in keywords
+        assert!(!c.denylist_keywords.is_empty()); // 内置关键词
     }
 }

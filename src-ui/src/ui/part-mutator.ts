@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// part-mutator — single source of truth for AgentEvent → AssistantPart[] mutation.
-// Used by both main agent (chat-stream.ts) and sub-agent (subagent-sink.ts).
-// One function, one implementation — no more drifting duplicates.
+// part-mutator — AgentEvent → AssistantPart[] 变更的唯一真相源。
+// 主 agent（chat-stream.ts）和子 agent（subagent-sink.ts）共用。
+// 一个函数，一套实现 — 不再有漂移的重复代码。
 
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
@@ -11,12 +11,12 @@ import type { AssistantPart } from './message-model';
 import { findToolPart, lastTextPart } from './message-model';
 
 /**
- * Apply one AgentEvent to a parts array. Mutates in-place.
- * Returns true if the array was changed.
+ * 将一个 AgentEvent 应用到 parts 数组。原地变更。
+ * 数组有变化时返回 true。
  *
- * Handles: Reasoning, Text, Message, ToolDispatch, ToolProgress, ToolResult.
- * Does NOT handle: TurnStarted, Usage, Notice, SessionChanged — those have
- * display-specific side effects that callers manage separately.
+ * 处理：Reasoning、Text、Message、ToolDispatch、ToolProgress、ToolResult。
+ * 不处理：TurnStarted、Usage、Notice、SessionChanged — 这些有显示特定的
+ * 副作用，由调用方单独管理。
  */
 export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boolean {
   switch (ev.kind) {
@@ -54,8 +54,8 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
       if (ev.tool) {
         const existing = findToolPart(parts, ev.tool.id);
         if (existing) {
-          // Upsert: ToolCallStart + ToolCall both emit ToolDispatch for
-          // the same tool id — the second event carries the full args.
+          // Upsert：ToolCallStart + ToolCall 都发出同一 toolId 的
+          // ToolDispatch — 第二个事件携带完整参数。
           existing.status = ev.tool.partial ? 'pending' : 'running';
           if (ev.tool.args && ev.tool.args.length > existing.args.length) {
             existing.args = ev.tool.args;
@@ -82,8 +82,8 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
         if (tp) {
           tp.status = 'running';
           if (ev.tool.output) {
-            // ponytail: replace for write/edit tools (preview content grows as model streams),
-            // append for shell tools (stdout chunks accumulate)
+            // ponytail: 写入/编辑工具替换（预览内容随模型流式增长），
+            // shell 工具追加（stdout 块累积）
             const isWrite = tp.name === 'write_file' || tp.name === 'write_file_content' || tp.name === 'edit_file';
             tp.output = isWrite ? ev.tool.output : (tp.output || '') + ev.tool.output;
           }
@@ -97,9 +97,9 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
         const tr = findToolPart(parts, ev.tool.id);
         if (tr) {
           tr.status = ev.tool.err ? 'error' : 'done';
-          // ponytail: ToolResult carries the complete final output.
-          // REPLACE (not append) — ToolProgress already accumulated incremental
-          // chunks, and ToolResult sends the authoritative full result.
+          // ponytail: ToolResult 携带完整的最终输出。
+          // 替换（非追加）— ToolProgress 已累积增量块，
+          // ToolResult 发送权威的完整结果。
           if (!ev.tool.err) tr.output = ev.tool.output;
           if (ev.tool.err) {
             tr.err = ev.tool.err;

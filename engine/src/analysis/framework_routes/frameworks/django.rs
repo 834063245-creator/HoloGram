@@ -9,9 +9,9 @@ pub(crate) fn is_django_url_file(file: &str) -> bool {
     lower.ends_with(".py") && (lower.contains("urls") || lower.contains("urlpatterns"))
 }
 
-/// Detect Django `path()` / `re_path()` / `url()` calls.
-/// Pattern: `path('<route>', <view_ref>, ...)`
-/// View ref can be: `views.func`, `ModuleView.as_view()`, lambda
+/// 检测 Django `path()` / `re_path()` / `url()` 调用。
+/// 模式：`path('<route>', <view_ref>, ...)`
+/// 视图引用可以是：`views.func`、`ModuleView.as_view()`、lambda
 pub(crate) fn detect_django_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
@@ -41,7 +41,7 @@ pub(crate) fn detect_django_routes(file: &str, source: &str) -> Vec<DetectedRout
                     if let Some(args) = node.child_by_field_name("arguments") {
                         let line = node.start_position().row + 1;
                         if is_router_register {
-                            // D4: Expand DRF register() into 6 CRUD routes
+                            // D4：将 DRF register() 展开为 6 条 CRUD 路由
                             result.extend(expand_drf_register(args, source, file, line));
                         } else if let Some((method, url, handler)) = extract_django_route(args, source, func_name, false) {
                             result.push((method, url, handler, file.to_string(), line));
@@ -59,7 +59,7 @@ pub(crate) fn detect_django_routes(file: &str, source: &str) -> Vec<DetectedRout
     result
 }
 
-/// Extract (http_method, url_pattern, handler_ref) from Django path() arguments.
+/// 从 Django path() 参数中提取 (http_method, url_pattern, handler_ref)。
 fn extract_django_route(
     args: tree_sitter::Node,
     source: &str,
@@ -80,7 +80,7 @@ fn extract_django_route(
         let kind = child.kind();
         let text = child.utf8_text(source.as_bytes()).unwrap_or("");
 
-        // First string argument = route
+        // 第一个字符串参数 = 路由
         if kind == "string" && !found_route {
             route_str = strip_py_string_prefix(text).to_string();
             found_route = true;
@@ -99,12 +99,12 @@ fn extract_django_route(
                     break;
                 }
                 "call" => {
-                    // D3: Check if this is an include() call — emit as include route
-                    // so the prefix is preserved for potential cross-file resolution
+                    // D3：检查是否为 include() 调用——作为 include 路由发出
+                    // 以保留前缀，便于潜在的跨文件解析
                     if let Some(func) = child.child_by_field_name("function") {
                         let func_name = func.utf8_text(source.as_bytes()).unwrap_or("");
                         if func_name == "include" {
-                            // Extract the included module path (first string argument)
+                            // 提取被包含的模块路径（第一个字符串参数）
                             let include_target = child
                                 .child_by_field_name("arguments")
                                 .and_then(|include_args| {
@@ -119,14 +119,14 @@ fn extract_django_route(
                                 })
                                 .unwrap_or_default();
                             if !route_str.is_empty() {
-                                // Return with handler = "include:target" to preserve prefix info
+                                // 以 handler = "include:target" 返回，以保留前缀信息
                                 handler = format!("include({})", include_target);
                                 return Some((http_method.clone(), route_str.clone(), handler));
                             }
                             return None;
                         }
                     }
-                    // e.g. views.OrderView.as_view()
+                    // 例如 views.OrderView.as_view()
                     handler = text.to_string();
                     break;
                 }
@@ -135,24 +135,24 @@ fn extract_django_route(
                     break;
                 }
                 "keyword_argument" => {
-                    // name='x' — not the handler, skip
+                    // name='x' —— 不是处理函数，跳过
                     next_is_handler = false;
                     continue;
                 }
                 "(" | ")" | "," => continue,
                 _ => {
-                    // Unknown — might be a variable reference
+                    // 未知——可能是变量引用
                     handler = text.to_string();
                     break;
                 }
             }
         }
 
-        // Check for `name=` keyword (HTTP method hint)
+        // 检查 `name=` 关键字（HTTP 方法提示）
         if kind == "keyword_argument" {
             let kw_text = text.to_string();
             if kw_text.starts_with("name=") {
-                // Extract name, could hint at HTTP method
+                // 提取 name，可能暗示 HTTP 方法
             }
         }
     }
@@ -164,8 +164,8 @@ fn extract_django_route(
     }
 }
 
-/// D4: Expand a DRF `router.register(r'prefix', ViewSet)` call into 6 CRUD routes.
-/// Generates: list, create, retrieve, update, partial_update, destroy.
+/// D4：将 DRF `router.register(r'prefix', ViewSet)` 调用展开为 6 条 CRUD 路由。
+/// 生成：list、create、retrieve、update、partial_update、destroy。
 fn expand_drf_register(
     args: tree_sitter::Node,
     source: &str,
@@ -200,7 +200,7 @@ fn expand_drf_register(
         return Vec::new();
     }
 
-    // DRF DefaultRouter generates these standard routes:
+    // DRF DefaultRouter 生成以下标准路由：
     //   GET    /prefix/       → list
     //   POST   /prefix/       → create
     //   GET    /prefix/{id}/  → retrieve
@@ -220,18 +220,18 @@ fn expand_drf_register(
     ]
 }
 
-/// Strip Python string prefixes (r, b, f, rb, u) and surrounding quotes.
-/// `r'users'` → `users`, `"path"` → `path`, `b"data"` → `data`
+/// 去除 Python 字符串前缀（r、b、f、rb、u）及外围引号。
+/// `r'users'` → `users`，`"path"` → `path`，`b"data"` → `data`
 fn strip_py_string_prefix(s: &str) -> &str {
     let s = s.trim();
-    // Strip known Python string prefixes: r, b, f, u, rb, br, fr, rf (case-insensitive)
+    // 去除已知的 Python 字符串前缀：r、b、f、u、rb、br、fr、rf（不区分大小写）
     let mut rest = s;
     loop {
         let lower = rest.to_ascii_lowercase();
         if lower.starts_with("rb") || lower.starts_with("br") || lower.starts_with("fr") || lower.starts_with("rf") {
             rest = &rest[2..];
         } else if lower.starts_with('r') || lower.starts_with('b') || lower.starts_with('f') || lower.starts_with('u') {
-            // Only strip if followed by a quote
+            // 仅在后跟引号时才去除
             let after = rest[1..].trim_start();
             if after.starts_with('\'') || after.starts_with('"') {
                 rest = &rest[1..];

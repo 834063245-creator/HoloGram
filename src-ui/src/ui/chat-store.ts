@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Chat store — thin registry over 4 domain stores.
+// Chat store — 4 个领域 store 的轻量注册表。
 //
-//   msg   → messages-store.ts  — per-session messages, streaming flags
-//   sess  → session-store.ts   — sessions[], activeIdx, tokens, nextId
-//   panel → panel-store.ts     — panelMode, projectPath, toolSchemas, focus
-//   input → input-store.ts     — inputText, attachedFiles, inputHistory
+//   msg   → messages-store.ts  — 会话级消息、流式标志
+//   sess  → session-store.ts   — sessions[]、activeIdx、token、nextId
+//   panel → panel-store.ts     — panelMode、projectPath、toolSchemas、focus
+//   input → input-store.ts     — inputText、attachedFiles、inputHistory
 //
-// Each is a real Zustand store. getState() returns live internal state.
+// 每个都是真实的 Zustand store。getState() 返回实时内部状态。
 
 import {
   getAttachedFiles,
@@ -57,7 +57,7 @@ import {
 } from './session-store';
 import { disposeSessionStore } from './session-store';
 
-// ── ChatStore handles — direct sub-store access ──
+// ── ChatStore 句柄 — 直接访问子 store ──
 
 export interface ChatStoreHandles {
   msg: MessagesStoreApi;
@@ -66,7 +66,7 @@ export interface ChatStoreHandles {
   input: InputStoreApi;
 }
 
-/** Return the 4 domain stores for a given panel. */
+/** 返回指定面板的 4 个领域 store。 */
 export function getChatStore(storeId?: string): ChatStoreHandles {
   const id = storeId || '__default__';
   return {
@@ -77,17 +77,17 @@ export function getChatStore(storeId?: string): ChatStoreHandles {
   };
 }
 
-// ── Per-session messages store ──
-// ponytail: each session gets its own messages-store instance.
-// This is the ONLY source of truth for a session's messages — no
-// panel-level array, no sessionMessageModels cache, no manual sync.
+// ── 会话级消息 store ──
+// ponytail: 每个会话拥有独立的 messages-store 实例。
+// 这是会话消息的唯一数据源 — 无面板级数组，
+// 无 sessionMessageModels 缓存，无手动同步。
 
-/** Messages store for a specific session (not panel-level). */
+/** 特定会话的消息 store（非面板级）。 */
 export function msgStoreFor(storeId: string, sessionId: number): MessagesStoreApi {
   return getMessagesStore(`${storeId}:${sessionId}`);
 }
 
-/** Messages store for the active session. Returns null if no active session. */
+/** 活跃会话的消息 store。无活跃会话时返回 null。 */
 export function msgStoreForActive(storeId: string): MessagesStoreApi | null {
   const sess = getSessionStore(storeId).getState();
   const sid = sess.sessions[sess.activeIdx]?.id;
@@ -95,18 +95,18 @@ export function msgStoreForActive(storeId: string): MessagesStoreApi | null {
   return msgStoreFor(storeId, sid);
 }
 
-/** Bump version on a specific session's messages store. */
+/** 递增特定会话消息 store 的版本号。 */
 export function bumpSession(storeId: string, sessionId: number): void {
   getMessagesStore(`${storeId}:${sessionId}`).getState().bump();
 }
 
-// ── Panel-level streaming flags (read from default msg store, migrated to per-session later) ──
+// ── 面板级流式标志（从默认 msg store 读取，后续迁移到会话级）──
 
 export function bumpChat(storeId?: string): void {
   bumpMessages(storeId);
 }
 
-// Streaming
+// 流式
 export function getStreamingAssistantId(storeId?: string) {
   return _msg_streamingId(storeId);
 }
@@ -117,10 +117,10 @@ export function getExpandedReasoningSet(storeId?: string) {
   return _msg_expandedReasoning(storeId);
 }
 
-// ── Panel disposal — call when a panel is closed to prevent memory leaks ──
+// ── 面板销毁 — 面板关闭时调用以防止内存泄漏 ──
 
-/** Dispose all stores associated with a panel (messages, session, panel, input).
- *  Also removes per-session message stores (panelId:sessionId). */
+/** 销毁与面板关联的所有 store（messages、session、panel、input）。
+ *  同时移除会话级消息 store（panelId:sessionId）。 */
 export function disposePanelStores(storeId: string): void {
   disposeMessagesStores(storeId);
   disposeSessionStore(storeId);

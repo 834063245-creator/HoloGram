@@ -1,20 +1,19 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// ── 3D Force-Directed Layout ─────────────────────────────────────
-// Extracted from graph.ts: standalone layout functions with no
-// THREE.js or StarGraph dependency.
+// ── 3D 力导向布局 ────────────────────────────────────────────
+// 从 graph.ts 提取：无 THREE.js 或 StarGraph 依赖的独立布局函数。
 //
-// Layout pipeline:
+// 布局管线：
 //   fibonacciSphere → simulateForces → spiralGalaxies → repelCommunityCentroids
-//   Orchestrated by layout3D
+//   由 layout3D 统一编排
 //
-// Parameters LOCKED as of v4.2 — safety layers only, no tuning.
+// 参数自 v4.2 起锁定 — 仅有安全层，不再调参。
 // ═══════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════
 
-// ── Fibonacci Sphere ──────────────────────────────────────────────
+// ── 斐波那契球面 ──────────────────────────────────────────────
 
 export function fibonacciSphere(n: number, radius: number): Float32Array {
   const pos = new Float32Array(n * 3),
@@ -31,16 +30,16 @@ export function fibonacciSphere(n: number, radius: number): Float32Array {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Robustness-hardened: per-pair force caps, per-node velocity caps,
-// per-node displacement caps, every-iteration NaN sampling,
-// adaptive shell constraint, adaptive iteration budget.
-// Core aesthetic parameters (rep, att, damp, shellRadius formula)
-// are LOCKED — safety layers only, no tuning.
+// 健壮性加固：每对力上限、每节点速度上限、
+// 每节点位移上限、每次迭代 NaN 采样、
+// 自适应外壳约束、自适应迭代预算。
+// 核心美学参数（rep、att、damp、shellRadius 公式）
+// 已锁定 — 仅有安全层，不再调参。
 // ═══════════════════════════════════════════════════════════════════
 
-// ── Single-cluster force simulation ─────────────────────────────
-// rep/att/damp LOCKED at 600/0.018/0.72.
-// Returns positions centered around local origin.
+// ── 单簇力模拟 ─────────────────────────────────────────────
+// rep/att/damp 锁定为 600/0.018/0.72。
+// 返回围绕局部原点居中的位置。
 
 export async function simulateForces(
   m: number,
@@ -50,32 +49,32 @@ export async function simulateForces(
 ): Promise<Float32Array> {
   if (m === 0) return new Float32Array(0);
 
-  // ── Core parameters (LOCKED) ──
+  // ── 核心参数（已锁定）──
   const rep = 600,
     att = 0.018,
     damp = 0.72;
   const pos = fibonacciSphere(m, shellRadius);
   const vel = new Float32Array(m * 3);
 
-  // ── Adaptive shell constraint — tighter for large graphs ──
+  // ── 自适应外壳约束 — 大图更紧 ──
   const sp = 0.006 + (m > 2000 ? 0.008 : 0) + (m > 4000 ? 0.006 : 0);
 
-  // ── Adaptive iteration budget — fewer for large graphs (O(n²) cost) ──
+  // ── 自适应迭代预算 — 大图更少（O(n²) 开销）──
   const maxIter = Math.min(60, Math.max(15, 60 - Math.floor(m / 800)));
 
-  // ── Safety caps (derived from shell, not tuned per-graph) ──
+  // ── 安全上限（派生自外壳，非逐图调参）──
   const REP_CAP = shellRadius * 8;
   const ATT_CAP = shellRadius;
   const VEL_CAP = shellRadius * 0.25;
 
-  // Yield every N iterations to keep the UI responsive
+  // 每 N 次迭代让出控制权以保持 UI 响应
   const YIELD_EVERY = m > 4000 ? 2 : m > 1500 ? 3 : 5;
 
   for (let iter = 0; iter < maxIter; iter++) {
-    // Abort if a newer render supersedes this one
+    // 若更新的渲染取代了此次，则中止
     if (signal?.aborted) return pos;
 
-    // ── Repulsion (all pairs) ──
+    // ── 排斥（所有对）──
     for (let i = 0; i < m; i++) {
       for (let j = i + 1; j < m; j++) {
         const dx = pos[i * 3] - pos[j * 3],
@@ -91,7 +90,7 @@ export async function simulateForces(
         vel[j * 3 + 2] -= (dz / dist) * f;
       }
     }
-    // ── Attraction (edges only) ──
+    // ── 吸引（仅边）──
     for (const [s, t] of localPairs) {
       const dx = pos[s * 3] - pos[t * 3],
         dy = pos[s * 3 + 1] - pos[t * 3 + 1],
@@ -105,13 +104,13 @@ export async function simulateForces(
       vel[t * 3 + 1] += (dy / dist) * f;
       vel[t * 3 + 2] += (dz / dist) * f;
     }
-    // ── Origin attraction ──
+    // ── 原点吸引 ──
     for (let i = 0; i < m; i++) {
       vel[i * 3] -= pos[i * 3] * 0.0004;
       vel[i * 3 + 1] -= pos[i * 3 + 1] * 0.0004;
       vel[i * 3 + 2] -= pos[i * 3 + 2] * 0.0004;
     }
-    // ── Per-node velocity cap ──
+    // ── 每节点速度上限 ──
     for (let i = 0; i < m; i++) {
       const vx = vel[i * 3],
         vy = vel[i * 3 + 1],
@@ -124,12 +123,12 @@ export async function simulateForces(
         vel[i * 3 + 2] = vz * s;
       }
     }
-    // ── Damping + position update ──
+    // ── 阻尼 + 位置更新 ──
     for (let i = 0; i < m * 3; i++) {
       vel[i] *= damp;
       pos[i] += vel[i];
     }
-    // ── NaN detection ──
+    // ── NaN 检测 ──
     if (iter % 5 === 0) {
       let diverged = false;
       for (let i = 0; i < m * 3 && !diverged; i++) {
@@ -167,10 +166,10 @@ export async function simulateForces(
         }
       }
     }
-    // ── Shell constraint (soft, one-sided: only pull in far outliers) ──
-    // Original: pulled ALL nodes toward shellRadius → forced sphere shape.
-    // Fix: only constrain nodes that drift far beyond the shell (2× radius).
-    // This lets the graph find its natural shape while preventing runaway.
+    // ── 外壳约束（软约束，单向：仅拉回远端离群点）──
+    // 原始：将所有节点拉向 shellRadius → 强制球形。
+    // 修复：仅约束漂移过远的节点（2× 半径以外）。
+    // 让图找到自然形状的同时防止失控。
     const hardLimit = shellRadius * 2.5;
     for (let i = 0; i < m; i++) {
       const dx = pos[i * 3],
@@ -178,7 +177,7 @@ export async function simulateForces(
         dz = pos[i * 3 + 2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist > hardLimit) {
-        // Pull back proportionally — soft, not snapping to shellRadius
+        // 按比例拉回 — 软约束，不直接吸附到 shellRadius
         const pull = (dist - hardLimit) * sp * 3;
         pos[i * 3] -= (dx / dist) * pull;
         pos[i * 3 + 1] -= (dy / dist) * pull;
@@ -186,7 +185,7 @@ export async function simulateForces(
       }
     }
 
-    // Yield to event loop every N iterations to keep the UI responsive
+    // 每 N 次迭代让出事件循环以保持 UI 响应
     if (iter % YIELD_EVERY === YIELD_EVERY - 1 && iter < maxIter - 1) {
       await new Promise<void>((r) => setTimeout(r, 0));
     }
@@ -194,23 +193,22 @@ export async function simulateForces(
   return pos;
 }
 
-// ── Procedural spiral galaxy generation (GPU companion) ──────────
-// After GPU N-body sets community centroids, each community's nodes
-// are placed in a spiral-arm pattern — hubs at center, leaves in arms.
-// O(n) total, no iterations. Game-engine-style procedural generation.
+// ── 程序化螺旋星系生成（GPU 伴随）──────────────────
+// GPU N-body 确定社区质心后，每个社区的节点
+// 按旋臂模式放置 — 中心节点在核心，叶子节点在旋臂。
+// 总复杂度 O(n)，无需迭代。游戏引擎式程序化生成。
 
 /**
- * Local layout relaxation for incremental updates.
- * Runs a short force simulation on a subgraph (new nodes + their neighbors),
- * treating existing nodes as anchored (they don't move). Call after
- * `applyGraphDiff` appends new nodes.
+ * 增量更新的局部布局松弛。
+ * 对子图（新节点 + 其邻居）运行短力模拟，
+ * 将已有节点视为锚定（不移动）。在 `applyGraphDiff` 追加新节点后调用。
  *
- * @param allPos - All node positions (Float32Array, n*3). Modified in-place.
- * @param n - Total node count.
- * @param allPairs - All edge pairs (source, target indices).
- * @param affectedIndices - Indices of nodes that need layout (new + neighbors).
- * @param anchoredIndices - Indices of existing nodes to keep fixed.
- * @param signal - Optional abort signal.
+ * @param allPos - 所有节点位置（Float32Array，n*3）。原地修改。
+ * @param n - 总节点数。
+ * @param allPairs - 所有边对（源、目标索引）。
+ * @param affectedIndices - 需要布局的节点索引（新增 + 邻居）。
+ * @param anchoredIndices - 保持固定的已有节点索引。
+ * @param signal - 可选的中止信号。
  */
 export async function relaxNewNodes(
   allPos: Float32Array,
@@ -223,14 +221,14 @@ export async function relaxNewNodes(
   const affected = [...affectedIndices];
   if (affected.length === 0) return;
 
-  // Build local index map: global idx → local idx
+  // 构建局部索引映射：全局 idx → 局部 idx
   const gl2loc = new Map<number, number>();
   affected.forEach((gi, li) => gl2loc.set(gi, li));
 
   const m = affected.length;
-  const shellR = Math.cbrt(Math.max(n, 10)) * 5; // small shell for local relax
+  const shellR = Math.cbrt(Math.max(n, 10)) * 5; // 局部松弛用小外壳
   const vel = new Float32Array(m * 3);
-  // Copy current positions (we modify allPos in-place, but use local pos for sim)
+  // 拷贝当前位置（原地修改 allPos，但模拟时用局部 pos）
   const pos = new Float32Array(m * 3);
   for (let li = 0; li < m; li++) {
     const gi = affected[li];
@@ -239,7 +237,7 @@ export async function relaxNewNodes(
     pos[li * 3 + 2] = allPos[gi * 3 + 2];
   }
 
-  // Build local edge pairs (only edges where both nodes are in affected set)
+  // 构建局部边对（仅两端节点都在受影响集合中的边）
   const localPairs: [number, number][] = [];
   for (const [s, t] of allPairs) {
     const ls = gl2loc.get(s),
@@ -247,17 +245,17 @@ export async function relaxNewNodes(
     if (ls !== undefined && lt !== undefined) localPairs.push([ls, lt]);
   }
 
-  // Light parameters — short run, strong damping
+  // 轻量参数 — 短运行，强阻尼
   const rep = 300,
     att = 0.03,
     damp = 0.55;
-  const maxIter = 8; // few iterations — layout should be close already
+  const maxIter = 8; // 少量迭代 — 布局应已接近正确
   const REP_CAP = shellR * 6;
 
   for (let iter = 0; iter < maxIter; iter++) {
     if (signal?.aborted) return;
 
-    // Repulsion (all local pairs)
+    // 排斥（所有局部对）
     for (let i = 0; i < m; i++) {
       for (let j = i + 1; j < m; j++) {
         const dx = pos[i * 3] - pos[j * 3],
@@ -273,7 +271,7 @@ export async function relaxNewNodes(
         vel[j * 3 + 2] -= (dz / dist) * f;
       }
     }
-    // Attraction (local edges)
+    // 吸引（局部边）
     for (const [s, t] of localPairs) {
       const dx = pos[s * 3] - pos[t * 3],
         dy = pos[s * 3 + 1] - pos[t * 3 + 1],
@@ -287,12 +285,12 @@ export async function relaxNewNodes(
       vel[t * 3 + 1] += (dy / dist) * f;
       vel[t * 3 + 2] += (dz / dist) * f;
     }
-    // Damping + update
+    // 阻尼 + 更新
     for (let i = 0; i < m * 3; i++) {
       vel[i] *= damp;
       pos[i] += vel[i];
     }
-    // Zero vel for anchored nodes → no movement
+    // 锚定节点速度清零 → 不移动
     for (let li = 0; li < m; li++) {
       const gi = affected[li];
       if (anchoredIndices.has(gi)) {
@@ -301,7 +299,7 @@ export async function relaxNewNodes(
         vel[li * 3 + 2] = 0;
       }
     }
-    // NaN guard
+    // NaN 防护
     if (iter % 3 === 0) {
       for (let i = 0; i < m * 3; i++) {
         if (!Number.isFinite(pos[i])) {
@@ -315,7 +313,7 @@ export async function relaxNewNodes(
     }
   }
 
-  // Write back new positions for affected nodes
+  // 将新位置写回受影响节点
   for (let li = 0; li < m; li++) {
     const gi = affected[li];
     allPos[gi * 3] = pos[li * 3];
@@ -373,7 +371,7 @@ export function spiralGalaxies(
     const ctB = Math.cos(tiltB),
       stB = Math.sin(tiltB);
 
-    // Seeded PRNG — deterministic per community (mulberry32)
+    // 种子 PRNG — 每社区确定性（mulberry32）
     let _s = ((cc.id + 1) * 2654435761) >>> 0;
     const rng = () => {
       _s = (_s + 0x6d2b79f5) | 0;
@@ -421,7 +419,7 @@ export function spiralGalaxies(
   }
 }
 
-// ── Community centroid repel + cross-edge attract ─────────────────
+// ── 社区质心斥力 + 跨边吸引 ────────────────────
 
 export function repelCommunityCentroids(
   pos: Float32Array,
@@ -515,7 +513,7 @@ export function repelCommunityCentroids(
       }
     }
     if (!hadOverlap && iter > 5) break;
-    // Clamp per-iteration delta to prevent runaway displacement
+    // 限制每次迭代的位移以防止失控
     const MAX_DELTA = 50;
     for (let a = 0; a < C; a++) {
       const cc = comms[a],
@@ -540,9 +538,9 @@ export function repelCommunityCentroids(
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Two-tier community-aware layout (v4.2):
-//   Tier B — per-community force simulation (simulateForces, same params)
-//   Tier A — cluster center placement with collision relaxation
+// 两层社区感知布局（v4.2）：
+//   B 层 — 每社区力模拟（simulateForces，相同参数）
+//   A 层 — 簇中心放置 + 碰撞松弛
 // ═══════════════════════════════════════════════════════════════════
 
 export async function layout3D(
@@ -555,18 +553,18 @@ export async function layout3D(
 
   const groupIds = nodeComm ? [...new Set(nodeComm.filter((c) => c >= 0))] : [];
 
-  // Degenerate: ≤1 community → single-ball
+  // 退化情况：≤1 个社区 → 单球
   if (groupIds.length <= 1) {
     return simulateForces(n, edgePairs, Math.cbrt(n) * 14, signal);
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // Multi-community: two-tier layout (CPU path)
-  // GPU path is handled directly in _renderImpl
+  // 多社区：两层布局（CPU 路径）
+  // GPU 路径在 _renderImpl 中直接处理
   // ═══════════════════════════════════════════════════════════════
 
-  // ── Build groups ──
-  const groupMap = new Map<number, number[]>(); // commId → global indices
+  // ── 构建分组 ──
+  const groupMap = new Map<number, number[]>(); // commId → 全局索引
   for (const gid of groupIds) groupMap.set(gid, []);
   const UNASSIGNED = -2;
   groupMap.set(UNASSIGNED, []);
@@ -582,7 +580,7 @@ export async function layout3D(
   const C = groupEntries.length;
   if (C <= 1) return simulateForces(n, edgePairs, Math.cbrt(n) * 14, signal);
 
-  // ── Tier B: per-community simulation ──
+  // ── B 层：每社区模拟 ──
   const localPositions: Float32Array[] = new Array(C);
   const groupRadii: number[] = new Array(C);
   const globalToLocal: Int32Array[] = new Array(C);
@@ -650,7 +648,7 @@ export async function layout3D(
     return partial;
   }
 
-  // ── Tier A: place cluster centers in space (collision relaxation) ──
+  // ── A 层：在空间中放置簇中心（碰撞松弛）──
   const SEP = 1.4;
   const COARSE_ITER = 400;
   const ATT_A = 0.01;
@@ -662,9 +660,9 @@ export async function layout3D(
     if (sg >= 0 && tg >= 0 && sg !== tg) crossWeight[sg][tg]++;
   }
 
-  // R0 scales with √C, not linearly with totalDiameter.
-  // Old: R0 = totalDiameter / 4.49 → O(C) growth, 50 communities = 2200+ radius.
-  // New: surface area packing → O(√C) growth. 4πR²/C ≥ π·avgR²·SEP² → R ≥ avgR·√C·SEP/2.
+  // R0 与 √C 成正比，而非与总直径线性增长。
+  // 旧：R0 = totalDiameter / 4.49 → O(C) 增长，50 个社区 = 2200+ 半径。
+  // 新：表面积 packing → O(√C) 增长。4πR²/C ≥ π·avgR²·SEP² → R ≥ avgR·√C·SEP/2。
   const avgR = groupRadii.reduce((s, r) => s + r, 0) / C;
   const R0 = Math.max(avgR * Math.sqrt(C) * SEP * 1.2, 10);
 
@@ -749,7 +747,7 @@ export async function layout3D(
     }
   }
 
-  // ── Synthesize final positions ──
+  // ── 合成最终位置 ──
   const finalPos = new Float32Array(n * 3);
   for (let g = 0; g < C; g++) {
     const members = groupEntries[g][1];

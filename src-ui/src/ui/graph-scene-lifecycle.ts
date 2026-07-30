@@ -141,16 +141,16 @@ export interface LifecycleHost {
 // ═══════════════════════════════════════════════════════════════
 
 export class GraphSceneLifecycle {
-  // Incremental-update abort: cancel in-flight layout when new data arrives
+  // 增量更新中止：新数据到达时取消进行中的布局
   private _layoutAbort: AbortController | null = null;
 
-  // Diagnostics
+  // 诊断
   private _diagMsg = '';
   private _revealCancelled = false;
-  private _revealGeneration = 0; // ponytail: increment on each new reveal; old rAF callbacks discard themselves
+  private _revealGeneration = 0; // ponytail: 每次新揭示递增；旧 rAF 回调自行退出
   private _revealRevealed = false;
 
-  // Animation loop state
+  // 动画循环状态
   private _lastFrameTime = 0;
   private _idleCounter = 0;
   private _lastCamPos = new THREE.Vector3();
@@ -158,17 +158,16 @@ export class GraphSceneLifecycle {
 
   constructor(private host: LifecycleHost) {}
 
-  // ── Render ───────────────────────────────────────────────
+  // ── 渲染 ───────────────────────────────────────────────
 
   async renderImpl(graph: GraphJSON): Promise<void> {
-    // Cancel any in-flight layout from a previous render
+    // 取消之前渲染的进行中布局
     if (this._layoutAbort) {
       this._layoutAbort.abort();
     }
     this._layoutAbort = new AbortController();
-    // Block animation loop during scene rebuild — prevents access to
-    // disposed GPU resources which causes ghost artifacts and cold-start
-    // blank screens on slower machines.
+    // 场景重建期间阻止动画循环 — 防止访问已释放的 GPU 资源，
+    // 避免鬼影和慢机器上的冷启动黑屏。
     this.host._renderInProgress = true;
     this.clearGraph();
     const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes);
@@ -185,11 +184,11 @@ export class GraphSceneLifecycle {
     const eData: EdgeData[] = [];
     const deg = new Array<number>(nodes.length).fill(0);
     for (let i = 0; i < nodes.length; i++) nodeIdx.set(nodes[i].id, i);
-    // Extract file path from node location (e.g. "src/foo.py:10" → "src/foo.py")
+    // 从节点位置提取文件路径（如 "src/foo.py:10" → "src/foo.py"）
     const nodeFile = new Map<number, string>();
     for (let i = 0; i < nodes.length; i++) {
       const loc = nodes[i].location || '';
-      // Strip line number suffix (e.g. ":10")
+      // 去除行号后缀（如 ":10"）
       const filePath = loc.replace(/:\d+$/, '');
       nodeFile.set(i, filePath);
     }
@@ -212,7 +211,7 @@ export class GraphSceneLifecycle {
         });
       }
     }
-    // Debug: count cross-file edges
+    // 调试：统计跨文件边数
     const crossFileCount = eData.filter((e) => e.crossFile).length;
     console.log(`[DEBUG] Total edges: ${eData.length}, cross-file edges: ${crossFileCount}`);
     this.host.deg = deg;
@@ -229,13 +228,13 @@ export class GraphSceneLifecycle {
       this.host.edgeIndexOf[t].push(ei);
     }
 
-    // ── Parse communities & build node→community index ──────
-    // Prefer hierarchical (multi-level) over flat communities
+    // ── 解析社区 & 构建 node→community 索引 ──────
+    // 优先使用层级（多级）而非扁平社区
     this.host.communities = ((graph as any).hierarchical_communities ||
       (graph as any).communities ||
       []) as CommunityData[];
     this.host.nodeCommMap.clear();
-    // Debug: log community data
+    // 调试：记录社区数据
     const level0Comms = this.host.communities.filter((c) => !c.level || c.level === 0);
     const level1Comms = this.host.communities.filter((c) => c.level === 1);
     console.log(
@@ -259,10 +258,10 @@ export class GraphSceneLifecycle {
         if (idx !== undefined) this.host.nodeCommMap.set(idx, comm.id);
       }
     }
-    // Galaxy fold mode always uses Level 0 for top-level navigation
+    // 星系折叠模式始终使用 Level 0 进行顶层导航
     const level0Communities = level0Comms;
-    // Pre-compute galaxy members (centroids filled after layout)
-    // Only keep communities above minimum size — single-node communities are noise
+    // 预计算星系成员（质心在布局后填充）
+    // 仅保留高于最小大小的社区 — 单节点社区是噪声
     this.host._fold.galaxyMeta = [];
     let _skippedSingletons = 0;
     for (const comm of level0Communities) {
@@ -283,7 +282,7 @@ export class GraphSceneLifecycle {
         _skippedSingletons += members.length;
       }
     }
-    // Sort galaxies by size descending so largest render first (OCD-friendly)
+    // 按大小降序排列星系，最大的先渲染
     this.host._fold.galaxyMeta.sort((a, b) => b.memberIndices.length - a.memberIndices.length);
 
     this.host.l34Count = new Array(nodes.length).fill(0);
@@ -294,13 +293,13 @@ export class GraphSceneLifecycle {
       }
     }
 
-    // ── Force-directed layout: GPU compute (WebGPU) → CPU fallback ──
+    // ── 力导向布局：GPU 计算（WebGPU）→ CPU 回退 ──
     const shellRadius = Math.cbrt(nodes.length) * 14;
     const sp = 0.006 + (nodes.length > 2000 ? 0.008 : 0) + (nodes.length > 4000 ? 0.006 : 0);
     const maxIter = Math.min(60, Math.max(15, 60 - Math.floor(nodes.length / 800)));
     let layoutSource = 'CPU';
 
-    // Build numeric community index array for layout (0..C-1, -1 = unassigned)
+    // 构建布局用的数值社区索引数组（0..C-1，-1 = 未分配）
     const commStrIds = [...new Set(this.host.nodeCommMap.values())];
     const commStrToIdx = new Map<string, number>();
     commStrIds.forEach((sid, i) => commStrToIdx.set(sid, i));
@@ -309,7 +308,7 @@ export class GraphSceneLifecycle {
       nodeCommArr[nodeIdx] = commStrToIdx.get(commStr) ?? -1;
     }
 
-    // Fallback: if Louvain gave us ≤1 community, group by top-level directory
+    // 回退：如 Louvain 仅给出 ≤1 个社区，按顶级目录分组
     if (commStrIds.length <= 1) {
       console.warn(
         `[StarGraph] Louvain only found ${commStrIds.length} communities — falling back to directory-based grouping`,
@@ -317,13 +316,13 @@ export class GraphSceneLifecycle {
       const dirGroups = new Map<string, number[]>();
       for (let i = 0; i < nodes.length; i++) {
         const loc = nodes[i].location || '';
-        // Extract top-level dir: "src/foo/bar.py" → "src", "engine/src/main.rs" → "engine"
+        // 提取顶级目录："src/foo/bar.py" → "src", "engine/src/main.rs" → "engine"
         const topDir = loc.replace(/^[/\\]+/, '').split(/[/\\]/)[0] || '(root)';
         if (!dirGroups.has(topDir)) dirGroups.set(topDir, []);
         dirGroups.get(topDir)?.push(i);
       }
       console.warn(`[StarGraph] Directory-based groups: ${dirGroups.size} groups`, [...dirGroups.keys()]);
-      // Only use if we get more groups than Louvain
+      // 仅在比 Louvain 得到更多组时使用
       if (dirGroups.size > 1) {
         let nextId = 0;
         for (const [_dir, members] of dirGroups) {
@@ -344,15 +343,14 @@ export class GraphSceneLifecycle {
 
     let rawPos: Float32Array;
     const effGroups = new Set(nodeCommArr.filter((c) => c >= 0));
-    // Ensure GPU init has settled before choosing layout path — eliminates
-    // the race where first render uses CPU (init not yet complete) and
-    // subsequent renders use GPU, producing visually inconsistent layouts.
+    // 确保 GPU 初始化完成后再选择布局路径 — 消除首次渲染用 CPU（初始化
+    // 未完成）而后续渲染用 GPU 的竞争，避免视觉上不一致的布局。
     await gpuLayout.init();
-    // GPU path: N-body for macro structure, spiral for micro
+    // GPU 路径：N-body 计算宏观结构，螺旋生成微观结构
     if (gpuLayout.ready) {
-      // ── GPU N-body: macro structure from edge forces, spiral for micro ──
-      // Filter cross-community edges — they cause filament structures.
-      // Community placement is handled by repelCommunityCentroids.
+      // ── GPU N-body：边力产生宏观结构，螺旋产生微观结构 ──
+      // 过滤跨社区边 — 它们产生丝状结构。
+      // 社区放置由 repelCommunityCentroids 处理。
       const intraPairs = effGroups.size > 1
         ? pairs.filter(([s, t]) => nodeCommArr[s] === nodeCommArr[t])
         : pairs;
@@ -393,7 +391,7 @@ export class GraphSceneLifecycle {
     if (effGroups.size > 1) {
       repelCommunityCentroids(rawPos, nodes.length, nodeCommArr, shellRadius, pairs);
     }
-    // ── Safety: replace NaN, safe centroid + camera ──
+    // ── 安全：替换 NaN，安全质心 + 相机 ──
     let fixed = 0;
     for (let i = 0; i < rawPos.length; i++) {
       if (!Number.isFinite(rawPos[i])) {
@@ -402,7 +400,7 @@ export class GraphSceneLifecycle {
       }
     }
     if (fixed > 0) console.warn(`[StarGraph] Fixed ${fixed} NaN position components`);
-    // ── Bounding-box centering (immune to cluster-size bias) ──
+    // ── 包围盒居中（不受簇大小偏差影响）──
     let minX = Infinity,
       minY = Infinity,
       minZ = Infinity;
@@ -432,7 +430,7 @@ export class GraphSceneLifecycle {
     }
     this.host.nodePositions = rawPos;
 
-    // ── Radius = p95 distance from bounding-box center ──
+    // ── 半径 = 距包围盒中心的 p95 距离 ──
     const dists: number[] = [];
     for (let i = 0; i < nodes.length; i++) {
       const r2 = rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2;
@@ -441,9 +439,9 @@ export class GraphSceneLifecycle {
     dists.sort((a, b) => a - b);
     const radius = dists[Math.floor(dists.length * 0.95)] || 50;
     const absMax = dists[dists.length - 1] || 50;
-    this.host._graphRadius = radius; // graph spatial scale — used for camera zoom range only
+    this.host._graphRadius = radius; // 图空间尺度 — 仅用于相机缩放范围
 
-    // FOV-based camera distance — fills frame regardless of project size
+    // 基于 FOV 的相机距离 — 无论项目大小都填满画面
     const fovRad = (this.host.camera.fov * Math.PI) / 180;
     const aspect = this.host.container.clientWidth / Math.max(1, this.host.container.clientHeight);
     const camDist = ((radius / Math.tan(fovRad / 2)) * 0.6) / Math.min(1, aspect);
@@ -452,14 +450,14 @@ export class GraphSceneLifecycle {
     const isoCount = deg.filter((d) => d === 0).length;
     this._diagMsg = `${layoutSource} shellR≈${shellR | 0} radius=${radius | 0} absMax=${absMax | 0} cam=${camDist | 0} iso=${isoCount}/${nodes.length} NaNfix=${fixed}`;
 
-    // ── Camera zoom range — wide open, no LOD clamping ──
+    // ── 相机缩放范围 — 全开，无 LOD 裁剪 ──
     this.host.controls.minDistance = Math.max(0.5, radius * 0.001);
     this.host.controls.maxDistance = Math.max(this.host.controls.maxDistance, camDist * 6);
-    // Clip planes: match the actual zoom range so nothing gets hardware-culled
+    // 裁剪面：匹配实际缩放范围，不被硬件裁剪
     this.host.camera.near = Math.max(0.05, this.host.controls.minDistance * 0.5);
     this.host.camera.far = this.host.controls.maxDistance * 2;
 
-    // Flatter camera angle — less top-down, more natural
+    // 更平的相机角度 — 减少俯视，更自然
     const dir = new THREE.Vector3(0.3, 0.25, 1).normalize();
     this.host.camera.position.set(dir.x * camDist, dir.y * camDist, dir.z * camDist);
     this.host.controls.target.set(0, 0, 0);
@@ -469,9 +467,9 @@ export class GraphSceneLifecycle {
     this.host.camera.updateProjectionMatrix();
     this.host.controls.update();
 
-    // (standard mode: no bloom — bloom is full-mode only)
+    // （标准模式：无 bloom — bloom 仅全模式）
 
-    // ── Create batched GPU objects (1 InstancedMesh + 2 Points = 3 draw calls) ──
+    // ── 创建批量 GPU 对象（1 InstancedMesh + 2 Points = 3 draw calls）──
     this.host._nodeCount = nodes.length;
     this.host._nodeCapacity = nodes.length;
     this.host._deadIndices.clear();
@@ -486,19 +484,19 @@ export class GraphSceneLifecycle {
     );
     this.host.nodeCoresInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.host.nodeCoresInstanced.count = 0;
-    // ponytail: 10K+ instances spread across large volume → bounding sphere covers
-    // the entire graph; frustum culling at the object level is harmful (entire mesh
-    // disappears when camera zooms into a region far from the bounding sphere center).
+    // ponytail: 10K+ 实例分散在大体积中 → 包围球覆盖整个图；
+    // 对象级视锥裁剪有害（相机缩放到远离包围球中心的区域时
+    // 整个 mesh 会消失）。
     this.host.nodeCoresInstanced.frustumCulled = false;
     this.host.nodeGroup.add(this.host.nodeCoresInstanced);
 
-    // ── Build scene geometry ──
+    // ── 构建场景几何 ──
     this.host._edges.buildEdges(rawPos, eData);
     this.host._nodes.buildNodes(nodes, rawPos, deg);
     this.host._labels.buildLabels(nodes, deg);
     this.host.positionGrid(rawPos);
 
-    // Edge particle flow — full mode dense, standard mode subtle, minimal none
+    // 边粒子流 — 全模式密集，标准模式稀疏，最小模式无
     if (true) {
       this.host.initEdgeParticles(rawPos, eData);
     }
@@ -506,10 +504,10 @@ export class GraphSceneLifecycle {
       this.host.initTwinkleData(nodes.length);
     }
 
-    // ── Progressive reveal: nodes materialize in batches from center outward ──
+    // ── 渐进揭示：节点从中心向外分批物化 ──
     this._startProgressiveReveal(nodes.length);
 
-    // ── Compute galaxy centroids + radii from layout ──────────
+    // ── 从布局计算星系质心 + 半径 ──────────
     for (const gm of this.host._fold.galaxyMeta) {
       let sx = 0,
         sy = 0,
@@ -523,7 +521,7 @@ export class GraphSceneLifecycle {
         cy = sy / gm.memberIndices.length,
         cz = sz / gm.memberIndices.length;
       gm.centroid.set(cx, cy, cz);
-      // p90 radius
+      // p90 半径
       const dists: number[] = [];
       for (const mi of gm.memberIndices) {
         const dx = rawPos[mi * 3] - cx,
@@ -536,44 +534,44 @@ export class GraphSceneLifecycle {
     }
     this.host._fold._buildCommunityRings();
 
-    // ── Apply fold overlay if active ─────────────────────────
+    // ── 如折叠覆盖激活则应用 ─────────────────────────
     if (this.host._fold.foldMode) this.host._fold.applyFoldOverlay();
 
     this.host.updateStatus(nodes.length, edges.length, graph.meta);
     if (this.host.legendEl) this.host.legendEl.style.display = '';
-    // Append layout diagnostics so user can report them (release build has no DevTools)
+    // 附加布局诊断供用户报告（release 构建无 DevTools）
     if (this._diagMsg) {
       const cur = useShellStore.getState().statusText;
       useShellStore.getState().setStatusText(`${cur} | ${this._diagMsg}`);
     }
-    // Fix: container may have been display:none during constructor onResize().
-    // Defer resize one frame to ensure CSS layout has settled.
+    // 修复：constructor 中 onResize() 执行时容器可能是 display:none。
+    // 延迟一帧 resize 确保 CSS 布局已稳定。
     requestAnimationFrame(() => this.handleResize());
-    // ponytail: _renderInProgress stays TRUE until progressive reveal completes.
-    // Animation loop skips rendering while InstancedMesh.count is still ramping up,
-    // otherwise glow Points render at full count while cores are partially hidden
-    // → ghost dots (reported as "鬼影").
-    // The flag is cleared by _startProgressiveReveal's completion callback.
+    // ponytail: _renderInProgress 保持 TRUE 直到渐进揭示完成。
+    // 动画循环在 InstancedMesh.count 仍在递增时跳过渲染，
+    // 否则辉光 Points 以完整数量渲染而核心部分隐藏
+    // → 鬼影点（报告为"鬼影"）。
+    // 该标志由 _startProgressiveReveal 的完成回调清除。
   }
 
-  // ── Progressive reveal: materialize nodes in batches ────────
+  // ── 渐进揭示：分批物化节点 ────────
 
   private _startProgressiveReveal(nodeCount: number): void {
     this._revealCancelled = false;
-    const myGen = ++this._revealGeneration; // ponytail: bump generation so old rAF callbacks from previous renders bail out
+    const myGen = ++this._revealGeneration; // ponytail: 递增代际，使旧渲染的 rAF 回调自行退出
     const BATCH_SIZE = Math.max(50, Math.floor(nodeCount / 40));
     const totalNodes = this.host._nodeCount;
     const totalEdgeGroups = this.host.edgeLineGroups.length;
 
-    // Hide all batched objects
+    // 隐藏所有批量对象
     this.host.nodeCoresInstanced.count = 0;
     this.host.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
-    // ponytail: set override flags so shader passes through CPU alpha during reveal
+    // ponytail: 设置 override 标志使 shader 在揭示期间透传 CPU alpha
     this.host._overrideFlags.fill(1);
     this.host._nodes._flushOverrideAttrs();
-    // Zero all glow alpha — override=1 means shader uses these values directly.
-    // ponytail: only zero alpha channel, preserve RGB — fill(0) was wiping RGB,
-    // causing hover to read (0,0,0) glow color via override path → black dot
+    // 清零所有辉光 alpha — override=1 表示 shader 直接使用这些值。
+    // ponytail: 仅清零 alpha 通道，保留 RGB — fill(0) 会清除 RGB，
+    // 导致 hover 通过 override 路径读取 (0,0,0) 辉光颜色 → 黑点
     for (let i = 0; i < totalNodes; i++) {
       this.host._glowRgba[i * 4 + 3] = 0;
     }
@@ -584,7 +582,7 @@ export class GraphSceneLifecycle {
       }
       this.host.nodeGlows2Points.geometry.attributes.color.needsUpdate = true;
     }
-    // Save & clear edge opacities
+    // 保存并清除边线透明度
     const edgeTargetOpacities: number[] = [];
     for (const lines of this.host.edgeLineGroups) {
       const mat = lines.material as LineMaterial;
@@ -598,9 +596,9 @@ export class GraphSceneLifecycle {
     let revealedEdges = 0;
     const edgeRevealBatch = Math.max(1, Math.ceil(totalEdgeGroups / 10));
 
-    // Safety timeout: if the rAF chain dies for any reason (gen bump, crash,
-    // rapid re-render), force-clear _renderInProgress so the animation loop
-    // isn't permanently blocked.
+    // 安全超时：如 rAF 链因任何原因中断（代际递增、崩溃、
+    // 快速重渲染），强制清除 _renderInProgress 使动画循环
+    // 不被永久阻塞。
     let safetyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       safetyTimer = null;
       if (this.host._renderInProgress) {
@@ -610,9 +608,9 @@ export class GraphSceneLifecycle {
     }, 15000);
 
         const revealFrame = () => {
-      // ponytail: bail out if a newer render has started — prevents old rAF
-      // callbacks from touching the new scene objects (ghost dots root cause).
-      // Don't touch _renderInProgress here — the new render owns the flag.
+      // ponytail: 若更新的渲染已开始则退出 — 防止旧 rAF
+      // 回调触碰新场景对象（鬼影点根因）。
+      // 此处不触碰 _renderInProgress — 新渲染拥有该标志。
       if (this._revealGeneration !== myGen) return;
       if (this._revealCancelled) {
         if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
@@ -620,10 +618,10 @@ export class GraphSceneLifecycle {
         return;
       }
       const nodeEnd = Math.min(revealedNodes + BATCH_SIZE, totalNodes);
-      // Reveal cores via InstancedMesh.count
+      // 通过 InstancedMesh.count 揭示核心
       this.host.nodeCoresInstanced.count = nodeEnd;
       this.host.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
-      // Restore glow alpha for revealed batch
+      // 恢复已揭示批次的辉光透明度
       const gCol = this.host.nodeGlowsPoints.geometry.attributes.color.array as Float32Array;
       const g2Col = this.host.nodeGlows2Points?.geometry.attributes.color?.array as Float32Array;
       for (let i = revealedNodes; i < nodeEnd; i++) {
@@ -643,19 +641,19 @@ export class GraphSceneLifecycle {
 
       if (revealedNodes >= totalNodes && revealedEdges >= totalEdgeGroups) {
         this._revealRevealed = true;
-        // ponytail: clear override flags — shader resumes animation now that reveal is done
+        // ponytail: 清除 override 标志 — 揭示完成，shader 恢复动画
         this.host._overrideFlags.fill(0);
         this.host._nodes._flushOverrideAttrs();
-        // ponytail: force bounding-sphere recompute now that count==totalNodes.
+        // ponytail: count==totalNodes 时强制重算包围球。
         this.host.nodeCoresInstanced.boundingSphere = null;
         this.host.labelsContainer.style.transition = 'opacity 0.4s ease-in';
         this.host.labelsContainer.style.opacity = '1';
         setTimeout(() => {
           this.host.labelsContainer.style.transition = '';
         }, 500);
-        // ponytail: unblock animation loop now that progressive reveal is done.
-        // _renderInProgress was kept true since _renderImpl to prevent the
-        // animation loop from rendering partial state (ghost dots).
+        // ponytail: 渐进揭示完成后解除动画循环阻塞。
+        // _renderInProgress 自 _renderImpl 起保持 true，防止
+        // 动画循环渲染部分状态（鬼影点）。
         if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
         this.host._renderInProgress = false;
         return;
@@ -666,20 +664,20 @@ export class GraphSceneLifecycle {
   }
 
   clearGraph(): void {
-    this._revealCancelled = true; // cancel any in-flight progressive reveal
-    ++this._revealGeneration; // ponytail: bump generation so old rAF callbacks bail silently
-    // ── Explicit cleanup: each object type knows what to dispose.
-    //     DO NOT use a blind disposeGroup walk — nodeCoresInstanced shares
-    //     this.sphereGeo (created in constructor, reused across re-renders).
-    //     disposeGroup would destroy sphereGeo's WebGL buffers, causing
-    //     subsequent InstancedMesh renders to come out blank (cold-start + watcher race).
+    this._revealCancelled = true; // 取消进行中的渐进揭示
+    ++this._revealGeneration; // ponytail: 递增代际，使旧 rAF 回调静默退出
+    // ── 显式清理：每种对象类型知道该释放什么。
+    //     切勿盲目遍历 disposeGroup — nodeCoresInstanced 共享
+    //     this.sphereGeo（在 constructor 中创建，跨重渲染复用）。
+    //     disposeGroup 会销毁 sphereGeo 的 WebGL 缓冲，导致
+    //     后续 InstancedMesh 渲染全白（冷启动 + watcher 竞争）。
 
-    // Node cores: dispose material only — sphereGeo is shared, built once in constructor.
+    // 核心节点：仅释放材质 — sphereGeo 共享，constructor 中构建一次。
     if (this.host.nodeCoresInstanced) {
       (this.host.nodeCoresInstanced.material as THREE.Material)?.dispose();
       this.host.nodeGroup.remove(this.host.nodeCoresInstanced);
     }
-    // Glow Points: dispose geometry + material (rebuilt fresh each render).
+    // 辉光 Points：释放几何 + 材质（每次渲染全新重建）。
     if (this.host.nodeGlowsPoints) {
       (this.host.nodeGlowsPoints.material as THREE.Material)?.dispose();
       this.host.nodeGlowsPoints.geometry?.dispose();
@@ -692,12 +690,12 @@ export class GraphSceneLifecycle {
       disposeGlowInstanced(this.host.nodeGlows2Points);
       this.host.nodeGroup.remove(this.host.nodeGlows2Points);
     }
-    // Any remaining stray children in nodeGroup (shouldn't be any, but paranoia).
+    // nodeGroup 中残留的杂散子对象（不应该有，但以防万一）。
     while (this.host.nodeGroup.children.length) {
       this.host.nodeGroup.remove(this.host.nodeGroup.children[0]);
     }
 
-    // Edge groups — dispose materials + geometries, clear children.
+    // 边组 — 释放材质 + 几何，清除子对象。
     for (const lines of this.host.edgeLineGroups) {
       lines.geometry?.dispose();
       (lines.material as THREE.Material)?.dispose();
@@ -708,14 +706,14 @@ export class GraphSceneLifecycle {
     while (this.host._fold.commFoldGroup.children.length)
       this.host._fold.commFoldGroup.remove(this.host._fold.commFoldGroup.children[0]);
 
-    // Legacy: edgeLineGroups array may hold references already disposed above — clear.
+    // 遗留：edgeLineGroups 数组可能持有已释放的引用 — 清除。
     this.host.edgeLineGroups = [];
     this.host.labelsContainer.innerHTML = '';
     this.host.labelDivs = [];
     this.host.nodeLabelIdx = [];
     this.host.nodeGlowColors = [];
     this.host.nodeCoreColors = [];
-    this.host._nodeCount = 0; // ponytail: keep consistent with nodeCoreColors — previously missing, caused hover black-node regression
+    this.host._nodeCount = 0; // ponytail: 与 nodeCoreColors 保持一致 — 之前缺失，导致 hover 黑节点回归
     this.host._nodeBaseHSL = [];
     this.host._fold.galaxyClouds = [];
     this.host._fold.galaxyGlows = [];
@@ -755,20 +753,20 @@ export class GraphSceneLifecycle {
     if (this.host.focusSubgraphBanner) this.host.focusSubgraphBanner.style.display = 'none';
     this.host._tooltip.tooltipEl?.classList.remove('visible');
     this.host._tooltip.detailCard?.classList.remove('visible');
-    // Step 2: Clear lens & trail state
+    // Step 2: 清除透镜和轨迹状态
     this.host._lensActive = false;
     this.host._trailActive = false;
     this.host._highlight._clearTrailLine();
   }
 
   // ══════════════════════════════════════════════════════════
-  // Incremental graph update — apply diff without full re-render
+  // 增量图更新 — 应用 diff 而非全量重渲染
   // ══════════════════════════════════════════════════════════
 
   /**
-   * Apply a graph diff incrementally — no layout recalc, no camera reset,
-   * no progressive reveal. Preserves hover/selected/blast/filter/diff state.
-   * Falls back to full render() if no existing graph.
+   * 增量应用图 diff — 无布局重算、无相机重置、
+   * 无渐进揭示。保留 hover/selected/blast/filter/diff 状态。
+   * 无已有图时回退到全量 render()。
    */
   async applyGraphDiff(diff: GraphDiffJson, fullGraph: GraphJSON): Promise<void> {
     if (this.host._nodeCount === 0) {
@@ -776,19 +774,19 @@ export class GraphSceneLifecycle {
       return;
     }
 
-    // Exit fold mode — incremental + fold is visually inconsistent
+    // 退出折叠模式 — 增量 + 折叠视觉上不一致
     if (this.host._fold.foldMode) this.host._fold.setFoldMode(false);
 
-    // Build node ID → index map (alive nodes only)
+    // 构建 node ID → index 映射（仅存活节点）
     const nodeIdxMap = new Map<string, number>();
     for (let i = 0; i < this.host.graphNodes.length; i++) {
       if (!this.host._deadIndices.has(i) && this.host.graphNodes[i]) nodeIdxMap.set(this.host.graphNodes[i].id, i);
     }
 
-    const newIndices = new Set<number>(); // track which nodes are new
-    const neighborIndices = new Set<number>(); // neighbors of new nodes
+    const newIndices = new Set<number>(); // 跟踪哪些节点是新增的
+    const neighborIndices = new Set<number>(); // 新节点的邻居
 
-    // 1. Removed nodes → mark dead
+    // 1. 删除节点 → 标记为死亡
     for (const rn of diff.removed_nodes) {
       const idx = nodeIdxMap.get(rn.id);
       if (idx !== undefined) {
@@ -797,7 +795,7 @@ export class GraphSceneLifecycle {
       }
     }
 
-    // 2. Modified nodes → update kind/color
+    // 2. 修改节点 → 更新 kind/颜色
     for (const mn of diff.modified_nodes) {
       const idx = nodeIdxMap.get(mn.node_id);
       if (idx === undefined) continue;
@@ -813,37 +811,37 @@ export class GraphSceneLifecycle {
       this.host.nodeCoreColors[idx] = coreColor;
     }
 
-    // 3. Added nodes → extend buffers + append
+    // 3. 新增节点 → 扩展缓冲 + 追加
     if (diff.added_nodes.length > 0) {
       const needed = this.host._nodeCount + diff.added_nodes.length;
       if (needed > this.host._nodeCapacity) {
         this.host._nodes._rebuildNodeBuffers(Math.ceil(needed * 1.2));
       }
       this.host._nodes._appendNodes(diff.added_nodes, fullGraph, nodeIdxMap);
-      // Track new indices
+      // 跟踪新索引
       for (const n of diff.added_nodes) {
         const idx = nodeIdxMap.get(n.id);
         if (idx !== undefined) newIndices.add(idx);
       }
     }
 
-    // 4. Rebuild edges if any changed — rebuilds edgeDataList, neighborMap, edgeIndexOf
+    // 4. 如有变化则重建边 — 重建 edgeDataList、neighborMap、edgeIndexOf
     if (diff.added_edges.length > 0 || diff.removed_edges.length > 0) {
       this.host._edges._rebuildEdgeData(fullGraph, nodeIdxMap);
     }
 
-    // 5. Collect neighbor indices for local layout relaxation
+    // 5. 收集邻居索引用于局部布局松弛
     for (const ni of newIndices) {
       for (const nb of this.host.neighborMap[ni] || []) {
         if (!newIndices.has(nb)) neighborIndices.add(nb);
       }
     }
 
-    // 6. Local force relaxation — new nodes + their neighbors,
-    //    treating neighbors as anchored (only new nodes move freely)
+    // 6. 局部力松弛 — 新节点 + 其邻居，
+    //    邻居视为锚定（仅新节点自由移动）
     if (newIndices.size > 0) {
       const affected = new Set([...newIndices, ...neighborIndices]);
-      // Build edge pairs from edgeDataList
+      // 从 edgeDataList 构建边对
       const allPairs: [number, number][] = this.host.edgeDataList.map((e) => [e.s, e.t]);
       try {
         await relaxNewNodes(
@@ -851,24 +849,24 @@ export class GraphSceneLifecycle {
           this.host._nodeCount,
           allPairs,
           affected,
-          neighborIndices, // anchors: existing neighbors stay fixed
+          neighborIndices, // 锚点：已有邻居保持固定
         );
       } catch (e) {
         console.warn('[StarGraph] local relax failed, positions may be suboptimal:', e);
       }
-      // Sync updated positions to GPU buffers
+      // 将更新后的位置同步到 GPU 缓冲
       this.host._nodes._syncNodePositions([...affected]);
     }
 
-    // 7. Sync GPU core positions for all modified nodes
+    // 7. 同步所有修改节点的 GPU 核心位置
     this.host._nodes._syncNodeCoreMatrices();
 
-    // 8. Update communities from full graph
+    // 8. 从完整图更新社区
     this.host.communities = ((fullGraph as any).hierarchical_communities ||
       (fullGraph as any).communities ||
       []) as CommunityData[];
 
-    // 9. Clear stale interaction state pointing to dead nodes
+    // 9. 清除指向死亡节点的过期交互状态
     if (this.host.hoveredIdx >= 0 && this.host._deadIndices.has(this.host.hoveredIdx)) {
       this.host.hoveredIdx = -1;
       this.host.targetHoverScale = 0;
@@ -885,7 +883,7 @@ export class GraphSceneLifecycle {
       this.host.focusNodeIdx = -1;
     }
 
-    // 10. Re-apply diff overlay if active (new nodes might be in the diff set)
+    // 10. 如 diff 覆盖激活则重新应用（新节点可能在 diff 集合中）
     if (
       this.host._diffOverlay.diffActive &&
       this.host._diffOverlay.diffAddedIds.size +
@@ -902,33 +900,32 @@ export class GraphSceneLifecycle {
       this.host._diffOverlay.showDiff(saved);
     }
 
-    // 11. Update status
+    // 11. 更新状态
     const aliveCount = this.host._nodeCount - this.host._deadIndices.size;
     this.host.updateStatus(aliveCount, this.host.edgeDataList.length);
 
     this.host._nodes._flushOverrideAttrs();
   }
 
-  // ── Animate ──────────────────────────────────────────────
+  // ── 动画 ──────────────────────────────────────────────
 
   animate(): void {
     this.host.animId = requestAnimationFrame(() => this.animate());
 
-    // ponytail: cap at 30fps — GTX 1060 can't hold 60 on 2846 nodes + 6193 edges
+    // ponytail: 限制 30fps — GTX 1060 在 2846 节点 + 6193 边上无法保持 60
     const now = performance.now();
     if (now - this._lastFrameTime < 33.33) return;
     this._lastFrameTime = now;
 
-    // Skip rendering while scene is being rebuilt — prevents WebGL errors
-    // from accessing disposed InstancedMesh/Points geometry and eliminates
-    // ghost artifacts on cold-start.
+    // 场景重建期间跳过渲染 — 防止访问已释放的 InstancedMesh/Points
+    // 几何体产生 WebGL 错误，并消除冷启动鬼影。
     if (this.host._renderInProgress) return;
 
     const _isMinimal = false;
     const isFull = true;
-    // Auto-rotation disabled
+    // 自动旋转已禁用
 
-    // Infinite grid follows camera Y — always at viewer level, capped below nodes
+    // 无限网格跟随相机 Y — 始终在观察者高度，限制在节点下方
     if (this.host.holoGrid) {
       const sMat = this.host.holoGrid.material as THREE.ShaderMaterial;
       sMat.uniforms.uCameraWorldPos.value.copy(this.host.camera.position);
@@ -936,13 +933,13 @@ export class GraphSceneLifecycle {
     }
 
     if (false) {
-      // ponytail: minimal-mode fast path (disabled — isMinimal always false)
+      // ponytail: 最小模式快速路径（已禁用 — isMinimal 始终 false）
       this.host.controls.update();
       this.host.composer.render();
       return;
     }
 
-    // ── Idle detection: throttle expensive work when scene is static ──
+    // ── 空闲检测：场景静止时节流高开销操作 ──
     const camMoved =
       this.host.camera.position.distanceToSquared(this._lastCamPos) > 0.0001 ||
       this.host.controls.target.distanceToSquared(this._lastCamTarget) > 0.0001;
@@ -961,24 +958,24 @@ export class GraphSceneLifecycle {
     }
     this._lastCamPos.copy(this.host.camera.position);
     this._lastCamTarget.copy(this.host.controls.target);
-    const IDLE = this._idleCounter > 60; // ~1s of no activity
+    const IDLE = this._idleCounter > 60; // 约 1 秒无活动
 
     if (!IDLE || this._idleCounter % 4 === 0) {
       try {
         this.host._interaction.updateHover();
       } catch {
-        /* hover must never crash the animation loop */
+        /* hover 不得中断动画循环 */
       }
       try {
         this.host._focus.updateFocus();
       } catch {
-        /* ditto */
+        /* 同上 */
       }
     }
 
-    // ── GPU-driven glow: time + hover uniforms ──
-    // Shader handles all animation (twinkle, wave, hsl) and hover boost.
-    // CPU no longer touches _overrideFlags or _glowRgba for hover.
+    // ── GPU 驱动辉光：time + hover uniform ──
+    // Shader 处理所有动画（闪烁、波动、hsl）和 hover 增强。
+    // CPU 不再为 hover 操作 _overrideFlags 或 _glowRgba。
     const galTime = performance.now() * 0.001;
     this.host.hoverScale += (this.host.targetHoverScale - this.host.hoverScale) * 0.18;
     const hIdx = this.host.hoveredIdx >= 0 && this.host.hoveredIdx < this.host._nodeCount ? this.host.hoveredIdx : -1;
@@ -1001,13 +998,13 @@ export class GraphSceneLifecycle {
     }
 
     // ── Mode-driven override: blast/path/filter set once on mode change, not per-frame ──
-    // ponytail: blast/path/filter modes already call updateBlastNodeColors / highlightPath / etc.
-    // which set per-node colors AND override flags. The shader preserves those until reset.
-    // We only need to handle the case where a mode was active but animate loop was
-    // resetting nodes outside the mode ring back to animated state.
-    // With shader-driven glow, no per-frame reset needed — shader animates non-overridden nodes.
+    // ponytail: blast/path/filter 模式已调用 updateBlastNodeColors / highlightPath 等，
+    // 设置每节点颜色和 override 标志。shader 保留这些直到重置。
+    // 我们只需处理模式曾激活但动画循环在
+    // 重置模式外节点回动画状态的情况。
+    // 在 shader 驱动辉光下，无需每帧重置 — shader 动画化未覆盖的节点。
 
-    // Galaxy cloud breathe + hover ...
+    // 星系云图呼吸 + hover ...
     if (this.host._fold.foldMode && !this.host._fold.enteredGalaxyId) {
       this.host._fold.animateCrossEdgeFlow();
       for (let k = 0; k < this.host._fold.galaxyGlows.length; k++) {
@@ -1058,7 +1055,7 @@ export class GraphSceneLifecycle {
     this.host.composer.render();
   }
 
-  // ── Resize ───────────────────────────────────────────────
+  // ── 调整大小 ───────────────────────────────────────────────
 
   handleResize(): void {
     const w = this.host.container.clientWidth,
@@ -1068,32 +1065,32 @@ export class GraphSceneLifecycle {
     this.host.camera.updateProjectionMatrix();
     this.host.renderer.setSize(w, h);
     this.host.composer.setSize(w, h);
-    // ponytail: bloom at 1/4 res — composer.setSize resets it to full, clamp back
+    // ponytail: bloom 在 1/4 分辨率 — composer.setSize 会重置为全分辨率，需钳回
     this.host.bloomPass.resolution.set(Math.floor(w / 4), Math.floor(h / 4));
     for (const lines of this.host.edgeLineGroups) {
       (lines.material as LineMaterial).resolution.set(w, h);
     }
   }
 
-  // ── Destroy ──────────────────────────────────────────────
+  // ── 销毁 ──────────────────────────────────────────────
 
   destroy(): void {
     cancelAnimationFrame(this.host.animId);
     this.host._fold.communityRingGroup.clear();
-    // Cancel progressive reveal if in-flight (audit: prevent rAF leak after destroy)
+    // 取消进行中的渐进揭示（审计：防止 destroy 后 rAF 泄漏）
     this._revealCancelled = true;
-    // Clear prompt auto-hide timer (audit: prevent timeout after destroy)
+    // 清除提示自动隐藏定时器（审计：防止 destroy 后 timeout 泄漏）
     if (this.host._tooltip._promptTimer) {
       clearTimeout(this.host._tooltip._promptTimer);
       this.host._tooltip._promptTimer = null;
     }
     window.removeEventListener('resize', this.host.onResize);
-    // Unsubscribe EventBus handlers (audit: prevent stale bus listeners)
+    // 取消订阅 EventBus 处理器（审计：防止过期 bus 监听器）
     if (this.host._langHandler) {
       bus.off('lang:changed', this.host._langHandler);
       this.host._langHandler = null;
     }
-    // Dispose all GPU resources
+    // 释放所有 GPU 资源
     for (const cloud of this.host._fold.galaxyClouds) {
       if (cloud) {
         cloud.geometry.dispose();
@@ -1105,7 +1102,7 @@ export class GraphSceneLifecycle {
       this.host.nebulaDust.geometry.dispose();
       (this.host.nebulaDust.material as THREE.Material).dispose();
     }
-    // Dispose InstancedMesh cores + glows
+    // 释放 InstancedMesh 核心 + 辉光
     if (this.host.nodeCoresInstanced) {
       (this.host.nodeCoresInstanced.material as THREE.Material)?.dispose();
     }

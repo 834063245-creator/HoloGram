@@ -10,15 +10,15 @@ fn count_l4_edges(graph: &Graph) -> usize {
     graph.edges.values().filter(|e| e.coupling_depth >= 4).count()
 }
 
-/// Stable violation identity — deterministic, readable, survives across check runs.
-/// Format: `L{level}_{category}_{discriminator}` with path separators normalised.
+/// 稳定的违规标识 — 确定性、可读、跨检查运行保持一致。
+/// 格式：`L{level}_{category}_{discriminator}`，路径分隔符已归一化。
 fn vid(level: u32, category: &str, discriminator: &str) -> String {
     format!("L{}_{}_{}", level, category, discriminator)
         .replace(['/', '\\'], "_")
         .replace(' ', "_")
 }
 
-/// Aggregated dataflow signal counts from `query_dataflow_files`.
+/// 来自 `query_dataflow_files` 的聚合数据流信号计数。
 pub struct DataflowSignalCounts {
     pub l3_shared_vars: usize,
     pub l3_reads: usize,
@@ -41,9 +41,9 @@ impl Default for SignalGenerator {
 impl SignalGenerator {
     pub fn new() -> Self { Self { matcher: PatternMatcher::new() } }
 
-    /// Generate change signals by diffing `before` → `after`.
-    /// L4/L2 only fire when coupling/cycles **increase** — not for static project state.
-    /// If `df_counts` is provided, uses dataflow engine results for L3/L4 instead of graph edges.
+    /// 通过对比 `before` → `after` 生成变更信号。
+    /// L4/L2 仅在耦合/环 **增加** 时触发 — 不针对静态项目状态。
+    /// 如果提供了 `df_counts`，则使用数据流引擎结果代替 graph 边来生成 L3/L4 信号。
     pub fn generate(&self, before: &Graph, after: &Graph, changed_files: &[String],
         _coupling_l4_after: usize, cycle_count_after: usize,
         df_counts: Option<&DataflowSignalCounts>) -> Vec<Value> {
@@ -52,7 +52,7 @@ impl SignalGenerator {
         let l4_after = count_l4_edges(after);
         let cycles_before = detect_cycles(before).len();
 
-        // L5 — irreversible (only when user actually changed these files)
+        // L5 — 不可逆操作（仅当用户实际修改了这些文件时触发）
         for f in changed_files {
             if self.matcher.is_migration_file(f) {
                 signals.push(json!({"signal":{"description":"Migration file changed — may irreversibly alter data schema. Requires manual review.","file_path":f,"line":0,"level":5,"affected_nodes":[],"violation_id":vid(5,"migration",f)},"level":5}));
@@ -65,7 +65,7 @@ impl SignalGenerator {
             }
         }
 
-        // L4 — new deep coupling since last baseline (or from dataflow engine)
+        // L4 — 自上次基线以来的新增深度耦合（或来自数据流引擎）
         if let Some(df) = df_counts {
             let df_l4 = df.l4_triggers + df.l4_awaits + df.l4_sequences;
             if df_l4 > 0 {
@@ -76,7 +76,7 @@ impl SignalGenerator {
             signals.push(json!({"signal":{"description":format!("{} new L4 deep coupling edge(s) since last check.", delta),"file_path":"","line":0,"level":4,"affected_nodes":[],"violation_id":vid(4,"coupling","graph")},"level":4}));
         }
 
-        // L3 — shared data (from dataflow engine if available, else graph edges)
+        // L3 — 共享数据（优先使用数据流引擎，否则使用 graph 边）
         if let Some(df) = df_counts {
             if df.l3_shared_vars > 0 {
                 signals.push(json!({"signal":{"description":format!("{} shared variable(s) detected across function boundaries ({} reads, {} writes).", df.l3_shared_vars, df.l3_reads, df.l3_writes),"file_path":"","line":0,"level":3,"affected_nodes":[],"violation_id":vid(3,"shared_vars","dataflow")},"level":3}));
@@ -87,7 +87,7 @@ impl SignalGenerator {
                     let loc = after.nodes.get(&edge.source)
                         .and_then(|n| n.location.as_deref())
                         .unwrap_or("");
-                    // Use path-aware matching: file must match a path segment, not arbitrary substring
+                    // 使用路径感知匹配：文件必须匹配路径段，而非任意子串
                     let is_affected = changed_files.iter().any(|f| {
                         let f_norm = f.replace('\\', "/");
                         let loc_norm = loc.replace('\\', "/");
@@ -103,13 +103,13 @@ impl SignalGenerator {
             }
         }
 
-        // L2 — new cycles since last baseline
+        // L2 — 自上次基线以来的新增环
         if cycle_count_after > cycles_before {
             let delta = cycle_count_after - cycles_before;
             signals.push(json!({"signal":{"description":format!("{} new circular dependency cycle(s) since last check.", delta),"file_path":"","line":0,"level":2,"affected_nodes":[],"violation_id":vid(2,"cycles","delta")},"level":2}));
         }
 
-        // L1 — documentation/test only (skip for v1)
+        // L1 — 仅文档/测试（v1 版本跳过）
         signals
     }
 }
@@ -224,7 +224,7 @@ mod tests {
         let signals = gen.generate(&before, &after,
             &["migrations/init.py".into(), "config.toml".into()],
             1, 1, None);
-        // L5: migration + config + serialization? config only = 1 config + 1 migration = 2, L4 delta 1, L2 delta 1
+        // L5：migration + config + serialization？仅 config = 1 config + 1 migration = 2，L4 delta 1，L2 delta 1
         assert!(signals.len() >= 3);
     }
 }

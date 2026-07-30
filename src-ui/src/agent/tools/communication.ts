@@ -162,14 +162,14 @@ export function createCommunicationTools(bus: MessageBus, agentId: () => string)
       const type = args.type as string | undefined;
       const limit = args.limit as number | undefined;
 
-      // If no filter at all — return summary only (id/from/type/ts, no payload)
+      // 无任何过滤条件 — 仅返回摘要（id/from/type/ts，不含内容）
       const summaryOnly = !msgId && !from && !type && !limit;
 
       const result = bus.queryInbox(agentId(), { msgId, from, type, limit, summaryOnly });
 
       if (Array.isArray(result)) {
         if (result.length === 0) return '(no matching messages)';
-        // Full content — truncate each payload to 2000 chars
+        // 完整内容 — 每条 payload 截断到 2000 字符
         return result
           .map(
             (m) => {
@@ -181,7 +181,7 @@ export function createCommunicationTools(bus: MessageBus, agentId: () => string)
           .join('\n\n');
       }
 
-      // Summary mode
+      // 摘要模式
       if (result.messages.length === 0) return '(inbox empty)';
       const lines = result.messages
         .map((m) => `- [msg_id:${m.id}] from:${m.from} type:${m.type}`)

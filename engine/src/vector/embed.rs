@@ -1,23 +1,23 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// N-gram hashing embedder — pure Rust, zero deps, zero models, zero downloads.
-// Converts text to fixed-dim vectors using character 3-gram hashing.
-// Captures lexical similarity: "handlePayment" ≈ "process_payment" → both contain "pay", "men", "ent".
-// ponytail: not as good as neural embeddings, but instant and maintenance-free.
+// N-gram 哈希嵌入器 —— 纯 Rust，零依赖、零模型、零下载。
+// 通过字符 3-gram 哈希将文本转换为固定维度向量。
+// 捕获词法相似性："handlePayment" ≈ "process_payment" → 都包含 "pay"、"men"、"ent"。
+// ponytail：不如神经网络嵌入效果好，但即时且免维护。
 
-/// Fixed embedding dimension.
+/// 固定嵌入维度。
 pub const EMBED_DIM: usize = 384;
 
-/// Embed text into a DIM-dimensional dense vector using 3-gram hashing.
-/// Each 3-gram is hashed to a dimension; the vector is normalized.
+/// 通过 3-gram 哈希将文本嵌入为 DIM 维稠密向量。
+/// 每个 3-gram 哈希到一个维度；向量经过归一化。
 pub fn embed(text: &str) -> Vec<f32> {
     let mut vec = vec![0.0f32; EMBED_DIM];
     let text = text.to_lowercase();
     let chars: Vec<char> = text.chars().collect();
 
     if chars.len() < 3 {
-        // Short text: use bigrams or unigrams
+        // 短文本：使用 bigram 或 unigram
         for i in 0..chars.len() {
             let h = hash_char(chars[i]) % EMBED_DIM;
             vec[h] += 1.0;
@@ -35,20 +35,20 @@ pub fn embed(text: &str) -> Vec<f32> {
             let h = hash_str(&gram) % EMBED_DIM;
             vec[h] += 1.0;
         }
-        // Also add word-boundary bigrams for better word matching
+        // 同时添加词边界 bigram 以提升单词匹配效果
         let mut word_start = 0usize;
         for (i, &ch) in chars.iter().enumerate() {
             if ch == '_' || ch == '.' || ch == ' ' || ch == '(' || ch == ')' || ch == '{' || ch == '}' {
                 if i > word_start + 2 {
-                    // Start-of-word 2-gram: "#he" for "hello"
+                    // 词首 2-gram：如 "hello" → "#he"
                     let sow: String = std::iter::once('#').chain(chars[word_start..word_start + 2].iter().copied()).collect();
                     let h = hash_str(&sow) % EMBED_DIM;
-                    vec[h] += 2.0; // bonus weight for word-start markers
+                    vec[h] += 2.0; // 词首标记的加权
                 }
                 word_start = i + 1;
             }
         }
-        // Last word
+        // 最后一个词
         if chars.len() > word_start + 2 {
             let sow: String = std::iter::once('#').chain(chars[word_start..word_start + 2].iter().copied()).collect();
             let h = hash_str(&sow) % EMBED_DIM;
@@ -56,7 +56,7 @@ pub fn embed(text: &str) -> Vec<f32> {
         }
     }
 
-    // Normalize to unit length
+    // 归一化为单位长度
     let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 1e-8 {
         for v in &mut vec { *v /= norm; }
@@ -98,8 +98,8 @@ mod tests {
         let sim13 = cosine(&v1, &v3);
         eprintln!("sim(payment, transaction) = {:.3}", sim12);
         eprintln!("sim(payment, ui) = {:.3}", sim13);
-        // Similar code patterns (Result<(), Error>, f64 type) should be closer
-        assert!(sim12 > sim13 * 0.8, "payment should be at least somewhat close to transaction");
+        // 相似代码模式（Result<(), Error>、f64 类型）应更接近
+        assert!(sim12 > sim13 * 0.8, "payment 应至少与 transaction 有一定接近度");
     }
 
     #[test]
@@ -111,7 +111,7 @@ mod tests {
         let sim13 = cosine(&v1, &v3);
         eprintln!("sim(handle_payment, process_payment) = {:.3}", sim12);
         eprintln!("sim(handle_payment, draw_button) = {:.3}", sim13);
-        assert!(sim12 > sim13, "similar names should be closer");
+        assert!(sim12 > sim13, "相似名称应更接近");
     }
 
     fn cosine(a: &[f32], b: &[f32]) -> f32 {

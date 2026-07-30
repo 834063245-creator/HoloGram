@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Utility functions shared across Tauri commands.
+// 共享工具函数。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,7 +23,7 @@ use engine::routing::preflight::save_baseline;
 #[cfg(windows)] pub(crate) const NO_WINDOW: u32 = 0x08000000;
 
 // ═══════════════════════════════════════════════════════
-// Background job system — timeout + background + output + kill
+// 后台任务系统 — 超时 + 后台 + 输出 + 终止
 // ═══════════════════════════════════════════════════════
 
 pub(crate) struct BgJob {
@@ -31,7 +31,7 @@ pub(crate) struct BgJob {
     stdout_buf: Vec<u8>,
     stderr_buf: Vec<u8>,
     start_time: std::time::Instant,
-    #[allow(dead_code)] // stored for future job-listing feature
+    #[allow(dead_code)] // 存储供未来任务列表功能使用
     label: String,
     last_output_time: std::time::Instant,
 }
@@ -39,18 +39,18 @@ pub(crate) struct BgJob {
 pub(crate) static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-/// Notification queue — drained by the agent before each stream() call.
+/// 通知队列 — 由 agent 在每次 stream() 调用前清空。
 pub(crate) static COMPLETED_NOTES: std::sync::LazyLock<Mutex<Vec<String>>> =
     std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
 static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
-/// Push a notification message to the background notification queue.
+/// 将通知消息推入后台通知队列。
 pub(crate) fn push_bg_note(msg: &str) {
     COMPLETED_NOTES.lock().unwrap().push(msg.to_string());
 }
 
-/// Drain and return all pending background notifications (clears the queue).
+/// 排空并返回所有待处理的后台通知（同时清空队列）。
 pub(crate) fn drain_bg_notifications() -> String {
     let mut notes = COMPLETED_NOTES.lock().unwrap();
     if notes.is_empty() {
@@ -61,12 +61,12 @@ pub(crate) fn drain_bg_notifications() -> String {
     result
 }
 
-/// Stall detection threshold — no output for this duration triggers a warning.
+/// 停滞检测阈值 — 超过此时长无输出则触发警告。
 const STALL_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Spawn a monitor thread that polls the child every second.
-/// On exit: pushes a completion notification to COMPLETED_NOTES.
-/// On stall (no output for STALL_THRESHOLD): pushes a stall warning and resets the timer.
+/// 启动监控线程，每秒轮询子进程状态。
+/// 进程退出时：向 COMPLETED_NOTES 推送完成通知。
+/// 停滞时（超过 STALL_THRESHOLD 无输出）：推送停滞警告并重置计时器。
 fn spawn_monitor(id: u32, label: String) {
     std::thread::spawn(move || {
         loop {
@@ -75,7 +75,7 @@ fn spawn_monitor(id: u32, label: String) {
             let mut jobs = BG_JOBS.lock().unwrap();
             let job = match jobs.get_mut(&id) {
                 Some(j) => j,
-                None => return, // job removed by read_bg_output / kill_bg
+                None => return, // 任务已被 read_bg_output / kill_bg 移除
             };
 
             match job.child.try_wait() {
@@ -87,7 +87,7 @@ fn spawn_monitor(id: u32, label: String) {
                         label, ec, elapsed, id
                     );
                     COMPLETED_NOTES.lock().unwrap().push(msg);
-                    return; // don't remove — read_bg_output cleans up when agent checks
+                    return; // 不移除 — read_bg_output 会在 agent 检查时清理
                 }
                 Ok(None) => {
                     let stall_elapsed = job.last_output_time.elapsed();
@@ -97,7 +97,7 @@ fn spawn_monitor(id: u32, label: String) {
                             label, stall_elapsed.as_secs(), id, id, id
                         );
                         COMPLETED_NOTES.lock().unwrap().push(msg);
-                        job.last_output_time = std::time::Instant::now(); // reset to avoid repeat
+                        job.last_output_time = std::time::Instant::now(); // 重置以避免重复警告
                     }
                 }
                 Err(_) => return,
@@ -106,7 +106,7 @@ fn spawn_monitor(id: u32, label: String) {
     });
 }
 
-/// Logging guard — initialized once on first project open, held for process lifetime.
+/// 日志守护 — 在首次打开项目时初始化一次，在整个进程生命周期内持有。
 pub(crate) static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
 
 pub(crate) fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
@@ -116,8 +116,8 @@ pub(crate) fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
     spawn_bg_from_child(child, &label)
 }
 
-/// Register an already-spawned SandboxedChild as a background job.
-/// Used by the foreground timeout path to convert a timed-out command to background.
+/// 将已启动的 SandboxedChild 注册为后台任务。
+/// 用于前台超时路径，将超时命令转为后台任务。
 pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str) -> Result<u32, String> {
     let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let now = std::time::Instant::now();
@@ -137,7 +137,7 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
 pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
     let mut jobs = BG_JOBS.lock().unwrap();
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
-    // Drain what's available without blocking
+    // 非阻塞地读取可用输出
     let mut new_output = false;
     if let Some(stdout) = job.child.stdout_reader() {
         let mut buf = [0u8; 4096];
@@ -167,11 +167,11 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
     let elapsed = job.start_time.elapsed().as_secs();
     let stdout = String::from_utf8_lossy(&job.stdout_buf).to_string();
     let stderr = String::from_utf8_lossy(&job.stderr_buf).to_string();
-    // Check if process has exited
+    // 检查进程是否已退出
     let status = job.child.try_wait().map_err(|e| format!("检查进程状态失败: {e}"))?;
     let info = if let Some(ec) = status {
         let msg = format!("[任务已完成, exit code: {}, 耗时: {}s]\n", ec, elapsed);
-        jobs.remove(&id); // Clean up
+        jobs.remove(&id); // 清理
         msg
     } else {
         format!("[任务运行中, 已运行: {}s]\n", elapsed)
@@ -179,8 +179,8 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
     Ok(format!("{info}{stdout}{stderr}"))
 }
 
-/// Block until a background job completes (or timeout). Returns full output + exit code.
-/// Unlike read_bg_output (non-blocking snapshot), this waits and then cleans up.
+/// 阻塞等待后台任务完成（或超时）。返回完整输出和退出码。
+/// 与 read_bg_output（非阻塞快照）不同，此函数会等待完成后清理资源。
 pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
@@ -188,7 +188,7 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
         let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
         match job.child.try_wait() {
             Ok(Some(status)) => {
-                // Drain remaining output
+                // 读取剩余输出
                 if let Some(stdout) = job.child.stdout_reader() {
                     let mut buf = [0u8; 4096];
                     loop {
@@ -244,8 +244,8 @@ pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
     Ok(format!("[任务已终止]\n{stdout}{stderr}"))
 }
 
-/// Find the Rust engine executable.
-/// Checks: 1) HOLOGRAM_ENGINE env var  2) engine/target/release  3) engine/target/debug
+/// 查找 Rust 引擎可执行文件。
+/// 检查顺序：1) HOLOGRAM_ENGINE 环境变量  2) engine/target/release  3) engine/target/debug
 pub(crate) fn engine_binary() -> String {
     if let Ok(p) = std::env::var("HOLOGRAM_ENGINE") {
         if std::path::Path::new(&p).exists() {
@@ -254,9 +254,9 @@ pub(crate) fn engine_binary() -> String {
     }
     let root = project_root();
     let paths = [
-        // Bundled resource: engine.exe placed next to the app binary
+        // 打包资源：engine.exe 放在应用二进制文件旁边
         root.join("hologram-engine.exe"),
-        // Dev layout: engine built in engine/target/
+        // 开发布局：引擎构建在 engine/target/
         root.join("engine/target/release/hologram-engine.exe"),
         root.join("engine/target/debug/hologram-engine.exe"),
     ];
@@ -265,36 +265,36 @@ pub(crate) fn engine_binary() -> String {
             return p.to_string_lossy().to_string();
         }
     }
-    // Fallback: default debug path
+    // 回退：默认 debug 路径
     project_root().join("engine/target/debug/hologram-engine.exe")
         .to_string_lossy().to_string()
 }
 
 pub(crate) fn project_root() -> PathBuf {
-    // Production (installed app): use exe directory — python/ and src_python/ are bundled next to it
+    // 生产环境（已安装应用）：使用 exe 所在目录 — python/ 和 src_python/ 打包在旁边
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let dir_str = dir.to_string_lossy();
-            // "target" in path = cargo build dir → dev mode; otherwise = installed app
+            // 路径中含 "target" = cargo 构建目录 → 开发模式；否则为已安装应用
             if !dir_str.contains("target") {
                 return dir.to_path_buf();
             }
         }
     }
-    // Dev mode: CARGO_MANIFEST_DIR is src-tauri/, project root is one level up
+    // 开发模式：CARGO_MANIFEST_DIR 是 src-tauri/，项目根目录在上一级
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or(PathBuf::from(".").as_path())
         .to_path_buf()
 }
 
-/// Set the active workspace — now a no-op stub. Use workspace_activate instead.
-/// Kept for API compatibility; frontend never calls this directly.
+/// 设置活动工作区 — 现为空操作桩函数。请改用 workspace_activate。
+/// 仅为 API 兼容性保留；前端不会直接调用此函数。
 
 type WorkspaceState = Arc<Mutex<Option<workspace::WorkspaceHandle>>>;
 
-/// Helper: get the active workspace path from WorkspaceHandle state.
-/// Returns an error if no workspace is open (instead of silently falling back to globals).
+/// 辅助函数：从 WorkspaceHandle 状态获取活动工作区路径。
+/// 若未打开工作区则返回错误（而非静默回退到全局变量）。
 pub(crate) fn workspace_path(state: &WorkspaceState) -> Result<String, String> {
     state.lock()
         .map_err(|e| format!("工作区状态错误: {e}"))?
@@ -303,8 +303,8 @@ pub(crate) fn workspace_path(state: &WorkspaceState) -> Result<String, String> {
         .ok_or_else(|| "未打开工作区，请先打开项目".into())
 }
 
-/// Reject IDs that could be used for path traversal.
-/// Allows alphanumeric, dash, underscore, dot, colon, and space.
+/// 拒绝可能用于路径穿越的 ID。
+/// 允许字母数字、连字符、下划线、点、冒号和空格。
 pub(crate) fn sanitize_path_id(id: &str, label: &str) -> Result<(), String> {
     if id.is_empty() {
         return Err(format!("{label} 不能为空"));
@@ -315,8 +315,8 @@ pub(crate) fn sanitize_path_id(id: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate that a path is within the `.hologram` directory of some project root.
-/// Rejects `..` traversal and paths outside the hologram workspace.
+/// 验证路径是否在某个项目根目录的 `.hologram` 目录内。
+/// 拒绝 `..` 穿越和 hologram 工作区之外的路径。
 pub(crate) fn validate_hologram_path(path: &str) -> Result<(), String> {
     if path.contains('\0') {
         return Err("路径包含非法字符".into());
@@ -332,8 +332,8 @@ pub(crate) fn validate_hologram_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Helper: get a reference to the active WorkspaceHandle.
-#[allow(dead_code)] // ponytail: kept for non-permission workspace access
+/// 辅助函数：获取活动 WorkspaceHandle 的引用。
+#[allow(dead_code)] // ponytail: 保留用于非权限工作区访问
 pub(crate) fn with_workspace<F, R>(state: &WorkspaceState, f: F) -> Result<R, String>
 where
     F: FnOnce(&workspace::WorkspaceHandle) -> Result<R, String>,
@@ -344,18 +344,18 @@ where
 }
 
 // ═══════════════════════════════════════════════════════
-// Phase 2: Permission helpers — replace old with_workspace sandbox calls
+// Phase 2：权限辅助函数 — 替换旧的 with_workspace 沙箱调用
 
-/// Get the PermissionContext from workspace state, releasing the lock immediately.
+/// 从工作区状态获取 PermissionContext，并立即释放锁。
 pub(crate) fn get_ctx(state: &WorkspaceState) -> Result<Arc<PermissionContext>, String> {
     let guard = state.lock().map_err(|e| format!("工作区状态错误: {e}"))?;
     let handle = guard.as_ref().ok_or("未打开工作区，请先打开项目")?;
     Ok(handle.permission_ctx.clone())
 }
 
-/// Check MCP/graph tool permission — deny + ask + allow + safety.
-/// MCP tools are read-only; only explicit deny rules should block them.
-/// No workspace = no rules = passthrough (allows diagnostic tools like hologram_status).
+/// 检查 MCP/图工具权限 — deny + ask + allow + 安全检查。
+/// MCP 工具是只读的；只有明确的 deny 规则才会阻止它们。
+/// 无工作区 = 无规则 = 放行（允许 hologram_status 等诊断工具通过）。
 pub(crate) fn check_mcp_permission(
     tool_name: &str,
     state: &tauri::State<'_, WorkspaceState>,
@@ -367,7 +367,7 @@ pub(crate) fn check_mcp_permission(
     };
     let rules = ctx.read_rules();
 
-    // ① Tool-level Deny — highest priority
+    // ① 工具级 Deny — 最高优先级
     if let Some(rule) = rules.find_deny(tool_name, None) {
         let reason = format!("{} 工具被规则禁止使用", rule.explain());
         drop(rules);
@@ -375,23 +375,23 @@ pub(crate) fn check_mcp_permission(
         return Err(reason);
     }
 
-    // ② Tool-level Ask — force dialog (previously ignored for MCP tools)
+    // ② 工具级 Ask — 强制弹窗确认（此前对 MCP 工具忽略此项）
     if let Some(rule) = rules.find_ask(tool_name, None) {
         let reason = rule.explain();
         drop(rules);
         return Err(format!("{} 工具需要用户确认: {}", tool_name, reason));
     }
 
-    // ③ Tool-level Allow — explicit allow
+    // ③ 工具级 Allow — 明确允许
     if rules.find_allow(tool_name, None).is_some() {
         return Ok(());
     }
 
-    // ④ No rule matched → Passthrough
+    // ④ 无规则匹配 → 放行
     Ok(())
 }
 
-/// Check permission for a tool. If Ask, emit event and wait for user response.
+/// 检查工具权限。若为 Ask，则发送事件并等待用户响应。
 pub(crate) async fn check_permission(
     tool: &dyn permissions::Tool,
     ctx: &PermissionContext,
@@ -423,7 +423,7 @@ pub(crate) async fn check_permission(
     }
 }
 
-/// Check permission synchronously (no Await — for background tasks: Ask → log + deny with clear reason).
+/// 同步检查权限（无 Await — 用于后台任务：Ask → 记录日志 + 拒绝并给出明确原因）。
 pub(crate) fn check_permission_sync(
     tool: &dyn permissions::Tool,
     ctx: &PermissionContext,
@@ -448,20 +448,20 @@ pub(crate) fn check_permission_sync(
 
 pub(crate) async fn require_read(file_path: &str, agent_id: Option<&str>, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
-    // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
+    // Phase 3：当隔离模式为 Worktree 时，前向映射到 worktree 物理路径 (spec §5.6)
     let physical = ctx.forward_map_path(std::path::Path::new(file_path), agent_id);
     let physical_str = physical.to_string_lossy().to_string();
     let tool = tools::ReadTool { path: physical_str.clone(), agent_id: agent_id.map(|s| s.to_string()) };
     check_permission(&tool, &ctx, app).await?;
-    // Permission granted — sandbox was already consulted inside check_permission.
-    // Don't re-check sandbox boundary; user-approved external reads must go through.
+    // 权限已授予 — 沙箱已在 check_permission 内部检查过。
+    // 不再重复检查沙箱边界；用户批准的外部读取必须放行。
     std::fs::canonicalize(&physical)
         .map_err(|e| format!("无法解析路径 {}: {}", physical_str, e))
 }
 
 pub(crate) async fn require_write(file_path: &str, agent_id: Option<&str>, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
-    // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
+    // Phase 3：当隔离模式为 Worktree 时，前向映射到 worktree 物理路径 (spec §5.6)
     let physical = ctx.forward_map_path(std::path::Path::new(file_path), agent_id);
     let physical_str = physical.to_string_lossy().to_string();
     let tool = tools::EditTool { path: physical_str.clone(), agent_id: agent_id.map(|s| s.to_string()) };
@@ -529,7 +529,7 @@ pub(crate) async fn require_git_dispatch(
     if is_agent {
         require_git(repo_path, subcommand, agent_id, state, app).await
     } else {
-        Ok(())  // user UI git operations are unrestricted
+        Ok(())  // 用户 UI git 操作不受限制
     }
 }
 
@@ -547,7 +547,7 @@ pub(crate) fn require_command_sync(command: &str, state: &tauri::State<'_, Works
 
 pub(crate) fn require_read_sync(file_path: &str, agent_id: Option<&str>, state: &tauri::State<'_, WorkspaceState>) -> Result<PathBuf, String> {
     let ctx = get_ctx(state)?;
-    // Phase 3: forward-map to worktree physical path when isolation is Worktree (spec §5.6)
+    // Phase 3：当隔离模式为 Worktree 时，前向映射到 worktree 物理路径 (spec §5.6)
     let physical = ctx.forward_map_path(std::path::Path::new(file_path), agent_id);
     let physical_str = physical.to_string_lossy().to_string();
     let tool = tools::ReadTool { path: physical_str.clone(), agent_id: agent_id.map(|s| s.to_string()) };
@@ -558,7 +558,7 @@ pub(crate) fn require_read_sync(file_path: &str, agent_id: Option<&str>, state: 
 
 pub(crate) async fn require_git(repo_path: &str, subcommand: &str, agent_id: Option<&str>, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
     let ctx = get_ctx(state)?;
-    // Phase 3: forward-map repo path to worktree when isolated (spec §5.6)
+    // Phase 3：隔离时将仓库路径前向映射到 worktree (spec §5.6)
     let physical = ctx.forward_map_path(std::path::Path::new(repo_path), agent_id);
     let tool = tools::GitTool { repo_path: physical.to_string_lossy().to_string(), subcommand: subcommand.to_string() };
     check_permission(&tool, &ctx, app).await
@@ -569,9 +569,9 @@ fn cache_is_stale(root: &std::path::Path) -> bool {
     let cache_mtime = match std::fs::metadata(&graph_json) {
         Ok(m) => match m.modified() {
             Ok(t) => t,
-            Err(_) => return true, // can't read mtime → assume stale
+            Err(_) => return true, // 无法读取 mtime → 假设已过期
         },
-        Err(_) => return true, // no baseline → stale
+        Err(_) => return true, // 无基线 → 已过期
     };
 
     const EXTS: &[&str] = &[
@@ -608,7 +608,7 @@ fn cache_is_stale(root: &std::path::Path) -> bool {
             if let Ok(mtime) = meta.modified() {
                 if mtime > cache_mtime {
                     eprintln!(
-                        "[direct_analyze] Cache stale: {} modified after last analysis",
+                        "[direct_analyze] 缓存已过期: {} 在上次分析后被修改",
                         path.display()
                     );
                     return true;
@@ -625,22 +625,21 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
         return Err(format!("路径不存在: {path}"));
     }
 
-    // Initialize engine (idempotent — loads SQLite cache into memory)
+    // 初始化引擎（幂等操作 — 加载 SQLite 缓存到内存）
     engine_api::engine_init(&root)
         .map_err(|e| format!("Engine init failed: {e}"))?;
 
-    // ponytail: if SQLite cache already has graph data AND reanalysis not
-    // forced, skip the full pipeline. Cold-start wins ~420s; warm reload <1s.
-    // But verify cache freshness first — if any source file was modified after
-    // the last analysis, the cache is stale and must be rebuilt. Otherwise
-    // code changes made outside HoloGram (e.g. in VS Code between sessions)
-    // are silently invisible until the user manually hits "re-analyze".
+    // ponytail: 如果 SQLite 缓存已有图数据且未强制重新分析，
+    // 则跳过完整流水线。冷启动约需 420s；热重载 <1s。
+    // 但首先需验证缓存新鲜度 — 若任何源文件在上次分析后被修改，
+    // 缓存已过期，必须重建。否则在 HoloGram 外部所做的代码修改
+    // （例如在 VS Code 中跨会话修改）将静默不可见，直到用户手动点击"重新分析"。
     if !force {
         let cached_node_count = engine_api::engine_read(|idx| idx.node_count())
             .unwrap_or(0);
         if cached_node_count > 0 && !cache_is_stale(&root) {
-            eprintln!("[direct_analyze] Using cached graph ({cached_node_count} nodes), skipping full analysis");
-        // Serialize from cache inside callback — avoids cloning the entire Graph
+            eprintln!("[direct_analyze] 使用缓存图 ({cached_node_count} 个节点)，跳过完整分析");
+        // 在回调内从缓存序列化 — 避免克隆整个 Graph
         return engine_api::engine_read_graph(|graph| {
             let nc = graph.node_count();
             let ec = graph.edge_count();
@@ -677,25 +676,25 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
             }).to_string()
         }).map_err(|e| format!("Read cached graph failed: {e}"));
     }
-    } // if !force
+    } // if !force 结束
 
     let result = engine_api::engine_analyze(&root)
         .map_err(|e| format!("Analyze failed: {e}"))?;
 
-    // result.graph is drained by engine (nodes/edges moved to MemoryIndex/store).
-    // Use result.node_count / result.edge_count for scalars, and read graph
-    // data from the store for serialization.
+    // result.graph 已被引擎消费（节点/边已移至 MemoryIndex/store）。
+    // 使用 result.node_count / result.edge_count 获取标量值，
+    // 从 store 读取图数据进行序列化。
     let nc = result.node_count;
     let ec = result.edge_count;
 
-    // Serialize from the graph store (data was swapped in by engine_analyze)
+    // 从图 store 序列化（数据已由 engine_analyze 交换入）
     let serialized = serialize_cached_graph(path)?;
     let wrapped: serde_json::Value = serde_json::from_str(&serialized)
         .unwrap_or(serde_json::json!({"nodes":[],"edges":[],"communities":[]}));
     let nodes = wrapped.get("nodes").cloned().unwrap_or(serde_json::json!([]));
     let edges = wrapped.get("edges").cloned().unwrap_or(serde_json::json!([]));
     let comms = wrapped.get("communities").cloned().unwrap_or(serde_json::json!([]));
-    // Hierarchical communities come from result (not drained)
+    // 层次社区来自 result（未被消费）
     let hcomms: Vec<serde_json::Value> = result.hierarchical_communities.iter()
         .map(|hc| serde_json::json!({
             "id": hc.id,
@@ -706,7 +705,7 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
         }))
         .collect();
 
-    // Persist hologram_graph.json for cold-start
+    // 持久化 hologram_graph.json 供冷启动使用
     let graph_path = format!("{}/hologram_graph.json", path);
     let wrapped = serde_json::json!({
         "meta": { "source_root": path,
@@ -716,15 +715,15 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
         "hierarchical_communities": hcomms,
     });
     let _ = std::fs::write(&graph_path, serde_json::to_string(&wrapped).unwrap_or_default());
-    // Always update baseline after full analysis so subsequent checks
-    // diff against a fresh snapshot — prevents stale-baseline false positives
-    // (e.g. "53 new cycles" when graph structure evolves between analyses).
+    // 每次全量分析后都更新基线，使后续检查
+    // 与最新快照进行对比 — 防止基线过期导致的误报
+    // （例如图结构在两次分析间演化时出现"53 个新循环"）。
     let _ = engine_api::engine_read_graph(|g| save_baseline(&root, g));
-    // .hologram MsgPack retired — CACHED_GRAPH is the sole runtime truth, JSON is cold-start archive only
+    // .hologram MsgPack 已废弃 — CACHED_GRAPH 是唯一的运行时真相，JSON 仅用于冷启动归档
     let _ = std::fs::remove_file(format!("{}/hologram_graph.hologram", path));
     let _ = regenerate_file_graph(path);
 
-    // Record timeline event (mirrors engine binary's handle_analyze)
+    // 记录时间线事件（与引擎二进制的 handle_analyze 对应）
     let _ = engine_api::engine_record_timeline(
         "analyze",
         None::<&str>,
@@ -738,7 +737,7 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
     }).to_string())
 }
 
-/// Run a query on the graph. Reads from Engine.
+/// 在图上运行查询。从 Engine 读取。
 pub(crate) fn with_graph<F: Fn(&Graph) -> serde_json::Value>(f: F) -> Result<String, String> {
     engine_api::engine_read_graph(|g| {
         serde_json::to_string(&f(g)).unwrap_or_default()
@@ -746,8 +745,8 @@ pub(crate) fn with_graph<F: Fn(&Graph) -> serde_json::Value>(f: F) -> Result<Str
     .map_err(|e| format!("Engine error: {}", e))
 }
 
-/// Run a query on the MemoryIndex (CSR-based, O(1) adjacency).
-/// Preferred over with_graph for traversal queries.
+/// 在 MemoryIndex（基于 CSR，O(1) 邻接查询）上运行查询。
+/// 遍历查询时优先使用此函数而非 with_graph。
 pub(crate) fn with_index<F: FnOnce(&MemoryIndex) -> serde_json::Value>(f: F) -> Result<String, String> {
     engine_api::engine_read(|idx| {
         serde_json::to_string(&f(idx)).unwrap_or_default()
@@ -755,8 +754,8 @@ pub(crate) fn with_index<F: FnOnce(&MemoryIndex) -> serde_json::Value>(f: F) -> 
     .map_err(|e| format!("Engine error: {}", e))
 }
 
-/// Serialize full graph JSON — shared by frontend and analyze_and_load.
-/// Reads from Engine exclusively.
+/// 序列化完整图 JSON — 前端和 analyze_and_load 共用。
+/// 仅从 Engine 读取。
 pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
     engine_api::engine_read_graph(|g| {
         let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| serde_json::json!({
@@ -772,9 +771,9 @@ pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String
             "cross_file": e.cross_file,
             "temporal_delay_sec": e.temporal_delay_sec,
         })).collect();
-        // Rebuild communities from pre-computed community_id on each node
-        // (avoids re-running Louvain, which is O(V·avg_degree·iterations))
-        // community_id is Option<usize> → JSON number, not string
+        // 从每个节点上预计算的 community_id 重建社区
+        // （避免重新运行 Louvain，其复杂度为 O(V·avg_degree·iterations)）
+        // community_id 是 Option<usize> → JSON 数字，而非字符串
         let mut comm_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         for n in &nodes {
             if let Some(cid) = n.get("community_id").and_then(|v| v.as_u64()) {
@@ -785,14 +784,14 @@ pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String
         }
         let communities_json: Vec<serde_json::Value> = comm_map.iter()
             .map(|(cid, node_ids)| {
-                // Derive a readable label from the most common file prefix
+                // 从最常见的文件前缀推导可读标签
                 let label = derive_community_label(node_ids);
                 serde_json::json!({"id": cid, "size": node_ids.len(), "node_ids": node_ids, "label": label})
             })
             .collect();
-        // Hierarchical communities — rebuild base from node.community_id
-        // (already set during analyze), then run only Phase 2 condensation.
-        // Avoids re-running Phase 1 detect_communities on every serialize.
+        // 层次社区 — 从 node.community_id 重建基础社区
+        // （在分析阶段已设置），然后仅运行 Phase 2 凝聚。
+        // 避免每次序列化时重新运行 Phase 1 detect_communities。
         let mut base_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
         for n in g.nodes.values() {
             if let Some(cid) = n.community_id {
@@ -820,17 +819,17 @@ pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String
     .map_err(|e| format!("Engine error: {}", e))
 }
 
-/// Derive a readable label for a community from its member node IDs.
-/// Uses the most common file path segment from the node IDs.
+/// 从社区的成员节点 ID 推导可读标签。
+/// 使用节点 ID 中最常见的文件路径片段。
 pub(crate) fn derive_community_label(node_ids: &[String]) -> String {
     use std::collections::HashMap;
     let mut prefix_counts: HashMap<String, usize> = HashMap::new();
     for nid in node_ids {
-        // Node IDs are typically "file_path:line" or "file_path::symbol"
-        // Extract top-level directory or file stem
+        // 节点 ID 通常为 "file_path:line" 或 "file_path::symbol"
+        // 提取顶级目录或文件名
         let file = nid.split(':').next().unwrap_or(nid);
         let parts: Vec<&str> = file.split(['/', '\\']).collect();
-        // Try to get a meaningful prefix: first 1-2 segments of the path
+        // 尝试获取有意义的前缀：路径的前 1-2 段
         let prefix = if parts.len() >= 2 {
             format!("{}/{}", parts[parts.len().saturating_sub(2)], parts[parts.len() - 1])
         } else {
@@ -838,7 +837,7 @@ pub(crate) fn derive_community_label(node_ids: &[String]) -> String {
         };
         *prefix_counts.entry(prefix).or_default() += 1;
     }
-    // Pick the most common prefix, or fall back to first node
+    // 选择最常见的前缀，若无则回退到第一个节点
     prefix_counts
         .into_iter()
         .max_by_key(|(_, count)| *count)
@@ -846,7 +845,7 @@ pub(crate) fn derive_community_label(node_ids: &[String]) -> String {
         .unwrap_or_else(|| "社区".to_string())
 }
 
-#[allow(dead_code)] // used by tests in main.rs
+#[allow(dead_code)] // 供 main.rs 中的测试使用
 pub(crate) fn diff_to_json(before: &Graph, after: &Graph) -> serde_json::Value {
     let d = before.diff(after);
     let added_nodes: Vec<_> = d.added_nodes.iter().map(|n| serde_json::json!({
@@ -876,13 +875,13 @@ pub(crate) async fn run_analyze_with_progress(target: String, app: tauri::AppHan
     let app_clone = app.clone();
     let scheduled = std::time::Instant::now();
 
-    // Spawn analysis in a blocking thread
+    // 在阻塞线程中启动分析
     let mut analyze_handle = tokio::task::spawn_blocking(move || {
         direct_analyze(&target_clone, force)
     });
 
-    // Poll progress until the blocking task finishes (don't exit early on Ready —
-    // queued analyzes wait on analyze_lock while state stays Ready).
+    // 轮询进度直到阻塞任务完成（不要在 Ready 时提前退出 —
+    // 排队中的分析在 analyze_lock 上等待，此时状态保持 Ready）。
     loop {
         tokio::select! {
             res = &mut analyze_handle => {
@@ -936,10 +935,10 @@ pub(crate) struct DirEntry {
     pub(crate) truncated: Option<bool>,
 }
 
-/// Recursively list directory contents (depth-limited to avoid huge trees).
-/// Max depth: 4 levels, max entries: 2000. When `filter_ignored` is true,
-/// excludes ignored paths via engine's is_ignored_path (for agent-facing tool calls).
-/// Internal callers (message store, session scanner) pass false to list .hologram contents.
+/// 递归列出目录内容（深度受限以避免过大的树）。
+/// 最大深度：4 层，最大条目数：2000。当 `filter_ignored` 为 true 时，
+/// 通过引擎的 is_ignored_path 排除被忽略的路径（用于面向 Agent 的工具调用）。
+/// 内部调用者（消息存储、会话扫描器）传 false 以列出 .hologram 内容。
 pub(crate) fn list_dir_recursive(root: &std::path::Path, filter_ignored: bool) -> Vec<DirEntry> {
     fn recurse(
         dir: &std::path::Path,
@@ -949,7 +948,7 @@ pub(crate) fn list_dir_recursive(root: &std::path::Path, filter_ignored: bool) -
         truncated: &mut bool,
         filter_ignored: bool,
     ) {
-        const MAX_DEPTH: usize = 3; // 0,1,2,3 = 4 levels
+        const MAX_DEPTH: usize = 3; // 0,1,2,3 = 4 层
         const MAX_ENTRIES: usize = 2000;
 
         if depth > MAX_DEPTH || *entry_count >= MAX_ENTRIES {
@@ -972,7 +971,7 @@ pub(crate) fn list_dir_recursive(root: &std::path::Path, filter_ignored: bool) -
             let name = entry.file_name().to_string_lossy().to_string();
 
             let is_dir = path.is_dir();
-            // Reuse engine's is_ignored_path for consistent exclusion (agent-facing only)
+            // 复用引擎的 is_ignored_path 以保持一致的排除行为（仅面向 Agent）
             if filter_ignored && is_dir && hologram_engine::pipeline::discovery::is_ignored_path(
                 &path.to_string_lossy().replace('\\', "/"),
             ) {
@@ -1002,7 +1001,7 @@ pub(crate) fn list_dir_recursive(root: &std::path::Path, filter_ignored: bool) -
     let mut entry_count = 0usize;
     let mut truncated = false;
     recurse(root, 0, &mut entries, &mut entry_count, &mut truncated, filter_ignored);
-    // Set truncated flag on the first entry if limits were hit
+    // 如果达到限制，在第一个条目上设置截断标志
     if truncated && !entries.is_empty() {
         entries[0].truncated = Some(true);
     }
@@ -1052,7 +1051,7 @@ pub(crate) struct GlobEntry {
 }
 
 pub(crate) fn is_private_ip(host: &str) -> bool {
-    // Hostname checks (DNS names that resolve to local/private)
+    // 主机名检查（解析到本地/私有的 DNS 名称）
     let host_lower = host.to_lowercase();
     if host_lower == "localhost" || host_lower.ends_with(".local") || host_lower.ends_with(".internal") {
         return true;
@@ -1068,12 +1067,12 @@ pub(crate) fn is_private_ip(host: &str) -> bool {
             v4.is_private() || v4.is_link_local()
         }
         IpAddr::V6(v6) => {
-            // Check for ipv6-mapped-ipv4 addresses (::ffff:a.b.c.d)
+            // 检查 IPv6 映射的 IPv4 地址 (::ffff:a.b.c.d)
             if let Some(mapped) = v6.to_ipv4_mapped() {
                 return is_private_ip(&mapped.to_string());
             }
             let segs = v6.segments();
-            // link-local (fe80::/10) or ULA (fc00::/7 — includes fd00::/8)
+            // 链路本地 (fe80::/10) 或 ULA (fc00::/7 — 包含 fd00::/8)
             (segs[0] & 0xffc0 == 0xfe80) || (segs[0] & 0xfe00 == 0xfc00)
         }
     }
@@ -1100,12 +1099,12 @@ pub(crate) fn regenerate_file_graph(project_path: &str) -> Result<String, String
     let g: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Invalid graph JSON: {}", e))?;
 
-    // Group nodes by file
+    // 按文件分组节点
     let mut file_nodes: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     if let Some(nodes) = g.get("nodes").and_then(|v| v.as_array()) {
         for n in nodes {
             let loc = n.get("location").and_then(|v| v.as_str()).unwrap_or("");
-            // Extract file path from "file.py:123" or "file.py"
+            // 从 "file.py:123" 或 "file.py" 中提取文件路径
             let file = loc.split(':').next().unwrap_or("").to_string();
             if !file.is_empty() {
                 if let Some(id) = n.get("id").and_then(|v| v.as_str()) {
@@ -1115,7 +1114,7 @@ pub(crate) fn regenerate_file_graph(project_path: &str) -> Result<String, String
         }
     }
 
-    // Build node_id → file lookup in O(N) — avoids O(N*E) find_node_file scan
+    // 以 O(N) 构建 node_id → file 查找表 — 避免 O(N*E) 的 find_node_file 扫描
     let node_file: std::collections::HashMap<&str, &str> = g.get("nodes")
         .and_then(|v| v.as_array())
         .map(|nodes| {
@@ -1127,7 +1126,7 @@ pub(crate) fn regenerate_file_graph(project_path: &str) -> Result<String, String
             }).collect()
         }).unwrap_or_default();
 
-    // Count edges per file pair
+    // 统计每对文件之间的边数
     let mut file_edges: std::collections::HashMap<(String, String), u32> = std::collections::HashMap::new();
     if let Some(edges) = g.get("edges").and_then(|v| v.as_array()) {
         for e in edges {
@@ -1181,16 +1180,16 @@ pub(crate) fn run_git_sync(dir: &str, args: &[String]) -> Result<String, String>
     }
 }
 
-/// Run a git command on the blocking thread pool.
-/// ponytail: .output() blocks the thread waiting for the git process;
-/// running it on the async worker starves concurrent Tauri commands.
+/// 在阻塞线程池中运行 git 命令。
+/// ponytail: .output() 会阻塞线程等待 git 进程；
+/// 在 async worker 上运行会饿死并发的 Tauri 命令。
 pub(crate) async fn run_git(dir: String, args: Vec<String>) -> Result<String, String> {
     tokio::task::spawn_blocking(move || run_git_sync(&dir, &args))
         .await
         .map_err(|e| format!("git 任务失败: {e}"))?
 }
 
-/// Parse `git status --porcelain` into structured JSON.
+/// 将 `git status --porcelain` 解析为结构化 JSON。
 pub(crate) fn parse_status(raw: &str) -> serde_json::Value {
     let files: Vec<serde_json::Value> = raw
         .lines()
@@ -1214,7 +1213,7 @@ pub(crate) fn parse_status(raw: &str) -> serde_json::Value {
             };
             let staged = !st.starts_with(' ') && st != "??";
             let is_rename = st.contains('R');
-            // For renames, the path looks like "old -> new"
+            // 对于重命名，路径格式为 "old -> new"
             let (display_path, old_path) = if is_rename && path.contains(" -> ") {
                 let parts: Vec<&str> = path.split(" -> ").collect();
                 (parts[1].to_string(), Some(parts[0].to_string()))
@@ -1235,35 +1234,35 @@ pub(crate) fn parse_status(raw: &str) -> serde_json::Value {
     serde_json::json!(files)
 }
 
-/// Atomic write: temp file then rename.
-/// Write a file atomically (tmp → rename), with a .bak backup of the
-/// original file when one already exists. Uses io_retry for transient errors.
-/// Callers must have already passed permission checks — this is pure I/O.
+/// 原子写入：临时文件再重命名。
+/// 原子地写入文件（tmp → rename），当原文件已存在时创建 .bak 备份。
+/// 使用 io_retry 处理瞬时错误。
+/// 调用方必须已通过权限检查 — 此函数仅做纯 I/O。
 pub(crate) fn write_atomic(file_path: &str, content: &str) -> Result<(), String> {
     let tmp_path = format!("{}.tmp", file_path);
     let bak_path = format!("{}.bak", file_path);
 
-    // Retry the tmp write (transient I/O errors on NFS, etc.)
+    // 重试临时文件写入（NFS 等的瞬时 I/O 错误）
     io_retry(|| std::fs::write(&tmp_path, content), "write_atomic(tmp)")?;
 
-    // Create .bak snapshot before overwriting the original (best-effort)
+    // 在覆盖原文件前创建 .bak 快照（尽力而为）
     let had_original = std::path::Path::new(file_path).exists();
     if had_original {
-        // Rename original → .bak; ignore failure (disk full, permission, etc.)
+        // 将原文件重命名为 .bak；忽略失败（磁盘满、权限等）
         let _ = std::fs::rename(file_path, &bak_path);
     }
 
-    // Atomically replace original with tmp
+    // 用 tmp 原子替换原文件
     match std::fs::rename(&tmp_path, file_path) {
         Ok(()) => {
-            // On success, remove the stale .bak (best-effort)
+            // 成功后删除旧的 .bak（尽力而为）
             if had_original {
                 let _ = std::fs::remove_file(&bak_path);
             }
             Ok(())
         }
         Err(e) => {
-            // If rename failed, try to restore from .bak
+            // 如果重命名失败，尝试从 .bak 恢复
             if had_original && std::path::Path::new(&bak_path).exists() {
                 let _ = std::fs::rename(&bak_path, file_path);
             }
@@ -1272,8 +1271,8 @@ pub(crate) fn write_atomic(file_path: &str, content: &str) -> Result<(), String>
     }
 }
 
-/// Retry a fallible I/O closure up to 3 times on transient errors.
-/// Transient = Interrupted, TimedOut, WouldBlock. All other errors fail fast.
+/// 对可能失败的 I/O 闭包最多重试 3 次（针对瞬时错误）。
+/// 瞬时错误 = Interrupted、TimedOut、WouldBlock。其他错误立即失败。
 fn io_retry<T, F>(mut op: F, label: &str) -> Result<T, String>
 where
     F: FnMut() -> std::io::Result<T>,
@@ -1294,7 +1293,7 @@ where
                 }
                 let delay = std::time::Duration::from_millis(100) * 2u32.pow(attempt);
                 eprintln!(
-                    "[write_atomic] {}: retryable error, attempt {}/{} — {:?} (retrying in {:?})",
+                    "[write_atomic] {}: 可重试错误，第 {}/{} 次尝试 — {:?}（{:?} 后重试）",
                     label,
                     attempt + 1,
                     retry_count,
@@ -1308,8 +1307,8 @@ where
     Err(format!("{}: unreachable", label))
 }
 
-/// Clamp depth to u8::MAX (255), logging a warning on overflow.
-/// Used by engine_neighbors/impact/path to prevent silent truncation.
+/// 将深度限制到 u8::MAX (255)，溢出时记录警告。
+/// 供 engine_neighbors/impact/path 使用，防止静默截断。
 pub(crate) fn clamp_depth(depth: usize) -> u8 {
     if depth > u8::MAX as usize {
         tracing::warn!(depth, "depth clamped to 255");
@@ -1319,7 +1318,7 @@ pub(crate) fn clamp_depth(depth: usize) -> u8 {
     }
 }
 
-/// Find line in content containing query (fuzzy substring match).
+/// 在内容中查找包含查询字符串的行（模糊子串匹配）。
 pub(crate) fn fuzzy_find(content: &str, query: &str) -> Option<(usize, String)> {
     let q = query.trim();
     if q.is_empty() { return None; }
@@ -1334,12 +1333,12 @@ pub(crate) fn fuzzy_find(content: &str, query: &str) -> Option<(usize, String)> 
 mod tests {
     use super::*;
 
-    // ── B1: SSRF guard must catch ipv6-mapped-ipv4 (::ffff:a.b.c.d) ──
+    // ── B1: SSRF 防护必须捕获 ipv6 映射的 ipv4 (::ffff:a.b.c.d) ──
     #[test]
     fn test_b1_is_private_ip_ipv6_mapped() {
-        assert!(is_private_ip("::ffff:127.0.0.1"), "ipv6-mapped loopback must be blocked");
-        assert!(is_private_ip("::ffff:10.0.0.5"), "ipv6-mapped private range must be blocked");
-        assert!(is_private_ip("::ffff:192.168.1.1"), "ipv6-mapped private range must be blocked");
+        assert!(is_private_ip("::ffff:127.0.0.1"), "ipv6 映射的回环地址必须被拦截");
+        assert!(is_private_ip("::ffff:10.0.0.5"), "ipv6 映射的私有地址段必须被拦截");
+        assert!(is_private_ip("::ffff:192.168.1.1"), "ipv6 映射的私有地址段必须被拦截");
     }
 
     #[test]
@@ -1348,20 +1347,20 @@ mod tests {
         assert!(is_private_ip("10.1.2.3"));
         assert!(is_private_ip("192.168.0.1"));
         assert!(is_private_ip("172.16.5.5"));
-        assert!(is_private_ip("169.254.1.1"), "link-local must be blocked");
-        assert!(is_private_ip("0.0.0.0"), "unspecified must be blocked");
-        assert!(is_private_ip("::1"), "ipv6 loopback must be blocked");
-        assert!(is_private_ip("fe80::1"), "ipv6 link-local must be blocked");
-        assert!(is_private_ip("fd00::1"), "ipv6 ULA must be blocked");
+        assert!(is_private_ip("169.254.1.1"), "链路本地地址必须被拦截");
+        assert!(is_private_ip("0.0.0.0"), "未指定地址必须被拦截");
+        assert!(is_private_ip("::1"), "ipv6 回环地址必须被拦截");
+        assert!(is_private_ip("fe80::1"), "ipv6 链路本地地址必须被拦截");
+        assert!(is_private_ip("fd00::1"), "ipv6 ULA 地址必须被拦截");
         assert!(is_private_ip("localhost"));
-        // Public addresses must NOT be flagged
+        // 公网地址不应被标记
         assert!(!is_private_ip("8.8.8.8"));
         assert!(!is_private_ip("1.1.1.1"));
-        assert!(!is_private_ip("2606:4700:4700::1111"), "public ipv6 must pass");
-        assert!(!is_private_ip("example.com"), "plain hostname is not an IP literal");
+        assert!(!is_private_ip("2606:4700:4700::1111"), "公网 ipv6 必须放行");
+        assert!(!is_private_ip("example.com"), "普通主机名不是 IP 字面量");
     }
 
-    // ── depth clamp ──
+    // ── 深度限制 ──
     #[test]
     fn test_clamp_depth_normal() {
         assert_eq!(clamp_depth(0), 0);

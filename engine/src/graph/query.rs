@@ -1,15 +1,15 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Graph query functions — O(E) legacy implementations.
-// DEPRECATED: New code should use crate::storage::query or GraphStore directly.
-// These functions are kept for backward compat with callers that pass &Graph.
+// Graph 查询函数 — O(E) 传统实现。
+// 已弃用：新代码应使用 crate::storage::query 或直接使用 GraphStore。
+// 这些函数保留是为了向后兼容传入 &Graph 的调用方。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use crate::graph::{Graph, Node};
 
-/// Neighbors of a node (outgoing edges → connected nodes, with edge info).
-/// DEPRECATED: use storage::query::neighbors or MemoryIndex::neighbors() directly.
+/// 节点的邻居（出边 → 连接的节点，含边信息）。
+/// 已弃用：请使用 storage::query::neighbors 或直接使用 MemoryIndex::neighbors()。
 pub fn neighbors(graph: &Graph, node_id: &str, depth: usize) -> Vec<(String, String, u8)> {
     let mut result = Vec::new();
     let mut visited = HashSet::new();
@@ -38,8 +38,8 @@ pub fn neighbors(graph: &Graph, node_id: &str, depth: usize) -> Vec<(String, Str
     result
 }
 
-/// BFS shortest path between two nodes.
-/// DEPRECATED: use storage::query::shortest_path or MemoryIndex::shortest_path() directly.
+/// BFS 最短路径：两个节点之间。
+/// 已弃用：请使用 storage::query::shortest_path 或直接使用 MemoryIndex::shortest_path()。
 pub fn shortest_path(graph: &Graph, from: &str, to: &str) -> Option<Vec<String>> {
     let mut prev: HashMap<&str, &str> = HashMap::new();
     let mut visited = HashSet::new();
@@ -78,8 +78,8 @@ pub fn shortest_path(graph: &Graph, from: &str, to: &str) -> Option<Vec<String>>
     Some(path)
 }
 
-/// Search nodes by name substring.
-/// DEPRECATED: use FTS5 via tool_search or MemoryIndex::fts_search().
+/// 按名称子串搜索节点。
+/// 已弃用：请通过 tool_search 使用 FTS5 或使用 MemoryIndex::fts_search()。
 pub fn search_nodes<'a>(graph: &'a Graph, query: &str) -> Vec<&'a Node> {
     let lower = query.to_lowercase();
     graph.nodes.values()
@@ -87,8 +87,8 @@ pub fn search_nodes<'a>(graph: &'a Graph, query: &str) -> Vec<&'a Node> {
         .collect()
 }
 
-/// Impact analysis: BFS blast from a node, returning nodes by distance layer.
-/// DEPRECATED: use storage::query::impact or MemoryIndex::impact() directly.
+/// 影响分析：从节点出发的 BFS 扩散，按距离层返回节点。
+/// 已弃用：请使用 storage::query::impact 或直接使用 MemoryIndex::impact()。
 pub fn impact(graph: &Graph, node_id: &str, max_depth: usize) -> Vec<(usize, Vec<String>)> {
     let mut layers: Vec<(usize, Vec<String>)> = Vec::new();
     let mut visited = HashSet::new();

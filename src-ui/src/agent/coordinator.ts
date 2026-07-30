@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Coordinator — sub-agent lifecycle registry.
+// Coordinator — 子 Agent 生命周期注册器。
 //
 // 模型：子Agent = 一个会跑很久的工具调用。agent_spawn 阻塞至子Agent完成，
 // 子Agent的最终报告就是该工具调用的结果。同一轮发多个 agent_spawn 时
@@ -30,12 +30,12 @@ export interface SubAgentHandle {
   error?: string;
 }
 
-/** The work a sub-agent runs. Receives the pool's AbortSignal synchronously —
- *  wire it into the child agent's LLM stream so stop/timeout actually kills it. */
+/** 子 Agent 运行的工作。同步接收 pool 的 AbortSignal —
+ *  将其接入子 agent 的 LLM stream，使 stop/timeout 能真正终止它。 */
 export type SubAgentRunFn = (signal: AbortSignal) => Promise<{ text: string; err?: string }>;
 
-/** Returned synchronously by spawn(). `done` resolves exactly once with the
- *  final handle (completed / failed / stopped / timeout-as-failed). */
+/** 由 spawn() 同步返回。`done` 恰好 resolve 一次，返回
+ *  最终句柄（completed / failed / stopped / timeout 计为 failed）。 */
 export interface SpawnedAgent {
   id: string;
   signal: AbortSignal;
@@ -47,7 +47,7 @@ interface PendingAgent {
   done: Promise<SubAgentHandle>;
   resolve: (h: SubAgentHandle) => void;
   callId?: string;
-  finished?: boolean; // guard against double-finish (timeout + promise race)
+  finished?: boolean; // 防止重复完成（超时 + promise 竞态）
   abortController: AbortController;
 }
 
@@ -62,26 +62,26 @@ interface QueuedSpawn {
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const MAX_QUEUE_SIZE = 20;
-// 10 minutes — coding sub-agents run builds/tests; 2 min timed out healthy agents
-// and (worse) left them running detached while the parent was told they failed.
+// 10 分钟 — 编码子 Agent 需要跑构建/测试；2 分钟会让健康的 agent 超时，
+// 且（更糟的）让它们脱离父 Agent 继续运行，而父 Agent 被告知已失败。
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class SubAgentPool {
   private agents = new Map<string, PendingAgent>();
   private completed: SubAgentHandle[] = [];
-  private static readonly MAX_COMPLETED = 20; // cap to prevent memory leak
+  private static readonly MAX_COMPLETED = 20; // 上限，防止内存泄漏
   private maxConcurrent: number;
   private defaultTimeoutMs: number;
   private timeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
-  // ── Queue for rate-limit backoff ──
+  // ── 限流退避队列 ──
   private queue: QueuedSpawn[] = [];
   private _queuedIds = new Set<string>();
 
-  /** Optional callback fired when any sub-agent finishes (for board archiving etc.) */
+  /** 任意子 Agent 完成时触发的可选回调（用于 board 归档等） */
   onFinish?: (agentId: string, status: SubAgentStatus) => void;
 
-  /** Map from model-visible id (sub-...) to pool internal id (subagent-...) */
+  /** 模型可见 id（sub-...）到 pool 内部 id（subagent-...）的映射 */
   private _aliasToInternal = new Map<string, string>();
 
   constructor(maxConcurrent = DEFAULT_MAX_CONCURRENT, defaultTimeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -96,10 +96,10 @@ export class SubAgentPool {
     }
   }
 
-  /** Spawn a sub-agent. When at maxConcurrent, queues the request instead of failing.
-   *  Returns null only when the queue is also full.
-   *  Idempotent on callId: re-dispatch of the same tool call (stream retry)
-   *  returns the already-running agent instead of starting a duplicate. */
+  /** 生成子 Agent。达到 maxConcurrent 时，将请求排队而非失败。
+   *  仅当队列也满时返回 null。
+   *  对 callId 幂等：同一工具调用的重发（stream retry）
+   *  返回已运行的 agent 而非启动重复的。 */
   spawn(description: string, runFn: SubAgentRunFn, callId?: string, timeoutMs?: number): SpawnedAgent | null {
     if (callId) {
       for (const [id, pending] of this.agents) {
@@ -107,20 +107,20 @@ export class SubAgentPool {
           return { id, signal: pending.abortController.signal, done: pending.done };
         }
       }
-      // Also check queue for duplicates
+      // 也检查队列中的重复
       if (this.queue.some((q) => q.callId === callId)) {
-        return null; // already queued with this callId
+        return null; // 已用此 callId 排队
       }
     }
     if (this.agents.size >= this.maxConcurrent) {
-      // Queue instead of failing — model gets back a "queued" SpawnedAgent
+      // 排队而非失败 — 模型收到一个"排队中"的 SpawnedAgent
       return this._enqueue(description, runFn, callId, timeoutMs);
     }
 
     return this._doSpawn(description, runFn, callId, timeoutMs);
   }
 
-  /** Core spawn logic — extracted so spawn() and _drainQueue() can share it. */
+  /** 核心生成逻辑 — 提取出来供 spawn() 和 _drainQueue() 共用。 */
   private _doSpawn(description: string, runFn: SubAgentRunFn, callId?: string, timeoutMs?: number): SpawnedAgent {
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const handle: SubAgentHandle = {
@@ -160,11 +160,11 @@ export class SubAgentPool {
       this._addCompleted(handle);
       this.agents.delete(id);
       pending.resolve(handle);
-      // Resolve alias for onFinish callback — callers (archive) need the model-visible id
+      // 为 onFinish 回调解析别名 — 调用方（归档）需要模型可见 id
       const aliasId = this._reverseAlias(id);
       this.onFinish?.(aliasId ?? id, handle.status);
 
-      // Drain queue — a slot just freed up
+      // 排空队列 — 刚空出一个槽位
       this._drainQueue();
     };
 
@@ -172,13 +172,13 @@ export class SubAgentPool {
     this.timeouts.set(
       id,
       setTimeout(() => {
-        abortController.abort(); // kill the actual runFn first…
-        finish('', `timeout: exceeded ${Math.round(ms / 1000)}s`); // …then settle the books
+        abortController.abort(); // 先终止实际的 runFn…
+        finish('', `timeout: exceeded ${Math.round(ms / 1000)}s`); // …再结算
       }, ms),
     );
 
-    // Fire and forget — the signal is handed over synchronously, so stop/timeout
-    // always reach the running child. Late completions hit the `finished` guard.
+    // 发后即忘 — signal 同步交接，stop/timeout
+    // 总能到达运行中的子 Agent。延迟完成会被 `finished` 守卫拦截。
     runFn(abortController.signal).then(
       ({ text, err }) => finish(text, err),
       (err) => finish('', String(err?.message || err)),
@@ -187,11 +187,11 @@ export class SubAgentPool {
     return { id, signal: abortController.signal, done };
   }
 
-  /** Enqueue a spawn request when the pool is full. Returns a "queued" SpawnedAgent.
-   *  The actual spawn happens when _drainQueue() fires. */
+  /** pool 满时将生成请求入队。返回一个"排队中"的 SpawnedAgent。
+   *  实际生成在 _drainQueue() 触发时进行。 */
   private _enqueue(description: string, runFn: SubAgentRunFn, callId?: string, timeoutMs?: number): SpawnedAgent | null {
     if (this.queue.length >= MAX_QUEUE_SIZE) {
-      return null; // queue full — model must retry
+      return null; // 队列已满 — 模型需重试
     }
 
     const id = `subagent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -203,7 +203,7 @@ export class SubAgentPool {
       resolveDone = r;
     });
 
-    // Store the resolve function so _drainQueue can wire up the real spawn
+    // 存储 resolve 函数，以便 _drainQueue 能接上真正的生成
     this.queue.push({
       description,
       runFn,
@@ -211,12 +211,12 @@ export class SubAgentPool {
       timeoutMs,
       queuedId: id,
       resolve: (real: SpawnedAgent) => {
-        // When the real spawn fires, connect its done to our deferred promise
+        // 真正的生成触发时，将其 done 连接到我们的延迟 promise
         real.done.then((h) => {
           this._queuedIds.delete(id);
-          resolveDone({ ...h, id }); // preserve the queued ID for the caller
+          resolveDone({ ...h, id }); // 为调用方保留排队 ID
         });
-        // Forward abort from the real signal
+        // 从真实 signal 转发中止
         real.signal.addEventListener('abort', () => abortController.abort(), { once: true });
       },
     });
@@ -224,41 +224,41 @@ export class SubAgentPool {
     return { id, signal: abortController.signal, done };
   }
 
-  /** Drain the queue — start as many queued spawns as slots allow. */
+  /** 排空队列 — 在可用槽位范围内启动尽可能多的排队生成。 */
   private _drainQueue(): void {
     while (this.queue.length > 0 && this.agents.size < this.maxConcurrent) {
       const item = this.queue.shift()!;
       const spawned = this._doSpawn(item.description, item.runFn, item.callId, item.timeoutMs);
-      // Re-map any alias that pointed to the queued id → real internal id
+      // 重新映射指向排队 id 的别名 → 真实内部 id
       for (const [alias, internal] of this._aliasToInternal) {
         if (internal === item.queuedId) {
           this._aliasToInternal.set(alias, spawned.id);
           break;
         }
       }
-      // Delete the QUEUED id (not spawned.id which was never in the set)
+      // 删除排队的 id（不是 spawned.id，后者从未在集合中）
       this._queuedIds.delete(item.queuedId);
       item.resolve(spawned);
     }
   }
 
-  /** Check if an agent ID is currently queued (not yet spawned). */
+  /** 检查 agent ID 是否正在排队（尚未生成）。 */
   isQueued(id: string): boolean {
     return this._queuedIds.has(id);
   }
 
-  /** Register an alias (model-visible id) for an internal pool id.
-   *  This lets agent_kill use the id the model actually sees. */
+  /** 注册别名（模型可见 id）对应 pool 内部 id。
+   *  使 agent_kill 能使用模型实际看到的 id。 */
   registerAlias(aliasId: string, internalId: string): void {
     this._aliasToInternal.set(aliasId, internalId);
   }
 
-  /** Resolve a model-visible id to pool internal id (or return as-is if no alias). */
+  /** 将模型可见 id 解析为 pool 内部 id（无别名则原样返回）。 */
   private _resolveId(id: string): string {
     return this._aliasToInternal.get(id) ?? id;
   }
 
-  /** Reverse lookup: pool internal id → model-visible id (if registered). */
+  /** 反向查找：pool 内部 id → 模型可见 id（如已注册）。 */
   private _reverseAlias(internalId: string): string | undefined {
     for (const [alias, internal] of this._aliasToInternal) {
       if (internal === internalId) return alias;
@@ -266,17 +266,16 @@ export class SubAgentPool {
     return undefined;
   }
 
-  /** Look up a sub-agent by ID — running first, then completed history.
-   *  Accepts both model-visible (sub-...) and internal (subagent-...) ids. */
+  /** 按 ID 查找子 Agent — 先查运行中，再查已完成历史。
+   *  同时接受模型可见（sub-...）和内部（subagent-...）id。 */
   getHandle(id: string): SubAgentHandle | undefined {
     const internalId = this._resolveId(id);
     return this.agents.get(internalId)?.handle ?? this.completed.find((h) => h.id === internalId);
   }
 
-  /** Handles of all RUNNING sub-agents, with the model-visible (alias) id swapped
-   *  in where one is registered — agent_status reports these so the model can
-   *  correlate with the ids it already knows. Queued (not-yet-spawned) agents
-   *  are excluded: they have no event stream to observe. */
+  /** 所有运行中子 Agent 的句柄，已注册别名的会替换为模型可见（别名）id —
+   *  agent_status 报告这些 id，使模型能与自己已知的 id 关联。排队中（尚未生成）
+   *  的 Agent 被排除：它们没有可观察的事件流。 */
   listRunning(): SubAgentHandle[] {
     const out: SubAgentHandle[] = [];
     for (const [, pending] of this.agents) {
@@ -286,10 +285,10 @@ export class SubAgentPool {
     return out;
   }
 
-  /** Stop a running sub-agent: aborts its runFn, then marks it stopped.
-   *  Also covers queued (not-yet-spawned) agents — dequeues them and settles
-   *  their `done` as stopped so agent_kill works before a slot frees up.
-   *  Accepts both model-visible (sub-...) and internal (subagent-...) ids. */
+  /** 停止运行中的子 Agent：中止其 runFn，然后标记为已停止。
+   *  也覆盖排队中（尚未生成）的 Agent — 将其出队并以 stopped 结算
+   *  `done`，使 agent_kill 在有空位之前也能工作。
+   *  同时接受模型可见（sub-...）和内部（subagent-...）id。 */
   stop(id: string): boolean {
     const internalId = this._resolveId(id);
     const qIdx = this.queue.findIndex((q) => q.queuedId === internalId);
@@ -305,9 +304,9 @@ export class SubAgentPool {
     return true;
   }
 
-  /** Stop all running sub-agents AND drain the queue (otherwise _finishStopped's
-   *  _drainQueue would spawn queued agents right after stopping the running ones).
-   *  Returns the stopped agent IDs. */
+  /** 停止所有运行中的子 Agent 并排空队列（否则 _finishStopped 的
+   *  _drainQueue 会在停止运行中的之后立即生成排队的 Agent）。
+   *  返回被停止的 Agent ID。 */
   stopAll(): string[] {
     const stopped: string[] = [];
     while (this.queue.length > 0) {
@@ -323,9 +322,9 @@ export class SubAgentPool {
     return stopped;
   }
 
-  /** Settle a queued (never-spawned) agent as stopped: records it in completed
-   *  history and resolves the caller's `done` via the stored resolve, producing
-   *  the same { ...handle, id } shape _enqueue would have produced on drain. */
+  /** 将排队中（从未生成）的 Agent 结算为已停止：记录到已完成
+   *  历史并通过存储的 resolve 结算调用方的 `done`，产生与
+   *  _enqueue 在排空时相同的 { ...handle, id } 结构。 */
   private _stopQueued(item: QueuedSpawn): void {
     this._queuedIds.delete(item.queuedId);
     const handle: SubAgentHandle = {
@@ -357,11 +356,11 @@ export class SubAgentPool {
     pending.resolve(pending.handle);
     const aliasId = this._reverseAlias(id);
     this.onFinish?.(aliasId ?? id, SubAgentStatus.Stopped);
-    // Drain queue — stopping an agent frees a slot
+    // 排空队列 — 停止一个 Agent 会释放一个槽位
     this._drainQueue();
   }
 
-  /** Summary of running + recently completed agents (for status display). */
+  /** 运行中 + 最近完成的 Agent 摘要（用于状态显示）。 */
   summary(): string {
     const lines: string[] = [];
     for (const [, pending] of this.agents) {

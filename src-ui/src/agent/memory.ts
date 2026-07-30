@@ -18,42 +18,42 @@ import type { AuraRecord } from './aura-memory';
 import { auraCount, auraInit, auraRecall, auraShutdown, auraStore } from './aura-memory';
 import type { Tool } from './tool';
 
-// ── Fact-save authorization (self-consuming sentinel) ──
-// /remember command sets this; the next hologram_memory_save consumes it.
-// Agent has no way to call authorizeFactSave() — only chat.ts's /remember handler can.
+// ── Fact 保存授权（自消费哨兵） ──
+// /remember 命令设置此标志；下一次 hologram_memory_save 会消费它。
+// Agent 无法调用 authorizeFactSave() — 只有 chat.ts 的 /remember 处理器可以。
 let _factAuthorized = false;
-/** Called by /remember handler BEFORE sending the save prompt to the Agent. */
+/** 由 /remember 处理器在发送保存提示给 Agent 之前调用。 */
 export function authorizeFactSave(): void {
   _factAuthorized = true;
 }
-/** Consume the authorization. Returns true exactly once per /remember. */
+/** 消费授权。每次 /remember 仅返回一次 true。 */
 function consumeFactAuthorization(): boolean {
   const was = _factAuthorized;
   _factAuthorized = false;
   return was;
 }
 
-// ── Types ──
+// ── 类型 ──
 
 type Confidence = 'fact' | 'reference' | 'background' | 'suppressed';
 
-/** Parsed entry from MEMORY.md index */
+/** 从 MEMORY.md 索引解析的条目 */
 export interface MemoryEntry {
-  name: string; // kebab-case slug, e.g. "user-prefers-concise"
-  title: string; // display title, e.g. "用户偏好简洁回复"
-  file: string; // file name with .md extension
-  description: string; // one-line hook from index
+  name: string; // kebab-case slug，如 "user-prefers-concise"
+  title: string; // 显示标题，如 "用户偏好简洁回复"
+  file: string; // 文件名（含 .md 扩展名）
+  description: string; // 索引中的一行摘要
 }
 
-/** Full memory with parsed frontmatter + body */
+/** 完整记忆，含已解析的 frontmatter + 正文 */
 export interface MemoryFile {
   name: string;
   description: string;
   type: 'user' | 'feedback' | 'project' | 'reference';
   confidence: Confidence;
   hit_count: number;
-  content: string; // body only (without frontmatter)
-  raw: string; // full file text (for rewriting with updated metadata)
+  content: string; // 仅正文（不含 frontmatter）
+  raw: string; // 完整文件文本（用于重写时更新元数据）
 }
 
 // ── MemoryManager ──
@@ -65,8 +65,8 @@ export class MemoryManager {
   private _auraInitPromise: Promise<void> | null = null;
   private globalDirPath: string | null = null;
 
-  /** Fired after a memory is saved (wired by the workspace — fans out to the
-   *  UI bus and to the live agent's notifyMemorySaved). */
+  /** 记忆保存后触发（由 workspace 接线 — 扇出到
+   *  UI 总线和活跃 Agent 的 notifyMemorySaved）。 */
   onSaved?: (info: { name: string; description?: string; confidence?: string; scope?: string }) => void;
 
   /** @param projectPath 项目根目录
@@ -78,24 +78,24 @@ export class MemoryManager {
     this.globalDirPath = globalPath || null;
   }
 
-  /** Whether AuraSDK semantic recall has been initialized. */
+  /** AuraSDK 语义检索是否已初始化。 */
   get auraReady(): boolean {
     return this._auraReady;
   }
 
-  /** Initialize AuraSDK semantic retrieval engine.
-   *  Creates or opens the brain at .hologram/aura-brain/ in the project root.
-   *  Safe to call multiple times — subsequent calls are no-ops. */
+  /** 初始化 AuraSDK 语义检索引擎。
+   *  在项目根目录的 .hologram/aura-brain/ 下创建或打开 brain。
+   *  可安全多次调用 — 后续调用为空操作。 */
   async initAura(): Promise<void> {
     if (this._auraReady) return;
     if (this._auraInitPromise) return this._auraInitPromise;
     this._auraInitPromise = (async () => {
       try {
-        // ponytail: native Aura is a global singleton — shut down old brain before init'ing new one (workspace switch)
+        // ponytail: 原生 Aura 是全局单例 — 初始化新 brain 前先关闭旧的（工作区切换）
         try {
           await auraShutdown();
         } catch {
-          /* not initialized yet, ok */
+          /* 尚未初始化，无妨 */
         }
         const brainPath = this.projectPath.replace(/\\/g, '/') + '/.hologram/aura-brain';
         const result = await auraInit(brainPath);
@@ -110,9 +110,8 @@ export class MemoryManager {
     return this._auraInitPromise;
   }
 
-  /** Run AuraSDK semantic recall against a natural-language query.
-   *  Returns scored records, filtered to remove records whose source memory
-   *  has been deleted. Gracefully falls back to empty array if Aura is down. */
+  /** 对自然语言查询执行 AuraSDK 语义检索。
+   *  返回评分记录，过滤掉源记忆已删除的记录。Aura 不可用时优雅降级为空数组。 */
   async auraSemanticRecall(query: string, topK: number = 20): Promise<AuraRecord[]> {
     if (!this._auraReady) return [];
     try {
@@ -124,9 +123,9 @@ export class MemoryManager {
     }
   }
 
-  /** Fire a dummy recall to pre-load the SDR index into memory.
-   *  Call during bootstrap to avoid cold-start latency on first user message.
-   *  Waits for initAura() to complete if it's still in progress, then warms up. */
+  /** 发起一次空查询以预加载 SDR 索引到内存。
+   *  在启动阶段调用以避免首条用户消息的冷启动延迟。
+   *  若 initAura() 仍在进行中则先等待完成，再预热。 */
   prewarmAura(): void {
     this.initAura().then(() => {
       if (this._auraReady) {
@@ -135,30 +134,30 @@ export class MemoryManager {
     }).catch(() => {});
   }
 
-  /** Filter out Aura records whose source memory file no longer exists.
-   *  Records without a [memory:NAME] marker (pre-migration) are kept. */
+  /** 过滤掉源记忆文件已不存在的 Aura 记录。
+   *  没有 [memory:NAME] 标记的记录（迁移前）予以保留。 */
   private async _filterOrphaned(records: AuraRecord[]): Promise<AuraRecord[]> {
     if (records.length === 0) return records;
-    // Collect all active memory names across all scopes (with .md extension for direct lookup)
+    // 收集所有范围内活跃记忆名称（含 .md 扩展名用于直接查找）
     const active = new Set<string>();
     for (const scope of this.scopes()) {
       try {
         const entries = await this.list(scope);
         for (const e of entries) active.add(e.name + '.md');
       } catch {
-        /* scope not ready yet */
+        /* 范围尚未就绪 */
       }
     }
-    if (active.size === 0) return records; // can't verify, keep all
+    if (active.size === 0) return records; // 无法验证，全部保留
     const markerRe = /^\[memory:([^\]]+)\]/;
     return records.filter((r) => {
       const m = r.content.match(markerRe);
-      if (!m) return true; // no marker → pre-migration record, keep
+      if (!m) return true; // 无标记 → 迁移前记录，保留
       return active.has(m[1] + '.md');
     });
   }
 
-  /** Get Aura record count. */
+  /** 获取 Aura 记录数量。 */
   async auraRecordCount(): Promise<number> {
     if (!this._auraReady) return 0;
     try {
@@ -172,7 +171,7 @@ export class MemoryManager {
     return this.projectPath.replace(/\\/g, '/') + '/.hologram/memory';
   }
 
-  /** Resolve the working directory for a given scope. */
+  /** 解析指定范围的工作目录。 */
   private dirFor(scope: 'project' | 'global'): string {
     if (scope === 'global') {
       if (!this.globalDirPath) throw new Error('全局记忆未启用');
@@ -181,7 +180,7 @@ export class MemoryManager {
     return this.projectDir;
   }
 
-  /** Returns both scopes (global first if enabled). */
+  /** 返回所有范围（全局优先，若已启用）。 */
   public scopes(): Array<'project' | 'global'> {
     const s: Array<'project' | 'global'> = [];
     if (this.globalDirPath) s.push('global');
@@ -197,40 +196,40 @@ export class MemoryManager {
     return this.dirFor(scope) + '/' + name + '.md';
   }
 
-  /** Ensure .hologram/memory/ exists before any read. Fixes cold-start where
-   *  sandbox denies reads from non-existent parent directories. */
+  /** 确保读取前 .hologram/memory/ 存在。修复冷启动时
+   *  sandbox 拒绝从不存在的父目录读取的问题。 */
   private async ensureDir(scope: 'project' | 'global' = 'project'): Promise<void> {
     if (scope === 'project' && this._projectDirReady) return;
     if (scope === 'global' && this._globalDirReady) return;
     try {
       await rpc('create_directory', { path: this.dirFor(scope) });
     } catch {
-      // Directory may already exist or create is not available — safe to continue
+      // 目录可能已存在或创建不可用 — 安全继续
     }
     if (scope === 'project') this._projectDirReady = true;
     else this._globalDirReady = true;
   }
 
-  // ── Prompt section cache ──
+  // ── Prompt 区段缓存 ──
 
   private _promptSectionCache: string | null = null;
   private _promptSectionCacheTime = 0;
 
-  // ── Index ──
+  // ── 索引 ──
 
-  /** Load the raw MEMORY.md text for a scope. */
+  /** 加载指定范围的 MEMORY.md 原始文本。 */
   async loadIndexText(scope: 'project' | 'global' = 'project'): Promise<string> {
     await this.ensureDir(scope);
     try {
       const numbered = await rpc<string>('read_file_content', { filePath: this.indexPath(scope) });
-      // read_file_content returns cat -n format (line numbers); strip them.
+      // read_file_content 返回 cat -n 格式（含行号）；去除行号。
       return numbered.replace(/^\s*\d+\t/gm, '');
     } catch {
       return '';
     }
   }
 
-  /** Parse MEMORY.md into structured entries for a scope. */
+  /** 将 MEMORY.md 解析为结构化条目（指定范围）。 */
   async list(scope: 'project' | 'global' = 'project'): Promise<MemoryEntry[]> {
     const text = await this.loadIndexText(scope);
     if (!text.trim()) return [];
@@ -248,15 +247,15 @@ export class MemoryManager {
     return entries;
   }
 
-  /** Build a compact index line (for adding to MEMORY.md). */
+  /** 构建紧凑的索引行（用于添加到 MEMORY.md）。 */
   static formatIndexEntry(entry: MemoryEntry): string {
     return `- [${entry.title}](${entry.file}) — ${entry.description}`;
   }
 
-  // ── Read ──
+  // ── 读取 ──
 
-  /** Read a full memory file by name (without .md). Returns null if not found.
-   *  Set incrementHit to track recall frequency. */
+  /** 按名称读取完整记忆文件（不含 .md）。未找到则返回 null。
+   *  设置 incrementHit 以追踪回想频率。 */
   async read(name: string, scope: 'project' | 'global' = 'project', incrementHit = false): Promise<MemoryFile | null> {
     await this.ensureDir(scope);
     try {
@@ -280,27 +279,27 @@ export class MemoryManager {
     }
   }
 
-  // ── Prompt section — loaded into system prompt ──
+  // ── Prompt 区段 — 加载到 system prompt ──
 
-  /** Load all non-suppressed memories from both scopes and format as system prompt section.
-   *  Global memories load first, project memories overlay (same name = project wins).
-   *  When memory count exceeds threshold, graph-aware relevance filtering is applied
-   *  to keep only the most relevant memories (facts are always included).
-   *  Cached for 5 seconds for rapid session creation. */
+  /** 从两个范围加载所有非 suppressed 的记忆并格式化为 system prompt 区段。
+   *  全局记忆先加载，项目记忆覆盖（同名时项目优先）。
+   *  当记忆数量超过阈值时，应用图感知相关性过滤
+   *  只保留最相关的记忆（fact 级别始终包含）。
+   *  缓存 5 秒以支持快速会话创建。 */
   async loadPromptSection(graphNodes?: string[]): Promise<string> {
     const now = Date.now();
     if (this._promptSectionCache && now - this._promptSectionCacheTime < 5000) {
       return this._promptSectionCache;
     }
 
-    // Collect from all scopes (global first, project overlay).
-    // Use batch read when there are multiple entries to avoid N IPC round-trips.
+    // 从所有范围收集（全局优先，项目覆盖）。
+    // 多条目时使用批量读取以避免 N 次 IPC 往返。
     const allByName = new Map<string, { mf: MemoryFile; scope: string }>();
     for (const scope of this.scopes()) {
       const entries = await this.list(scope);
       if (entries.length === 0) continue;
 
-      // Collect file paths for batch read
+      // 收集文件路径用于批量读取
       const filePaths = entries.map((e) => this.filePath(e.name, scope));
       let batchResults: Record<string, string | null> = {};
 
@@ -309,7 +308,7 @@ export class MemoryManager {
           const raw = await rpc<string>('read_memory_batch', { paths: filePaths });
           batchResults = JSON.parse(raw);
         } catch {
-          // Fall back to individual reads below
+          // 降级为逐个读取
         }
       }
 
@@ -318,11 +317,11 @@ export class MemoryManager {
         const fp = this.filePath(entry.name, scope);
 
         if (batchResults[fp] !== undefined) {
-          // Used batch result
+          // 使用批量读取结果
           const content = batchResults[fp];
           mf = content !== null ? parseFrontmatter(content) : null;
         } else {
-          // Fall back to individual read
+          // 降级为逐个读取
           mf = await this.read(entry.name, scope);
         }
 
@@ -330,7 +329,7 @@ export class MemoryManager {
           if (!allByName.has(entry.name)) {
             allByName.set(entry.name, { mf, scope });
           }
-          // Project scope overlays global (same name)
+          // 项目范围覆盖全局（同名）
           if (scope === 'project') {
             allByName.set(entry.name, { mf, scope: 'project' });
           }
@@ -345,9 +344,9 @@ export class MemoryManager {
       return section;
     }
 
-    // ── Graph-aware relevance filtering ──
-    // When memories > 10, rank by relevance to current graph nodes.
-    // Facts are always included; reference/background compete for remaining slots.
+    // ── 图感知相关性过滤 ──
+    // 当记忆超过 10 条时，按与当前图节点的相关性排序。
+    // fact 级别始终包含；reference/background 竞争剩余名额。
     const MEMORY_LIMIT = 10;
     const allItems = [...allByName.values()];
     const facts = allItems.filter((i) => i.mf.confidence === 'fact');
@@ -355,7 +354,7 @@ export class MemoryManager {
 
     let itemsToLoad = allItems;
     if (allItems.length > MEMORY_LIMIT && graphNodes && graphNodes.length > 0) {
-      // Score each non-fact memory by relevance to graph nodes
+      // 对每条非 fact 记忆按与图节点的相关性评分
       const gn = graphNodes ?? [];
       const scored = others.map((item) => ({
         item,
@@ -363,20 +362,20 @@ export class MemoryManager {
       }));
       scored.sort((a, b) => b.score - a.score);
 
-      // Take top (MEMORY_LIMIT - facts.length) reference/background + all facts
+      // 取前 (MEMORY_LIMIT - facts.length) 条 reference/background + 全部 fact
       const refLimit = Math.max(0, MEMORY_LIMIT - facts.length);
       const topRefs = scored.slice(0, refLimit).map((s) => s.item);
       itemsToLoad = [...facts, ...topRefs];
 
-      // If some memories were filtered out, note it
+      // 如果有记忆被过滤掉，记录一下
       const dropped = allItems.length - itemsToLoad.length;
       if (dropped > 0) {
-        // ponytail: silent filter — the section note below explains it
+        // ponytail: 静默过滤 — 下方的区段注释已说明
         void dropped;
       }
     }
 
-    // Group by confidence
+    // 按置信度分组
     const byConfidence: Record<Confidence, Array<{ mf: MemoryFile; scope: string }>> = {
       fact: [],
       reference: [],
@@ -423,10 +422,10 @@ export class MemoryManager {
     return section;
   }
 
-  // ── Write ──
+  // ── 写入 ──
 
-  /** Save a memory (creates or updates). Also updates MEMORY.md index.
-   *  Preserves existing hit_count on update. Confidence defaults to 'reference'. */
+  /** 保存记忆（创建或更新）。同时更新 MEMORY.md 索引。
+   *  更新时保留已有的 hit_count。置信度默认为 'reference'。 */
   async save(
     name: string,
     description: string,
@@ -460,10 +459,10 @@ export class MemoryManager {
     const title = description.length > 40 ? description.slice(0, 39) + '…' : description;
     await this.upsertIndex(title, name + '.md', description, scope);
 
-    // Dual-write to AuraSDK for semantic retrieval
+    // 双写到 AuraSDK 用于语义检索
     if (this._auraReady) {
       const tagList = [type, confidence, scope];
-      // ponytail: prefix with [memory:NAME] marker so recall can detect orphaned records
+      // ponytail: 以 [memory:NAME] 标记为前缀，使 recall 能检测孤儿记录
       auraStore(`[memory:${name}] ${description}\n\n${content}`, 0, tagList, scope).catch((e: unknown) => {
         console.warn('[aura] dual-write failed:', e);
       });
@@ -472,7 +471,7 @@ export class MemoryManager {
     this._promptSectionCache = null;
   }
 
-  /** Delete a memory by name. Returns true if deleted, false if not found. */
+  /** 按名称删除记忆。删除成功返回 true，未找到返回 false。 */
   async delete(name: string, scope: 'project' | 'global' = 'project'): Promise<boolean> {
     let index = await this.loadIndexText(scope);
     if (!index.trim()) return false;
@@ -532,7 +531,7 @@ export class MemoryManager {
   }
 }
 
-// ── Frontmatter ──
+// ── Frontmatter 解析 ──
 
 function parseFrontmatter(raw: string): MemoryFile {
   const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
@@ -553,7 +552,7 @@ function parseFrontmatter(raw: string): MemoryFile {
 
   const name = (fm.match(/^name:\s*(.+)$/m) || [])[1]?.trim() || 'unknown';
   const desc = (fm.match(/^description:\s*(.+)$/m) || [])[1]?.trim() || '';
-  // ponytail: accept both indented (under metadata:) and top-level formats
+  // ponytail: 同时接受缩进格式（在 metadata: 下）和顶层格式
   const typeRaw = (fm.match(/^\s*type:\s*(.+)$/m) || [])[1]?.trim() || 'reference';
   const type = (['user', 'feedback', 'project', 'reference'] as const).includes(typeRaw as any)
     ? (typeRaw as MemoryFile['type'])
@@ -583,7 +582,7 @@ function rebuildRaw(mf: MemoryFile): string {
   ].join('\n');
 }
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
@@ -595,25 +594,25 @@ function formatMemoryLine(m: MemoryFile, scope?: string): string {
   return `- **${m.description}**${tag} — ${body}`;
 }
 
-/** Score a memory's relevance to the current graph context.
- *  Higher score = more likely to be relevant to what the user is working on.
- *  ponytail: simple substring matching against graph node names — no LLM call needed. */
+/** 评估记忆与当前图上下文的相关性。
+ *  分数越高 = 越可能与用户正在做的事相关。
+ *  ponytail: 对图节点名做简单子串匹配 — 无需 LLM 调用。 */
 function scoreMemoryRelevance(mf: MemoryFile, graphNodes: string[]): number {
   let score = 0;
   const haystack = (mf.description + ' ' + mf.content + ' ' + mf.name).toLowerCase();
 
   for (const node of graphNodes) {
     const lower = node.toLowerCase();
-    // Exact node name match in memory content
+    // 节点名精确匹配记忆内容
     if (haystack.includes(lower)) {
       score += 3;
-      // File-name portion match (last segment after / or \) → stronger signal
+      // 文件名部分匹配（/ 或 \ 后的最后一段）→ 更强信号
       const filePart = lower.split(/[/\\]/).pop() || '';
       if (filePart && filePart !== lower && haystack.includes(filePart)) {
         score += 2;
       }
     } else {
-      // Partial word matches
+      // 部分词匹配
       const parts = lower.split(/[/\\:.#_-]/);
       for (const part of parts) {
         if (part.length > 2 && haystack.includes(part)) {
@@ -623,15 +622,15 @@ function scoreMemoryRelevance(mf: MemoryFile, graphNodes: string[]): number {
     }
   }
 
-  // Boost: more recently hit memories are likely more relevant
+  // 加权: 最近被回想的记忆可能更相关
   score += Math.min(mf.hit_count, 5);
 
   return score;
 }
 
-// ── Agent Tools ──
+// ── Agent 工具 ──
 
-/** Create Agent tools for memory operations. All operate on the given MemoryManager. */
+/** 创建记忆操作的 Agent 工具。所有工具都基于指定的 MemoryManager。 */
 export function createMemoryTools(mm: MemoryManager): Tool[] {
   return [
     {
@@ -642,7 +641,7 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
       readOnly: () => true,
       execute: async () => {
         const sections: string[] = [];
-        // Show global first, then project
+        // 先显示全局，再显示项目
         const allScopes = mm.scopes?.() || ['project'];
         for (const scope of allScopes) {
           const entries = await mm.list(scope);
@@ -803,7 +802,7 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         const authorized = consumeFactAuthorization();
         if (confidence === 'fact') {
           if (authorized) {
-            // /remember authorized — fact passes through
+            // /remember 已授权 — fact 通过
           } else {
             confidence = 'reference';
             factDowngraded = true;
@@ -818,7 +817,7 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           confidence,
           scope,
         );
-        // H1: notify so the workspace can fan out (UI bus + live agent injection)
+        // H1: 通知 workspace 以扇出（UI 总线 + 活跃 Agent 注入）
         mm.onSaved?.({
           name: args.name as string,
           description: args.description as string,

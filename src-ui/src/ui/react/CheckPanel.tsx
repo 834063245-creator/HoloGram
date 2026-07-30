@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// CheckPanel — React rewrite of check.ts.
-// Change summary panel with violations, statistics, gate check.
-// Right sidebar, auto-opens on failure.
+// CheckPanel — check.ts 的 React 重写。
+// 变更摘要面板，包含违规项、统计数据、门禁检查。
+// 右侧栏，检查失败时自动打开。
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { rpc } from '../../bridge';
@@ -67,7 +67,7 @@ function fmtTime(iso: string): string {
   }
 }
 
-// ── Collapsible section ──
+// ── 折叠区段 ──
 
 const Collapsible: React.FC<{
   title: string;
@@ -89,7 +89,7 @@ const Collapsible: React.FC<{
   );
 };
 
-// ── Violation item ──
+// ── 违规项 ──
 
 const ViolationItem: React.FC<{ v: Violation; label: string }> = ({ v, label }) => {
   const sig = v.signal || {};
@@ -155,7 +155,7 @@ const ViolationItem: React.FC<{ v: Violation; label: string }> = ({ v, label }) 
   );
 };
 
-// ── Main Component（P3：直接挂 DockPanel 树，Controller 包装已删）──
+// ── 主组件（P3：直接挂 DockPanel 树，Controller 包装已删）──
 // 开合状态与结果数据都在 dock-store；旧 key 重挂载的视图复位语义用 effect 复现。
 
 export function CheckPanel() {
@@ -174,7 +174,7 @@ export function CheckPanel() {
     if (open) setView('current');
   }, [open]);
 
-  // ── History loading ──
+  // ── 历史加载 ──
 
   const loadHistory = useCallback(async () => {
     try {
@@ -206,7 +206,7 @@ export function CheckPanel() {
     setView('current');
   }, []);
 
-  // ── Compute current result ──
+  // ── 计算当前结果 ──
 
   const r = view === 'detail' && historyDetail ? historyDetail : result;
   const passed = r?.passed ?? true;
@@ -224,7 +224,7 @@ export function CheckPanel() {
       {/* Resize 视觉条（旧拖拽逻辑从未接入宽度 — 死代码已清） */}
       <div className="check-resize" />
 
-      {/* Header */}
+      {/* 头部 */}
       <div className="check-tab">
         <span className={`check-tab-status ${passed ? 'check-pass' : 'check-fail'}`} />
         <span className="check-tab-label"><span className="zh">简报</span>BRIEFING</span>
@@ -247,9 +247,9 @@ export function CheckPanel() {
         />
       </div>
 
-      {/* Content */}
+      {/* 内容 */}
       <div className="check-content">
-        {/* ── History view ── */}
+        {/* ── 历史视图 ── */}
         {view === 'history' && (
           <>
             <div className="check-history-banner">
@@ -283,10 +283,10 @@ export function CheckPanel() {
           </>
         )}
 
-        {/* ── Result view (current or history detail) ── */}
+        {/* ── 结果视图（当前或历史详情） ── */}
         {(view === 'current' || view === 'detail') && r && (
           <>
-            {/* History banner */}
+            {/* 历史横幅 */}
             {view === 'detail' && (
               <div className="check-history-banner">
                 <span className="check-history-label">历史简报 — {fmtTime(historyTimestamp)}</span>
@@ -296,7 +296,7 @@ export function CheckPanel() {
               </div>
             )}
 
-            {/* Status bar */}
+            {/* 状态栏 */}
             <div className={`check-status-bar ${passed ? 'check-status-pass' : 'check-status-fail'}`}>
               <span
                 className="check-status-icon"
@@ -307,7 +307,7 @@ export function CheckPanel() {
               <span className="check-status-label">{passed ? '检查通过' : '检查未通过'}</span>
             </div>
 
-            {/* Summary row */}
+            {/* 摘要行 */}
             <div className="check-summary">
               {[
                 `${r.total_changed_files} 文件`,
@@ -322,7 +322,7 @@ export function CheckPanel() {
                 .join(' · ')}
             </div>
 
-            {/* Diff row */}
+            {/* 差异行 */}
             {(nv > 0 || rv > 0 || pv > 0) && (
               <div className="check-diff-row">
                 {nv > 0 && <span className="check-diff-badge check-diff-new">+{nv} 新增</span>}
@@ -331,7 +331,7 @@ export function CheckPanel() {
               </div>
             )}
 
-            {/* Files */}
+            {/* 文件 */}
             <Collapsible title="变更文件" count={String(r.total_changed_files)} startOpen={r.total_changed_files <= 5}>
               <div className="check-file-list">
                 {(r.changed_files || []).map((f) => (
@@ -342,7 +342,7 @@ export function CheckPanel() {
               </div>
             </Collapsible>
 
-            {/* Violations */}
+            {/* 违规 */}
             {[
               { label: 'L5 不可逆', cls: 'l5', count: l5, violations: r.l5_violations || [] },
               { label: 'L4 静默', cls: 'l4', count: l4, violations: r.l4_violations || [] },
@@ -363,7 +363,7 @@ export function CheckPanel() {
                 </Collapsible>
               ))}
 
-            {/* Stats */}
+            {/* 统计 */}
             <Collapsible title="统计" count="" startOpen={false}>
               <div className="check-stats-grid">
                 {[
@@ -381,7 +381,7 @@ export function CheckPanel() {
               </div>
             </Collapsible>
 
-            {/* Passed checks */}
+            {/* 自动放行 */}
             {(r.passed_checks?.length || 0) > 0 && (
               <Collapsible title="自动放行" count={String(r.passed_checks.length)} startOpen={false}>
                 {(r.passed_checks || []).map((c, i) => (
@@ -394,7 +394,7 @@ export function CheckPanel() {
           </>
         )}
 
-        {/* Empty state */}
+        {/* 空状态 */}
         {(view === 'current' || view === 'detail') && !r && <div className="check-history-empty">暂无简报数据</div>}
       </div>
     </div>

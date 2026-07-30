@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// ModelSelector — searchable combobox for picking models from the catalog.
-// Supports free text input for custom models not in the catalog.
-// Dynamic models fetched from API are marked with a "live" badge.
+// ModelSelector — 可搜索的下拉组合框，用于从目录中选择模型。
+// 支持自由输入目录中不存在的自定义模型名称。
+// 从 API 动态获取的模型会标记 "live" 徽章。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getDynamicModelCount, getModel, searchModels } from '../../provider/catalog';
@@ -13,11 +13,11 @@ import { iconHtml } from '../icons';
 interface ModelSelectorProps {
   value: string;
   onChange: (modelId: string, desc?: ModelDescriptor) => void;
-  /** Current provider name — models from this provider are sorted first. */
+  /** 当前 provider 名称 — 来自该 provider 的模型优先排序。 */
   providerName: string;
-  /** Provider kind — filters catalog to matching API protocol. */
+  /** Provider 类型 — 按匹配的 API 协议过滤目录。 */
   kind: 'anthropic' | 'openai';
-  /** Optional: fetch models from the provider's API and merge into catalog. */
+  /** 可选：从 provider 的 API 获取模型并合并到目录中。 */
   onRefreshModels?: () => Promise<number>;
 }
 

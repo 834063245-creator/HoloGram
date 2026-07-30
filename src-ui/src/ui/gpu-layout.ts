@@ -4,13 +4,13 @@
 /// <reference types="@webgpu/types" />
 
 // ═══════════════════════════════════════════════════════════════
-// GPU Compute Layout — WebGPU force-directed graph layout
-// Replaces CPU layout3D with parallel compute shaders.
-// Three compute passes per iteration: repulsion → attraction → update.
-// Falls back gracefully if WebGPU is unavailable.
+// GPU 计算布局 — WebGPU 力导向图布局
+// 用并行计算着色器替代 CPU layout3D。
+// 每次迭代三趟计算：排斥 → 吸引 → 更新。
+// WebGPU 不可用时优雅降级。
 //
-// Core parameters (rep, att, damp, shellRadius, caps) are LOCKED —
-// kept identical to the JS layout3D function.
+// 核心参数（rep、att、damp、shellRadius、caps）已锁定 —
+// 与 JS layout3D 函数保持一致。
 // ═══════════════════════════════════════════════════════════════
 
 const WGSL = /* wgsl */ `
@@ -33,7 +33,7 @@ struct Params {
 @group(0) @binding(3) var<storage, read>       adjTgt: array<u32>;
 @group(0) @binding(4) var<storage, read>       params: Params;
 
-// ── Repulsion: O(n) threads, O(n) work each = O(n²) parallel ──
+// ── 排斥：O(n) 线程，每个 O(n) 工作量 = O(n²) 并行 ──
 
 @compute @workgroup_size(64)
 fn repulsion(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -69,7 +69,7 @@ fn repulsion(@builtin(global_invocation_id) gid: vec3<u32>) {
   vel[i * 3u + 2u] += fz;
 }
 
-// ── Attraction: per-node, walks its incident edges (no atomics) ──
+// ── 吸引：逐节点遍历邻接边（无需原子操作）──
 
 @compute @workgroup_size(64)
 fn attraction(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -107,19 +107,19 @@ fn attraction(@builtin(global_invocation_id) gid: vec3<u32>) {
   vel[i * 3u + 2u] += az;
 }
 
-// ── Update: velocity cap, damping, origin attraction, shell constraint ──
+// ── 更新：速度上限、阻尼、原点吸引、外壳约束 ──
 
 @compute @workgroup_size(64)
 fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= params.n) { return; }
 
-  // Origin attraction
+  // 原点吸引
   vel[i * 3u] -= pos[i * 3u] * params.originStr;
   vel[i * 3u + 1u] -= pos[i * 3u + 1u] * params.originStr;
   vel[i * 3u + 2u] -= pos[i * 3u + 2u] * params.originStr;
 
-  // Velocity cap
+  // 速度上限
   let vx = vel[i * 3u];
   let vy = vel[i * 3u + 1u];
   let vz = vel[i * 3u + 2u];
@@ -131,17 +131,17 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     vel[i * 3u + 2u] = vz * s;
   }
 
-  // Damping
+  // 阻尼
   vel[i * 3u] *= params.damp;
   vel[i * 3u + 1u] *= params.damp;
   vel[i * 3u + 2u] *= params.damp;
 
-  // Position update
+  // 位置更新
   pos[i * 3u] += vel[i * 3u];
   pos[i * 3u + 1u] += vel[i * 3u + 1u];
   pos[i * 3u + 2u] += vel[i * 3u + 2u];
 
-  // Shell constraint — soft, only pull in far outliers (matching graph-layout.ts fix)
+  // 外壳约束 — 软约束，仅拉回远端离群点（与 graph-layout.ts 修复一致）
   let dx = pos[i * 3u];
   let dy = pos[i * 3u + 1u];
   let dz = pos[i * 3u + 2u];
@@ -157,7 +157,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 `;
 
-/** Parameters for one layout run. Must match the CPU layout3D values exactly. */
+/** 一次布局运行的参数。必须与 CPU layout3D 的值完全一致。 */
 interface GPULayoutParams {
   n: number;
   rep: number;
@@ -180,14 +180,14 @@ export class GPULayout {
   ready = false;
   private _initPromise: Promise<boolean> | null = null;
 
-  /** Initialize WebGPU. Idempotent — concurrent callers share the same promise. */
+  /** 初始化 WebGPU。幂等 — 并发调用者共享同一个 Promise。 */
   init(): Promise<boolean> {
     if (!this._initPromise) this._initPromise = this._doInit();
     return this._initPromise;
   }
 
   private async _doInit(): Promise<boolean> {
-    if (this.ready) return true; // already initialized
+    if (this.ready) return true; // 已初始化
     try {
       if (typeof navigator === 'undefined' || !navigator.gpu) {
         console.warn('[GPULayout] WebGPU not available — using CPU layout');
@@ -252,14 +252,14 @@ export class GPULayout {
   }
 
   /**
-   * Run GPU-accelerated force-directed layout.
-   * Returns positions as Float32Array, or null if GPU is unavailable.
+   * 运行 GPU 加速的力导向布局。
+   * 返回 Float32Array 格式的位置，GPU 不可用时返回 null。
    *
-   * @param n - node count
-   * @param pairs - edge pairs [s, t] (same as passed to layout3D)
-   * @param initPos - initial positions (fibonacci sphere)
-   * @param params - locked layout parameters
-   * @param maxIter - adaptive iteration budget
+   * @param n - 节点数
+   * @param pairs - 边对 [s, t]（与传入 layout3D 的相同）
+   * @param initPos - 初始位置（斐波那契球面）
+   * @param params - 锁定的布局参数
+   * @param maxIter - 自适应迭代预算
    */
   async compute(
     n: number,
@@ -273,7 +273,7 @@ export class GPULayout {
     const device = this.device;
 
     try {
-      // ── Build adjacency lists (CSR format) ──
+      // ── 构建邻接表（CSR 格式）──
       const deg = new Uint32Array(n);
       for (const [s, t] of pairs) {
         deg[s]++;
@@ -295,7 +295,7 @@ export class GPULayout {
         adjTgt[adjOff[t] + cursor[t]++] = s;
       }
 
-      // ── Upload buffers ──
+      // ── 上传缓冲区 ──
       const posBuf = this._upload(
         initPos.buffer,
         GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
@@ -304,7 +304,7 @@ export class GPULayout {
       const adjOffBuf = this._upload(adjOff.buffer, GPUBufferUsage.STORAGE);
       const adjTgtBuf = this._upload(adjTgt.buffer, GPUBufferUsage.STORAGE);
 
-      // Params buffer: u32 n at [0], then 9 × f32
+      // 参数缓冲区：偏移 0 处为 u32 n，随后 9 × f32
       const paramsBuf = this._uploadParams(n, params);
 
       const stagingBuf = device.createBuffer({
@@ -312,7 +312,7 @@ export class GPULayout {
         usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
       });
 
-      // ── Bind group ──
+      // ── 绑定组 ──
       const bindGroup = device.createBindGroup({
         layout: this.bindGroupLayout!,
         entries: [
@@ -324,7 +324,7 @@ export class GPULayout {
         ],
       });
 
-      // ── Command encoding: maxIter × (repulsion → attraction → update) ──
+      // ── 命令编码：maxIter ×（排斥 → 吸引 → 更新）──
       const encoder = device.createCommandEncoder();
       const computePass = encoder.beginComputePass();
       const wgCount = Math.ceil(n / 64);
@@ -345,19 +345,19 @@ export class GPULayout {
 
       computePass.end();
 
-      // Copy final positions to staging buffer for CPU readback
+      // 将最终位置复制到暂存缓冲区供 CPU 回读
       encoder.copyBufferToBuffer(posBuf, 0, stagingBuf, 0, n * 3 * 4);
 
       device.queue.submit([encoder.finish()]);
 
-      // ── Read back ──
+      // ── 回读 ──
       await device.queue.onSubmittedWorkDone();
       await stagingBuf.mapAsync(GPUMapMode.READ);
       const mapped = new Float32Array(stagingBuf.getMappedRange());
-      const result = new Float32Array(mapped); // copy — mapped range invalidated on unmap
+      const result = new Float32Array(mapped); // 拷贝 — 映射范围在 unmap 后失效
       stagingBuf.unmap();
 
-      // ── Cleanup non-staging GPU resources ──
+      // ── 清理非暂存 GPU 资源 ──
       posBuf.destroy();
       velBuf.destroy();
       adjOffBuf.destroy();
@@ -372,7 +372,7 @@ export class GPULayout {
     }
   }
 
-  /** Create and upload a GPU buffer from an ArrayBuffer. */
+  /** 从 ArrayBuffer 创建并上传 GPU 缓冲区。 */
   private _upload(data: ArrayBuffer | SharedArrayBuffer, usage: number): GPUBuffer {
     const buf = this.device?.createBuffer({
       size: data.byteLength,
@@ -385,7 +385,7 @@ export class GPULayout {
     return buf;
   }
 
-  /** Create params buffer: u32 n at offset 0, then 9 × f32. */
+  /** 创建参数缓冲区：偏移 0 处为 u32 n，随后 9 × f32。 */
   private _uploadParams(n: number, p: GPULayoutParams): GPUBuffer {
     const ab = new ArrayBuffer(40); // 10 × 4 bytes
     const u32 = new Uint32Array(ab);
@@ -404,5 +404,5 @@ export class GPULayout {
   }
 }
 
-/** Singleton — initialized once, reused across layout runs. */
+/** 单例 — 初始化一次，跨布局运行复用。 */
 export const gpuLayout = new GPULayout();

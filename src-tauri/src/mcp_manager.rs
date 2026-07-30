@@ -32,14 +32,14 @@ impl McpManager {
         }
     }
 
-    /// Spawn the Rust engine MCP server, wait for the ready signal, then return
-    /// the tool list via tools/list.
+    /// 启动 Rust engine MCP 服务器，等待就绪信号，然后通过
+    /// tools/list 返回工具列表。
     pub fn start(&mut self, project_root: &str, engine_path: &str) -> Result<String, String> {
         if self.degraded {
             return Err("MCP 已永久降级，请使用 CLI 模式".into());
         }
 
-        // Kill any existing process
+        // 终止任何已有进程
         self.kill_inner();
 
         let root = crate::utils::project_root();
@@ -73,29 +73,29 @@ impl McpManager {
         self.child = Some(child);
         self.request_id = 0;
 
-        // Wait for the ready signal from the server (analysis may take a while)
+        // 等待服务器的就绪信号（分析可能需要一些时间）
         if let Err(e) = self.read_ready() {
-            self.kill_inner(); // clean up leaked child
+            self.kill_inner(); // 清理泄漏的子进程
             return Err(e);
         }
 
-        // Immediately fetch tool list so the frontend can build dynamic tools
+        // 立即获取工具列表，使前端可以构建动态工具
         let tools = match self.send_request("tools/list", "{}") {
             Ok(t) => t,
             Err(e) => {
-                self.kill_inner(); // clean up leaked child
+                self.kill_inner(); // 清理泄漏的子进程
                 return Err(e);
             }
         };
 
-        // Reset crash tracking on successful start
+        // 成功启动后重置崩溃追踪
         self.crash_count = 0;
         self.crash_window_start = None;
 
         Ok(tools)
     }
 
-    /// Stop the MCP server and reset state.
+    /// 停止 MCP 服务器并重置状态。
     pub fn stop(&mut self) {
         self.kill_inner();
         self.degraded = false;
@@ -104,7 +104,7 @@ impl McpManager {
         self.request_id = 0;
     }
 
-    // ── internals ──
+    // ── 内部实现 ──
 
     fn kill_inner(&mut self) {
         if let Some(ref mut child) = self.child {
@@ -114,14 +114,14 @@ impl McpManager {
         self.child = None;
     }
 
-    /// Read the JSON "ready" notification from stdout after spawning.
-    /// Blocks until the server finishes analysis and signals readiness.
-    /// Timeout: 600 seconds (large projects need time for layout computation).
+    /// 从 stdout 读取 JSON "ready" 通知（启动后）。
+    /// 阻塞直到服务器完成分析并发出就绪信号。
+    /// 超时：600 秒（大型项目需要时间进行布局计算）。
     fn read_ready(&mut self) -> Result<(), String> {
         let child = self.child.as_mut().ok_or("子进程不存在")?;
         let stdout = child.stdout.take().ok_or("stdout 不可用")?;
 
-        // Spawn a thread to read the ready line with a timeout
+        // 启动一个线程读取就绪行，带超时
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
@@ -136,10 +136,10 @@ impl McpManager {
             }
         });
 
-        // Wait with timeout (600 seconds for large projects with layout computation)
+        // 带超时等待（大型项目布局计算需要 600 秒）
         match rx.recv_timeout(std::time::Duration::from_secs(600)) {
             Ok(Ok((stdout_back, line))) => {
-                // Put stdout back
+                // 将 stdout 放回
                 if let Some(ref mut child) = self.child {
                     child.stdout = Some(stdout_back);
                 }
@@ -147,14 +147,14 @@ impl McpManager {
                 if trimmed.is_empty() {
                     return Err("MCP Server 启动失败：无就绪信号".into());
                 }
-                // Verify it's a valid JSON ready notification
+                // 验证是否为有效的 JSON ready 通知
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     if val.get("method").and_then(|m| m.as_str()) == Some("ready") {
                         eprintln!("[mcp] 就绪信号已收到");
                         return Ok(());
                     }
                 }
-                // Not a ready signal — the server might have errored
+                // 非就绪信号 — 服务器可能出错了
                 Err(format!("MCP Server 异常启动输出: {trimmed}"))
             }
             Ok(Err(e)) => Err(e),
@@ -168,8 +168,8 @@ impl McpManager {
         }
     }
 
-    /// Send a JSON-RPC request (method + params as JSON string) and extract
-    /// the text content from the response.
+    /// 发送 JSON-RPC 请求（method + params 为 JSON 字符串）并从
+    /// 响应中提取文本内容。
     fn send_request(&mut self, method: &str, params_json: &str) -> Result<String, String> {
         let id = self.request_id;
         self.request_id += 1;
@@ -182,12 +182,12 @@ impl McpManager {
         self.send_raw(&request)
     }
 
-    /// Write a raw JSON-RPC line to stdin, read one line from stdout,
-    /// and extract the result text.
+    /// 向 stdin 写入一行原始 JSON-RPC，从 stdout 读取一行，
+    /// 并提取 result 文本。
     fn send_raw(&mut self, json_line: &str) -> Result<String, String> {
         let child = self.child.as_mut().ok_or("MCP Server 未启动")?;
 
-        // Write request to stdin
+        // 将请求写入 stdin
         {
             let stdin = child.stdin.as_mut().ok_or("stdin 不可用")?;
             writeln!(stdin, "{}", json_line)
@@ -197,7 +197,7 @@ impl McpManager {
                 .map_err(|e| format!("flush stdin 失败: {e}"))?;
         }
 
-        // Read response from stdout (take, read, put back)
+        // 从 stdout 读取响应（取出、读取、放回）
         let response_line = {
             let stdout = child.stdout.take().ok_or("stdout 不可用")?;
             let mut reader = BufReader::new(stdout);
@@ -214,20 +214,20 @@ impl McpManager {
             return Err("MCP 返回空响应".into());
         }
 
-        // Parse JSON-RPC response
+        // 解析 JSON-RPC 响应
         let resp: serde_json::Value =
             serde_json::from_str(trimmed).map_err(|e| format!("JSON-RPC 解析失败: {e} — raw: {}", trimmed))?;
 
-        // Check for JSON-RPC error
+        // 检查 JSON-RPC 错误
         if let Some(err) = resp.get("error") {
             let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
             return Err(format!("MCP 错误: {msg}"));
         }
 
-        // Extract result content
+        // 提取 result 内容
         let result = resp.get("result").ok_or("响应无 result 字段")?;
 
-        // For tools/list, return the full result as JSON
+        // 对于 tools/list，返回完整的 result 作为 JSON
         if let Some(content) = result.get("content") {
             if let Some(items) = content.as_array() {
                 for item in items {
@@ -240,12 +240,12 @@ impl McpManager {
             }
         }
 
-        // tools/list returns {tools: [...]} directly, not wrapped in content
+        // tools/list 直接返回 {tools: [...]}，未包裹在 content 中
         if let Some(_tools) = result.get("tools") {
             return Ok(serde_json::to_string(result).unwrap_or_default());
         }
 
-        // Fallback: return the entire result as a JSON string
+        // 回退：返回整个 result 作为 JSON 字符串
         Ok(serde_json::to_string(result).unwrap_or_default())
     }
 

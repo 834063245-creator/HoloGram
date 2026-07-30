@@ -92,7 +92,7 @@ export class GraphFocusController {
 
   constructor(private host: FocusHost) {}
 
-  // ── Focus ────────────────────────────────────────────────
+  // ── 聚焦 ────────────────────────────────────────────────
 
   private flyToNode(idx: number): void {
     const px = this.host.nodePositions[idx * 3],
@@ -129,9 +129,9 @@ export class GraphFocusController {
     }
   }
 
-  /** Reset camera to the default overview position with smooth animation. */
+  /** 将相机重置到默认概览位置，带平滑动画。 */
   resetCamera(): void {
-    if (this.host._initCamPos.lengthSq() < 1) return; // not initialized
+    if (this.host._initCamPos.lengthSq() < 1) return; // 未初始化
     if (this.host._flyDebounce) {
       clearTimeout(this.host._flyDebounce);
       this.host._flyDebounce = null;
@@ -155,14 +155,14 @@ export class GraphFocusController {
     if (idx < 0) idx = this.host.graphNodes.findIndex((n, i) => isAlive(n, i) && n.name.toLowerCase().startsWith(q));
     if (idx < 0) idx = this.host.graphNodes.findIndex((n, i) => isAlive(n, i) && n.name.toLowerCase().includes(q));
     if (idx < 0) return false;
-    // If fold mode is on, enter that galaxy instead of flying to node
+    // 如果折叠模式开启，进入该星系而非飞向节点
     if (this.host._fold.foldMode) {
       const cid = this.host.nodeCommMap.get(idx);
       if (cid) {
         this.host._fold.enterGalaxy(cid);
         return true;
       }
-      // Orphan node — can't enter, just fly
+      // 孤立节点 — 无法进入，直接飞向
       this.flyToNode(idx);
       return true;
     }
@@ -170,7 +170,7 @@ export class GraphFocusController {
     return true;
   }
 
-  /** Fly camera to the centroid of a set of node indices. */
+  /** 将相机飞向一组节点索引的质心。 */
   _flyToCentroid(indices: Set<number>): void {
     if (indices.size === 0) return;
     let cx = 0,
@@ -241,7 +241,7 @@ export class GraphFocusController {
     this.host.focusNodeIdx = -1;
   }
 
-  // ── Focus subgraph (detail-card button triggered) ────────────
+  // ── 聚焦子图（详情卡片按钮触发）────────────
 
   buildFocusBanner(): void {
     this.host.focusSubgraphBanner = buildFocusBanner(this.host.container, () => this.exitFocusSubgraph());
@@ -258,7 +258,7 @@ export class GraphFocusController {
       this.host.focusSubgraphVisibleIndices.add(ni);
     }
 
-    // Save current state
+    // 保存当前状态
     this.focusSubgraphSavedGlowOpacities = [];
     this.focusSubgraphSavedCoreVisible = [];
     for (let i = 0; i < this.host._nodeCount; i++) {
@@ -276,7 +276,7 @@ export class GraphFocusController {
       }
     }
 
-    // Dim edges
+    // 调暗边线
     this.focusSubgraphSavedEdgeOpacities = this.host.edgeLineGroups.map(
       (lines) => (lines.material as LineMaterial).opacity,
     );
@@ -284,10 +284,10 @@ export class GraphFocusController {
       (lines.material as LineMaterial).opacity = 0.005;
     }
 
-    // Build focus edges (only between visible nodes)
+    // 构建聚焦边（仅在可见节点之间）
     this._buildFocusSubgraphEdges();
 
-    // Highlight the focus node
+    // 高亮聚焦节点
     if (idx < this.host._nodeCount) {
       this.host._overrideFlags[idx] = 1;
       this.host._setGlowAlpha(idx, 0.92);
@@ -335,11 +335,11 @@ export class GraphFocusController {
         (this.host.edgeLineGroups[ei].material as LineMaterial).opacity = this.focusSubgraphSavedEdgeOpacities[ei];
       }
     }
-    // Clear focus edges
+    // 清除聚焦边
     while (this.host.highlightEdgeGroup.children.length)
       this.host.highlightEdgeGroup.remove(this.host.highlightEdgeGroup.children[0]);
 
-    // ponytail: clear override flags — shader resumes animation
+    // ponytail: 清除 override 标志 — shader 恢复动画
     for (let i = 0; i < this.host._nodeCount; i++) this.host._overrideFlags[i] = 0;
     this.host._flushOverrideAttrs();
 
@@ -357,8 +357,8 @@ export class GraphFocusController {
     const colors: number[] = [];
     const pos = this.host.nodePositions;
 
-    // ponytail: count edges first for degree-normalization — prevents
-    // hub over-exposure when focus node has hundreds of neighbors.
+    // ponytail: 先统计边数用于度归一化 — 防止
+    // 聚焦节点有数百邻居时中心节点过度曝光。
     let edgeCount = 0;
     for (const d of this.host.edgeDataList) {
       if (visible.has(d.s) && visible.has(d.t)) edgeCount++;

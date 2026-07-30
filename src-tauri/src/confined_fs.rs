@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Confined file I/O — unified wrapper that enforces permission checks before
-// every file read/write. Replaces bare std::fs calls in tools.rs so new tools
-// can't forget security checks. The wrapper is the single door every file op
-// passes through; no tool command calls std::fs directly.
+// 受限文件 I/O — 统一包装器，在每次文件读/写前强制执行权限检查。
+// 替代 tools.rs 中裸露的 std::fs 调用，使新工具
+// 不会遗漏安全检查。该包装器是每个文件操作的唯一入口；
+// 没有任何工具命令直接调用 std::fs。
 //
-// ponytail: this exists because the security audit found read_file_content /
-// write_file_content / edit_file all do resolve_*_dispatch then std::fs
-// separately — each command had to remember both steps. Now they can't forget.
+// ponytail: 之所以存在，是因为安全审计发现 read_file_content /
+// write_file_content / edit_file 都需要先执行 resolve_*_dispatch 再单独执行 std::fs
+// — 每个命令都得记住这两步。现在不会遗忘了。
 
 use std::io;
 use std::path::PathBuf;
@@ -18,31 +18,31 @@ use tauri::AppHandle;
 use crate::WorkspaceState;
 
 // ═══════════════════════════════════════════════════════════════
-// Guards — file size limits, read timeout, retry budget
+// Guards — 文件大小限制、读取超时、重试预算
 // ═══════════════════════════════════════════════════════════════
 
-/// Maximum file size for reads (100 MiB). Prevents OOM from reading huge files.
+/// 读取文件的最大大小 (100 MiB)。防止读取大文件导致 OOM。
 const MAX_READ_BYTES: u64 = 100 * 1024 * 1024;
 
-/// Maximum content size for writes (100 MiB).
+/// 写入内容的最大大小 (100 MiB)。
 const MAX_WRITE_BYTES: usize = 100 * 1024 * 1024;
 
-/// Read timeout — a stuck NFS mount must not hang the agent.
+/// 读取超时 — 卡住的 NFS 挂载不能阻塞 agent。
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Number of retries for transient I/O errors (Interrupted, TimedOut, WouldBlock).
+/// 瞬态 I/O 错误的重试次数（Interrupted、TimedOut、WouldBlock）。
 const IO_RETRY_COUNT: u32 = 3;
 
-/// Delay between retries, doubles each attempt.
+/// 重试之间的延迟，每次翻倍。
 const IO_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
 
 // ═══════════════════════════════════════════════════════════════
-// I/O retry helper
+// I/O 重试辅助函数
 // ═══════════════════════════════════════════════════════════════
 
-/// Retry a fallible I/O closure up to IO_RETRY_COUNT times on transient errors.
-/// Transient = Interrupted, TimedOut, WouldBlock. Permanent errors (NotFound,
-/// PermissionDenied, etc.) fail immediately.
+/// 在瞬态错误时最多重试 IO_RETRY_COUNT 次 I/O 闭包。
+/// 瞬态 = Interrupted、TimedOut、WouldBlock。永久错误（NotFound、
+/// PermissionDenied 等）立即失败。
 fn with_io_retry<T, F>(mut op: F, label: &str) -> Result<T, String>
 where
     F: FnMut() -> io::Result<T>,
@@ -78,11 +78,11 @@ where
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Read operations — permission check + I/O in one call
+// 读取操作 — 权限检查 + I/O 合为一步
 // ═══════════════════════════════════════════════════════════════
 
-/// Read a text file with timeout and size guard. Wraps blocking I/O in
-/// spawn_blocking so a stuck NFS mount does not hang the async runtime.
+/// 带超时和大小限制的文本文件读取。将阻塞式 I/O 包装在
+/// spawn_blocking 中，使卡住的 NFS 挂载不会阻塞异步运行时。
 pub(crate) async fn read_text(
     file_path: &str,
     is_agent: bool,
@@ -94,7 +94,7 @@ pub(crate) async fn read_text(
     let rp = real_path.clone();
     let fp = file_path.to_string();
 
-    // Check file size before reading — prevent OOM on huge files
+    // 读取前检查文件大小 — 防止大文件导致 OOM
     let meta = with_io_retry(|| std::fs::metadata(&rp), "stat")?;
     if meta.len() > MAX_READ_BYTES {
         return Err(format!(
@@ -116,7 +116,7 @@ pub(crate) async fn read_text(
     Ok((real_path, content))
 }
 
-/// Read a binary file with timeout and size guard.
+/// 带超时和大小限制的二进制文件读取。
 pub(crate) async fn read_bytes(
     file_path: &str,
     is_agent: bool,
@@ -149,8 +149,8 @@ pub(crate) async fn read_bytes(
     Ok((real_path, bytes))
 }
 
-/// Only resolve and verify a read path — no I/O. Use when the resolved path is
-/// needed for downstream logic (e.g. git commands, explorer open).
+/// 仅解析和验证读取路径 — 无 I/O。当下游逻辑需要已解析路径时使用
+/// （如 git 命令、资源管理器打开）。
 pub(crate) async fn verify_read_path(
     file_path: &str,
     is_agent: bool,
@@ -162,11 +162,11 @@ pub(crate) async fn verify_read_path(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Write operations — permission check + I/O in one call
+// 写入操作 — 权限检查 + I/O 合为一步
 // ═══════════════════════════════════════════════════════════════
 
-/// Write a file atomically (temp file → rename). Creates parent dirs if needed.
-/// Content size is checked against MAX_WRITE_BYTES to prevent OOM.
+/// 原子地写入文件（临时文件 → 重命名）。如需要则创建父目录。
+/// 内容大小会与 MAX_WRITE_BYTES 比较以防止 OOM。
 pub(crate) async fn write_text(
     file_path: &str,
     content: &str,
@@ -192,7 +192,7 @@ pub(crate) async fn write_text(
     Ok(real_path)
 }
 
-/// Create a directory (and all parents).
+/// 创建目录（及其所有父目录）。
 pub(crate) async fn create_dir(
     path: &str,
     is_agent: bool,
@@ -206,7 +206,7 @@ pub(crate) async fn create_dir(
     Ok(resolved)
 }
 
-/// Delete a file or directory tree.
+/// 删除文件或目录树。
 pub(crate) async fn delete(
     path: &str,
     is_agent: bool,
@@ -228,8 +228,8 @@ pub(crate) async fn delete(
     Ok(real)
 }
 
-/// Rename/move a file or directory. Both `from` and `to` pass through write
-/// permission checks, and `from` additionally passes read check (spec §4.7).
+/// 重命名/移动文件或目录。`from` 和 `to` 都通过写入
+/// 权限检查，`from` 还需通过读取检查 (spec §4.7)。
 pub(crate) async fn rename(
     from: &str,
     to: &str,
@@ -250,10 +250,10 @@ pub(crate) async fn rename(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Presentation helpers — formatting, not I/O
+// 展示辅助函数 — 格式化，非 I/O
 // ═══════════════════════════════════════════════════════════════
 
-/// Format content as cat -n style numbered lines with offset/limit.
+/// 将内容格式化为 cat -n 风格的带行号输出，支持 offset/limit。
 pub(crate) fn format_lines(
     content: &str,
     offset: Option<usize>,
@@ -272,7 +272,7 @@ pub(crate) fn format_lines(
     numbered.join("\n")
 }
 
-/// Preview the first `max_lines` of content, truncating each line to `max_width` chars.
+/// 预览内容的前 `max_lines` 行，每行截断为 `max_width` 个字符。
 pub(crate) fn preview(content: &str, max_width: usize, max_lines: usize) -> String {
     content
         .lines()
@@ -290,7 +290,7 @@ pub(crate) fn preview(content: &str, max_width: usize, max_lines: usize) -> Stri
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Tests — moved from tools.rs where preview_content used to live
+// 测试 — 从 tools.rs 迁移（preview_content 原先在那里）
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -309,7 +309,7 @@ mod tests {
         let input = "a".repeat(100);
         let out = preview(&input, 80, 20);
         assert!(out.ends_with('\u{2026}'), "should end with ellipsis: {out:?}");
-        assert_eq!(out.chars().count(), 81); // 80 chars + U+2026 (3 bytes)
+        assert_eq!(out.chars().count(), 81); // 80 字符 + U+2026 (3 字节)
     }
 
     #[test]

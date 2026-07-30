@@ -10,10 +10,10 @@ pub(crate) fn is_actix_candidate(file: &str) -> bool {
     lower.ends_with(".rs")
 }
 
-/// Content gate for Actix detection. `is_actix_candidate` matches every .rs
-/// file and the route attributes (`#[get("/x")]`) share Rocket's identical
-/// spelling, so the dispatcher requires a real actix reference — actual
-/// actix files always import actix_web — before claiming the file (F7).
+/// Actix 检测的内容门控。`is_actix_candidate` 匹配所有 .rs
+/// 文件，且路由属性（`#[get("/x")]`）与 Rocket 的拼写完全
+/// 相同，因此调度器在认领文件之前需要确认真实的 actix 引用——
+/// 真正的 actix 文件总是导入 actix_web（F7）。
 pub(crate) fn has_actix_content(source: &str) -> bool {
     source.contains("actix")
 }
@@ -37,16 +37,16 @@ pub(crate) fn detect_actix_routes(file: &str, source: &str) -> Vec<DetectedRoute
     let mut cursor = root.walk();
     let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
 
-    // Collect #[xxx("/path")] → next fn
-    let mut pending_route: Option<(String, String)> = None; // (method, path)
+    // 收集 #[xxx("/path")] → 下一个 fn
+    let mut pending_route: Option<(String, String)> = None; // （方法，路径）
 
     while let Some(node) = stack.pop() {
         match node.kind() {
             "attribute_item" => {
-                // #[get("/path")] or #[web::get("/path")]
+                // #[get("/path")] 或 #[web::get("/path")]
                 let text = node.utf8_text(source.as_bytes()).unwrap_or("");
                 let inner = text.trim_start_matches("#[").trim_end_matches(']').trim();
-                // Split at '(' to get attr_name and args
+                // 在 '(' 处分割以获取 attr_name 和参数
                 if let Some(paren) = inner.find('(') {
                     let attr_name = inner[..paren].trim().to_lowercase();
                     let args = &inner[paren..];

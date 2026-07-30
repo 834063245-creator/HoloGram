@@ -11,22 +11,22 @@ use tracing::info;
 use crate::adapter::registry::AdapterRegistry;
 use crate::graph::{Edge, Node};
 
-/// Parse result for a single file.
+/// 单个文件的解析结果。
 pub struct FileData {
     pub path: PathBuf,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub source_len: usize,
-    /// Raw source text — carried forward for synthesis passes (Steps 4-6)
-    /// so they don't re-read from disk.
+    /// 原始源码文本 — 传递给后续合成阶段（步骤 4-6），
+    /// 以避免重复从磁盘读取。
     pub source: String,
-    /// Parsed tree-sitter tree — carried forward for synthesis passes.
-    /// Steps 4-6 walk this tree instead of re-parsing.
+    /// 解析后的 tree-sitter 树 — 传递给后续合成阶段。
+    /// 步骤 4-6 遍历此树而非重新解析。
     pub tree: Option<tree_sitter::Tree>,
 }
 
-/// Parallel file parser.
-/// Discovers files, dispatches to language adapters, collects results.
+/// 并行文件解析器。
+/// 发现文件，分发给语言适配器，收集结果。
 pub struct ParallelParser {
     registry: AdapterRegistry,
 }
@@ -44,8 +44,8 @@ impl ParallelParser {
         }
     }
 
-    /// Parse a batch of files in parallel using rayon.
-    /// Returns file-level results. Caller merges them via GraphMerger.
+    /// 使用 rayon 并行解析一批文件。
+    /// 返回文件级别的结果。调用方通过 GraphMerger 合并它们。
     pub fn parse_files(&self, files: &[PathBuf]) -> Vec<FileData> {
         let start = Instant::now();
 
@@ -68,10 +68,10 @@ impl ParallelParser {
     }
 
     pub fn parse_one(&self, path: &PathBuf) -> Option<FileData> {
-        // ponytail: skip oversized files — vendored/generated blobs that
-        // slip past L0-L2 filters. tree-sitter parse is O(file_size),
-        // generic_walk is O(AST_nodes). 1 MB is generous: hand-written
-        // source never exceeds this (that's ~25,000 lines in one file).
+        // ponytail: 跳过超大文件 — 混过 L0-L2 过滤器的第三方/生成文件。
+        // tree-sitter 解析为 O(file_size)，
+        // generic_walk 为 O(AST_nodes)。1 MB 已很宽裕：手写
+        // 源码不会超过此大小（相当于单文件约 25,000 行）。
         const MAX_FILE_SIZE: u64 = 1_048_576; // 1 MB
         if let Ok(meta) = std::fs::metadata(path) {
             if meta.len() > MAX_FILE_SIZE {
@@ -96,14 +96,14 @@ impl ParallelParser {
             &source,
         );
 
-        // Normalise location to forward-slash format so file_index lookups match.
-        // Adapter already sets `file:line`; only fill in for nodes missing location.
+        // 将 location 归一化为正斜杠格式，以便 file_index 查找匹配。
+        // 适配器已设置 `file:line`；仅为缺少 location 的节点填充。
         let norm_path = path.to_string_lossy().replace('\\', "/");
         for node in &mut nodes {
             if node.location.is_none() {
                 node.location = Some(norm_path.clone());
             } else {
-                // Replace backslashes in adapter-set location
+                // 替换适配器设置的 location 中的反斜杠
                 if let Some(ref loc) = node.location {
                     node.location = Some(loc.replace('\\', "/"));
                 }
@@ -140,7 +140,7 @@ mod tests {
         let results = parser.parse_files(&files);
 
         assert_eq!(results.len(), 2);
-        // a.py should have 2 nodes (foo, Bar)
+        // a.py 应有 2 个节点（foo, Bar）
         let a = results.iter().find(|r| r.path.ends_with("a.py")).unwrap();
         assert!(!a.nodes.is_empty(), "should extract at least 1 symbol from a.py");
 

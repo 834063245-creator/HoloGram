@@ -109,8 +109,8 @@ export class AgentLifecycleManager {
     const trulyLeaked = leaked.filter((e) => !this.pool.getHandle(e.agentId))
 
     if (trulyLeaked.length === 0) {
-      // Don't clear warnedKeys — if the same leak reappears next cycle we don't
-      // want to re-report it. warnedKeys only grows until stop() clears it.
+      // 不清除 warnedKeys — 如果同一泄漏下个周期重新出现，我们不想
+      // 重复报告。warnedKeys 只增不减，直到 stop() 清除。
       return
     }
 
@@ -118,12 +118,12 @@ export class AgentLifecycleManager {
     const newLeaks = trulyLeaked.filter((e) => !this.warnedKeys.has(e.agentId))
     if (newLeaks.length === 0) return
 
-    // Update warnedKeys to include all currently leaked (not just new)
+    // 更新 warnedKeys 以包含所有当前泄漏的（不只是新增的）
     for (const e of trulyLeaked) {
       this.warnedKeys.add(e.agentId)
     }
 
-    // Only report the newly leaked agents
+    // 只报告新泄漏的 Agent
     const newIds = newLeaks.map((e) => e.agentId).join(", ")
     this._notify(
       "warn",

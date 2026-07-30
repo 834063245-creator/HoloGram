@@ -1,17 +1,17 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Shared persistence infrastructure for board-style stores (TaskBoard, DiscoveryBoard).
-// Handles directory creation, debounced file I/O, and lifecycle (destroy/flush/restore).
+// 面板式 store 的共享持久化基础设施（TaskBoard、DiscoveryBoard）。
+// 处理目录创建、防抖文件 I/O 和生命周期管理（destroy/flush/restore）。
 
 import { rpc } from '../bridge';
 
-/** Strip leading line numbers (e.g. "42\t") — Tauri read_file_content adds them. */
+/** 去除行号前缀（如 "42\t"）— Tauri read_file_content 会添加行号。 */
 export function stripNums(text: string): string {
   return text.replace(/^\s*\d+\t/gm, '');
 }
 
-/** Normalize a project path: forward slashes, no trailing slash. */
+/** 规范化项目路径：正斜杠，无尾部斜杠。 */
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/$/, '');
 }
@@ -19,13 +19,13 @@ function normalizePath(p: string): string {
 export interface BoardPersistenceOptions {
   projectPath: string;
   sessionId: string;
-  /** Subdirectory under .hologram/ (e.g. "taskboard", "discoveries") */
+  /** .hologram/ 下的子目录名（如 "taskboard"、"discoveries"） */
   dirName: string;
 }
 
-/** Manages debounced file-based persistence for a board.
- *  The board provides serialize/deserialize hooks; this class handles
- *  directory creation, file I/O, flush debouncing, and cleanup. */
+/** 管理面板的防抖文件持久化。
+ *  面板提供序列化/反序列化钩子；此类处理
+ *  目录创建、文件 I/O、flush 防抖和清理。 */
 export class BoardPersistence {
   private _projectPath: string;
   private _sessionId: string;
@@ -59,23 +59,23 @@ export class BoardPersistence {
         path: normalizePath(this._projectPath) + '/.hologram/' + this._dirName,
       });
     } catch {
-      /* already exists */
+      /* 已存在 */
     }
     this._dirReady = true;
   }
 
-  /** Serialize entries and write to disk. Best-effort — never throws. */
+  /** 序列化 entries 并写入磁盘。尽力而为 — 永不抛异常。 */
   async flush(data: string): Promise<void> {
     if (!this._projectPath || this._destroyed) return;
     try {
       await this._ensureDir();
       await rpc('write_file_content', { filePath: this._boardPath, content: data });
     } catch {
-      /* best-effort */
+      /* 尽力而为 */
     }
   }
 
-  /** Read and return raw file content. Returns null if file missing or error. */
+  /** 读取并返回原始文件内容。文件不存在或出错时返回 null。 */
   async restore(): Promise<string | null> {
     if (!this._projectPath) return null;
     try {
@@ -86,7 +86,7 @@ export class BoardPersistence {
     }
   }
 
-  /** Schedule a debounced flush (2s delay). The callback provides the serialized data. */
+  /** 调度防抖 flush（2 秒延迟）。回调提供序列化后的数据。 */
   scheduleFlush(getData: () => string): void {
     if (!this._projectPath || this._destroyed) return;
     if (this._flushTimer) clearTimeout(this._flushTimer);
@@ -96,7 +96,7 @@ export class BoardPersistence {
     }, 2000);
   }
 
-  /** Clear the flush timer — call on destroy. */
+  /** 清除 flush 定时器 — destroy 时调用。 */
   clearFlushTimer(): void {
     if (this._flushTimer) {
       clearTimeout(this._flushTimer);
@@ -104,7 +104,7 @@ export class BoardPersistence {
     }
   }
 
-  /** Delete the persistence file and mark as destroyed. */
+  /** 删除持久化文件并标记为已销毁。 */
   async destroy(): Promise<void> {
     if (!this._projectPath) return;
     this._destroyed = true;
@@ -112,7 +112,7 @@ export class BoardPersistence {
     try {
       await rpc('delete_file_or_dir', { path: this._boardPath });
     } catch {
-      /* best-effort */
+      /* 尽力而为 */
     }
   }
 }

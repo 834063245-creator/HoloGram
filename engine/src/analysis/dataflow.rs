@@ -7,7 +7,7 @@ use crate::analysis::detect_cycles;
 use crate::analysis::detect_cycles_from_index;
 use serde_json::json;
 
-/// Classify cycles from Tarjan SCC: pure_code, data_persistent, llm_involved.
+/// 从 Tarjan SCC 分类循环：pure_code、data_persistent、llm_involved。
 pub fn classify_cycles(graph: &Graph) -> serde_json::Value {
     classify_cycles_inner(graph.nodes.iter().map(|(id, n)| (id.as_str(), n)),
         &detect_cycles(graph))

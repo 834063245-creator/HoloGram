@@ -15,44 +15,44 @@ pub(crate) fn detect_phoenix_routes(file: &str, source: &str) -> Vec<DetectedRou
     let http_verbs: HashSet<&str> = ["get", "post", "put", "delete", "patch", "head", "options"]
         .iter().cloned().collect();
 
-    // D2: Track scope prefixes via a block stack.
-    // Phoenix uses `do ... end` blocks. `scope "/path" do` opens a scope block;
-    // other `do` blocks (defmodule, pipeline, etc.) are tracked as non-scope blocks.
+    // D2：通过块栈跟踪 scope 前缀。
+    // Phoenix 使用 `do ... end` 块。`scope "/path" do` 打开一个 scope 块；
+    // 其他 `do` 块（defmodule、pipeline 等）作为非 scope 块跟踪。
     enum Block { Scope(String), Other }
     let mut block_stack: Vec<Block> = Vec::new();
 
-    // Phoenix uses macros: `get "/path", Controller, :action`
-    // Also works as keyword: `get("/path", Controller, :action)`
-    // Line-based fallback — Elixir tree-sitter quirk with macro calls
+    // Phoenix 使用宏：`get "/path", Controller, :action`
+    // 也可用关键字形式：`get("/path", Controller, :action)`
+    // 基于行的回退——Elixir tree-sitter 对宏调用的特殊行为
     for (line_idx, line) in source.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() { continue; }
 
-        // Track block openings BEFORE route detection so scope is active on the same line.
-        // `scope "/api" do` → push Scope("/api"); other `... do` → push Other.
+        // 在路由检测之前跟踪块开头，以便 scope 在同一行生效。
+        // `scope "/api" do` → push Scope("/api")；其他 `... do` → push Other。
         if trimmed.starts_with("scope ") {
-            // Extract the scope path (first quoted string)
+            // 提取 scope 路径（第一个引号字符串）
             let scope_path = extract_phoenix_string(trimmed).unwrap_or_default();
             block_stack.push(Block::Scope(scope_path));
         } else if trimmed.ends_with(" do") {
             block_stack.push(Block::Other);
         }
 
-        // Route detection (skip structural keywords)
+        // 路由检测（跳过结构关键字）
         if trimmed.starts_with("defmodule") || trimmed.starts_with("use ")
             || trimmed.starts_with("pipeline") || trimmed.starts_with("plug ")
         {
-            // These lines already triggered block tracking above if they end with `do`.
-            // Just skip route detection for them.
+            // 这些行如果以 `do` 结尾，已经在上面触发了块跟踪。
+            // 这里仅跳过它们的路由检测。
             continue;
         }
 
-        // Check for `end` — pop the innermost block AFTER route detection
-        // so routes on the same line as `end` are unlikely in practice.
+        // 检查 `end` —— 在路由检测之后弹出最内层块，
+        // 因此与 `end` 同行的路由在实践中不太可能出现。
         let is_end = trimmed == "end";
 
         if !is_end {
-            // Pattern: `verb "/path", Controller, :action` or `verb("/path", Controller, :action)`
+            // 模式：`verb "/path", Controller, :action` 或 `verb("/path", Controller, :action)`
             let first_space = trimmed.find(' ');
             let first_paren = trimmed.find('(');
             let verb_end = match (first_space, first_paren) {
@@ -67,7 +67,7 @@ pub(crate) fn detect_phoenix_routes(file: &str, source: &str) -> Vec<DetectedRou
             let verb = trimmed[..verb_end].trim().to_lowercase();
             if http_verbs.contains(verb.as_str()) {
                 let rest = &trimmed[verb_end..].trim();
-                // Extract path (first string)
+                // 提取路径（第一个字符串）
                 let path_start = rest.find('"').or_else(|| rest.find('\''));
                 let path = match path_start {
                     Some(s) => {
@@ -80,14 +80,14 @@ pub(crate) fn detect_phoenix_routes(file: &str, source: &str) -> Vec<DetectedRou
                     None => { continue; }
                 };
 
-                // Extract handler: the atom after the path (starts with :)
+                // 提取处理函数：路径后面的 atom（以 : 开头）
                 let handler = if let Some(atom_pos) = rest.rfind(':') {
                     rest[atom_pos..].split([',', ' ', ')'])
                         .next().unwrap_or("").trim_matches(':').to_string()
                 } else { continue };
 
                 if !path.is_empty() && !handler.is_empty() {
-                    // D2: Prepend all scope prefixes from the block stack
+                    // D2：添加块栈中所有 scope 前缀
                     let scope_prefix: String = block_stack.iter()
                         .filter_map(|b| match b { Block::Scope(p) => Some(p.as_str()), _ => None })
                         .collect::<Vec<_>>()
@@ -107,7 +107,7 @@ pub(crate) fn detect_phoenix_routes(file: &str, source: &str) -> Vec<DetectedRou
             }
         }
 
-        // Pop block on `end`
+        // 在 `end` 上弹出块
         if is_end {
             block_stack.pop();
         }
@@ -115,7 +115,7 @@ pub(crate) fn detect_phoenix_routes(file: &str, source: &str) -> Vec<DetectedRou
     result
 }
 
-/// Extract the first quoted string from a line (for scope path extraction).
+/// 从一行中提取第一个引号字符串（用于 scope 路径提取）。
 fn extract_phoenix_string(line: &str) -> Option<String> {
     let start = line.find('"').or_else(|| line.find('\''))?;
     let delim = line.as_bytes()[start];

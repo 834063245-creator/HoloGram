@@ -38,7 +38,7 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
     },
 
     onProgress(_agentId: string, _step: number, _toolName: string): void {
-      // Progress is handled via eventSink → ChatCore.renderEvent
+      // 进度通过 eventSink → ChatCore.renderEvent 处理
     },
 
     onToolDone(_agentId: string, toolName: string, args: Record<string, unknown>, output: string): void {
@@ -46,13 +46,13 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
     },
 
     onSessionReplaced(_agentId: string, messages: Message[]): void {
-      // Route by ownership, NOT by active tab: find the session whose registered
-      // agent actually holds this session array (sessionReplaced passes
-      // `this.session` — the same reference getSession() returns).
-      // Previously this rebuilt the ACTIVE session's store unconditionally, so a
-      // background-session compaction (or a history-load setSession fired before
-      // the new tab became active) overwrote the foreground tab's messages with
-      // another session's content — every tab ended up showing the same chat.
+      // 按所有权路由，而非按活动标签页：找到其注册 agent 实际持有
+      // 此会话数组的会话（sessionReplaced 传递 `this.session` —
+      // 与 getSession() 返回的引用相同）。
+      // 以前这会无条件重建活动会话的 store，所以后台会话压缩
+      // （或新标签页变活动前触发的 history-load setSession）会用
+      // 另一个会话的内容覆盖前台标签页的消息 — 每个标签页最终
+      // 显示相同的聊天。
       const { sessions } = getChatStore(storeId).sess.getState();
       for (const s of sessions) {
         const agent = agentSessionState.getAgent(storeId, s.id);
@@ -61,9 +61,9 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
           return;
         }
       }
-      // No registered owner: the agent is mid-restore — setSession() runs before
-      // setAgent() in loadSessionFromDisk / autoRestoreLastSession, and those
-      // flows rebuild explicitly via renderRestoredSession. Leave stores alone.
+      // 无注册所有者：agent 正在恢复中 — setSession() 在
+      // loadSessionFromDisk / autoRestoreLastSession 中先于 setAgent() 运行，
+      // 这些流程通过 renderRestoredSession 显式重建。不要动 store。
     },
 
     onSubAgentSpawn(info): EventSink | undefined {
@@ -79,7 +79,7 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
         version: 0,
       };
       const msgs = store.getState().messages;
-      // Primary target: the last streaming assistant message.
+      // 主要目标：最后一条流式助手消息。
       let attachIdx = -1;
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
@@ -89,8 +89,8 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
         }
       }
       if (attachIdx < 0) {
-        // Fallback: the spawn event raced with the parent turn finalising —
-        // attach to the last assistant message rather than dropping the card.
+        // 回退：spawn 事件与父回合最终化竞争 —
+        // 挂载到最后一条助手消息而非丢弃卡片。
         for (let i = msgs.length - 1; i >= 0; i--) {
           if (msgs[i].role === 'assistant') {
             attachIdx = i;
@@ -101,20 +101,18 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
       if (attachIdx >= 0) {
         const m = msgs[attachIdx] as AssistantMessage;
         m.parts.push(subPart);
-        // Commit through the store's single write path — swaps the message
-        // reference so memoized bubbles render the new card even when the
-        // parent turn already finished.
+        // 通过 store 的单一写入路径提交 — 替换消息引用，
+        // 使记忆化气泡即使在父回合已完成后也能渲染新卡片。
         store.getState().touchMessage(m._id);
       } else {
-        // No assistant message at all — keep the sink alive so events aren't
-        // lost, but make the failure visible instead of silently dropping.
+        // 完全没有助手消息 — 保持 sink 存活以免事件丢失，
+        // 但让失败可见而非静默丢弃。
         console.warn(`[subagent] spawn ${info.agentId}: no assistant message to attach to`);
       }
       return createSubAgentSink({
         subPart,
-        // The sink mutates subPart in place; commit by part identity so the
-        // update lands even after a session rebuild re-attached the part to
-        // a new message object.
+        // sink 原地变更 subPart；按 part 身份提交，使更新
+        // 在会话重建将 part 重新挂载到新消息对象后仍能生效。
         bump: () => store.getState().touchMessageContaining(subPart),
         onProgress: info.onProgress,
       });
@@ -127,7 +125,7 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
         level: ok ? 'info' : 'warn',
         text,
       });
-      // Find and update the SubAgentPart in the assistant message that owns it
+      // 查找并更新拥有它的助手消息中的 SubAgentPart
       const store = msgStoreFor(storeId, sessionId);
       if (!store) return;
       const msgs = store.getState().messages;
@@ -139,8 +137,8 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
             if (p.type === 'subagent' && p.agentId === agentId) {
               p.status = ok ? 'done' : 'error';
               p.version++;
-              // Commit via the single write path — the parent turn is often
-              // already done here; a bare bump froze the card at "执行中".
+              // 通过单一写入路径提交 — 父回合通常此时已完成；
+              // 裸 bump 会使卡片停在"执行中"。
               store.getState().touchMessage(m._id);
               return;
             }
@@ -159,7 +157,7 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
   };
 }
 
-/** Simple string hash for dedup IDs — same text → same ID → store replaces. */
+/** 简单字符串 hash 用于去重 ID — 相同文本 → 相同 ID → store 替换。 */
 function hashStr(s: string): string {
   let h = 0;
   for (let i = 0; i < s.length; i++) {
@@ -181,7 +179,7 @@ export function createBuilderDeps(storeId: string): import('../agent/runtime/age
     onDataflowSaved: () => {
       bus.emit('dataflow:saved');
     },
-    // diagnosticsSource and shellStream are wired separately
-    // (they need Tauri-specific imports that belong in ui layer)
+    // diagnosticsSource 和 shellStream 单独接线
+    // （它们需要属于 UI 层的 Tauri 特定 import）
   };
 }

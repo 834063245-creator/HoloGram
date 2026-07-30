@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// SqliteDb — persistent storage for hologram.db.
-// Handles all SQLite operations: schema creation, batch upsert, FTS5 search,
-// timeline events, and startup migration.
+// SqliteDb — hologram.db 的持久化存储。
+// 处理所有 SQLite 操作：schema 创建、批量 upsert、FTS5 搜索、
+// 时间线事件、以及启动迁移。
 
 use std::path::{Path, PathBuf};
 
@@ -12,15 +12,15 @@ use tracing::info;
 
 use crate::graph::{EdgeKind, Node, NodeKind};
 
-/// Wrapper around the single hologram.db connection.
+/// 包装单一 hologram.db 连接。
 pub struct SqliteDb {
     conn: Connection,
     db_path: PathBuf,
 }
 
 impl SqliteDb {
-    /// Open (or create) the database at `<project_root>/.hologram/hologram.db`.
-    /// Creates schema if first run.
+    /// 在 `<project_root>/.hologram/hologram.db` 打开（或创建）数据库。
+    /// 首次运行时创建 schema。
     pub fn open(project_root: &Path) -> Result<Self, String> {
         let hologram_dir = project_root.join(".hologram");
         std::fs::create_dir_all(&hologram_dir)
@@ -30,9 +30,9 @@ impl SqliteDb {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("open hologram.db: {}", e))?;
 
-        // Essential pragmas — set once at connection open.
-        // ponytail: synchronous=NORMAL is safe in WAL mode and ~2x faster for bulk writes.
-        // SQLite forbids changing synchronous inside a transaction, so do it here.
+        // 关键 pragma —— 连接打开时设置一次。
+        // ponytail：WAL 模式下 synchronous=NORMAL 是安全的，且批量写入快约 2 倍。
+        // SQLite 禁止在事务内修改 synchronous，所以在此设置。
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
@@ -48,12 +48,11 @@ impl SqliteDb {
         Ok(db)
     }
 
-    /// Detect and fix broken FTS5 schema from v4.0 (column `node_id` mismatched
-    /// `nodes.id`). Checks the FTS5 table definition directly; if it uses the old
-    /// column name, drops and recreates the FTS5 index plus triggers, then rebuilds
-    /// from the content table.
+    /// 检测并修复 v4.0 的 FTS5 schema 损坏（`node_id` 列与 `nodes.id` 不匹配）。
+    /// 直接检查 FTS5 表定义；如果使用旧列名，则删除并重建 FTS5 索引及触发器，
+    /// 然后从内容表重建。
     fn migrate_fts5(&self) -> Result<(), String> {
-        // Check if fts_nodes exists and uses the old column name `node_id`.
+        // 检查 fts_nodes 是否存在且使用旧列名 `node_id`。
         let sql: String = self.conn
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='fts_nodes'",
@@ -62,10 +61,10 @@ impl SqliteDb {
             )
             .unwrap_or_default();
         if !sql.contains("node_id") {
-            return Ok(()); // already correct or table doesn't exist yet
+            return Ok(()); // 已正确或表尚未存在
         }
-        info!("[sqlite] migrating broken FTS5 schema (node_id → id)");
-        // Drop old triggers (ignore errors — they might not exist)
+        info!("[sqlite] 正在迁移损坏的 FTS5 schema（node_id → id）");
+        // 删除旧触发器（忽略错误 —— 可能不存在）
         for trig in &["nodes_ai", "nodes_ad", "nodes_au"] {
             let _ = self.conn.execute_batch(&format!("DROP TRIGGER {}", trig));
         }
@@ -89,16 +88,16 @@ impl SqliteDb {
              INSERT INTO fts_nodes(fts_nodes) VALUES('rebuild');",
         )
             .map_err(|e| format!("fts5 migration: {}", e))?;
-        info!("[sqlite] FTS5 migration complete");
+        info!("[sqlite] FTS5 迁移完成");
         Ok(())
     }
 
-    /// Return path for diagnostic messages.
+    /// 返回路径（用于诊断消息）。
     pub fn path(&self) -> &Path {
         &self.db_path
     }
 
-    /// Secondary connection for timeline I/O — avoids blocking on graph store mutex.
+    /// 用于时间线 I/O 的辅助连接 —— 避免阻塞图存储互斥锁。
     pub fn open_aux_connection(db_path: &Path) -> Result<Connection, String> {
         let conn = Connection::open(db_path)
             .map_err(|e| format!("open aux hologram.db: {}", e))?;
@@ -110,7 +109,7 @@ impl SqliteDb {
         Ok(conn)
     }
 
-    /// Create tables if they don't exist.
+    /// 如果表不存在则创建。
     fn ensure_schema(&self) -> Result<(), String> {
         self.conn
             .execute_batch(
@@ -165,7 +164,7 @@ impl SqliteDb {
                     value TEXT
                 );
 
-                -- Name segment vocabulary for camelCase/PascalCase token search
+                -- camelCase/PascalCase 分词搜索的名称段词汇表
                 CREATE TABLE IF NOT EXISTS name_segment_vocab (
                     segment TEXT NOT NULL,
                     name TEXT NOT NULL,
@@ -176,7 +175,7 @@ impl SqliteDb {
             )
             .map_err(|e| format!("ensure schema: {}", e))?;
 
-        // Ensure FTS5 external content table
+        // 确保 FTS5 外部内容表存在
         self.conn
             .execute_batch(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS fts_nodes USING fts5(
@@ -189,8 +188,8 @@ impl SqliteDb {
             )
             .map_err(|e| format!("fts5 table: {}", e))?;
 
-        // Triggers for FTS sync (idempotent via IF NOT EXISTS-like pattern —
-        // rusqlite doesn't support CREATE TRIGGER IF NOT EXISTS, so catch "already exists" error).
+        // FTS 同步触发器（通过类似 IF NOT EXISTS 的模式幂等 ——
+        // rusqlite 不支持 CREATE TRIGGER IF NOT EXISTS，所以捕获 "already exists" 错误）。
         for trigger_sql in [
             "CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
                 INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
@@ -204,21 +203,21 @@ impl SqliteDb {
             END;",
         ] {
             let _ = self.conn.execute_batch(trigger_sql);
-            // Ignore "already exists" — triggers are created once with the table.
+            // 忽略 "already exists" —— 触发器在表创建时一次性创建。
         }
 
-        // Init schema version if not present
+        // 如果不存在则初始化 schema 版本
         let _ = self.conn.execute(
             "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')",
             [],
         );
 
-        // Migration: add metadata column to edges (v4.1)
+        // 迁移：为 edges 表添加 metadata 列（v4.1）
         let _ = self.conn.execute(
             "ALTER TABLE edges ADD COLUMN metadata TEXT",
             [],
         );
-        // Migration: add lsp_resolved column to edges
+        // 迁移：为 edges 表添加 lsp_resolved 列
         let _ = self.conn.execute(
             "ALTER TABLE edges ADD COLUMN lsp_resolved INTEGER DEFAULT 0",
             [],
@@ -227,7 +226,7 @@ impl SqliteDb {
         Ok(())
     }
 
-    // ── full table loads (for MemoryIndex construction) ──
+    // ── 全表加载（用于 MemoryIndex 构建）──
 
     pub fn load_all_nodes(&self) -> Result<Vec<Node>, String> {
         let mut stmt = self
@@ -280,7 +279,7 @@ impl SqliteDb {
         Ok(nodes)
     }
 
-    /// Returns (source, target, kind, coupling_depth, temporal_delay_sec) tuples.
+    /// 返回 (source, target, kind, coupling_depth, temporal_delay_sec) 元组。
     pub fn load_all_edges(&self) -> Result<Vec<(String, String, EdgeKind, u8, Option<f64>)>, String> {
         let mut stmt = self
             .conn
@@ -306,12 +305,12 @@ impl SqliteDb {
         Ok(edges)
     }
 
-    // ── bulk write (full analysis + incremental) ──
+    // ── 批量写入（全量分析 + 增量）──
 
-    /// Replace all graph data in SQLite with the given nodes and edges.
-    /// Uses chunked multi-row INSERT with FTS triggers disabled during bulk load.
-    /// ponytail: synchronous=NORMAL is safe in WAL mode.
-    /// SQLite param limit is 999; nodes have 11 cols → 90 rows/chunk, edges 6 cols → 166 rows/chunk.
+    /// 用给定节点和边替换 SQLite 中的所有图数据。
+    /// 使用分块多行 INSERT，批量加载期间禁用 FTS 触发器。
+    /// ponytail：WAL 模式下 synchronous=NORMAL 是安全的。
+    /// SQLite 参数上限为 999；节点 11 列 → 80 行/块，边 6 列 → 150 行/块。
     pub fn bulk_replace_all(
         &self,
         nodes: &[&Node],
@@ -323,18 +322,18 @@ impl SqliteDb {
         tx.execute_batch("PRAGMA cache_size=-50000;")
             .map_err(|e| format!("pragma cache: {}", e))?;
 
-        // Clear old data
+        // 清除旧数据
         tx.execute_batch("DELETE FROM edges; DELETE FROM nodes;")
             .map_err(|e| format!("delete: {}", e))?;
 
-        // Drop FTS triggers during bulk insert — rebuild FTS at the end.
+        // 批量插入期间删除 FTS 触发器 —— 最后重建 FTS。
         tx.execute_batch("DROP TRIGGER IF EXISTS nodes_ai;
                           DROP TRIGGER IF EXISTS nodes_ad;
                           DROP TRIGGER IF EXISTS nodes_au;")
             .map_err(|e| format!("drop fts triggers: {}", e))?;
 
-        // ── Chunked node insert ──
-        const NODE_CHUNK: usize = 80; // 11 cols × 80 = 880 params, safe under 999
+        // ── 分块插入节点 ──
+        const NODE_CHUNK: usize = 80; // 11 列 × 80 = 880 参数，安全在 999 以内
         let node_sql = "INSERT INTO nodes (id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id) VALUES ";
         for chunk in nodes.chunks(NODE_CHUNK) {
             let mut sql = String::with_capacity(node_sql.len() + chunk.len() * 80);
@@ -367,8 +366,8 @@ impl SqliteDb {
                 .map_err(|e| format!("insert node chunk: {}", e))?;
         }
 
-        // ── Chunked edge insert ──
-        const EDGE_CHUNK: usize = 150; // 6 cols × 150 = 900 params
+        // ── 分块插入边 ──
+        const EDGE_CHUNK: usize = 150; // 6 列 × 150 = 900 参数
         let edge_sql = "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec) VALUES ";
         for chunk in edges.chunks(EDGE_CHUNK) {
             let mut sql = String::with_capacity(edge_sql.len() + chunk.len() * 60);
@@ -390,7 +389,7 @@ impl SqliteDb {
                 .map_err(|e| format!("insert edge chunk: {}", e))?;
         }
 
-        // ── Rebuild FTS and recreate triggers ──
+        // ── 重建 FTS 并重新创建触发器 ──
         tx.execute_batch(
             "INSERT INTO fts_nodes(fts_nodes) VALUES('rebuild');
              CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
@@ -412,9 +411,9 @@ impl SqliteDb {
         Ok(())
     }
 
-    // ── batch upsert (incremental updates) ──
+    // ── 批量 upsert（增量更新）──
 
-    /// Batch upsert nodes. Uses a transaction for performance.
+    /// 批量 upsert 节点。使用事务提升性能。
     pub fn batch_upsert_nodes(&self, nodes: &[&Node]) -> Result<(), String> {
         let tx = self
             .conn
@@ -455,7 +454,7 @@ impl SqliteDb {
         Ok(())
     }
 
-    /// Batch upsert edges using (source, target, kind, coupling_depth, temporal_delay_sec) tuples.
+    /// 使用 (source, target, kind, coupling_depth, temporal_delay_sec) 元组批量 upsert 边。
     pub fn batch_upsert_edges(
         &self,
         edges: &[(&str, &str, EdgeKind, u8, Option<f64>)],
@@ -480,10 +479,10 @@ impl SqliteDb {
         Ok(())
     }
 
-    // ── FTS5 search ──
+    // ── FTS5 搜索 ──
 
     pub fn fts_search(&self, query: &str, limit: usize) -> Result<Vec<String>, String> {
-        // Sanitize: escape FTS5 special characters, use simple MATCH
+        // 清理：转义 FTS5 特殊字符，使用简单 MATCH
         let safe = query.replace(['"', '\''], "");
         let pattern = format!("\"{}\"", safe);
         let mut stmt = self
@@ -502,7 +501,7 @@ impl SqliteDb {
         Ok(ids)
     }
 
-    // ── timeline events ──
+    // ── 时间线事件 ──
 
     pub fn record_timeline(
         &self,
@@ -513,8 +512,8 @@ impl SqliteDb {
         timeline_record(&self.conn, event_type, file, summary)
     }
 
-    /// Record a timeline event with custom properties JSON.
-    /// Properties must be a valid serde_json::Value — stored as JSON string.
+    /// 记录带自定义属性 JSON 的时间线事件。
+    /// properties 必须是有效的 serde_json::Value —— 以 JSON 字符串存储。
     pub fn record_timeline_with_props(
         &self,
         event_type: &str,
@@ -529,14 +528,14 @@ impl SqliteDb {
         timeline_query(&self.conn, limit)
     }
 
-    /// Run incremental vacuum to reclaim space after many incremental updates.
+    /// 运行增量 vacuum 以在大量增量更新后回收空间。
     pub fn incremental_vacuum(&self) -> Result<(), String> {
         self.conn
             .execute_batch("PRAGMA incremental_vacuum;")
             .map_err(|e| format!("vacuum: {}", e))
     }
 
-    /// Get the underlying connection (for Attach/detach operations if needed).
+    /// 获取底层连接（用于 Attach/detach 操作）。
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
@@ -553,7 +552,7 @@ fn timeline_prune(conn: &Connection) {
     );
 }
 
-/// Record a timeline event on any hologram.db connection (WAL-safe).
+/// 在任意 hologram.db 连接上记录时间线事件（WAL 安全）。
 pub fn timeline_record(
     conn: &Connection,
     event_type: &str,
@@ -573,7 +572,7 @@ pub fn timeline_record(
     Ok(())
 }
 
-/// Record a timeline event with JSON properties on any connection.
+/// 在任意连接上记录带 JSON 属性的时间线事件。
 pub fn timeline_record_with_props(
     conn: &Connection,
     event_type: &str,
@@ -595,7 +594,7 @@ pub fn timeline_record_with_props(
     Ok(())
 }
 
-/// Query recent timeline events on any connection.
+/// 在任意连接上查询最近的时间线事件。
 pub fn timeline_query(conn: &Connection, limit: usize) -> Result<Vec<serde_json::Value>, String> {
     let mut stmt = conn
         .prepare(
@@ -623,8 +622,8 @@ pub fn timeline_query(conn: &Connection, limit: usize) -> Result<Vec<serde_json:
     Ok(events)
 }
 
-/// Parse edge kind from SQLite string.
-/// Returns an error for unknown kinds instead of silently defaulting to Calls.
+/// 从 SQLite 字符串解析边类型。
+/// 未知类型返回错误，而非静默默认为 Calls。
 fn edge_kind_from_str(s: &str) -> Result<EdgeKind, String> {
     match s {
         "imports" => Ok(EdgeKind::Imports),
@@ -665,7 +664,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let db = SqliteDb::open(&tmp).unwrap();
 
-        // Write one node of each NodeKind variant
+        // 写入每种 NodeKind 变体各一个节点
         let all_kinds = [NodeKind::Symbol,
             NodeKind::Function,
             NodeKind::Class,
@@ -683,9 +682,9 @@ mod tests {
 
         db.bulk_replace_all(&nodes.iter().collect::<Vec<_>>(), &edges).unwrap();
 
-        // Read back and verify every kind is preserved
+        // 读回并验证每种类型都被保留
         let loaded = db.load_all_nodes().unwrap();
-        assert_eq!(loaded.len(), 8, "all 8 nodes should survive round-trip");
+        assert_eq!(loaded.len(), 8, "全部 8 个节点应在往返后保留");
 
         for node in &loaded {
             let expected_kind_str = node.id.as_str(); // we named nodes by their kind string
@@ -698,11 +697,11 @@ mod tests {
                 "interface" => NodeKind::Interface,
                 "medium" => NodeKind::Medium,
                 "temporal" => NodeKind::Temporal,
-                _ => panic!("unexpected node id: {}", node.id),
+                _ => panic!("意外的节点 id: {}", node.id),
             };
             assert_eq!(std::mem::discriminant(&node.kind), std::mem::discriminant(&expected_kind),
-                "node '{}' loaded as {:?}, expected {:?}", node.id, node.kind, expected_kind);
-            // Verify other fields survived
+                "节点 '{}' 加载为 {:?}, 期望 {:?}", node.id, node.kind, expected_kind);
+            // 验证其他字段也已保留
             assert_eq!(node.out_degree, 1);
             assert_eq!(node.in_degree, 0);
             assert_eq!(node.position, Some([1.0, 2.0, 3.0]));
@@ -746,6 +745,6 @@ mod tests {
 
     #[allow(dead_code)]
     fn _removed_dataflow_test() {
-        // ponytail: dataflow trace storage removed — engine queries only now
+        // ponytail：数据流追踪存储已移除 —— 引擎现在只查询
     }
 }

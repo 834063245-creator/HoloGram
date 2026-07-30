@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// External services — MCP Server, Unity process manager, sandbox status.
+// 外部服务 — MCP Server、Unity 进程管理器、沙箱状态。
 
 use std::sync::{Arc, Mutex};
 use std::io::Read;
@@ -13,10 +13,10 @@ use crate::unity_manager::UnityManager;
 pub(crate) static MCP_MANAGER: std::sync::LazyLock<Arc<Mutex<McpManager>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(McpManager::new())));
 
-/// Retained Child handle for memory-bundle.exe — killed by ResourceLedger on shutdown.
+/// memory-bundle.exe 的保留 Child 句柄 — 在关闭时由 ResourceLedger 终止。
 pub(crate) static MEMORY_BUNDLE_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
 
-/// Shutdown flag for the Unity event TCP server thread.
+/// Unity 事件 TCP 服务器线程的关闭标志。
 pub(crate) static UNITY_EVENT_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
@@ -43,7 +43,7 @@ pub(crate) fn start_unity_event_server(app: tauri::AppHandle) {
                 return;
             }
         };
-        // Non-blocking so we can poll the shutdown flag
+        // 设为非阻塞模式以便轮询关闭标志
         let _ = listener.set_nonblocking(true);
         println!("[unity-events] listening on 127.0.0.1:9776");
 
@@ -54,9 +54,9 @@ pub(crate) fn start_unity_event_server(app: tauri::AppHandle) {
             }
             match listener.accept() {
                 Ok((mut s, _)) => {
-                    // Accepted stream may inherit non-blocking mode from listener
-                    // (platform-dependent). Set back to blocking for the per-connection
-                    // handler which uses blocking read().
+                    // 接受的流可能从监听器继承非阻塞模式
+                    // （平台相关）。为使用阻塞 read() 的
+                    // 每连接处理器恢复为阻塞模式。
                     let _ = s.set_nonblocking(false);
                     handle_unity_connection(&mut s, &app);
                 }

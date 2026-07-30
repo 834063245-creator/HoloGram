@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Migration utilities: JSON → SQLite migration.
-// The actual timeline.db merge is handled in SqliteDb::open() → migrate_timeline().
-// This module provides the JSON-to-MemoryIndex-to-SQLite pipeline for first-time setup.
+// 迁移工具：JSON → SQLite 迁移。
+// 实际的 timeline.db 合并在 SqliteDb::open() → migrate_timeline() 中处理。
+// 本模块提供 JSON → MemoryIndex → SQLite 的流水线，用于首次初始化。
 
 use std::path::Path;
 
@@ -13,8 +13,8 @@ use crate::graph::Graph;
 use crate::storage::memory::MemoryIndex;
 use crate::storage::sqlite::SqliteDb;
 
-/// Try to load a graph from JSON and persist to SQLite.
-/// Returns MemoryIndex on success, or an error string.
+/// 尝试从 JSON 加载图并持久化到 SQLite。
+/// 成功返回 MemoryIndex，失败返回错误字符串。
 pub fn migrate_json_to_sqlite(json_path: &Path, db: &SqliteDb) -> Result<MemoryIndex, String> {
     let path_str = json_path.to_string_lossy();
     info!("[migration] loading JSON: {}", path_str);

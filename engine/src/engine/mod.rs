@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Engine — unified API boundary for all graph operations.
-// Replaces scattered globals (CACHED_GRAPH, GRAPH_STORE, ANALYZE_LOCK)
-// with a single struct that owns all state.
+// Engine — 所有 graph 操作的统一 API 边界。
+// 用一个拥有所有状态的结构体替换分散的全局变量
+// （CACHED_GRAPH, GRAPH_STORE, ANALYZE_LOCK）。
 //
-// Lifecycle:
+// 生命周期：
 //   let mut engine = Engine::new();
 //   engine.init("/path/to/project")?;
 //   engine.read(|idx| { ... })?;
@@ -25,41 +25,41 @@ use crate::storage::{GraphStore, MemoryIndex, SqliteDb};
 use crate::storage::sqlite::{timeline_query, timeline_record, timeline_record_with_props};
 
 // ═══════════════════════════════════════════════════════════════
-// EngineState — lifecycle state machine
+// EngineState — 生命周期状态机
 // ═══════════════════════════════════════════════════════════════
 
-/// Engine lifecycle states.
-/// Transitions: Uninitialized → Loading → Ready ↔ Analyzing
-/// Error is a terminal sink from any state.
+/// Engine 生命周期状态。
+/// 转换：Uninitialized → Loading → Ready ↔ Analyzing
+/// Error 是从任何状态的终态汇。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineState {
-    /// Engine created but not yet initialized with a project.
+    /// Engine 已创建但尚未用项目初始化。
     Uninitialized,
-    /// Loading graph data from SQLite or JSON.
+    /// 正在从 SQLite 或 JSON 加载 graph 数据。
     Loading {
         nodes_loaded: usize,
         edges_loaded: usize,
         elapsed_ms: u64,
     },
-    /// Graph loaded and ready for queries.
+    /// Graph 已加载，可用于查询。
     Ready {
         node_count: usize,
         edge_count: usize,
     },
-    /// Full analysis in progress.
+    /// 全量分析进行中。
     Analyzing {
-        /// When the analysis started (ms since epoch).
+        /// 分析开始时间（自 epoch 起的毫秒数）。
         started_at_ms: u64,
-        /// Current phase label (e.g. "解析文件", "社区检测").
+        /// 当前阶段标签（如 "解析文件", "社区检测"）。
         phase: String,
-        /// Files processed so far.
+        /// 已处理的文件数。
         current: usize,
-        /// Total files to process (0 if unknown).
+        /// 待处理文件总数（未知时为 0）。
         total: usize,
-        /// File currently being processed (empty if none).
+        /// 当前正在处理的文件（无则为空）。
         file: String,
     },
-    /// Unrecoverable error.
+    /// 不可恢复的错误。
     Error(String),
 }
 
@@ -74,29 +74,29 @@ impl EngineState {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// AnalyzeResult — what Engine::analyze() returns
+// AnalyzeResult — Engine::analyze() 的返回值
 // ═══════════════════════════════════════════════════════════════
 
-/// Result of a full analysis pipeline run.
+/// 完整分析流水线运行的结果。
 #[derive(Debug, Clone)]
 pub struct AnalyzeResult {
-    /// The analyzed graph (for callers that need the full Graph object).
+    /// 分析后的 graph（供需要完整 Graph 对象的调用方使用）。
     pub graph: Graph,
-    /// Number of nodes in the resulting graph.
+    /// 结果 graph 中的节点数。
     pub node_count: usize,
-    /// Number of edges in the resulting graph.
+    /// 结果 graph 中的边数。
     pub edge_count: usize,
-    /// Number of detected communities.
+    /// 检测到的社区数。
     pub community_count: usize,
-    /// Hierarchical communities (Level 0 → N), None if single-level only.
+    /// 层次化社区（Level 0 → N），仅单层时为 None。
     pub hierarchical_communities: Vec<crate::community::HierarchicalCommunity>,
-    /// Wall-clock time for the full pipeline.
+    /// 完整流水线的挂钟时间。
     pub elapsed_secs: f64,
-    /// Per-stage timing breakdown.
+    /// 各阶段计时明细。
     pub stage_timings: Vec<StageTiming>,
 }
 
-/// A single pipeline stage timing record.
+/// 单个流水线阶段的计时记录。
 #[derive(Debug, Clone)]
 pub struct StageTiming {
     pub name: String,
@@ -105,7 +105,7 @@ pub struct StageTiming {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Engine — the one door
+// Engine — 唯一入口
 // ═══════════════════════════════════════════════════════════════
 
 fn graph_from_index(idx: &MemoryIndex) -> Graph {
@@ -116,8 +116,8 @@ fn graph_from_index(idx: &MemoryIndex) -> Graph {
     for (source, targets) in idx.edges_iter() {
         for (target, kind, coupling_depth, delay) in targets {
             let id = format!("{}::{}::{}", source, target, kind.as_str());
-            // ponytail: cross_file is analysis metadata lost in CSR round-trip.
-            // Compute from node locations BEFORE target is moved into Edge::new.
+            // ponytail: cross_file 是在 CSR 往返中丢失的分析元数据。
+            // 在 target 被 move 到 Edge::new 之前从节点位置计算。
             let cross_file = {
                 let sf = idx.get_node(&source).and_then(|n| n.location.as_deref());
                 let tf = idx.get_node(&target).and_then(|n| n.location.as_deref());
@@ -140,47 +140,47 @@ fn graph_from_index(idx: &MemoryIndex) -> Graph {
     g
 }
 
-/// Central engine instance. Owns all graph state.
+/// 核心引擎实例。拥有所有 graph 状态。
 ///
-/// All graph operations — queries, analysis, watching — go through this struct.
-/// External code should never access GraphStore, MemoryIndex, or the legacy
-/// Graph cache directly.
+/// 所有 graph 操作 — 查询、分析、watcher — 都通过此结构体。
+/// 外部代码不应直接访问 GraphStore、MemoryIndex 或遗留的
+/// Graph 缓存。
 pub struct Engine {
-    /// The graph store (MemoryIndex + SQLite). Wrapped in std Mutex because
-    /// GraphStore contains rusqlite::Connection which is !Sync.
+    /// Graph store（MemoryIndex + SQLite）。使用 std Mutex 包裹，因为
+    /// GraphStore 包含 rusqlite::Connection，其为 !Sync。
     store: Mutex<Option<GraphStore>>,
 
-    /// Dedicated SQLite connection for timeline — never blocks on graph store lock.
+    /// 专用于 timeline 的 SQLite 连接 — 永不阻塞 graph store 锁。
     timeline_conn: Mutex<Option<Connection>>,
 
-    /// Current project root. Set once during init().
+    /// 当前项目根路径。在 init() 中设置一次。
     project_root: Mutex<PathBuf>,
 
-    /// Serializes full analysis runs. Only one analyze() at a time.
+    /// 串行化全量分析运行。同一时间仅允许一个 analyze()。
     analyze_lock: Mutex<()>,
 
-    /// Cancel token for the currently-running analysis.
-    /// Set to `true` when a new analyze() call wants to preempt the old one.
-    /// The running pipeline checks this between stages and aborts early.
+    /// 当前运行中分析的取消令牌。
+    /// 当新的 analyze() 调用想要抢占旧调用时设为 `true`。
+    /// 运行中的流水线在阶段之间检查此令牌并提前中止。
     cancel_token: RwLock<Option<Arc<AtomicBool>>>,
 
-    /// Current lifecycle state.
+    /// 当前生命周期状态。
     state: RwLock<EngineState>,
 
-    /// Whether the file watcher is running.
+    /// 文件 watcher 是否正在运行。
     watcher_running: Arc<AtomicBool>,
 
-    /// JoinHandle for the watcher thread. Used by stop_watcher() to confirm
-    /// the old thread has exited before starting a new one.
+    /// watcher 线程的 JoinHandle。stop_watcher() 用它确认
+    /// 旧线程已退出后再启动新线程。
     watcher_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 
-    /// Pending file changes detected by the watcher but not yet synced.
-    /// Each entry: (path, timestamp_ms, is_indexing).
+    /// watcher 检测到但尚未同步的待处理文件变更。
+    /// 每条记录：(path, timestamp_ms, is_indexing)。
     pending_changes: Mutex<Vec<(String, u64, bool)>>,
 }
 
 impl Engine {
-    /// Create a new uninitialized engine.
+    /// 创建一个新的未初始化引擎。
     pub fn new() -> Self {
         Self {
             store: Mutex::new(None),
@@ -195,38 +195,38 @@ impl Engine {
         }
     }
 
-    // ── Identity ──────────────────────────────────────────────
+    // ── 标识 ──────────────────────────────────────────────
 
-    /// Current lifecycle state.
+    /// 当前生命周期状态。
     pub fn state(&self) -> EngineState {
         self.state.read().clone()
     }
 
-    /// Project root, if initialized.
+    /// 项目根路径（如已初始化）。
     pub fn project_root(&self) -> PathBuf {
         self.project_root.lock().unwrap().clone()
     }
 
-    /// Whether the engine is ready to serve queries.
+    /// 引擎是否已准备好响应查询。
     pub fn is_ready(&self) -> bool {
         self.state.read().is_ready()
     }
 
-    // ── Init ──────────────────────────────────────────────────
+    // ── 初始化 ──────────────────────────────────────────────────
 
-    /// Initialize the engine for a project.
+    /// 为项目初始化引擎。
     ///
-    /// Opens (or re-opens) the GraphStore at the given path. If the project
-    /// root changed, the old store is replaced.
+    /// 在指定路径打开（或重新打开）GraphStore。如果项目根路径
+    /// 已变更，旧的 store 将被替换。
     pub fn init(&mut self, project_root: &Path) -> Result<(), String> {
         let new_root = project_root.to_path_buf();
         let old_root = self.project_root.lock().unwrap().clone();
 
         if old_root == new_root {
-            // Same project — check if already initialized
+            // 相同项目 — 检查是否已初始化
             let store_guard = self.store.lock().unwrap();
             if store_guard.is_some() && self.is_ready() {
-                // Ensure watcher is running (may have been lost on MCP reconnect)
+                // 确保 watcher 正在运行（MCP 重连后可能已丢失）
                 if !self.is_watching() {
                     self.start_watcher(new_root.clone(), None::<Box<dyn Fn(String) + Send + 'static>>);
                 }
@@ -238,12 +238,12 @@ impl Engine {
                 old_root.display(),
                 new_root.display()
             );
-            // Stop old watcher — it's watching the previous workspace.
-            // The new watcher will be started at the end of this method.
+            // 停止旧 watcher — 它在监听前一个工作区。
+            // 新 watcher 将在本方法末尾启动。
             self.stop_watcher();
         }
 
-        // Set loading state
+        // 设置加载状态
         *self.state.write() = EngineState::Loading {
             nodes_loaded: 0,
             edges_loaded: 0,
@@ -254,7 +254,7 @@ impl Engine {
         let store = GraphStore::open(&new_root)?;
         let timeline_conn = SqliteDb::open_aux_connection(store.db.path())?;
 
-        // Read counts for Ready state
+        // 读取计数以用于 Ready 状态
         let (node_count, edge_count) = store.read(|idx| (idx.node_count(), idx.edge_count()));
 
         *self.project_root.lock().unwrap() = new_root.clone();
@@ -272,7 +272,7 @@ impl Engine {
             start.elapsed().as_millis()
         );
 
-        // Auto-start file watcher for incremental updates
+        // 自动启动文件 watcher 以进行增量更新
         if !self.is_watching() {
             self.start_watcher(new_root.clone(), None::<Box<dyn Fn(String) + Send + 'static>>);
         }
@@ -280,11 +280,11 @@ impl Engine {
         Ok(())
     }
 
-    // ── Read access (concurrent, lock-free between readers) ───
+    // ── 读取访问（并发，读取者之间无锁）──
 
-    /// Read from the MemoryIndex. Multiple readers can hold this concurrently.
+    /// 从 MemoryIndex 读取。多个读取者可同时持有。
     ///
-    /// Returns an error if the store is not initialized.
+    /// 如果 store 未初始化则返回错误。
     pub fn read<R>(&self, f: impl FnOnce(&MemoryIndex) -> R) -> Result<R, String> {
         let store_guard = self
             .store
@@ -296,8 +296,8 @@ impl Engine {
         Ok(store.read(f))
     }
 
-    /// Read data by reconstructing a legacy Graph from the MemoryIndex.
-    /// For callers that need the Graph type (legacy API compatibility).
+    /// 通过从 MemoryIndex 重建遗留 Graph 来读取数据。
+    /// 供需要 Graph 类型的调用方使用（遗留 API 兼容）。
     pub fn read_graph<R>(&self, f: impl FnOnce(&Graph) -> R) -> Result<R, String> {
         let graph = {
             let store_guard = self
@@ -313,7 +313,7 @@ impl Engine {
         Ok(f(&graph))
     }
 
-    /// Mutate the store with a write lock. Serializes all writers.
+    /// 使用写锁修改 store。串行化所有写者。
     pub fn write<R>(&self, f: impl FnOnce(&mut MemoryIndex) -> R) -> Result<R, String> {
         let store_guard = self
             .store
@@ -325,51 +325,50 @@ impl Engine {
         Ok(store.write(f))
     }
 
-    // ── Node/edge counts ─────────────────────────────────────
+    // ── 节点/边计数 ─────────────────────────────────────
 
-    /// Total node count.
+    /// 节点总数。
     pub fn node_count(&self) -> Result<usize, String> {
         self.read(|idx| idx.node_count())
     }
 
-    /// Total edge count.
+    /// 边总数。
     pub fn edge_count(&self) -> Result<usize, String> {
         self.read(|idx| idx.edge_count())
     }
 
-    // ── Analysis ────────────────────────────────────────────
+    // ── 分析 ────────────────────────────────────────────
 
-    /// Run the full analysis pipeline and store results.
+    /// 运行完整分析流水线并存储结果。
     ///
-    /// This is the ONE place where analysis happens. All consumers
-    /// (MCP tool_analyze, Tauri direct_analyze, TCP handle_analyze)
-    /// call this method.
+    /// 这是分析发生的唯一入口。所有消费者
+    /// （MCP tool_analyze、Tauri direct_analyze、TCP handle_analyze）
+    /// 都调用此方法。
     ///
-    /// Pipeline: analyze_project → CrossFileResolver → coupling →
+    /// 流水线：analyze_project → CrossFileResolver → coupling →
     /// framework_routes → dynamic_dispatch → dataflow_synthesis →
-    /// detect_communities → store in GraphStore + SQLite →
-    /// sync CACHED_GRAPH (temporary backward compat).
+    /// detect_communities → 存入 GraphStore + SQLite →
+    /// 同步 CACHED_GRAPH（临时向后兼容）。
     pub fn analyze(&self, project_root: &Path) -> Result<AnalyzeResult, String> {
-        // Cancel any currently-running analysis so it aborts at the next
-        // stage boundary, releasing the lock quickly instead of running to
-        // completion. This is what makes the "re-analyze" button responsive:
-        // the old run exits early, the new one starts immediately.
+        // 取消当前正在运行的分析，使其在下一个阶段边界中止，
+        // 快速释放锁而非运行到完成。这就是"重新分析"按钮响应灵敏的原因：
+        // 旧运行提前退出，新运行立即启动。
         if let Some(token) = self.cancel_token.read().as_ref() {
             token.store(true, Ordering::SeqCst);
         }
 
-        // Block until the current analysis releases the lock (cancelled →
-        // aborts at stage boundary within seconds, not minutes).
+        // 阻塞直到当前分析释放锁（取消后在阶段边界
+        // 数秒内中止，而非数分钟）。
         let _lock = self
             .analyze_lock
             .lock()
             .map_err(|e| format!("Analyze lock poisoned: {}", e))?;
 
-        // Old analysis is done — clear the stale cancel token and create ours.
+        // 旧分析已完成 — 清除过期的取消令牌并创建我们自己的。
         let cancel = Arc::new(AtomicBool::new(false));
         *self.cancel_token.write() = Some(cancel.clone());
 
-        // Abort stale analyzes queued before a workspace switch.
+        // 中止在工作区切换前排队的过期分析。
         if self.project_root() != project_root {
             return Err(format!(
                 "分析已取消（工作区已切换到 {}）",
@@ -380,7 +379,7 @@ impl Engine {
         let started_at = std::time::Instant::now();
         let started_at_ms = chrono::Utc::now().timestamp_millis() as u64;
 
-        // Helper to update progress (avoids repeating state write pattern)
+        // 更新进度的辅助函数（避免重复状态写入模式）
         let set_progress = |phase: &str, current: usize, total: usize, file: &str| {
             *self.state.write() = EngineState::Analyzing {
                 started_at_ms,
@@ -391,20 +390,20 @@ impl Engine {
             };
         };
 
-        // Set state to Analyzing
+        // 设置状态为 Analyzing
         set_progress("发现文件", 0, 0, "");
 
         info!("[engine] analysis started for {}", project_root.display());
 
-        // ponytail: panic guard — if any pipeline stage panics or errors,
-        // reset state from Analyzing to Error so the UI doesn't stay stuck.
-        // Without this, a single stack overflow or unwrap failure leaves the
-        // engine permanently "analyzing" and the analyze_lock poisoned.
+        // ponytail: panic 守卫 — 如果任何流水线阶段 panic 或出错，
+        // 将状态从 Analyzing 重置为 Error，使 UI 不会卡住。
+        // 没有这个，一次栈溢出或 unwrap 失败会导致
+        // 引擎永久停在 "analyzing" 且 analyze_lock 中毒。
         let analyze_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.run_pipeline(project_root, started_at, started_at_ms, &cancel)
         }));
 
-        // Clean up cancel token regardless of outcome
+        // 无论结果如何都清除取消令牌
         *self.cancel_token.write() = None;
 
         match analyze_result {
@@ -427,7 +426,7 @@ impl Engine {
 
     // ── Timeline ─────────────────────────────────────────────
 
-    /// Record a timeline event. Uses a dedicated DB connection (not graph store lock).
+    /// 记录 timeline 事件。使用专用 DB 连接（不阻塞 graph store 锁）。
     pub fn record_timeline(
         &self,
         event_type: &str,
@@ -445,7 +444,7 @@ impl Engine {
             .map_err(|e| format!("Timeline record failed: {}", e))
     }
 
-    /// Record a timeline event with properties.
+    /// 记录带属性的 timeline 事件。
     pub fn record_timeline_with_props(
         &self,
         event_type: &str,
@@ -464,7 +463,7 @@ impl Engine {
             .map_err(|e| format!("Timeline record failed: {}", e))
     }
 
-    /// Query timeline events. Uses a dedicated DB connection (not graph store lock).
+    /// 查询 timeline 事件。使用专用 DB 连接（不阻塞 graph store 锁）。
     pub fn query_timeline(
         &self,
         limit: usize,
@@ -479,7 +478,7 @@ impl Engine {
         timeline_query(conn, limit).map_err(|e| format!("Timeline query failed: {}", e))
     }
 
-    /// Persist the current MemoryIndex to SQLite.
+    /// 将当前 MemoryIndex 持久化到 SQLite。
     pub fn save(&self) -> Result<(), String> {
         let store_guard = self
             .store
@@ -491,7 +490,7 @@ impl Engine {
         store.save()
     }
 
-    /// Full-text search via SQLite FTS5. Returns matching nodes.
+    /// 通过 SQLite FTS5 全文搜索。返回匹配的节点。
     pub fn fts_search(
         &self,
         query: &str,
@@ -511,29 +510,29 @@ impl Engine {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Process-wide ENGINE global
+// 进程级 ENGINE 全局实例
 // ═══════════════════════════════════════════════════════════════
 
-// Sub-modules (extracted from this file to keep it manageable).
+// 子模块（从此文件中提取以保持可维护性）。
 mod grammar;
 mod pipeline;
 mod watcher;
 pub use grammar::GRAMMAR_LOADER;
 
-/// Global engine instance.
+/// 全局引擎实例。
 ///
-/// Outer RwLock allows replacing the entire Engine on workspace switch.
+/// 外层 RwLock 允许在工作区切换时替换整个 Engine。
 pub static ENGINE: std::sync::LazyLock<RwLock<Option<Engine>>> =
     std::sync::LazyLock::new(|| RwLock::new(None));
 
-/// Initialize the global engine for the given project root.
-/// Safe to call multiple times — reuses existing engine if same project,
-/// replaces it on workspace switch.
+/// 为给定项目根路径初始化全局引擎。
+/// 可安全多次调用 — 相同项目复用现有引擎，
+/// 工作区切换时替换。
 pub fn engine_init(project_root: &Path) -> Result<(), String> {
     let mut engine_guard = ENGINE.write();
     match engine_guard.as_mut() {
         Some(engine) => {
-            // Re-init handles same-project reuse and workspace switch internally
+            // 重新初始化内部处理相同项目复用和工作区切换
             engine.init(project_root)
         }
         None => {
@@ -545,7 +544,7 @@ pub fn engine_init(project_root: &Path) -> Result<(), String> {
     }
 }
 
-/// Read from the global engine's MemoryIndex.
+/// 从全局引擎的 MemoryIndex 读取。
 pub fn engine_read<R>(f: impl FnOnce(&MemoryIndex) -> R) -> Result<R, String> {
     let engine_guard = ENGINE.read();
     let engine = engine_guard
@@ -554,7 +553,7 @@ pub fn engine_read<R>(f: impl FnOnce(&MemoryIndex) -> R) -> Result<R, String> {
     engine.read(f)
 }
 
-/// Read from the global engine via a reconstructed legacy Graph.
+/// 通过重建的遗留 Graph 从全局引擎读取。
 pub fn engine_read_graph<R>(f: impl FnOnce(&Graph) -> R) -> Result<R, String> {
     let engine_guard = ENGINE.read();
     let engine = engine_guard
@@ -563,12 +562,12 @@ pub fn engine_read_graph<R>(f: impl FnOnce(&Graph) -> R) -> Result<R, String> {
     engine.read_graph(f)
 }
 
-/// Mutate the global engine's MemoryIndex.
+/// 修改全局引擎的 MemoryIndex。
 ///
-/// Locking: acquires ENGINE.read() (shared) to prevent workspace switch while
-/// mutating, then acquires the inner store's index.write() for actual serialization.
-/// The ENGINE read lock is NOT a write lock — engine_init() (which replaces the
-/// entire Engine) is the only caller that acquires ENGINE.write().
+/// 锁机制：获取 ENGINE.read()（共享）以防止修改时工作区切换，
+/// 然后获取内部 store 的 index.write() 进行实际串行化。
+/// ENGINE 读锁不是写锁 — engine_init()（替换整个 Engine）
+/// 是唯一获取 ENGINE.write() 的调用方。
 pub fn engine_write<R>(f: impl FnOnce(&mut MemoryIndex) -> R) -> Result<R, String> {
     let engine_guard = ENGINE.read();
     let engine = engine_guard
@@ -577,7 +576,7 @@ pub fn engine_write<R>(f: impl FnOnce(&mut MemoryIndex) -> R) -> Result<R, Strin
     engine.write(f)
 }
 
-/// Get the global engine's current state.
+/// 获取全局引擎的当前状态。
 pub fn engine_state() -> EngineState {
     ENGINE
         .read()
@@ -586,15 +585,15 @@ pub fn engine_state() -> EngineState {
         .unwrap_or(EngineState::Uninitialized)
 }
 
-/// Borrow the global Engine for direct method calls.
-/// Returns None if the engine hasn't been initialized.
-/// Use this when callers outside the engine module need to call
-/// methods like start_watcher() / stop_watcher() on the Engine.
+/// 借用全局 Engine 以进行直接方法调用。
+/// 如果引擎尚未初始化则返回 None。
+/// 当引擎模块外的调用方需要调用 Engine 上的
+/// start_watcher() / stop_watcher() 等方法时使用。
 pub fn with_engine<R>(f: impl FnOnce(&Engine) -> R) -> Option<R> {
     ENGINE.read().as_ref().map(f)
 }
 
-/// Record a timeline event on the global engine.
+/// 在全局引擎上记录 timeline 事件。
 pub fn engine_record_timeline(
     event_type: &str,
     node_id: Option<&str>,
@@ -607,7 +606,7 @@ pub fn engine_record_timeline(
     engine.record_timeline(event_type, node_id, summary)
 }
 
-/// Record a timeline event with properties on the global engine.
+/// 在全局引擎上记录带属性的 timeline 事件。
 pub fn engine_record_timeline_with_props(
     event_type: &str,
     node_id: Option<&str>,
@@ -621,7 +620,7 @@ pub fn engine_record_timeline_with_props(
     engine.record_timeline_with_props(event_type, node_id, summary, props)
 }
 
-/// Query timeline events from the global engine.
+/// 从全局引擎查询 timeline 事件。
 pub fn engine_query_timeline(
     limit: usize,
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -632,7 +631,7 @@ pub fn engine_query_timeline(
     engine.query_timeline(limit)
 }
 
-/// Persist to SQLite on the global engine.
+/// 在全局引擎上持久化到 SQLite。
 pub fn engine_save() -> Result<(), String> {
     let guard = ENGINE.read();
     let engine = guard
@@ -641,7 +640,7 @@ pub fn engine_save() -> Result<(), String> {
     engine.save()
 }
 
-/// Full-text search via FTS5 on the global engine.
+/// 在全局引擎上通过 FTS5 全文搜索。
 pub fn engine_fts_search(
     query: &str,
     limit: usize,
@@ -653,14 +652,14 @@ pub fn engine_fts_search(
     engine.fts_search(query, limit)
 }
 
-/// Supported source file extensions (dynamic, from GRAMMAR_LOADER).
-/// Always up-to-date with installed grammar DLLs.
+/// 支持的源文件扩展名（动态，来自 GRAMMAR_LOADER）。
+/// 始终与已安装的语法 DLL 保持同步。
 pub fn engine_supported_extensions() -> Vec<String> {
     GRAMMAR_LOADER.supported_extensions()
 }
 
-/// Run analysis on the global engine. Convenience wrapper that callers
-/// (MCP, TCP, Tauri) can use without directly touching the ENGINE lock.
+/// 在全局引擎上运行分析。便捷封装，调用方
+/// （MCP、TCP、Tauri）无需直接操作 ENGINE 锁。
 pub fn engine_analyze(project_root: &Path) -> Result<AnalyzeResult, String> {
     let guard = ENGINE.read();
     let engine = guard
@@ -669,9 +668,9 @@ pub fn engine_analyze(project_root: &Path) -> Result<AnalyzeResult, String> {
     engine.analyze(project_root)
 }
 
-/// Try incremental update first, fall back to full re-analysis.
-/// Called by the Tauri shell's file watcher so it doesn't always do
-/// a full re-analysis when only a few files changed.
+/// 先尝试增量更新，失败则回退到全量重新分析。
+/// 由 Tauri shell 的文件 watcher 调用，使其在仅少数文件变更时
+/// 不必总是进行全量重新分析。
 pub fn engine_try_incremental(
     root: &Path,
     changed_files: &[(PathBuf, String)],
@@ -680,7 +679,7 @@ pub fn engine_try_incremental(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Tests
+// 测试
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -693,7 +692,7 @@ mod tests {
         assert_eq!(engine.state(), EngineState::Uninitialized);
         assert!(!engine.is_ready());
         assert_eq!(engine.project_root(), PathBuf::new());
-        // Not initialized yet
+        // 尚未初始化
         assert!(engine.read(|idx| idx.node_count()).is_err());
         assert!(engine.read_graph(|g| g.node_count()).is_err());
     }
@@ -701,12 +700,12 @@ mod tests {
     #[test]
     fn test_engine_init_empty_project() {
         let tmp = std::env::temp_dir().join("hologram_test_engine_init_empty");
-        // Use a subdirectory that doesn't have .hologram/
+        // 使用一个没有 .hologram/ 的子目录
         let test_dir = tmp.join("empty_project");
         let _ = std::fs::create_dir_all(&test_dir);
 
         let mut engine = Engine::new();
-        // Init on a directory with no graph data should succeed (empty store)
+        // 在没有 graph 数据的目录上初始化应成功（空 store）
         let result = engine.init(&test_dir);
         assert!(result.is_ok(), "init should succeed on empty dir: {:?}", result.err());
         assert!(engine.is_ready());
@@ -736,7 +735,7 @@ mod tests {
         engine.init(&test_dir).unwrap();
         assert!(engine.is_ready());
 
-        // Second init on same project should succeed (idempotent)
+        // 对相同项目的第二次初始化应成功（幂等）
         let result = engine.init(&test_dir);
         assert!(result.is_ok(), "re-init should be idempotent: {:?}", result.err());
 
@@ -754,19 +753,19 @@ mod tests {
 
         let mut engine = Engine::new();
 
-        // Init with project A — watcher starts
+        // 用项目 A 初始化 — watcher 启动
         engine.init(&dir_a).unwrap();
         assert!(engine.is_ready());
         assert_eq!(engine.project_root(), dir_a);
         assert!(engine.is_watching(), "watcher should be running after first init");
 
-        // Switch to project B — watcher must restart for the new root
+        // 切换到项目 B — watcher 必须为新根路径重启
         engine.init(&dir_b).unwrap();
         assert!(engine.is_ready());
         assert_eq!(engine.project_root(), dir_b);
         assert!(engine.is_watching(), "watcher should be running after workspace switch");
-        // Verify it's actually watching the new root by checking project_root
-        // (the watcher thread holds a clone of project_root, tested implicitly)
+        // 通过检查 project_root 验证它确实在监听新根路径
+        // （watcher 线程持有 project_root 的 clone，隐式测试）
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -796,7 +795,7 @@ mod tests {
         engine.init(&test_dir).unwrap();
 
         let count = engine.read_graph(|g| g.node_count()).unwrap();
-        assert_eq!(count, 0); // empty project
+        assert_eq!(count, 0); // 空项目
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -812,7 +811,7 @@ mod tests {
         let mut engine = Engine::new();
         engine.init(&test_dir).unwrap();
 
-        // Insert a node via write
+        // 通过 write 插入节点
         engine
             .write(|idx| {
                 let node = Node::new("test_node_1", "test_fn", NodeKind::Function);
@@ -820,7 +819,7 @@ mod tests {
             })
             .unwrap();
 
-        // Read it back
+        // 读回数据
         let count = engine.read(|idx| idx.node_count()).unwrap();
         assert_eq!(count, 1);
 
@@ -831,13 +830,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    // test_global_engine_init_and_read removed — global ENGINE functions
-    // are tested implicitly by MCP tests (which use engine_read/write/init).
+    // test_global_engine_init_and_read 已移除 — 全局 ENGINE 函数
+    // 由 MCP 测试隐式覆盖（使用 engine_read/write/init）。
 
     #[test]
     fn test_engine_read_without_init_returns_error() {
-        // Don't use the global ENGINE — test directly on an Engine that was
-        // never initialized (read/write should fail).
+        // 不使用全局 ENGINE — 直接在一个从未初始化的 Engine 上测试
+        // （read/write 应失败）。
         let engine = Engine::new();
         let result = engine.read(|idx: &MemoryIndex| idx.node_count());
         assert!(result.is_err());
@@ -846,9 +845,9 @@ mod tests {
             .contains("Engine not initialized"));
     }
 
-    /// F1 regression: incremental update path must not always return Err.
-    /// Create a project, analyze it, modify a file, then verify
-    /// IncrementalUpdater::update() succeeds (no fallback to full analysis).
+    /// F1 回归：增量更新路径不能总是返回 Err。
+    /// 创建项目、分析、修改文件，然后验证
+    /// IncrementalUpdater::update() 成功（不回退到全量分析）。
     #[test]
     fn test_incremental_update_path_is_reachable() {
         use crate::storage::incremental::IncrementalUpdater;
@@ -858,24 +857,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // Create a small Python project
+        // 创建一个小型 Python 项目
         std::fs::write(tmp.join("main.py"), "def hello():\n    return 'world'\n").unwrap();
         std::fs::write(tmp.join("util.py"), "def add(a, b):\n    return a + b\n").unwrap();
 
-        // Analyze
+        // 分析
         let mut engine = Engine::new();
         engine.init(&tmp).unwrap();
         let result = engine.analyze(&tmp).unwrap();
         assert!(result.node_count > 0, "should have nodes after analysis");
 
-        // Read the old index
+        // 读取旧索引
         let old_node_count = engine.read(|idx| idx.node_count()).unwrap();
         assert!(old_node_count > 0);
 
-        // Modify a file (simulate watcher change)
+        // 修改文件（模拟 watcher 变更）
         std::fs::write(tmp.join("main.py"), "def hello():\n    return 'updated'\ndef new_fn(): pass\n").unwrap();
 
-        // Try incremental update
+        // 尝试增量更新
         let store_guard = engine.store.lock().unwrap();
         let store = store_guard.as_ref().unwrap();
         let changed: Vec<(PathBuf, &str)> = vec![(tmp.join("main.py"), "modified")];
@@ -887,14 +886,14 @@ mod tests {
         );
         drop(store_guard);
 
-        // The incremental update should succeed (not fall back to full analysis)
+        // 增量更新应成功（不回退到全量分析）
         match inc_result {
             Ok((new_idx, errors)) => {
                 assert!(new_idx.node_count() >= old_node_count,
                     "incremental update should preserve or add nodes (old={}, new={})",
                     old_node_count, new_idx.node_count());
                 if errors > 0 {
-                    // Parse errors are acceptable but node count shouldn't drop drastically
+                    // 解析错误可接受，但节点数不应大幅下降
                 }
             }
             Err(e) => {
@@ -905,18 +904,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// [removed] test_lsp_type_resolved_edges_in_graph — this test was coupled to
-    /// the now-removed handwritten python_lsp adapter. LSP resolution is now
-    /// on-demand via LspManager; graph edges are short-name only during indexing.
+    /// [已移除] test_lsp_type_resolved_edges_in_graph — 此测试耦合到
+    /// 已移除的手写 python_lsp 适配器。LSP 解析现在
+    /// 通过 LspManager 按需执行；graph 边在索引时仅使用短名称。
     #[test]
     fn test_lsp_stub_placeholder() {
-        // Placeholder: keep the test slot for future native-LSP E2E tests.
+        // 占位符：保留测试槽位以供未来原生 LSP E2E 测试使用。
     }
 
 
-    /// ponytail: graph_from_index lost edge metadata (cross_file in particular)
-    /// because MemoryIndex CSR doesn't store those fields. The fix re-derives
-    /// cross_file from node locations.
+    /// ponytail: graph_from_index 丢失了边元数据（特别是 cross_file），
+    /// 因为 MemoryIndex CSR 不存储这些字段。修复方法是从
+    /// 节点位置重新推导 cross_file。
     #[test]
     fn test_graph_from_index_cross_file() {
         use crate::graph::{EdgeKind, Node, NodeKind};
@@ -924,7 +923,7 @@ mod tests {
 
         let mut idx = MemoryIndex::new();
 
-        // Same file
+        // 相同文件
         let mut n1 = Node::new("n1", "fn_a", NodeKind::Function);
         n1.location = Some("src/lib.rs:10".into());
         idx.insert_node(n1);
@@ -933,29 +932,29 @@ mod tests {
         n2.location = Some("src/lib.rs:50".into());
         idx.insert_node(n2);
 
-        // Different file
+        // 不同文件
         let mut n3 = Node::new("n3", "fn_c", NodeKind::Function);
         n3.location = Some("src/main.rs:5".into());
         idx.insert_node(n3);
 
-        idx.upsert_edge("n1", "n2", EdgeKind::Calls, 0, None); // same file
-        idx.upsert_edge("n1", "n3", EdgeKind::Calls, 0, None); // cross-file
-        idx.flush_pending(); // upsert_edge → pending_adds, flush → CSR so graph_from_index sees them
+        idx.upsert_edge("n1", "n2", EdgeKind::Calls, 0, None); // 相同文件
+        idx.upsert_edge("n1", "n3", EdgeKind::Calls, 0, None); // 跨文件
+        idx.flush_pending(); // upsert_edge → pending_adds，flush → CSR 以便 graph_from_index 能看到
 
         let g = graph_from_index(&idx);
         assert_eq!(g.node_count(), 3);
         assert_eq!(g.edge_count(), 2);
 
-        // Edge n1→n2: same file → cross_file=false
+        // Edge n1→n2：相同文件 → cross_file=false
         let e1 = g.edges.values().find(|e| e.source == "n1" && e.target == "n2").unwrap();
         assert!(!e1.cross_file, "n1→n2 should be same-file (both in src/lib.rs), got cross_file={}", e1.cross_file);
 
-        // Edge n1→n3: different files → cross_file=true
+        // Edge n1→n3：不同文件 → cross_file=true
         let e2 = g.edges.values().find(|e| e.source == "n1" && e.target == "n3").unwrap();
         assert!(e2.cross_file, "n1→n3 should be cross-file (lib.rs vs main.rs), got cross_file={}", e2.cross_file);
     }
 
-    /// Edge without location info should default to cross_file=false.
+    /// 没有 location 信息的边应默认 cross_file=false。
     #[test]
     fn test_graph_from_index_no_location() {
         use crate::graph::{EdgeKind, Node, NodeKind};
@@ -973,12 +972,12 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Re-analyze resilience — state must never stay stuck at Analyzing
+    // 重新分析韧性 — 状态绝不能停留在 Analyzing
     // ═══════════════════════════════════════════════════════════════
 
-    /// After a workspace-mismatch error, state must be Error (not stuck at
-    /// Analyzing), and the analyze lock must be released so the next call
-    /// can proceed.
+    /// 工作区不匹配错误后，状态必须为 Error（不能停留在
+    /// Analyzing），且 analyze 锁必须已释放，以便下次调用
+    /// 能继续。
     #[test]
     fn test_reanalyze_state_recovers_on_workspace_mismatch() {
         let tmp = std::env::temp_dir().join("hologram_test_rs_ws_mismatch");
@@ -992,7 +991,7 @@ mod tests {
         engine.init(&dir_a).unwrap();
         assert!(engine.is_ready());
 
-        // analyze(dir_b) when engine is bound to dir_a — must fail
+        // 当引擎绑定到 dir_a 时 analyze(dir_b) — 必须失败
         let result = engine.analyze(&dir_b);
         assert!(result.is_err(), "analyze on wrong workspace must return Err");
         assert!(
@@ -1000,17 +999,17 @@ mod tests {
             "error message should mention workspace switch"
         );
 
-        // State must be Uninitialized (not Analyzing!) because the check
-        // happens BEFORE set_progress("发现文件", ...) sets Analyzing.
+        // 状态必须为 Uninitialized（不是 Analyzing！），因为检查
+        // 发生在 set_progress("发现文件", ...) 设置 Analyzing 之前。
         assert!(
             !engine.state().is_analyzing(),
             "state must NOT be Analyzing after workspace-mismatch error"
         );
 
-        // Lock must be released — a second analyze on the correct path works
+        // 锁必须已释放 — 在正确路径上的第二次 analyze 可工作
         let result2 = engine.analyze(&dir_a);
-        // This should succeed (or fail with a real analysis error, not lock
-        // poisoned). Either way, it must not hang.
+        // 应成功（或因真实分析错误失败，而非锁
+        // 中毒）。无论哪种情况都不能挂起。
         assert!(
             result2.is_ok() || !result2.as_ref().unwrap_err().contains("poisoned"),
             "analyze lock must not be poisoned after error: {:?}",
@@ -1020,15 +1019,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Full analysis on a real project: verify state ends at Ready (not
-    /// stuck at Analyzing), data is accessible, and lock is released.
+    /// 对真实项目的全量分析：验证状态最终为 Ready（不
+    /// 停留在 Analyzing）、数据可访问、锁已释放。
     #[test]
     fn test_reanalyze_completes_and_state_is_ready() {
         let tmp = std::env::temp_dir().join("hologram_test_rs_completes");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // Small multi-file Python project to exercise the full pipeline
+        // 小型多文件 Python 项目以测试完整流水线
         std::fs::write(tmp.join("main.py"), "import util\ndef main():\n    return util.add(1, 2)\n").unwrap();
         std::fs::write(tmp.join("util.py"), "def add(a, b):\n    return a + b\n").unwrap();
 
@@ -1039,7 +1038,7 @@ mod tests {
         let result = engine.analyze(&tmp);
         assert!(result.is_ok(), "analyze must succeed: {:?}", result.err());
 
-        // State must be Ready (NOT Analyzing)
+        // 状态必须为 Ready（不是 Analyzing）
         let state = engine.state();
         assert!(
             matches!(state, EngineState::Ready { .. }),
@@ -1047,23 +1046,23 @@ mod tests {
             state
         );
 
-        // Data must be accessible
+        // 数据必须可访问
         let nc = engine.node_count().unwrap();
         let ec = engine.edge_count().unwrap();
         assert!(nc > 0, "must have nodes after analysis");
         assert!(ec > 0, "must have edges after analysis (import + call)");
 
-        // Lock is healthy — consecutive reads work
+        // 锁健康 — 连续读取正常工作
         let nc2 = engine.read(|idx| idx.node_count()).unwrap();
         assert_eq!(nc2, nc, "read after analyze must return same count");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Verify the analyze lock is not poisoned and state is not stuck
-    /// after the pipeline completes (success or error).  Regression test
-    /// for the "re-analyze stuck at 分析中" bug where a panic or error
-    /// inside the pipeline left state permanently at Analyzing.
+    /// 验证 analyze 锁未中毒且状态未卡住
+    /// （流水线完成后，无论成功或失败）。回归测试
+    /// 针对 "re-analyze 卡在分析中" 的 bug，该 bug 中 panic 或错误
+    /// 导致状态永久停留在 Analyzing。
     #[test]
     fn test_reanalyze_lock_healthy_and_state_not_stuck() {
         let tmp = std::env::temp_dir().join("hologram_test_rs_lock_healthy");
@@ -1075,18 +1074,18 @@ mod tests {
         let mut engine = Engine::new();
         engine.init(&tmp).unwrap();
 
-        // Run analyze — may succeed or fail, but must not leave state stuck
+        // 运行 analyze — 可能成功或失败，但不能让状态卡住
         let _ = engine.analyze(&tmp);
 
-        // Assert 1: state is not Analyzing
+        // 断言 1：状态不是 Analyzing
         assert!(
             !engine.state().is_analyzing(),
             "BUG: state stuck at Analyzing after analyze() returned"
         );
 
-        // Assert 2: lock is healthy — can call analyze() again
+        // 断言 2：锁健康 — 可以再次调用 analyze()
         let result2 = engine.analyze(&tmp);
-        // Either succeeds or fails with a non-poison error
+        // 要么成功，要么因非中毒错误失败
         if let Err(e) = &result2 {
             assert!(
                 !e.contains("poisoned"),
@@ -1095,7 +1094,7 @@ mod tests {
             );
         }
 
-        // Assert 3: graph write still works
+        // 断言 3：graph 写入仍正常工作
         use crate::graph::{Node, NodeKind};
         let write_result = engine.write(|idx| {
             idx.insert_node(Node::new("test_n", "Test", NodeKind::Symbol));
@@ -1105,9 +1104,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Verify that even when analyze() is called concurrently on two
-    /// engines (different instances), each completes without the other's
-    /// state leaking.  Proves the analyze_lock is per-instance.
+    /// 验证即使在两个引擎（不同实例）上并发调用 analyze()，
+    /// 每个都能完成而不会泄漏对方的状态。
+    /// 证明 analyze_lock 是实例级别的。
     #[test]
     fn test_reanalyze_independent_engines_dont_interfere() {
         let tmp = std::env::temp_dir().join("hologram_test_rs_independent");
@@ -1136,9 +1135,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Full-pipeline integration test against a multi-file, multi-language
-    /// fixture. One test that catches regressions across the entire stack:
-    /// parser → structure → coupling → communities → dataflow → persistence.
+    /// 针对多文件、多语言 fixture 的全流水线集成测试。
+    /// 一个覆盖整个技术栈回归的测试：
+    /// parser → structure → coupling → communities → dataflow → persistence。
     #[test]
     fn test_fixture_full_pipeline() {
         let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1149,13 +1148,13 @@ mod tests {
         let result = engine.analyze(&fixture);
         assert!(result.is_ok(), "analyze failed: {:?}", result.err());
 
-        // ── Structure: nodes + edges exist ──
+        // ── 结构：节点 + 边存在 ──
         let nc = engine.node_count().unwrap();
         let ec = engine.edge_count().unwrap();
         assert!(nc >= 8, "expected >=8 nodes (3 py files + 1 js file + functions/classes), got {nc}");
         assert!(ec >= 5, "expected >=5 edges (calls + imports + inherits), got {ec}");
 
-        // ── Edge types present ──
+        // ── 边类型存在 ──
         let (has_calls, has_imports, has_defines, has_inherits) = engine.read(|idx| {
             let mut calls = false; let mut imports = false;
             let mut defines = false; let mut inherits = false;
@@ -1177,7 +1176,7 @@ mod tests {
         assert!(has_defines, "must have Defines edges (class → module, function → class)");
         assert!(has_inherits, "must have Inherits edges (PooledConnection → Config)");
 
-        // ── Communities detected ──
+        // ── 社区已检测 ──
         let community_count = engine.read(|idx| {
             let ids: std::collections::HashSet<usize> = idx.nodes_iter()
                 .filter_map(|n| n.community_id)
@@ -1186,28 +1185,28 @@ mod tests {
         }).unwrap();
         assert!(community_count >= 1, "must detect at least 1 community");
 
-        // ── Dataflow: query specific files ──
+        // ── 数据流：查询特定文件 ──
         let main_py = fixture.join("main.py");
         let db_py = fixture.join("db.py");
         let results = crate::analysis::dataflow_engine::query_dataflow_files(&[main_py, db_py]);
         assert_eq!(results.len(), 2);
 
-        // main.py: should detect `main` and `fetch_remote` async triggers
+        // main.py：应检测到 `main` 和 `fetch_remote` 异步触发器
         let main_df = results[0].result.as_ref().expect("main.py dataflow");
         let main_fn = main_df.scopes.iter().find(|s| s.name == "main").expect("main function");
         assert!(main_fn.writes.contains(&"db".into()), "main() writes db, got writes={:?}", main_fn.writes);
         let fetch_fn = main_df.scopes.iter().find(|s| s.name == "fetch_remote").expect("fetch_remote");
         assert!(!fetch_fn.triggers.is_empty(), "fetch_remote has await trigger");
 
-        // db.py: `_connection_count` should be detected as shared state
+        // db.py：`_connection_count` 应被检测为共享状态
         let db_df = results[1].result.as_ref().expect("db.py dataflow");
-        // db.py has shared variables: `host` (Config ctor → connect_db),
-        // `db` + `sql` (passed through execute_query → _do_query).
+        // db.py 有共享变量：`host`（Config 构造函数 → connect_db），
+        // `db` + `sql`（通过 execute_query → _do_query 传递）。
         let shared_vars: Vec<&str> = db_df.shared.iter().map(|s| s.var.as_str()).collect();
         assert!(shared_vars.contains(&"db"), "db.py should have shared 'db' var, got shared={:?}", db_df.shared);
         assert!(shared_vars.contains(&"host"), "db.py should have shared 'host' var, got shared={:?}", db_df.shared);
 
-        // helper.js: async + cache patterns
+        // helper.js：异步 + 缓存模式
         let js_results = crate::analysis::dataflow_engine::query_dataflow_files(&[fixture.join("helper.js")]);
         let js_df = js_results[0].result.as_ref().expect("helper.js dataflow");
         let loader = js_df.scopes.iter().find(|s| s.name == "loadResource").expect("loadResource");
@@ -1215,14 +1214,14 @@ mod tests {
             "loadResource writes something, got writes={:?}", loader.writes);
         assert!(!loader.triggers.is_empty(), "loadResource has await trigger");
 
-        // ── Persistence: save + read back ──
+        // ── 持久化：保存 + 读回 ──
         engine.save().expect("save to SQLite");
         let nc2 = engine.read(|idx| idx.node_count()).unwrap();
         assert_eq!(nc2, nc, "node count after save must match");
     }
 
-    /// Verify that all 4 blind-spot synthesis stages produce marker nodes
-    /// when run against a multi-language fixture with reflection/eval/cross-lang patterns.
+    /// 验证所有 4 个盲点合成阶段在针对含反射/eval/跨语言模式的多语言 fixture
+    /// 运行时能生成标记节点。
     #[test]
     fn test_blindspot_synthesis_pipeline() {
         let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1249,20 +1248,20 @@ mod tests {
         assert!(names.iter().any(|n| n.starts_with("<cross-lang:")), "cross-lang marker missing");
     }
 
-    // ── Cancel token tests ──────────────────────────────────────────────
+    // ── 取消令牌测试 ──────────────────────────────────────────────
 
-    /// Cancel flag set mid-pipeline → analysis aborts with cancel error.
-    /// Proves that re-analyze doesn't block waiting for a running analysis
-    /// to complete — the old one is cancelled at the next stage boundary.
+    /// 流水线中途设置取消标志 → 分析以取消错误中止。
+    /// 证明重新分析不会阻塞等待运行中的分析
+    /// 完成 — 旧分析在下一个阶段边界被取消。
     #[test]
     fn test_cancel_token_stops_pipeline() {
         let tmp = std::env::temp_dir().join("hologram_test_cancel_stop");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // ponytail: 300 files so core-parse takes 100-300ms — enough for
-        // the cancel signal to arrive before the pipeline finishes. 20 files
-        // parsed in 10ms which was too fast.
+        // ponytail: 300 个文件使核心解析耗时 100-300ms — 足够让
+        // 取消信号在流水线完成前到达。20 个文件
+        // 10ms 内解析完，太快了。
         for i in 0..300 {
             std::fs::write(
                 tmp.join(format!("mod{}.py", i)),
@@ -1281,11 +1280,11 @@ mod tests {
         let t = tmp.clone();
         let handle = std::thread::spawn(move || e.analyze(&t));
 
-        // Wait until the analysis has actually started (its cancel token is
-        // published at pipeline entry), then cancel mid-pipeline. A blind 50ms
-        // sleep raced thread scheduling: under full-suite load the spawned
-        // thread often hadn't started yet, the token was still None, and the
-        // cancel silently never fired — the pipeline then ran to completion.
+        // 等待分析实际开始（其取消令牌在流水线入口处
+        // 发布），然后在流水线中途取消。盲目 50ms
+        // 休眠会与线程调度竞争：在全套件负载下，生成的
+        // 线程往往尚未启动，令牌仍为 None，取消
+        // 静默失败 — 流水线随后运行到完成。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while engine.cancel_token.read().is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1309,9 +1308,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// After analysis completes (success or error), cancel_token must be
-    /// None — proves cleanup doesn't leak a stale token that interferes
-    /// with the next analysis.
+    /// 分析完成后（无论成功或失败），cancel_token 必须为
+    /// None — 证明清理不会泄漏过期令牌干扰
+    /// 下一次分析。
     #[test]
     fn test_cancel_token_cleaned_up_after_analysis() {
         let tmp = std::env::temp_dir().join("hologram_test_cancel_cleanup");
@@ -1322,7 +1321,7 @@ mod tests {
         let mut engine = Engine::new();
         engine.init(&tmp).unwrap();
 
-        // 1. Successful analysis: token must be None
+        // 1. 成功分析：令牌必须为 None
         let result = engine.analyze(&tmp);
         assert!(result.is_ok(), "analyze failed: {:?}", result.err());
         assert!(
@@ -1330,7 +1329,7 @@ mod tests {
             "cancel_token must be None after successful analysis"
         );
 
-        // 2. Lock is healthy — can analyze again
+        // 2. 锁健康 — 可以再次分析
         let result2 = engine.analyze(&tmp);
         assert!(result2.is_ok(), "second analyze failed: {:?}", result2.err());
         assert!(
@@ -1341,17 +1340,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Calling analyze() while another is running cancels the first and
-    /// runs to completion. This is the re-analyze button's contract:
-    /// "start fresh, now, don't queue behind the old run."
+    /// 在另一个分析运行时调用 analyze() 会取消第一个并
+    /// 运行到完成。这是重新分析按钮的契约：
+    /// "立即重新开始，不在旧运行后面排队。"
     #[test]
     fn test_reanalyze_cancels_running_analysis() {
         let tmp = std::env::temp_dir().join("hologram_test_rac_cancel");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // Enough files to ensure the first analysis is still running
-        // when the second call arrives
+        // 足够的文件确保第一次分析仍在运行
+        // 当第二次调用到达时
         for i in 0..30 {
             std::fs::write(
                 tmp.join(format!("lib{}.py", i)),
@@ -1366,16 +1365,16 @@ mod tests {
             unsafe { &mut *ptr }.init(&tmp).unwrap();
         }
 
-        // Start first analysis
+        // 启动第一次分析
         let e1 = engine.clone();
         let t1 = tmp.clone();
         let handle = std::thread::spawn(move || e1.analyze(&t1));
 
-        // Wait until the first analysis has actually started (its cancel token
-        // is published at pipeline entry). A blind 200ms sleep raced thread
-        // scheduling: under full-suite load the first thread sometimes hadn't
-        // started, so the second analyze ran first and was itself cancelled by
-        // the late first one — failing the result2.is_ok() assertion below.
+        // 等待第一次分析实际开始（其取消令牌
+        // 在流水线入口处发布）。盲目 200ms 休眠会与线程
+        // 调度竞争：在全套件负载下，第一个线程有时尚未
+        // 启动，导致第二次 analyze 先运行且自身被
+        // 迟到的第一次取消 — 从而无法通过下方的 result2.is_ok() 断言。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while engine.cancel_token.read().is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1385,7 +1384,7 @@ mod tests {
             "first analysis never started within 5s"
         );
 
-        // Second analysis — this cancels the first via the token
+        // 第二次分析 — 通过令牌取消第一次
         let result2 = engine.analyze(&tmp);
         assert!(result2.is_ok(), "second analyze must succeed: {:?}", result2.err());
         assert!(
@@ -1393,8 +1392,8 @@ mod tests {
             "state must be Ready after second analysis"
         );
 
-        // First analysis should have been cancelled (or completed if it was
-        // fast enough — either is acceptable, it's not stuck)
+        // 第一次分析应已被取消（或如果足够快则已完成 —
+        // 两者均可接受，关键是不能卡住）
         let result1 = handle.join().unwrap();
         if let Err(ref e) = result1 {
             assert!(
@@ -1403,18 +1402,18 @@ mod tests {
                 e
             );
         }
-        // If result1 is Ok, it means the first analysis finished before
-        // cancellation took effect — also fine (project was small enough).
+        // 如果 result1 为 Ok，表示第一次分析在取消
+        // 生效前已完成 — 也可以接受（项目足够小）。
 
-        // Verify data is accessible after all this
+        // 验证所有操作后数据仍可访问
         let nc = engine.node_count().unwrap();
         assert!(nc > 0, "must have nodes after re-analysis");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Verify native LSP resolution works end-to-end (no handwritten fallback).
-    /// Uses whichever LSP server is available on this machine.
+    /// 验证原生 LSP 解析端到端工作（无手写后备）。
+    /// 使用此机器上可用的 LSP 服务器。
     #[test]
     fn test_native_lsp_resolve_call_e2e() {
         let tmp = std::env::temp_dir().join("hologram_test_native_lsp");
@@ -1422,14 +1421,14 @@ mod tests {
         let test_dir = tmp.join("lsp_project");
         std::fs::create_dir_all(&test_dir).unwrap();
 
-        // Init the global engine
+        // 初始化全局引擎
         let _ = crate::engine::engine_init(&test_dir);
         let root_str = test_dir.to_string_lossy().to_string();
 
-        // Warm LSP pool
+        // 预热 LSP 池
         crate::lsp_manager::LspManager::warm(&root_str);
 
-        // ── Test 1: engine_status returns LSP info ──
+        // ── 测试 1：engine_status 返回 LSP 信息 ──
         let status = crate::tools::handlers::handler_status(&json!({}));
         let status_v = if let crate::tools::ToolResponse::Success(v) = status {
             v
@@ -1443,7 +1442,7 @@ mod tests {
         assert!(!servers.is_empty(),
             "lsp.servers should list configured servers; full status: {:?}", status_v);
 
-        // ── Test 2: unsupported language returns degraded ──
+        // ── 测试 2：不支持的语言返回 degraded ──
         let degraded = crate::tools::handlers::handler_resolve_call(&json!({
             "file": "test.sc",
             "function": "foo",
@@ -1451,7 +1450,7 @@ mod tests {
         assert!(matches!(degraded, crate::tools::ToolResponse::Degraded { .. }),
             "Unsupported language .sc should return Degraded, got: {:?}", degraded);
 
-        // ── Test 3: resolve_call with missing LSP returns degraded ──
+        // ── 测试 3：缺少 LSP 时 resolve_call 返回 degraded ──
         std::fs::write(test_dir.join("Test.java"), "class Test { void main() {} }").unwrap();
         let java_path = test_dir.join("Test.java").to_string_lossy().replace('\\', "/");
         let resp = crate::tools::handlers::handler_resolve_call(&json!({
@@ -1473,13 +1472,13 @@ mod tests {
             }
         }
 
-        // ── Test 4: engine_status missing list is populated ──
+        // ── 测试 4：engine_status 的 missing 列表已填充 ──
         let missing = lsp["missing"].as_array().unwrap();
         let available = lsp["available"].as_array().unwrap();
         eprintln!("LSP available: {:?}", available);
         eprintln!("LSP missing: {:?}", missing);
-        // At minimum rust-analyzer is on this machine (confirmed via which)
-        // The PATH issue in cargo test may cause false negatives — just assert structure
+        // 至少 rust-analyzer 在此机器上（通过 which 确认）
+        // cargo test 中的 PATH 问题可能导致假阴性 — 仅断言结构
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

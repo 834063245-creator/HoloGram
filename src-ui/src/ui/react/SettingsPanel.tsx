@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Settings Panel — React rewrite of settings-panel.ts.
+// Settings 面板 — settings-panel.ts 的 React 重写。
 // Provider | Agent | Display | Languages 四个标签页。
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化。
 
@@ -40,14 +40,14 @@ interface LspData {
   servers: LspServer[];
 }
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
 const _escapeAttr = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const _escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// ── Main Component ──
+// ── 主组件 ──
 
 const SettingsPanelApp: React.FC<{
   onClose: () => void;
@@ -108,35 +108,35 @@ const SettingsPanelApp: React.FC<{
   }, []);
   const [dirty, setDirty] = useState(false);
 
-  // Provider add form
+  // Provider 添加表单
   const [showAddForm, setShowAddForm] = useState(false);
   const [addName, setAddName] = useState('');
   const [addKind, setAddKind] = useState<'openai' | 'anthropic'>('openai');
   const [addKey, setAddKey] = useState('');
   const [addError, setAddError] = useState('');
 
-  // API key visibility
+  // API Key 可见性
   const [keyVisible, setKeyVisible] = useState(false);
 
-  // LSP status
+  // LSP 状态
   const [lspStatus, setLspStatus] = useState<LspData | null>(null);
   const [lspLoading, setLspLoading] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
 
-  // Tool search
+  // 工具搜索
   const [toolFilter, setToolFilter] = useState('');
 
-  // Save feedback
+  // 保存反馈
   const [saved, setSaved] = useState(false);
 
   const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
   const isAnthropic = active?.kind === 'anthropic';
 
-  // ── Load LSP status when Languages tab opens ──
+  // ── 语言依赖标签页打开时加载 LSP 状态 ──
   const lspLoaded = useRef(false);
   const lspPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const lspPollCount = useRef(0);
-  const MAX_LSP_POLLS = 15; // 30s max
+  const MAX_LSP_POLLS = 15; // 最多 30 秒
   useEffect(() => {
     if (activeTab !== 'languages' || lspLoaded.current) return;
     lspLoaded.current = true;
@@ -148,8 +148,8 @@ const SettingsPanelApp: React.FC<{
           const parsed = JSON.parse(raw);
           if (parsed?.lsp?.servers) {
             setLspStatus(parsed.lsp);
-            // Stop when all installed servers have resolved (running or error),
-            // or we've polled enough times.
+            // 当所有已安装服务器都已确定状态（运行或错误）时停止，
+            // 或轮询次数足够时停止。
             lspPollCount.current += 1;
             const allResolved = parsed.lsp.servers.every(
               (s: any) => s.available || s.error || !s.installed,
@@ -165,14 +165,14 @@ const SettingsPanelApp: React.FC<{
     };
 
     fetchStatus();
-    // Poll every 2s until all installed servers report their final state.
+    // 每 2 秒轮询一次，直到所有已安装服务器报告最终状态。
     lspPollTimer.current = setInterval(fetchStatus, 2000);
     return () => {
       if (lspPollTimer.current) clearInterval(lspPollTimer.current);
     };
   }, [activeTab]);
 
-  // ── Handlers ──
+  // ── 处理函数 ──
 
   const markDirty = useCallback(() => setDirty(true), []);
 
@@ -267,13 +267,13 @@ const SettingsPanelApp: React.FC<{
     return models.length;
   }, []);
 
-  // ── Render ──
+  // ── 渲染 ──
 
   return (
     <>
       <div id="settings-panel-overlay" className="sp-open" onClick={handleClose} />
       <div id="settings-panel" className="sp-open">
-        {/* Header */}
+        {/* 头部 */}
         <div className="sp-header">
           <span
             className="sp-title"
@@ -286,7 +286,7 @@ const SettingsPanelApp: React.FC<{
           />
         </div>
 
-        {/* Tabs */}
+        {/* 标签页 */}
         <div className="sp-tabs">
           {(
             [
@@ -306,9 +306,9 @@ const SettingsPanelApp: React.FC<{
           ))}
         </div>
 
-        {/* Content */}
+        {/* 内容 */}
         <div className="sp-content">
-          {/* ═══ Provider Tab ═══ */}
+          {/* ═══ Provider 标签页 ═══ */}
           <div
             className="sp-tab-content"
             data-tab="provider"
@@ -449,7 +449,7 @@ const SettingsPanelApp: React.FC<{
                   onRefreshModels={handleRefreshModels}
                   onChange={(modelId, desc) => {
                     updateProvider('model', modelId);
-                    // Auto-fill baseUrl if empty or user hasn't customized it
+                    // 如果为空或用户未自定义，自动填充 baseUrl
                     if (desc) {
                       const currentBase = active?.baseUrl || '';
                       const defaults = [
@@ -500,7 +500,7 @@ const SettingsPanelApp: React.FC<{
             </div>
           </div>
 
-          {/* ═══ Agent Tab ═══ */}
+          {/* ═══ Agent 标签页 ═══ */}
           <div className="sp-tab-content" data-tab="agent" style={{ display: activeTab === 'agent' ? '' : 'none' }}>
             <div className="sp-section">
               <div className="sp-section-title">模型参数</div>
@@ -583,7 +583,7 @@ const SettingsPanelApp: React.FC<{
             <div className="sp-hint">输出随机性越低越稳定 · 越高越有创意但可能胡说。小窗口意味着旧消息会被压缩。</div>
           </div>
 
-          {/* ═══ Display Tab ═══ */}
+          {/* ═══ 显示标签页 ═══ */}
           <div className="sp-tab-content" data-tab="display" style={{ display: activeTab === 'display' ? '' : 'none' }}>
             <div className="sp-section">
               <div className="sp-section-title">语言 / Language</div>
@@ -643,7 +643,7 @@ const SettingsPanelApp: React.FC<{
             <div className="sp-hint">缩放所有界面文字。更改后保存即生效（Terminal / 编辑器需重新打开文件）。</div>
           </div>
 
-          {/* ═══ Languages Tab ═══ */}
+          {/* ═══ 语言依赖标签页 ═══ */}
           <div
             className="sp-tab-content"
             data-tab="languages"
@@ -750,7 +750,7 @@ const SettingsPanelApp: React.FC<{
             )}
           </div>
 
-          {/* ═══ About Tab ═══ */}
+          {/* ═══ 关于标签页 ═══ */}
           <div className="sp-tab-content" data-tab="about" style={{ display: activeTab === 'about' ? '' : 'none' }}>
             <div className="sp-section">
               <div className="sp-section-title">HoloGram 全息观测站</div>
@@ -807,7 +807,7 @@ const SettingsPanelApp: React.FC<{
           </div>
         </div>
 
-        {/* Footer */}
+        {/* 底部 */}
         <div className="sp-footer">
           <button className="sp-btn sp-btn-cancel" onClick={handleClose}>
             取消
@@ -821,7 +821,7 @@ const SettingsPanelApp: React.FC<{
           />
         </div>
 
-        {/* Corner brackets */}
+        {/* 角标 */}
         <div className="corner-brackets">
           <span className="cb-bottom left" />
           <span className="cb-bottom right" />
@@ -831,7 +831,7 @@ const SettingsPanelApp: React.FC<{
   );
 };
 
-// ── Panel root（P3：DockPanel 条件挂载 — 关闭即卸载，重开从 localStorage 重读）──
+// ── 面板根（P3：DockPanel 条件挂载 — 关闭即卸载，重开从 localStorage 重读）──
 // 旧 Controller 外层 overlay/panel 与组件内层同 id 重复嵌套，收编后只保留组件内这一层。
 
 export function SettingsPanel() {

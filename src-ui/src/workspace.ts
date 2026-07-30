@@ -1,15 +1,15 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Workspace — owns all state for one open project.
-// Replaces 18+ module-level globals in main.ts.
+// Workspace — 拥有一个已打开项目的全部状态。
+// 替换 main.ts 中的 18+ 个模块级全局变量。
 //
-// Lifecycle:
+// 生命周期：
 //   const ws = await Workspace.open(path, starGraph, chatPanel);
-//   // ... user works ...
+//   // ... 用户工作 ...
 //   await ws.deactivate(chatPanel);
 //
-// Switching workspaces is atomic: old.deactivate() → new = Workspace.open() → assign.
+// 切换工作区是原子的：old.deactivate() → new = Workspace.open() → 赋值。
 
 import { Agent } from './agent/agent';
 import { AgentStore } from './agent/agent-store';
@@ -36,7 +36,7 @@ import type { StarGraph } from './ui/graph';
 import { getDiagnosticsForFile } from './ui/lsp-client';
 import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
-// ── Runtime layer (replaces bootstrap.ts) ──
+// ── 运行时层（替代 bootstrap.ts）──
 import { AgentRuntime } from './agent/runtime/runtime';
 import {
   buildGraphContextFromData,
@@ -52,19 +52,19 @@ import { SkillRegistry } from './agent/skills';
 import { withTimeout } from './lifecycle/timeout';
 
 // ═══════════════════════════════════════════════════════
-// Dynamic tool loading from engine registry
+// 从引擎注册表动态加载工具
 // ═══════════════════════════════════════════════════════
 
 import { dbg } from './ui/debug';
 
-// ── Path util ──────────────────────────────────────────────────────
+// ── 路径工具 ──────────────────────────────────────────────────────
 
-/** Case-insensitive path comparison (Windows drive letters may differ in case). */
+/** 不区分大小写的路径比较（Windows 盘符大小写可能不同）。 */
 export function isSamePath(a: string, b: string): boolean {
   return a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase();
 }
 
-// ── Arg translation (moved from main.ts) ───────────────────────────
+// ── 参数翻译（从 main.ts 迁移）──────────────────────────────────
 
 // ponytail: 所有 hologram 工具 schema 已用 camelCase (nodeId/maxDepth/from/to/...),
 // Tauri v2 默认 camelCase 重命名 Rust snake_case 参数 → 期望的 JS key 正是这些 camelCase.
@@ -72,20 +72,20 @@ export function isSamePath(a: string, b: string): boolean {
 // neighbors/path/coupling_report/community) 全部 "missing required key". 删整张表, args 直传.
 // 若新增 hologram 命令: schema 参数名用 camelCase 即可, 无需任何翻译.
 
-// ── Workspace class ─────────────────────────────────────────────────
+// ── Workspace 类 ─────────────────────────────────────────────────
 
 export class Workspace {
-  // ── Identity ──
+  // ── 标识 ──
   readonly path: string;
 
-  // ── Graph data ──
+  // ── 图数据 ──
   graphData: any = null;
   fileGraphData: any = null;
 
-  // ── View state ──
+  // ── 视图状态 ──
   diffActive: boolean = false;
 
-  // ── Agent & memory ──
+  // ── Agent 与记忆 ──
   agent: Agent | null = null;
   prov: Provider | null = null;
   registry: ToolRegistry | null = null;
@@ -95,48 +95,47 @@ export class Workspace {
   agentStore: AgentStore | null = null;
   goalManager: GoalManager | null = null;
 
-  // ── Runtime ──
+  // ── 运行时 ──
   runtime: AgentRuntime | null = null;
 
-  // ── Sub-agent pool ──
+  // ── 子 Agent 池 ──
   subAgentPool = new SubAgentPool();
 
-  // ── Store routing (per-panel isolation) ──
+  // ── Store 路由（面板级隔离）──
   _storeId: string = '__default__';
 
-  // ── Check state ──
+  // ── 检查状态 ──
   checkRunning: boolean = false;
   checkPending: boolean = false;
   checkTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // ── Agent setup guards ──
+  // ── Agent 设置守卫 ──
   agentSetupRunning: boolean = false;
   agentSetupPending: boolean = false;
 
-  // ── Internals ──
+  // ── 内部状态 ──
   private _active: boolean = false;
   private _unlisteners: Array<() => void> = [];
 
-  /** Health status for cold-start background analysis. */
+  /** 冷启动后台分析的健康状态。 */
   _health: 'unknown' | 'ready' | 'degraded' = 'unknown';
 
-  /** Callback invoked when background analysis fails (cold-start degraded mode). */
+  /** 后台分析失败时的回调（冷启动降级模式）。 */
   onAnalysisFailed: ((err: unknown) => void) | null = null;
 
-  /** Guard: true while the initial cold-start render (step 4 of open()) is in flight.
-   *  Prevents graph-updated events from stomping on the in-progress render with
-   *  a second _renderImpl → clearGraph() call that disposes GPU resources the
-   *  first render is still using. */
+  /** 守卫：初始冷启动渲染（open() 的第 4 步）进行中时为 true。
+   *  防止 graph-updated 事件用第二次 _renderImpl → clearGraph() 调用
+   *  踩踏正在进行的渲染，因为该调用会释放第一次渲染仍在使用的 GPU 资源。 */
   _initialRenderActive: boolean = false;
 
-  /** Preflight GraphContext — stored so engine snapshot can be refreshed after writes. */
+  /** 预检 GraphContext — 存储以便写入后刷新引擎快照。 */
   _preflightCtx: GraphContext | null = null;
 
   get active(): boolean {
     return this._active;
   }
 
-  // ── UI callbacks (set by main.ts) ──
+  // ── UI 回调（由 main.ts 设置）──
   onStatusChange: ((msg: string) => void) | null = null;
   onLoadingChange: ((loading: boolean) => void) | null = null;
 
@@ -144,13 +143,13 @@ export class Workspace {
     this.path = path;
   }
 
-  /** Create a placeholder workspace for agent-only mode (no project loaded). Never activated. */
+  /** 创建仅 Agent 模式的占位工作区（未加载项目）。永不激活。 */
   static placeholder(): Workspace {
     return new Workspace('');
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // Factory: open a workspace — full analysis + render + watcher
+  // 工厂方法：打开工作区 — 完整分析 + 渲染 + 监听器
   // ═══════════════════════════════════════════════════════════════
 
   static async open(
@@ -162,16 +161,15 @@ export class Workspace {
   ): Promise<Workspace> {
     const ws = new Workspace(path);
     ws._active = true;
-    // ponytail: wire callbacks immediately so progress listeners inside this
-    // method can push status updates. Without this, the entire analysis phase
-    // is silent — onStatusChange was assigned AFTER open() returned.
+    // ponytail: 立即连接回调，以便本方法内的进度监听器能推送状态更新。
+    // 否则整个分析阶段都是静默的 — onStatusChange 在 open() 返回后才被赋值。
     ws.onStatusChange = callbacks?.onStatusChange ?? null;
     ws.onLoadingChange = callbacks?.onLoadingChange ?? null;
 
-    // Auto-schedule check when agent writes files
-    // (handled via agent:tool-done → onToolDone → scheduleCheck below)
+    // Agent 写入文件时自动调度检查
+    // （通过 agent:tool-done → onToolDone → scheduleCheck 处理，见下文）
 
-    // 1. Register workspace with backend
+    // 1. 向后端注册工作区
     ws.onStatusChange?.('正在初始化引擎...');
     console.log('[Workspace.open] step 1: workspace_activate...');
     await rpc('workspace_activate', { path }).catch((e) => {
@@ -180,7 +178,7 @@ export class Workspace {
     console.log('[Workspace.open] step 1: done');
     initLogger(path);
 
-    // 2. Wire progress listeners (scoped to this workspace)
+    // 2. 连接进度监听器（限定于本工作区）
     let currentPhase = '';
     const unlistenProgress = await listen<{ current: number; total: number; file: string }>('analyze-progress', (e) => {
       if (!ws._active) return;
@@ -201,12 +199,11 @@ export class Workspace {
 
     try {
       if (opts?.skipAnalysis && opts.cachedGraph) {
-        // Cold-start: use cached graph for instant render.
-        // Still fire analyze_and_load (force=false) so engine_init switches
-        // the backend engine to THIS project. Without this, all hologram_*
-        // tool calls hit the previous session's graph data.
-        // fire-and-track: user sees graph immediately, engine init finishes in background.
-        // If analysis fails, workspace enters degraded mode — visible but non-blocking.
+        // 冷启动：使用缓存的图谱进行即时渲染。
+        // 仍触发 analyze_and_load（force=false），使 engine_init 将后端引擎切换到
+        // 当前项目。否则所有 hologram_* 工具调用会命中上一个会话的图谱数据。
+        // fire-and-track：用户立即看到图谱，引擎初始化在后台完成。
+        // 若分析失败，工作区进入降级模式 — 可见但不阻塞。
         ws.graphData = opts.cachedGraph;
         rpc('analyze_and_load', { path, force: false })
           .then(() => {
@@ -219,17 +216,16 @@ export class Workspace {
             ws.onAnalysisFailed?.(err);
           });
       } else {
-        // Full analysis
+        // 完整分析
         ws.onLoadingChange?.(true);
         const raw = await rpc<string>('analyze_and_load', { path, force: false });
         ws.graphData = JSON.parse(raw);
       }
 
-      // 3. Load file-level graph — timeout at 5s, don't block workspace open.
-      // ponytail: read_file_content's async require_read runs on the Tokio runtime
-      // which can be saturated by the fire-and-forget analyze_and_load serializing
-      // 11669-node JSON on the async thread. This is an internal file; if it times
-      // out, file-level graph is null — non-fatal.
+      // 3. 加载文件级图谱 — 5 秒超时，不阻塞工作区打开。
+      // ponytail: read_file_content 的 async require_read 运行在 Tokio 运行时上，
+      // 可能被 fire-and-forget 的 analyze_and_load 在异步线程上序列化 11669 节点
+      // 的 JSON 占满。这是一个内部文件；若超时，文件级图谱为 null — 非致命。
       console.log('[Workspace.open] step 3: read_file_content...');
       try {
         const filesPath = path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
@@ -244,14 +240,14 @@ export class Workspace {
         ws.fileGraphData = null;
       }
 
-      // 4. Render — defer to next macrotask so DOM status updates paint first.
-      // ponytail: _renderImpl runs heavy sync prep (Map/Array builds for N nodes)
-      // before its first await. Without setTimeout, the main thread is blocked
-      // and "正在渲染图谱..." never paints — user sees stale "正在分析...".
-      // ponytail 2: _initialRenderActive prevents graph-updated from calling
-      // doGraphUpdate→render→_renderImpl→clearGraph() while this render is
-      // in flight (cold-start race: fire-and-forget analyze_and_load emits
-      // graph-updated → get_full_graph → doGraphUpdate → render stomps on us).
+      // 4. 渲染 — 延迟到下一个宏任务，使 DOM 状态更新先绘制。
+      // ponytail: _renderImpl 在第一个 await 之前执行大量同步预处理
+      // （N 个节点的 Map/Array 构建）。没有 setTimeout，主线程被阻塞，
+      // "正在渲染图谱..." 永远不会绘制 — 用户看到的是过时的 "正在分析..."。
+      // ponytail 2: _initialRenderActive 防止 graph-updated 在本次渲染进行中
+      // 调用 doGraphUpdate→render→_renderImpl→clearGraph()
+      // （冷启动竞态：fire-and-forget 的 analyze_and_load 发出
+      // graph-updated → get_full_graph → doGraphUpdate → 渲染踩踏我们）。
       console.log('[Workspace.open] step 4: scheduling render...');
       ws.onStatusChange?.('正在渲染图谱...');
       ws._initialRenderActive = true;
@@ -260,14 +256,14 @@ export class Workspace {
         try {
           await starGraph.render(ws.graphData);
         } catch {
-          /* render handles its own errors */
+          /* 渲染器自行处理错误 */
         }
         ws._initialRenderActive = false;
-        // Run initial check to establish baseline — also schedules subsequent checks via doGraphUpdate
+        // 运行初始检查以建立基线 — 同时通过 doGraphUpdate 调度后续检查
         ws.runCheck();
       }, 0);
 
-      // 5. Wire persistent event listeners (graph-updated, analysis-complete, analysis-failed)
+      // 5. 连接持久事件监听器（graph-updated、analysis-complete、analysis-failed）
       console.log('[Workspace.open] step 5: wiring listeners...');
       const unlistenGraphUpdated = await listen<string>('graph-updated', async (event) => {
         if (!ws._active) return;
@@ -277,11 +273,11 @@ export class Workspace {
           if (eventRoot && !isSamePath(eventRoot, ws.path)) return;
           const nc = summary.total_nodes || summary.node_count || 0;
           if (nc > 0 && ws.path) {
-            // ponytail: if the initial cold-start render is still in flight,
-            // don't stomp on it with another _renderImpl → clearGraph().
-            // The initial render already has ws.graphData (cachedGraph).
-            // Subsequent graph-updated events will trigger doGraphUpdate normally
-            // once _initialRenderActive clears.
+            // ponytail: 若初始冷启动渲染仍在进行中，
+            // 不要用另一个 _renderImpl → clearGraph() 踩踏它。
+            // 初始渲染已有 ws.graphData（cachedGraph）。
+            // _initialRenderActive 清除后，后续 graph-updated 事件
+            // 将正常触发 doGraphUpdate。
             if (ws._initialRenderActive) {
               console.log('[Workspace.open] graph-updated: skipping (initial render in flight)');
               return;
@@ -295,21 +291,21 @@ export class Workspace {
                   stripLineNumbers(await rpc<string>('read_file_content', { filePath: filesPath })),
                 );
               } catch {
-                /* file graph may not exist yet */
+                /* 文件图谱可能尚不存在 */
               }
               ws.doGraphUpdate(starGraph, summary.diff);
               bus.emit('timeline:refresh');
             } catch {
-              /* get_full_graph failed */
+              /* get_full_graph 失败 */
             }
           }
         } catch {
-          /* ignore */
+          /* 忽略 */
         }
       });
       ws._unlisteners.push(unlistenGraphUpdated);
 
-      // Agent tool-done → auto-trigger briefings when files may have changed
+      // Agent 工具完成 → 文件可能变更时自动触发简报
       const FILE_MODIFY_TOOLS = new Set([
         'write_file',
         'edit_file',
@@ -327,7 +323,7 @@ export class Workspace {
         if (FILE_MODIFY_TOOLS.has(evt.toolName)) {
           ws.scheduleCheck();
           bus.emit('timeline:refresh');
-          // Refresh engine snapshot — tracks cumulative structure drift
+          // 刷新引擎快照 — 跟踪累积结构漂移
           if (ws._preflightCtx) scheduleEngineSnapshotRefresh(ws._preflightCtx, ws.path);
         }
       };
@@ -347,9 +343,9 @@ export class Workspace {
               stripLineNumbers(await rpc<string>('read_file_content', { filePath: filesPath })),
             );
           } catch {
-            /* will be regenerated by watcher */
+            /* 将由 watcher 重新生成 */
           }
-          // Use diff for incremental update if available, otherwise full render
+          // 若 diff 可用则增量更新，否则全量渲染
           ws.doGraphUpdate(starGraph, summary.diff);
           bus.emit('timeline:refresh');
         } catch (e) {
@@ -366,7 +362,7 @@ export class Workspace {
       });
       ws._unlisteners.push(unlistenAnalysisFailed);
 
-      // Clean up progress listeners (they only live during initial analysis)
+      // 清理进度监听器（仅在初始分析期间存活）
       unlistenProgress();
       unlistenPhase();
       unlistenHeartbeat();
@@ -385,56 +381,56 @@ export class Workspace {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // Deactivate — save state, stop watcher, remove listeners
+  // 停用 — 保存状态、停止监听器、移除监听器
   // ═══════════════════════════════════════════════════════════════
 
   async deactivate(chatPanel: ChatCore): Promise<void> {
     this._active = false;
 
-    // Save chat sessions
+    // 保存聊天会话
     try {
       await chatPanel.saveActiveSession(this.path);
     } catch {
-      /* ignore */
+      /* 忽略 */
     }
 
-    // Stop watcher and clear backend state
+    // 停止 watcher 并清除后端状态
     try {
       await rpc('workspace_deactivate');
     } catch {
-      /* ignore */
+      /* 忽略 */
     }
 
-    // Remove all event listeners
+    // 移除所有事件监听器
     for (const unlisten of this._unlisteners) {
       try {
         unlisten();
       } catch {
-        /* ignore */
+        /* 忽略 */
       }
     }
     this._unlisteners = [];
 
-    // Clear agent & memory
-    // Stop all running sub-agents before clearing
+    // 清除 Agent 与记忆
+    // 清除前停止所有运行中的子 Agent
     this.subAgentPool.stopAll();
-    // Flush session-scoped boards before destroying runtime — awaited so
-    // board data is persisted before the runtime agents are torn down.
+    // 销毁运行时前刷新会话级看板 — 等待完成，确保看板数据
+    // 在运行时 Agent 被拆除前已持久化。
     if (this.runtime) {
       await this.runtime.flushAllBoards();
     }
-    // Destroy runtime agents
+    // 销毁运行时 Agent
     if (this.runtime) {
       for (const summary of this.runtime.listAgents()) {
         this.runtime.destroyAgent(summary.id);
       }
       this.runtime = null;
     }
-    // Clear agent panel data
+    // 清除 Agent 面板数据
     useAgentPanelStore.getState().setAgents([]);
     useAgentPanelStore.getState().setTaskBoard([]);
     useAgentPanelStore.getState().setDiscoveries([]);
-    // Persist agent state before clearing
+    // 清除前持久化 Agent 状态
     if (this.agent) {
       this.agent.saveState('done').catch(() => {});
     }
@@ -442,29 +438,29 @@ export class Workspace {
     try {
       await auraShutdown();
     } catch {
-      /* ignore */
+      /* 忽略 */
     }
     this.memoryManager = null;
 
-    // Clear timers
+    // 清除计时器
     if (this.checkTimer) {
       clearTimeout(this.checkTimer);
       this.checkTimer = null;
     }
   }
 
-  /** Force-clear all state without waiting for async cleanup.
-   *  Called when deactivate() times out — prevents a stuck workspace
-   *  from blocking the next switchWorkspace. */
+  /** 强制清除所有状态，不等待异步清理。
+   *  在 deactivate() 超时时调用 — 防止卡住的工作区
+   *  阻塞下一次 switchWorkspace。 */
   forceClearState(): void {
     this._active = false;
     for (const unlisten of this._unlisteners) {
-      try { unlisten(); } catch { /* ignore */ }
+      try { unlisten(); } catch { /* 忽略 */ }
     }
     this._unlisteners = [];
     this.subAgentPool.stopAll();
-    // Best-effort flush before detaching runtime — fire-and-forget by design
-    // (this is the sync emergency path; deactivate() awaits the flush).
+    // 分离运行时前尽力刷新 — 设计为 fire-and-forget
+    // （这是同步紧急路径；deactivate() 会 await 刷新）。
     if (this.runtime) {
       void this.runtime.flushAllBoards();
     }
@@ -478,7 +474,7 @@ export class Workspace {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // setupAgent — build the LLM agent with hologram/coding/memory tools
+  // setupAgent — 构建带 hologram/coding/memory 工具的 LLM Agent
   // ═══════════════════════════════════════════════════════════════
 
   async setupAgent(chatPanel: ChatCore): Promise<void> {
@@ -498,14 +494,14 @@ export class Workspace {
     }
   }
 
-  /** Plan-mode tool registry: shallow-copies only read-only tools from the given registry. */
+  /** Plan 模式工具注册表：从给定注册表浅拷贝只读工具。 */
   private _planRegistry(base: ToolRegistry): ToolRegistry {
     const out = new ToolRegistry();
     for (const t of base.filterReadOnly()) out.register(t);
     return out;
   }
 
-  /** Read mode state from the panel store. Falls back to normal/ask. */
+  /** 从 panel store 读取模式状态。回退到 normal/ask。 */
   private _modeState(): { collaborationMode: 'normal' | 'plan'; permissionMode: 'ask' | 'auto' | 'yolo' } {
     try {
       const ps = getPanelStore(this._storeId).getState();
@@ -522,7 +518,7 @@ export class Workspace {
     let settings = loadSettings();
     settings = await restoreSecrets(settings);
 
-    // Initialize mode state from saved preferences
+    // 从保存的偏好初始化模式状态
     const sAgent = settings.agent || {};
     const ps = getPanelStore(this._storeId).getState();
     if (sAgent.collaborationMode && ps.collaborationMode === 'normal') {
@@ -547,13 +543,13 @@ export class Workspace {
 
     persistSecrets(settings).catch((e) => console.error('[workspace] persistSecrets failed:', e));
 
-    // Load memories (global + project)
+    // 加载记忆（全局 + 项目）
     let memorySection = '';
     let globalDir: string | undefined;
     try {
       globalDir = await rpc<string>('get_global_memory_dir');
     } catch {
-      /* ignore */
+      /* 忽略 */
     }
     this.memoryManager = new MemoryManager(this.path, globalDir);
     this.memoryManager.onSaved = (info) => {
@@ -568,7 +564,7 @@ export class Workspace {
       console.error('[setupAgent] loadPromptSection failed:', e);
     }
 
-    // Init agent state persistence + goal lifecycle + skill registry
+    // 初始化 Agent 状态持久化 + goal 生命周期 + skill 注册表
     this.agentStore = new AgentStore(this.path);
     this.goalManager = new GoalManager(this.path, (r) => bus.emit('goal:state', r));
     this.goalManager.migrateLegacy().then(() => this.goalManager?.adoptOrphans()).catch((e) => console.warn('[workspace] goal migration failed:', e));
@@ -581,12 +577,12 @@ export class Workspace {
       this.onStatusChange?.(`[记忆] 已注入 ${memLines} 条${globalCount}`);
     }
 
-    // ── Create Provider ──
+    // ── 创建 Provider ──
     const prov: Provider = createProvider(active, {
       disableThinking: settings.agent?.disableThinking,
     });
     prov.prewarm?.();
-    // Fetch dynamic models from API, merge into catalog (best-effort)
+    // 从 API 获取动态模型，合并到目录（尽力而为）
     prov.fetchModels?.()
       .then((models) => {
         if (models.length > 0) mergeDynamicModels(active.name, models);
@@ -594,14 +590,14 @@ export class Workspace {
       .catch(() => {});
     this.prov = prov;
 
-    // ── Create Runtime + UI adapter ──
+    // ── 创建 Runtime + UI 适配器 ──
     const runtime = new AgentRuntime(this.path);
     const adapter = createRuntimeAdapter(this._storeId);
     runtime.setNotifier(adapter);
     runtime.setDiagnosticsSource(getDiagnosticsForFile);
     this.runtime = runtime;
 
-    // ── Initialize agent panel data + subscribe to message flow ──
+    // ── 初始化 Agent 面板数据 + 订阅消息流 ──
     useAgentPanelStore.getState().setRuntime(runtime);
     useAgentPanelStore.getState().refresh(runtime);
     const unsubMsg = runtime.getBus().subscribe({}, (msg) => {
@@ -609,11 +605,11 @@ export class Workspace {
     });
     this._unlisteners.push(unsubMsg);
 
-    // ── Build graph context ──
+    // ── 构建图谱上下文 ──
     const graphCtx = buildGraphContextFromData(this.graphData);
     this._preflightCtx = graphCtx;
 
-    // ── Build tool registry (via agent-builder, zero UI imports) ──
+    // ── 构建工具注册表（通过 agent-builder，零 UI 导入）──
     const builderDeps: BuilderDeps = createBuilderDeps(this._storeId);
     runtime.setDeps(builderDeps);
     const agentRef = { current: null as Agent | null };
@@ -632,14 +628,14 @@ export class Workspace {
     });
     this.registry = registry;
 
-    // Wire tool schemas to UI panel
+    // 将工具 schema 连接到 UI 面板
     chatPanel.setToolSchemas(registry.schemas());
 
-    // Cold-start: prime state caches
+    // 冷启动：预热状态缓存
     refreshGitStatus(this.path).catch(() => {});
     refreshTimeline(this.path).catch(() => {});
 
-    // ── Factory: creates fresh agent via runtime on each call ──
+    // ── 工厂：每次调用通过 runtime 创建全新 Agent ──
     const factory = async (): Promise<Agent | null> => {
       let s = loadSettings();
       s = await restoreSecrets(s);
@@ -710,7 +706,7 @@ export class Workspace {
       return agent;
     };
 
-    // Register factory + create initial agent
+    // 注册工厂 + 创建初始 Agent
     chatPanel.setAgentFactory(factory);
     const initialAgent = await factory();
     if (initialAgent) {
@@ -721,7 +717,7 @@ export class Workspace {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // runCheck — health check / briefing
+  // runCheck — 健康检查 / 简报
   // ═══════════════════════════════════════════════════════════════
 
   async runCheck(): Promise<void> {
@@ -746,14 +742,14 @@ export class Workspace {
         // 旧 loadAndRenderGate 实际等价于 open() — 每次简报后展开面板
         dock.openPanel('check');
         bus.emit('timeline:refresh');
-        // Notify toolbar so it can show violation badge
+        // 通知工具栏以显示违规徽章
         const cnt =
           (result.l5_violations?.length || 0) +
           (result.l4_violations?.length || 0) +
           (result.l3_violations?.length || 0) +
           (result.l2_violations?.length || 0);
         bus.emit('check:result', { passed: result.passed, violations: cnt });
-        // Push status-bar notification — visible even when check panel is closed
+        // 推送状态栏通知 — 即使检查面板关闭也可见
         if (!result.passed) {
           this.onStatusChange?.(`⚠ 简报未通过: ${cnt} 条违规`);
         }
@@ -777,7 +773,7 @@ export class Workspace {
     }
   }
 
-  /** Debounced check — call whenever agent writes files. 3s delay batches multiple writes. */
+  /** 防抖检查 — Agent 写入文件时调用。3 秒延迟批量处理多次写入。 */
   scheduleCheck(): void {
     if (!this.path) return;
     if (this.checkTimer) clearTimeout(this.checkTimer);
@@ -788,7 +784,7 @@ export class Workspace {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // doGraphUpdate — handle graph update from watcher (incremental if diff available)
+  // doGraphUpdate — 处理来自 watcher 的图谱更新（diff 可用时增量更新）
   // ═══════════════════════════════════════════════════════════════
 
   doGraphUpdate(starGraph: StarGraph, diff?: any): void {
@@ -796,7 +792,7 @@ export class Workspace {
     const nodeCount = Array.isArray(this.graphData.nodes)
       ? this.graphData.nodes.length
       : Object.keys(this.graphData.nodes || {}).length;
-    // ponytail: incremental path — no clearGraph, no camera reset, local layout relax on new nodes
+    // ponytail: 增量路径 — 不 clearGraph，不重置相机，仅对新节点做局部布局松弛
     if (diff && starGraph.hasGraph) {
       starGraph
         .applyGraphDiff(diff, this.graphData)
@@ -827,8 +823,8 @@ export class Workspace {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// buildSystemPrompt — pure function, reads Workspace state
+// buildSystemPrompt — 纯函数，读取 Workspace 状态
 // ═══════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════
-// (dataflow trace Agent removed — engine queries replace it)
+// （数据流追踪 Agent 已移除 — 由引擎查询替代）

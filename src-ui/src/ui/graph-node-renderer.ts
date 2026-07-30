@@ -64,7 +64,7 @@ export interface NodeRendererHost {
 export class GraphNodeRenderer {
   constructor(private host: NodeRendererHost) {}
 
-  // ── Node scale mode ──────────────────────────────────────
+  // ── 节点缩放模式 ──────────────────────────────────────
 
   getNodeBaseScale(i: number): number {
     const val = this.host.scaleMode === 'degree' ? this.host.deg[i] : this.host.l34Count[i] || 0;
@@ -73,11 +73,11 @@ export class GraphNodeRenderer {
     return (0.6 + (val / maxVal) * 2.8) * sizeMul;
   }
 
-  // ── Batched GPU helpers (ponytail: write to InstancedMesh/Points buffers) ──
+  // ── 批量 GPU 辅助（ponytail: 写入 InstancedMesh/Points 缓冲）──
 
   _setCoreColor(i: number, c: number | THREE.Color): void {
     if (!this.host.nodeCoresInstanced || i >= this.host._nodeCount) return;
-    if (c == null || (typeof c === 'number' && !Number.isFinite(c))) return; // ponytail: reject NaN/undefined → would render black
+    if (c == null || (typeof c === 'number' && !Number.isFinite(c))) return; // ponytail: 拒绝 NaN/undefined → 否则渲染黑色
     const cc = c instanceof THREE.Color ? c : new THREE.Color(c);
     this.host.nodeCoresInstanced.setColorAt(i, cc);
     if (this.host.nodeCoresInstanced.instanceColor) this.host.nodeCoresInstanced.instanceColor.needsUpdate = true;
@@ -159,7 +159,7 @@ export class GraphNodeRenderer {
     }
   }
 
-  /** Magnitude factor 0.15–1.0: hub nodes shine bright, leaf nodes barely visible. Pre-computed cache. */
+  /** 幅度因子 0.15–1.0：Hub 节点明亮，叶子节点几乎不可见。预计算缓存。 */
   _nodeMag(i: number): number {
     return this.host._nodeMagCache[i] ?? 0.15;
   }
@@ -173,26 +173,26 @@ export class GraphNodeRenderer {
     }
   }
 
-  // ── Nodes ────────────────────────────────────────────────
+  // ── 节点 ────────────────────────────────────────────────
 
   buildNodes(nodes: GraphNode[], pos: Float32Array, deg: number[]): void {
     const N = nodes.length;
     const isFull = true;
 
-    // Glow Points geometry buffers (RGBA color + per-point size)
+    // Glow Points 几何缓冲（RGBA 颜色 + 每点大小）
     const glowPosArr = new Float32Array(N * 3);
     const glow2PosArr = isFull ? new Float32Array(N * 3) : new Float32Array(0);
     this.host._glowSizes = new Float32Array(N);
     this.host._glow2Sizes = isFull ? new Float32Array(N) : new Float32Array(0);
 
-    // ponytail: GPU-driven shader attributes — static, uploaded once
+    // ponytail: GPU 驱动的 shader 属性 — 静态，上传一次
     const phaseArr = new Float32Array(N);
     const speedArr = new Float32Array(N);
     const magArr = new Float32Array(N);
     const riskArr = new Float32Array(N);
     const hslArr = new Float32Array(N * 3);
-    this.host._overrideFlags = new Float32Array(N); // 0=shader animated, 1=CPU overridden
-    // init twinkle data inline (ponytail: avoid separate initTwinkleData call)
+    this.host._overrideFlags = new Float32Array(N); // 0=shader 动画, 1=CPU 覆盖
+    // 内联初始化闪烁数据（ponytail: 避免单独调用 initTwinkleData）
     for (let i = 0; i < N; i++) {
       phaseArr[i] = Math.random() * Math.PI * 2;
       speedArr[i] = 0.5 + Math.random() * 2.5;
@@ -211,7 +211,7 @@ export class GraphNodeRenderer {
         py = pos[i * 3 + 1],
         pz = pos[i * 3 + 2];
 
-      // Core InstancedMesh: position + scale in matrix, color in instanceColor
+      // 核心 InstancedMesh：位置 + 缩放在矩阵中，颜色在 instanceColor 中
       this.host._coreScales[i] = baseScale * 0.35;
       this.host.nodeCoresInstanced.setMatrixAt(
         i,
@@ -220,7 +220,7 @@ export class GraphNodeRenderer {
       this._setCoreColor(i, coreColor);
       this.host.nodeCoreColors[i] = coreColor;
 
-      // Inner glow RGBA
+      // 内层辉光 RGBA
       const gc = new THREE.Color(glowColor);
       glowPosArr[i * 3] = px;
       glowPosArr[i * 3 + 1] = py;
@@ -231,15 +231,15 @@ export class GraphNodeRenderer {
       this.host._glowRgba[i * 4 + 3] = 0.85;
       this.host.nodeGlowColors[i] = glowColor;
 
-      // HSL cache for twinkle
+      // 闪烁用 HSL 缓存
       this.host._nodeBaseHSL[i] = { h: 0, s: 0, l: 0 };
       gc.getHSL(this.host._nodeBaseHSL[i]);
-      // GPU shader attributes (static, uploaded once)
+      // GPU shader 属性（静态，上传一次）
       hslArr[i * 3] = this.host._nodeBaseHSL[i].h;
       hslArr[i * 3 + 1] = this.host._nodeBaseHSL[i].s;
       hslArr[i * 3 + 2] = this.host._nodeBaseHSL[i].l;
 
-      // Outer glow RGBA + size
+      // 外层辉光 RGBA + 大小
       if (isFull) {
         glow2PosArr[i * 3] = px;
         glow2PosArr[i * 3 + 1] = py;
@@ -248,12 +248,12 @@ export class GraphNodeRenderer {
         this.host._glow2Rgba[i * 4 + 1] = gc.g;
         this.host._glow2Rgba[i * 4 + 2] = gc.b;
         this.host._glow2Rgba[i * 4 + 3] = 0.55;
-        this.host._glow2Sizes[i] = this.host._coreScales[i] * 2.4; // outer glow tied to core scale
+        this.host._glow2Sizes[i] = this.host._coreScales[i] * 2.4; // 外层辉光基于核心球大小
       }
-      this.host._glowSizes[i] = this.host._coreScales[i] * 3.0; // inner glow tied to core scale
+      this.host._glowSizes[i] = this.host._coreScales[i] * 3.0; // 内层辉光基于核心球大小
     }
 
-    // Pre-compute _nodeMag cache (ponytail: log1p ratio is static, avoid per-frame recalc)
+    // 预计算 _nodeMag 缓存（ponytail: log1p 比率是静态的，避免每帧重算）
     this.host._nodeMagCache = new Float32Array(N);
     const logMax = Math.log1p(this.host.maxDeg);
     for (let i = 0; i < N; i++) {
@@ -262,11 +262,11 @@ export class GraphNodeRenderer {
       riskArr[i] = this.host.l34Count[i] || 0;
     }
 
-    // Upload + create Points objects
+    // 上传 + 创建 Points 对象
     this.host.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
     if (this.host.nodeCoresInstanced.instanceColor) this.host.nodeCoresInstanced.instanceColor.needsUpdate = true;
 
-    // ── Shared shader attribute helper ──
+    // ── 共享 shader 属性辅助函数 ──
     const addAnimAttrs = (geo: THREE.BufferGeometry) => {
       geo.setAttribute('phase', new THREE.BufferAttribute(phaseArr, 1));
       geo.setAttribute('speed', new THREE.BufferAttribute(speedArr, 1));
@@ -304,9 +304,9 @@ export class GraphNodeRenderer {
     }
   }
 
-  // ── Incremental update: buffer management ───────────────
+  // ── 增量更新：缓冲管理 ───────────────
 
-  /** Mark a node as dead: invisible but kept in graphNodes for index stability. */
+  /** 将节点标记为死亡：不可见但保留在 graphNodes 中以维持索引稳定。 */
   _markNodeDead(idx: number): void {
     this.host._deadIndices.add(idx);
     this.host._overrideFlags[idx] = 1;
@@ -315,7 +315,7 @@ export class GraphNodeRenderer {
     if (this.host._glow2Rgba.length > 0) this._setGlow2Alpha(idx, 0);
   }
 
-  /** Rebuild InstancedMesh + Points with larger capacity, copying old data. */
+  /** 以更大容量重建 InstancedMesh + Points，复制旧数据。 */
   _rebuildNodeBuffers(newCapacity: number): void {
     const oldCount = this.host._nodeCount;
     const extendF32 = (old: Float32Array, mul: number) => {
@@ -338,7 +338,7 @@ export class GraphNodeRenderer {
     this.host._nodeBaseHSL = newHSL;
     while (this.host.deg.length < newCapacity) this.host.deg.push(0);
 
-    // --- InstancedMesh ---
+    // --- InstancedMesh（实例化网格）---
     const oldInst = this.host.nodeCoresInstanced;
     const newInst = new THREE.InstancedMesh(
       this.host.sphereGeo,
@@ -365,7 +365,7 @@ export class GraphNodeRenderer {
     this.host.nodeGroup.add(newInst);
     this.host.nodeCoresInstanced = newInst;
 
-    // --- Points geometries ---
+    // --- Points 几何体 ---
     const oldGlowGeo = this.host.nodeGlowsPoints.geometry;
     const phaseArr = new Float32Array(newCapacity);
     const speedArr = new Float32Array(newCapacity);
@@ -429,7 +429,7 @@ export class GraphNodeRenderer {
     this.host._nodeCapacity = newCapacity;
   }
 
-  /** Append new nodes to existing buffers (capacity must be sufficient). */
+  /** 向现有缓冲追加新节点（容量必须充足）。 */
   _appendNodes(nodes: GraphNode[], fullGraph: GraphJSON, nodeIdxMap: Map<string, number>): void {
     // ponytail: 只取 level0 社区 — 与 _renderImpl 的 nodeCommMap 层级一致
     const allComms = ((fullGraph as any).hierarchical_communities ||
@@ -439,7 +439,7 @@ export class GraphNodeRenderer {
     const nodeComm = new Map<string, string>();
     for (const c of comms) for (const nid of c.node_ids) nodeComm.set(nid, c.id);
 
-    // Community centroids from existing alive nodes
+    // 从存活节点计算社区质心
     const centroids = new Map<string, { x: number; y: number; z: number; n: number }>();
     for (let i = 0; i < this.host._nodeCount; i++) {
       if (this.host._deadIndices.has(i)) continue;
@@ -461,7 +461,7 @@ export class GraphNodeRenderer {
       c.z /= c.n;
     }
 
-    // Graph center fallback
+    // 图中心回退
     let bcx = 0,
       bcy = 0,
       bcz = 0,
@@ -504,7 +504,7 @@ export class GraphNodeRenderer {
       const hsl = { h: 0, s: 0, l: 0 };
       gc.getHSL(hsl);
 
-      // Core
+      // 核心
       this.host._coreScales[i] = 0.8 * 0.35;
       this.host.nodeCoresInstanced.setMatrixAt(
         i,
@@ -519,7 +519,7 @@ export class GraphNodeRenderer {
       this.host.nodeGlowColors[i] = glowColor;
       this.host._nodeBaseHSL[i] = hsl;
 
-      // Glow points (position+color+size are per-geometry; phase/speed/mag/risk/baseHSL/override are shared)
+      // 辉光点（位置+颜色+大小为每几何体独立；phase/speed/mag/risk/baseHSL/override 共享）
       const gAttr = this.host.nodeGlowsPoints.geometry.attributes;
       (gAttr.position.array as Float32Array)[i * 3] = px;
       (gAttr.position.array as Float32Array)[i * 3 + 1] = py;
@@ -529,7 +529,7 @@ export class GraphNodeRenderer {
       this.host._glowRgba[i * 4 + 2] = gc.b;
       this.host._glowRgba[i * 4 + 3] = 0.85;
       this.host._glowSizes[i] = this.host._coreScales[i] * 3.0; // 辉光始终基于核心球大小
-      // Shared anim attrs (write once — both geometries share the same arrays)
+      // 共享动画属性（写一次 — 两个几何体共享同一数组）
       (gAttr.phase.array as Float32Array)[i] = Math.random() * Math.PI * 2;
       (gAttr.speed.array as Float32Array)[i] = 0.5 + Math.random() * 2.5;
       (gAttr.mag.array as Float32Array)[i] = 0.15;
@@ -539,7 +539,7 @@ export class GraphNodeRenderer {
       (gAttr.baseHSL.array as Float32Array)[i * 3 + 2] = hsl.l;
       this.host._overrideFlags[i] = 0;
 
-      // Outer glow (separate position/color/size)
+      // 外层辉光（独立的位置/颜色/大小）
       if (this.host.nodeGlows2Points) {
         const g2Attr = this.host.nodeGlows2Points.geometry.attributes;
         (g2Attr.position.array as Float32Array)[i * 3] = px;
@@ -557,7 +557,7 @@ export class GraphNodeRenderer {
       this.host._nodeCount++;
     }
 
-    // Upload all
+    // 上传全部
     this.host.nodeCoresInstanced.count = this.host._nodeCount;
     this.host.nodeCoresInstanced.instanceMatrix.needsUpdate = true;
     if (this.host.nodeCoresInstanced.instanceColor) this.host.nodeCoresInstanced.instanceColor.needsUpdate = true;
@@ -571,8 +571,8 @@ export class GraphNodeRenderer {
   }
 
   /**
-   * Sync node positions from nodePositions to GPU buffers (glow Points).
-   * Called after local layout relaxation updates positions.
+   * 将节点位置从 nodePositions 同步到 GPU 缓冲（glow Points）。
+   * 在局部布局松弛更新位置后调用。
    */
   _syncNodePositions(indices: number[]): void {
     const _m = new THREE.Matrix4();
@@ -585,10 +585,10 @@ export class GraphNodeRenderer {
       const px = this.host.nodePositions[i * 3],
         py = this.host.nodePositions[i * 3 + 1],
         pz = this.host.nodePositions[i * 3 + 2];
-      // Core matrix
+      // 核心矩阵
       const s = this.host._coreScales[i] || 0.28;
       this.host.nodeCoresInstanced.setMatrixAt(i, _m.compose(_v.set(px, py, pz), _q, new THREE.Vector3(s, s, s)));
-      // Glow point positions
+      // 辉光点位置
       if (gAttr) {
         (gAttr.position.array as Float32Array)[i * 3] = px;
         (gAttr.position.array as Float32Array)[i * 3 + 1] = py;
@@ -605,7 +605,7 @@ export class GraphNodeRenderer {
     if (g2Attr) g2Attr.position.needsUpdate = true;
   }
 
-  /** Sync all core matrices — call after incremental update to flush positions. */
+  /** 同步所有核心矩阵 — 增量更新后调用以刷新位置。 */
   _syncNodeCoreMatrices(): void {
     const _m = new THREE.Matrix4();
     const _v = new THREE.Vector3();

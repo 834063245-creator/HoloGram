@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// ContextMenu — React portal-based right-click context menu.
-// Renders at mouse position, auto-dismisses on outside click / Escape.
+// ContextMenu — 基于 React portal 的右键上下文菜单。
+// 在鼠标位置渲染，点击外部或按 Escape 时自动关闭。
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -11,7 +11,7 @@ export interface ContextMenuItem {
   label: string;
   action: () => void;
   disabled?: boolean;
-  separator?: boolean; // render a divider before this item
+  separator?: boolean; // 在此项前渲染分隔线
 }
 
 interface Props {
@@ -25,7 +25,7 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x: rawX, y: rawY });
 
-  // Adjust position to stay within viewport
+  // 调整位置以保持在视口内
   useEffect(() => {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -36,7 +36,7 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
     setPos({ x: Math.max(2, x), y: Math.max(2, y) });
   }, [rawX, rawY, items.length]);
 
-  // Dismiss on outside click / Escape
+  // 点击外部或按 Escape 时关闭
   useEffect(() => {
     const onDown = (ev: PointerEvent) => {
       if (menuRef.current && !menuRef.current.contains(ev.target as Node)) {
@@ -46,7 +46,7 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') onDismiss();
     };
-    // Defer listener registration so the triggering right-click doesn't immediately dismiss
+    // 延迟注册监听器，使触发右键不会立即关闭菜单
     const id = setTimeout(() => {
       document.addEventListener('pointerdown', onDown, true);
       document.addEventListener('keydown', onKey);
@@ -125,7 +125,7 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
   );
 };
 
-// ── Module-level API（P3：懒 root 已删 — 请求写入 overlay-store，由单树 ContextMenuHost 渲染）──
+// ── 模块级 API（P3：懒 root 已删 — 请求写入 overlay-store，由单树 ContextMenuHost 渲染）──
 
 import { useOverlayStore } from '../overlay-store';
 

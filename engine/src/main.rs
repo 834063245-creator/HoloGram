@@ -154,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(pos) = args.iter().position(|a| a == "--stress-lsp") {
         let path_str = args.get(pos + 1).map(|s| s.as_str()).unwrap_or(".");
         let iterations: usize = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(3);
-        // Optional language filter: comma-separated extensions, e.g. "py,rs"
+        // 可选语言过滤：逗号分隔的扩展名，如 "py,rs"
         let ext_filter: Vec<String> = args.get(pos + 3)
             .map(|s| s.split(',').map(|e| e.trim().to_string()).collect())
             .unwrap_or_default();
@@ -1078,8 +1078,8 @@ mod tests {
     fn test_handle_simple_empty_graph_is_not_an_error() {
         let _lock = lock_bin();
         clear_graph();
-        // Engine is still Ready (node_count=0, edge_count=0) — not an error.
-        // The callback returns json!({}), which is an empty success response.
+        // 引擎仍为 Ready（node_count=0, edge_count=0）—— 非错误。
+        // 回调返回 json!({})，这是一个空的成功响应。
         let resp = handle_simple("fragile:", "fragile:5", |_, _| json!({"result": "empty"}));
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
         assert_eq!(v["result"], "empty");
@@ -1159,7 +1159,7 @@ mod tests {
         std::fs::write(tmp.join("main.py"), "def hello(): pass\n").unwrap();
 
         let path = tmp.to_str().unwrap();
-        // handle_analyze takes the raw request string (prefix stripped by caller in main loop)
+        // handle_analyze 接收原始请求字符串（前缀由 main 循环中的调用方去除）
         let resp = handle_analyze(path);
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
         assert!(v["nodes"].is_array());
@@ -1171,7 +1171,7 @@ mod tests {
     #[test]
     fn test_handle_analyze_nonexistent_path() {
         let fake = std::env::temp_dir().join("__nonexistent_tool_dir__");
-        // Ensure it doesn't exist
+        // 确保其不存在
         let _ = std::fs::remove_dir_all(&fake);
         let resp = handle_analyze(fake.to_str().unwrap());
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
@@ -1184,7 +1184,7 @@ mod tests {
     fn test_handle_check_no_project() {
         let _g = lock_bin();
         clear_graph();
-        // handle_check strips the "check:" prefix internally
+        // handle_check 内部去除 "check:" 前缀
         let resp = handle_check("check:C:/hologram_definitely_nonexistent_dir_xyz123");
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
         assert_eq!(v["error"], "project not found");

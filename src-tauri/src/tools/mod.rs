@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Tool implementations — each Tauri command gets a Tool (spec §4.2 mapping table)
-// Implements crate::permissions::Tool trait, delegates to permissions/* helpers.
+// Tool 实现 — 每个 Tauri command 对应一个 Tool (spec §4.2 映射表)
+// 实现 crate::permissions::Tool trait，委托给 permissions/* 辅助函数。
 
 use std::path::PathBuf;
 
@@ -12,7 +12,7 @@ use crate::permissions::{
 
 // ═══════════════════════════════════════════════════════════════
 // ReadTool — read_file_content, read_file_base64, list_directory,
-//           glob, search_content, and read-only git commands
+//           glob, search_content 及只读 git 命令
 // ═══════════════════════════════════════════════════════════════
 
 pub struct ReadTool {
@@ -43,7 +43,7 @@ impl Tool for ReadTool {
 
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
         let rules = ctx.read_rules();
-        // Phase 3: reverse-map worktree path → main repo path for rule matching (spec §5.6)
+        // Phase 3: 反向映射 worktree 路径 → 主仓库路径以进行规则匹配 (spec §5.6)
         let logical = ctx.reverse_map_path(std::path::Path::new(&self.path), self.agent_id.as_deref());
         let logical_str = logical.to_string_lossy().replace('\\', "/");
         filesystem::check_read_permission(&self.path, &ctx.sandbox, &rules, Some(&logical_str))
@@ -83,7 +83,7 @@ impl Tool for EditTool {
 
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
         let rules = ctx.read_rules();
-        // Phase 3: reverse-map worktree path → main repo path for rule matching (spec §5.6)
+        // Phase 3: 反向映射 worktree 路径 → 主仓库路径以进行规则匹配 (spec §5.6)
         let logical = ctx.reverse_map_path(std::path::Path::new(&self.path), self.agent_id.as_deref());
         let logical_str = logical.to_string_lossy().replace('\\', "/");
         filesystem::check_write_permission(&self.path, &ctx.sandbox, &rules, Some(&logical_str))
@@ -104,7 +104,7 @@ impl Tool for BashTool {
     }
 
     fn get_path(&self) -> Option<PathBuf> {
-        None // bash commands operate on multiple paths, not a single file
+        None // bash 命令操作多个路径，而非单个文件
     }
 
     fn is_read_only(&self) -> bool {
@@ -146,12 +146,12 @@ impl Tool for GitTool {
     }
 
     fn is_destructive(&self) -> bool {
-        // push/commit/stash_pop/checkout can modify working tree
+        // push/commit/stash_pop/checkout 可能修改工作区
         true
     }
 
     fn requires_user_interaction(&self) -> bool {
-        // ponytail: git destructive ops always need user interaction
+        // ponytail: git 破坏性操作始终需要用户交互
         matches!(
             self.subcommand.as_str(),
             "push" | "commit" | "checkout" | "discard" | "stash_pop"
@@ -159,11 +159,11 @@ impl Tool for GitTool {
     }
 
     fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
-        // First check the repo path is readable
+        // 首先检查仓库路径是否可读
         let rules = ctx.read_rules();
         let path_check = filesystem::check_read_permission(&self.repo_path, &ctx.sandbox, &rules, None);
         if let PermissionResult::Deny { .. } = path_check { return path_check }
-        // Then check the git subcommand
+        // 然后检查 git 子命令
         git::check(&self.subcommand, &rules)
     }
 }

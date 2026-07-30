@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Dataflow Tauri commands — per-file tree-sitter analysis + result persistence.
-// Engine queries are deterministic; storage saves engine results (not Agent snapshots).
+// Dataflow Tauri 命令 — 逐文件 tree-sitter 分析 + 结果持久化。
+// 引擎查询是确定性的；存储保存引擎结果（而非 Agent 快照）。
 
 use tauri;
 use serde_json;
@@ -11,11 +11,11 @@ use chrono::Utc;
 
 
 // ═══════════════════════════════════════════════════════════════
-// dataflow_save — persist Agent-produced trace content as JSON
+// dataflow_save — 将 Agent 产生的追踪内容持久化为 JSON
 // ═══════════════════════════════════════════════════════════════
-// ponytail: JSON files in .hologram/dataflow/ — no SQLite schema, no migrations.
-// `content` is the Agent's free-form trace (markdown or structured text).
-// `exploreResult` / `dataflowResult` are legacy engine dumps; still accepted.
+// ponytail: .hologram/dataflow/ 中的 JSON 文件 — 无 SQLite schema，无迁移。
+// `content` 是 Agent 的自由格式追踪（markdown 或结构化文本）。
+// `exploreResult` / `dataflowResult` 是遗留引擎转储；仍然接受。
 
 #[tauri::command]
 pub(crate) async fn dataflow_save(
@@ -50,10 +50,10 @@ pub(crate) async fn dataflow_save(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// dataflow_query — list summaries or load a specific trace
+// dataflow_query — 列出摘要或加载特定追踪记录
 // ═══════════════════════════════════════════════════════════════
-// trace_id=Some → load full trace. trace_id=None + list=true → summaries.
-// trace_id=None + list=false/absent → full content list (legacy).
+// trace_id=Some → 加载完整追踪记录。trace_id=None + list=true → 摘要。
+// trace_id=None + list=false/absent → 完整内容列表（遗留模式）。
 
 #[tauri::command]
 pub(crate) async fn dataflow_query(
@@ -68,7 +68,7 @@ pub(crate) async fn dataflow_query(
         return Ok(serde_json::json!({ "traces": [] }).to_string());
     }
 
-    // Load specific trace
+    // 加载特定追踪记录
     if let Some(tid) = trace_id {
         crate::utils::sanitize_path_id(&tid, "trace_id")?;
         let path = dir.join(format!("{tid}.json"));
@@ -77,7 +77,7 @@ pub(crate) async fn dataflow_query(
         return Ok(content);
     }
 
-    // Collect entries (newest first)
+    // 收集条目（最新优先）
     let mut entries: Vec<_> = fs::read_dir(&dir)
         .map_err(|e| format!("读取目录失败: {e}"))?
         .filter_map(|e| e.ok())
@@ -91,7 +91,7 @@ pub(crate) async fn dataflow_query(
 
     entries.sort_by(|a, b| b.1.cmp(&a.1));
 
-    // Summary mode — lightweight list for panel/Agent browsing
+    // 摘要模式 — 面板/Agent 浏览用的轻量列表
     if list.unwrap_or(false) {
         let summaries: Vec<serde_json::Value> = entries.into_iter().take(100).filter_map(|(p, _)| {
             let raw = fs::read_to_string(&p).ok()?;
@@ -106,7 +106,7 @@ pub(crate) async fn dataflow_query(
         return Ok(serde_json::json!({ "traces": summaries }).to_string());
     }
 
-    // Full content list (legacy)
+    // 完整内容列表（遗留模式）
     let traces: Vec<serde_json::Value> = entries.into_iter().take(50).filter_map(|(p, _)| {
         let content = fs::read_to_string(&p).ok()?;
         serde_json::from_str::<serde_json::Value>(&content).ok()
@@ -116,7 +116,7 @@ pub(crate) async fn dataflow_query(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// dataflow_delete — remove a saved trace
+// dataflow_delete — 删除已保存的追踪记录
 // ═══════════════════════════════════════════════════════════════
 
 #[tauri::command]

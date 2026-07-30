@@ -4,9 +4,9 @@
 import * as THREE from 'three';
 import { communityColor } from './graph-colors';
 
-// ── Scene decoration functions ─────────────────────────────────
-// Starfield, nebula dust, holographic grid, galaxy clouds, cross-edge flow.
-// All functions are pure: they take THREE objects as params, modify nothing else.
+// ── 场景装饰函数 ────────────────────────────────────────
+// 星场、星云尘埃、全息网格、星系云图、跨边流。
+// 所有函数都是纯函数：接收 THREE 对象作为参数，不修改其他内容。
 
 export function buildNebulaDust(
   scene: THREE.Scene,
@@ -114,7 +114,7 @@ export function buildStarfield(scene: THREE.Scene, glowTex: THREE.Texture): THRE
   return points;
 }
 
-// ── Infinite holographic grid ──────────────────────────────────
+// ── 无限全息网格 ──────────────────────────────────────────
 
 export function buildHoloGrid(scene: THREE.Scene): { mesh: THREE.Mesh; gridY: number } {
   const gridSize = 60;
@@ -182,7 +182,7 @@ export function positionGrid(mesh: THREE.Mesh, pos: Float32Array, gridY: number)
   return newY;
 }
 
-// ── Galaxy clouds (fold mode) ─────────────────────────────────
+// ── 星系云图（折叠模式）─────────────────
 
 export function buildGalaxyClouds(
   commFoldGroup: THREE.Group,
@@ -234,7 +234,7 @@ export function buildGalaxyClouds(
   return { clouds, glows };
 }
 
-// ── Galaxy labels ─────────────────────────────────────────────
+// ── 星系标签 ────────────────────────────────────────────
 
 export function buildGalaxyLabels(
   container: HTMLElement,

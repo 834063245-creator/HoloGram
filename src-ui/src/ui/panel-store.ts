@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Panel store — UI chrome: tabs, tools, metrics, focus, filters.
-// Split from chat-store.ts (god store → domain stores).
+// 面板存储 — UI 外壳：标签页、工具、指标、焦点、过滤。
+// 从 chat-store.ts 拆分（god store → 领域存储）。
 
 import { create } from 'zustand';
 import type { GoalRecord } from '../agent/goal-manager';
@@ -124,10 +124,10 @@ function createPanelStoreImpl() {
   }));
 }
 
-// ── Per-panel registry ──
+// ── 每面板注册表 ──
 
-// ponytail: store Map on window so Vite HMR doesn't wipe it (module-level
-// variables are re-initialized on hot reload, breaking React subscriptions).
+// ponytail: 将 store Map 存在 window 上，这样 Vite HMR 不会清除它
+// （模块级变量在热重载时重新初始化，会破坏 React 订阅）。
 const PANEL_STORES_KEY = '__hologram_panel_stores__';
 const DEFAULT_ID = '__default__';
 
@@ -152,12 +152,12 @@ export function getPanelStore(storeId?: string): PanelStoreApi {
   return s;
 }
 
-/** Remove a panel's store from the registry. */
+/** 从注册表中移除面板的 store。 */
 export function disposePanelStore(storeId: string): void {
   _storesMap().delete(storeId);
 }
 
-// ── Non-reactive accessors ──
+// ── 非响应式访问器 ──
 
 function _store(storeId?: string) {
   return getPanelStore(storeId).getState();

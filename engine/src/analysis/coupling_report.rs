@@ -7,12 +7,12 @@ use crate::storage::MemoryIndex;
 pub fn coupling_report(graph: &Graph, module: &str) -> serde_json::Value {
     let mut l1=0u32; let mut l2=0u32; let mut l3=0u32; let mut l4=0u32;
 
-    // Normalize module path for matching against node locations
+    // 规范化模块路径，用于匹配节点位置
     let normalized = module.replace('\\', "/").to_lowercase();
 
-    /// Check whether a node ID matches the given module.
-    /// Fast path: direct ID match (for tests & simple cases).
-    /// Slow path: check node.location against the module file path.
+    /// 检查节点 ID 是否匹配给定模块。
+    /// 快速路径：直接 ID 匹配（用于测试和简单场景）。
+    /// 慢速路径：检查 node.location 与模块文件路径的匹配。
     fn node_matches(graph: &Graph, node_id: &str, module: &str, normalized_module: &str) -> bool {
         if node_id == module {
             return true;
@@ -46,20 +46,20 @@ pub fn coupling_report(graph: &Graph, module: &str) -> serde_json::Value {
 pub fn coupling_report_from_index(idx: &MemoryIndex, module: &str) -> serde_json::Value {
     let mut l1=0u32; let mut l2=0u32; let mut l3=0u32; let mut l4=0u32;
 
-        // Normalize module path for matching
+        // 规范化模块路径用于匹配
     let normalized = module.replace('\\', "/");
 
-    // Find nodes belonging to this module
+    // 查找属于该模块的节点
     let mut module_node_ids: Vec<String> = Vec::new();
-    // Direct ID match
+    // 直接 ID 匹配
     if idx.get_node(module).is_some() {
         module_node_ids.push(module.to_string());
     }
-    // File path match via file_index (exact match first)
+    // 通过 file_index 进行文件路径匹配（先精确匹配）
     module_node_ids.extend(idx.get_nodes_by_file(&normalized));
 
-    // Fuzzy fallback: if no nodes found, try suffix/substring match
-    // Supports partial paths like "pipeline.rs" or "src/engine/pipeline.rs"
+    // 模糊回退：如果未找到节点，尝试后缀/子串匹配
+    // 支持部分路径如 "pipeline.rs" 或 "src/engine/pipeline.rs"
     if module_node_ids.is_empty() {
         let lower_module = normalized.to_lowercase();
         for n in idx.nodes_iter() {
@@ -72,7 +72,7 @@ pub fn coupling_report_from_index(idx: &MemoryIndex, module: &str) -> serde_json
         }
     }
 
-    // ponytail: only traverse edges incident to module nodes — O(degree), not O(E)
+    // ponytail：仅遍历与模块节点关联的边 — O(degree)，而非 O(E)
     let mut seen = std::collections::HashSet::new();
     for nid in &module_node_ids {
         for (tgt, _, depth, _) in idx.outgoing(nid, None) {
@@ -97,8 +97,8 @@ pub fn coupling_report_from_index(idx: &MemoryIndex, module: &str) -> serde_json
     })
 }
 
-/// Count edges with coupling_depth >= 4 — single O(E) pass, no allocations.
-/// Used by arch_blindspots as a cheap alternative to full coupling_report.
+/// 统计 coupling_depth >= 4 的边 — 单次 O(E) 遍历，无内存分配。
+/// 被 arch_blindspots 用作全量 coupling_report 的轻量替代方案。
 pub fn count_l4_from_index(idx: &MemoryIndex) -> usize {
     idx.edges_iter()
         .into_iter()
@@ -107,8 +107,8 @@ pub fn count_l4_from_index(idx: &MemoryIndex) -> usize {
         .count()
 }
 
-/// Group L4 edges by source file, returning (file_path, count) pairs sorted by count desc.
-/// Used by arch_blindspots to show WHERE the deep coupling lives.
+/// 按源文件分组 L4 边，返回 (file_path, count) 对，按 count 降序排列。
+/// 被 arch_blindspots 用于展示深层耦合分布在哪些文件中。
 pub fn count_l4_by_file(idx: &MemoryIndex) -> Vec<(String, usize)> {
     use std::collections::HashMap;
     let node_files: HashMap<String, String> = idx
@@ -125,7 +125,7 @@ pub fn count_l4_by_file(idx: &MemoryIndex) -> Vec<(String, usize)> {
     for (src_id, targets) in idx.edges_iter() {
         for (tgt_id, _kind, depth, _delay) in targets {
             if depth >= 4 {
-                // Try source file first, fall back to target file
+                // 先尝试源文件，回退到目标文件
                 let file = node_files
                     .get(&src_id)
                     .or_else(|| node_files.get(&tgt_id))

@@ -8,22 +8,22 @@ import type { ToolSchema } from '../provider/types';
 
 // ---- Tool 接口 ----
 
-/** A Tool is one callable tool the agent can dispatch. */
+/** Tool 是 agent 可分发的一个可调用工具。 */
 export interface Tool {
-  /** Machine name, e.g. "fragile_modules" */
+  /** 机器名，如 "fragile_modules" */
   name(): string;
-  /** Human-readable description for the model */
+  /** 面向模型的描述 */
   description(): string;
-  /** JSON Schema for the arguments */
+  /** 参数的 JSON Schema */
   parameters(): Record<string, unknown>;
-  /** Whether this tool is read-only (safe to parallelize) */
+  /** 是否只读（可安全并行） */
   readOnly(): boolean;
-  /** Execute the tool with raw JSON arguments. Returns the result string.
-   *  onProgress is an optional callback for streaming partial output during execution. */
+  /** 用原始 JSON 参数执行工具。返回结果字符串。
+   *  onProgress 是可选回调，用于在执行期间流式输出部分结果。 */
   execute(args: Record<string, unknown>, onProgress?: (chunk: string) => void): Promise<string>;
 }
 
-// ---- Tool Registry ----
+// ---- Tool 注册表 ----
 
 export class ToolRegistry {
   private tools = new Map<string, Tool>();
@@ -35,19 +35,19 @@ export class ToolRegistry {
     this.tools.set(t.name(), t);
   }
 
-  /** Remove a tool by name. No-op if the tool doesn't exist. */
+  /** 按名称移除工具。工具不存在时无操作。 */
   unregister(name: string): void {
     this.tools.delete(name);
   }
 
-  /** Register an alias — same implementation, different name shown to LLM.
-   *  Alias also appears in schemas() so LLM can use either name. */
+  /** 注册别名 — 相同实现，向 LLM 显示不同名称。
+   *  别名也出现在 schemas() 中，LLM 可用任一名称。 */
   alias(aliasName: string, existingName: string): void {
     const original = this.tools.get(existingName);
     if (!original) throw new Error(`ToolRegistry: cannot alias unknown tool "${existingName}"`);
-    if (this.tools.has(aliasName)) return; // already exists (real tool or earlier alias)
+    if (this.tools.has(aliasName)) return; // 已存在（真实工具或先前的别名）
 
-    // Wrap to override name() — schemas() must show the alias name, not the original
+    // 包装以覆盖 name() — schemas() 必须显示别名而非原名
     const wrapper: Tool = {
       name: () => aliasName,
       description: () => original.description(),
@@ -82,8 +82,8 @@ export class ToolRegistry {
     return this.all().filter((t) => t.readOnly());
   }
 
-  /** Return a new ToolRegistry containing only the named tools (in given order).
-   *  Missing names are skipped silently. Used to build scoped agent toolsets. */
+  /** 返回仅包含指定名称工具的新 ToolRegistry（按给定顺序）。
+   *  缺失的名称静默跳过。用于构建限定范围的 agent 工具集。 */
   subset(names: string[]): ToolRegistry {
     const sub = new ToolRegistry();
     for (const n of names) {
@@ -99,8 +99,8 @@ export class ToolRegistry {
 // MCP = 执行通道：长驻引擎进程 <100ms 响应，挂了降级到进程内 ToolRegistry::dispatch 直调。
 // 两者永远对齐——引擎新增 MCP 工具必须同步在此补硬编码定义。
 
-/** Tool executor: invokes tools via MCP (fast, persistent) or in-process dispatch (fallback).
- *  onProgress is an optional callback for streaming partial output during execution. */
+/** 工具执行器：通过 MCP（快速、长驻）或进程内分发（回退）调用工具。
+ *  onProgress 是可选回调，用于在执行期间流式输出部分结果。 */
 export type ToolExecutor = (
   toolName: string,
   args: Record<string, unknown>,
@@ -117,7 +117,7 @@ export async function agentInvoke<T = string>(name: string, args: Record<string,
 }
 
 // ═══════════════════════════════════════════════════════
-// Tool implementations moved to agent/tools/
+// Tool 实现已移至 agent/tools/
 // ═══════════════════════════════════════════════════════
 
 export { createCodingTools } from './tools/coding';

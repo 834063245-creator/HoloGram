@@ -1,15 +1,15 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Agent Store — persist agent state + session to .hologram/agents/{id}/
-// Enables agent identity tracking, session recovery, and sub-agent lineage
-// Pattern follows MemoryManager: rpc file I/O, ensureDir, stripLineNumbers.
+// Agent Store — 持久化 agent 状态 + 会话到 .hologram/agents/{id}/
+// 实现 agent 身份追踪、会话恢复和子 Agent 血缘关系
+// 模式参照 MemoryManager：rpc 文件 I/O、ensureDir、stripLineNumbers。
 
 import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
 import { stripNums } from './board-persistence';
 
-// ── Types ──
+// ── 类型 ──
 
 export interface AgentRecord {
   id: string;
@@ -19,7 +19,7 @@ export interface AgentRecord {
   createdAt: number;
   updatedAt: number;
   subagentDepth: number;
-  /** Plan mode snapshot — { active, id } for session resume. null/undefined = not in plan mode. */
+  /** Plan 模式快照 — { active, id } 用于会话恢复。null/undefined = 非 plan 模式。 */
   planSnapshot?: { active: boolean; id: string | null } | null;
 }
 
@@ -53,14 +53,14 @@ export class AgentStore {
     return `${this.baseDir}/${INDEX_FILE}`;
   }
 
-  // ponytail: ensureDir is lazy — most callers don't need it twice per operation.
-  // We call it once at entry points, not before every file write.
+  // ponytail: ensureDir 是惰性的 — 大多数调用者不需要每次操作调用两次。
+  // 我们在入口点调用一次，而不是每次写文件前都调用。
   private async ensureDir(): Promise<void> {
     if (this.dirReady) return;
     try {
       await rpc('create_directory', { path: this.baseDir });
     } catch {
-      /* already exists */
+      /* 已存在 */
     }
     this.dirReady = true;
   }
@@ -70,13 +70,13 @@ export class AgentStore {
     try {
       await rpc('create_directory', { path: `${this.baseDir}/${id}` });
     } catch {
-      /* already exists */
+      /* 已存在 */
     }
   }
 
   // ── CRUD ──
 
-  /** Save agent state record + optional session messages. */
+  /** 保存 agent 状态记录 + 可选的会话消息。 */
   async save(id: string, partial: Partial<AgentRecord>, messages?: Message[]): Promise<void> {
     await this.ensureAgentDir(id);
     const now = Date.now();
@@ -89,23 +89,23 @@ export class AgentStore {
       updatedAt: now,
       subagentDepth: partial.subagentDepth ?? 0,
     };
-    // State file — compact, always written
+    // 状态文件 — 精简，总是写入
     await rpc('write_file_content', {
       filePath: this.statePath(id),
       content: JSON.stringify(record, null, 2),
     });
-    // Session file — only written when messages are provided
+    // 会话文件 — 仅在提供了消息时写入
     if (messages !== undefined) {
       await rpc('write_file_content', {
         filePath: this.sessionPath(id),
         content: JSON.stringify(messages, null, 2),
       });
     }
-    // Index — always updated so list() stays consistent
+    // 索引 — 总是更新，保持 list() 一致
     await this._upsertIndex(record);
   }
 
-  /** Load agent state + session. Returns null when agent not found. */
+  /** 加载 agent 状态 + 会话。未找到 agent 时返回 null。 */
   async load(id: string): Promise<AgentLoadResult | null> {
     await this.ensureDir();
     try {
@@ -120,7 +120,7 @@ export class AgentStore {
         });
         messages = JSON.parse(stripNums(rawSession));
       } catch {
-        /* session file may not exist yet — empty session is fine */
+        /* 会话文件可能尚不存在 — 空会话没问题 */
       }
       return { record, messages };
     } catch {
@@ -128,7 +128,7 @@ export class AgentStore {
     }
   }
 
-  /** Load the index of all persisted agents. */
+  /** 加载所有已持久化 agent 的索引。 */
   async list(): Promise<AgentRecord[]> {
     await this.ensureDir();
     try {
@@ -141,14 +141,14 @@ export class AgentStore {
     }
   }
 
-  /** Delete an agent's persisted state. Best-effort — never throws. */
+  /** 删除 agent 的持久化状态。尽力而为 — 永不抛异常。 */
   async delete(id: string): Promise<void> {
     try {
       await rpc('delete_file_or_dir', { path: `${this.baseDir}/${id}` });
     } catch {
-      /* best effort */
+      /* 尽力而为 */
     }
-    // Remove from index
+    // 从索引中移除
     const all = await this.list();
     const filtered = all.filter((r) => r.id !== id);
     if (filtered.length < all.length) {
@@ -158,12 +158,12 @@ export class AgentStore {
           content: JSON.stringify(filtered, null, 2),
         });
       } catch {
-        /* index write is best-effort */
+        /* 索引写入是尽力而为 */
       }
     }
   }
 
-  // ── Internals ──
+  // ── 内部方法 ──
 
   private async _upsertIndex(record: AgentRecord): Promise<void> {
     const all = await this.list();
@@ -179,7 +179,7 @@ export class AgentStore {
         content: JSON.stringify(all, null, 2),
       });
     } catch {
-      /* best effort */
+      /* 尽力而为 */
     }
   }
 }

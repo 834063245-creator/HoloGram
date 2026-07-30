@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Settings — API key management, model selection, provider config
-// Stored in localStorage, backed by Tauri store plugin when available
+// Settings — API Key 管理、模型选择、provider 配置
+// 存储在 localStorage 中，在可用时由 Tauri store 插件支持
 
 export interface ProviderSettings {
   kind: 'anthropic' | 'openai';
@@ -10,7 +10,7 @@ export interface ProviderSettings {
   apiKey: string;
   baseUrl: string;
   model: string;
-  thinking?: string; // Anthropic extended thinking
+  thinking?: string; // Anthropic 扩展思考
   /** @deprecated 已移除——max_tokens 现在由 provider 默认值 + 模型目录上限自动决定。
    *  旧 localStorage 数据里的此字段会被忽略。 */
   maxTokens?: number;
@@ -84,7 +84,7 @@ export function loadSettings(): AppSettings {
       }
     }
   } catch {
-    // corrupted settings, use defaults
+    // 设置损坏，使用默认值
   }
   return { ...DEFAULTS };
 }
@@ -105,12 +105,12 @@ export async function persistSecrets(s: AppSettings): Promise<void> {
         try {
           await rpc('credential_store', { provider: p.name, key });
         } catch {
-          /* non-critical — localStorage still has the key */
+          /* 非关键 — localStorage 中仍有 Key */
         }
       }
     }
   } catch {
-    /* dynamic import failed — non-critical */
+    /* 动态导入失败 — 非关键 */
   }
 }
 
@@ -120,7 +120,7 @@ export async function removeSecret(providerName: string): Promise<void> {
     const { rpc } = await import('./bridge');
     await rpc('credential_delete', { provider: providerName });
   } catch {
-    /* no encrypted store or key not found — non-critical */
+    /* 无加密存储或 Key 未找到 — 非关键 */
   }
 }
 
@@ -138,7 +138,7 @@ export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
             changed = true;
           }
         } catch {
-          /* no encrypted store or decrypt failed */
+          /* 无加密存储或解密失败 */
         }
       }
     }
@@ -146,7 +146,7 @@ export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
       saveSettings(s);
     }
   } catch {
-    /* dynamic import failed — proceed with localStorage-only settings */
+    /* 动态导入失败 — 继续使用仅 localStorage 的设置 */
   }
   return s;
 }
@@ -200,16 +200,16 @@ export function removeProvider(s: AppSettings, name: string): AppSettings {
   return { ...s, activeProvider: active, providers: next };
 }
 
-// ---- Pricing (per 1M tokens) ----
+// ---- 定价（每百万 token）----
 
 export function defaultPricing(kind: string, model: string) {
   if (kind === 'anthropic') {
-    // Claude Sonnet 4 pricing
+    // Claude Sonnet 4 定价
     return { cache_hit: 0.3, input: 3, output: 15, currency: '$' };
   }
   if (model.includes('deepseek')) {
     return { cache_hit: 0.14, input: 2.0, output: 8.0, currency: '¥' };
   }
-  // OpenAI default
+  // OpenAI 默认
   return { cache_hit: 2.5, input: 5, output: 15, currency: '$' };
 }

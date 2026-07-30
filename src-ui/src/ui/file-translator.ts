@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// File Translator — thin wrapper, rendering delegated to React FileTranslatorPanel.tsx.
-// Public API unchanged for FileViewer compatibility.
+// File Translator — 轻量包装器，渲染委托给 React FileTranslatorPanel.tsx。
+// 公共 API 不变，保持与 FileViewer 的兼容性。
 // P3：不再自建 React root —— 渲染会话写入 overlay-store，
 // 由 App 树的 FileTranslatorPortal 经 createPortal 挂到 _panelEl（挂载点不变）。
 
@@ -30,7 +30,7 @@ export class FileTranslator {
     this._dividerEl = document.createElement('div');
     this._panelEl = document.createElement('div');
 
-    // Insert before resize handle（挂载点与旧 Controller 一致）
+    // 插入到 resize handle 之前（挂载点与旧 Controller 一致）
     const resizeHandle = parentEl.querySelector<HTMLElement>('.fv-grip');
     if (resizeHandle) {
       resizeHandle.before(this._dividerEl, this._panelEl);
@@ -40,10 +40,10 @@ export class FileTranslator {
     }
   }
 
-  // ── Public API (unchanged) ──
+  // ── 公共 API（不变）──
 
   translateFile(filePath: string): void {
-    // Toggle: if same file, close
+    // 切换：若为同一文件，则关闭
     if (this._visible && this._filePath === filePath) {
       this.destroy();
       return;
@@ -78,7 +78,7 @@ export class FileTranslator {
     this._clear();
   }
 
-  // ── Internal ──
+  // ── 内部实现 ──
 
   private _pushSession(key: string | number, filePath: string | null, getContent: () => string | null): void {
     useOverlayStore.getState().setTranslator({

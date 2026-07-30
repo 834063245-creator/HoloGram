@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Chat Panel — session management (CRUD, persistence, restore)
-// Extracted from chat.ts ChatPanel class.
-// All functions receive SessionContext instead of accessing `this`.
+// 聊天面板 — 会话管理（CRUD、持久化、恢复）
+// 从 chat.ts 的 ChatPanel 类中提取。
+// 所有函数接收 SessionContext，而非访问 `this`。
 
 import { agentSessionState, type TurnPair } from '../agent/agent-session-state';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
@@ -22,10 +22,10 @@ import {
   resetMsgIdCounter,
 } from './message-model';
 
-// ── Module-level session state ──
+// ── 模块级会话状态 ──
 //
-// Pure data lives in chat-store.ts (sessions list, activeIdx, tokens, nextId).
-// Non-serializable handles (agent instances, DOM refs, callbacks) stay here.
+// 纯数据存放在 chat-store.ts（会话列表、activeIdx、token、nextId）。
+// 不可序列化的句柄（Agent 实例、DOM 引用、回调）保留在此处。
 
 export interface ChatSession {
   id: number;
@@ -33,11 +33,10 @@ export interface ChatSession {
   agent: ChatAgentHandle;
 }
 
-// ── Per-panel module state (composite key: panelId:sessionId) ──
-// ponytail: was singleton Maps/arrays — caused cross-panel leaks when
-// multiple ChatPanel instances shared the same module-level state.
-// session IDs collide across panels (both start at 1), so composite keys
-// prevent wrong-agent / wrong-execState / wrong-turnPairs bugs.
+// ── 面板级模块状态（复合键：panelId:sessionId）──
+// ponytail: 原为单例 Maps/数组 — 多个 ChatPanel 实例共享同一模块级状态
+// 时导致跨面板泄漏。会话 ID 在不同面板间冲突（都从 1 开始），复合键
+// 可防止错误的 agent / 错误的 execState / 错误的 turnPairs 等 bug。
 
 /** Agent 在 session 中注入的内部上下文消息（非用户输入），恢复/导出时应跳过 */
 const INTERNAL_PREFIXES = ['<system-reminder>', '<goal>', '<truncated-context>', '<compacted-context>'];
@@ -46,16 +45,16 @@ function isInternalMessage(content: string | undefined): boolean {
   return INTERNAL_PREFIXES.some((p) => content.startsWith(p));
 }
 
-// Module-level Maps migrated to AgentSessionState (agent/agent-session-state.ts)
+// 模块级 Maps 已迁移到 AgentSessionState（agent/agent-session-state.ts）
 
-// ── Helpers: bridge store sessions to ChatSession (with agent handles) ──
+// ── 辅助函数：将 store 会话桥接到 ChatSession（含 agent 句柄）──
 
 function storeSessionsWithAgents(storeId: string): ChatSession[] {
   const { sessions, activeIdx } = getChatStore(storeId).sess.getState();
   return sessions.map((s) => ({ ...s, agent: agentSessionState.getAgent(storeId, s.id)! }));
 }
 
-// ── Accessors (used by ChatPanel to bridge module state) ──
+// ── 访问器（ChatPanel 用于桥接模块状态）──
 
 export function getSessions(storeId: string): ChatSession[] {
   return storeSessionsWithAgents(storeId);
@@ -74,7 +73,7 @@ export function getNextSessionId(storeId: string): number {
 export function setNextSessionId(storeId: string, id: number): void {
   getChatStore(storeId).sess.setState({ nextSessionId: id });
 }
-/** Sync the active session's token count into the per-session map. */
+/** 将活跃会话的 token 计数同步到会话级映射中。 */
 export function syncActiveSessionTokens(storeId: string, count: number): void {
   const { sessions, activeIdx } = getChatStore(storeId).sess.getState();
   const s = sessions[activeIdx];
@@ -93,13 +92,13 @@ export function setAgentFactory(storeId: string, fn: (() => Promise<ChatAgentHan
   agentSessionState.setAgentFactory(storeId, fn);
 }
 
-/** Get or create the execState for a session. */
+/** 获取或创建会话的 execState。 */
 export function getSessionExecState(storeId: string, sessionId: number): ExecStateInstance {
   return agentSessionState.getOrCreateExec(storeId, sessionId);
 }
 
-/** Check if any session other than the active one has a running agent.
- *  Two agents streaming simultaneously would interleave events. */
+/** 检查活跃会话以外的任何会话是否有运行中的 Agent。
+ *  两个 Agent 同时流式输出会导致事件交错。 */
 export function hasRunningBackgroundSession(storeId: string): boolean {
   const { sessions, activeIdx } = getChatStore(storeId).sess.getState();
   for (let i = 0; i < sessions.length; i++) {
@@ -110,16 +109,16 @@ export function hasRunningBackgroundSession(storeId: string): boolean {
   return false;
 }
 
-/** Clean up execState for a closed session. */
+/** 清理已关闭会话的 execState。 */
 export function removeSessionExecState(storeId: string, sessionId: number): void {
   agentSessionState.removeExec(storeId, sessionId);
 }
 
-/** Full reset — used by setAgent in ChatPanel when switching workspace. */
+/** 全量重置 — 用于 ChatPanel 中切换工作区时的 setAgent。 */
 export function resetSessionState(storeId: string, ag: ChatAgentHandle): void {
   const id = getChatStore(storeId).sess.getState().nextSessionId;
   const label = '会话 1';
-  // Clear only this panel's agent handles and exec states
+  // 仅清除本面板的 agent 句柄和 exec 状态
   agentSessionState.clearPanelState(storeId);
   agentSessionState.setAgent(storeId, id, ag);
   agentSessionState.setExec(storeId, id, createExecState());
@@ -129,20 +128,20 @@ export function resetSessionState(storeId: string, ag: ChatAgentHandle): void {
     sessionTokens: {},
     nextSessionId: id + 1,
   });
-  // ponytail: create per-session messages store — the ONLY source of truth
+  // ponytail: 创建会话级消息 store — 唯一数据源
   msgStoreFor(storeId, id).getState().setMessages([]);
   setTurnPairs(storeId, []);
 }
 
-/** If the active session still has a default label ("会话 N"), auto-title it
- *  from the first user message. Called after each turn completes. */
+/** 若活跃会话仍为默认标签（"会话 N"），则从第一条用户消息自动命名。
+ *  在每轮对话完成后调用。 */
 export function autoTitleSessionIfDefault(storeId: string): void {
   const st = getChatStore(storeId).sess.getState();
   const { sessions, activeIdx } = st;
   const s = sessions[activeIdx];
   if (!s) return;
 
-  // Only auto-title if label is still the default "会话 N" pattern
+  // 仅在标签仍为默认的 "会话 N" 格式时自动命名
   if (!/^会话 \d+$/.test(s.label)) return;
 
   const agent = agentSessionState.getAgent(storeId, s.id);
@@ -157,32 +156,32 @@ export function autoTitleSessionIfDefault(storeId: string): void {
   getChatStore(storeId).sess.setState({ sessions: updated });
 }
 
-// ── SessionContext — the bridge between standalone session functions and ChatPanel state ──
+// ── SessionContext — 独立会话函数与 ChatPanel 状态之间的桥接 ──
 
 export interface SessionContext {
   storeId: string;
 
-  // DOM elements
+  // DOM 元素
   panel: HTMLElement;
   sessionTabs: HTMLElement;
   tabBar: HTMLElement;
 
   getProjectPath: () => string;
 
-  // Streaming helpers
+  // 流式辅助
   flushReasoning: () => void;
   flushText: () => void;
   clearPendingToolCards: () => void;
 
-  // Running state
+  // 运行状态
   getRunning: () => boolean;
   abort: () => void;
 
-  // Notices & footer
+  // 通知与底栏
   addNotice: (text: string, level?: 'info' | 'warn' | 'error') => void;
   updateFooter: () => void;
 
-  // Token usage
+  // Token 用量
   getTotalTokensUsed: () => number;
   setTotalTokensUsed: (n: number) => void;
   clearToolUsage: () => void;
@@ -195,13 +194,13 @@ export interface SessionContext {
   clearInputHistory: () => void;
   getStarGraph: () => import('./graph').StarGraph | null;
 
-  /** Runtime access for session-scoped board switching */
+  /** 运行时访问，用于会话级 board 切换 */
   getRuntime?: () => import('../agent/runtime/types').RuntimePort | null;
 }
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
-/** djb2 hash for project path → localStorage key isolation. */
+/** djb2 哈希，用于项目路径 → localStorage 键隔离。 */
 export function hashProjectPath(projectPath: string): number {
   let hash = 0;
   for (let i = 0; i < projectPath.length; i++) {
@@ -211,8 +210,8 @@ export function hashProjectPath(projectPath: string): number {
   return hash;
 }
 
-/** Strip read_file_content's cat -n line numbers. Rust backend always returns
- *  "{:>6}\t{content}" format. Session JSON files need this stripped before parse. */
+/** 去除 read_file_content 的 cat -n 行号。Rust 后端始终返回
+ *  "{:>6}\t{content}" 格式。会话 JSON 文件在解析前需去除行号。 */
 export function stripLineNumbers(text: string): string {
   return text
     .split('\n')
@@ -220,15 +219,15 @@ export function stripLineNumbers(text: string): string {
     .join('\n');
 }
 
-// ── Session CRUD ──
+// ── 会话 CRUD ──
 
 export function switchSession(ctx: SessionContext, idx: number): void {
   const st = getChatStore(ctx.storeId).sess.getState();
   const { sessions, activeIdx } = st;
   if (idx === activeIdx || idx < 0 || idx >= sessions.length) return;
 
-  // ponytail: messages live in per-session stores — no save/restore needed.
-  // Just save token count, switch activeIdx, React re-renders from new store.
+  // ponytail: 消息存放在会话级 store 中 — 无需保存/恢复。
+  // 只需保存 token 计数，切换 activeIdx，React 从新 store 重新渲染。
   if (activeIdx >= 0) {
     getChatStore(ctx.storeId).sess.getState().setSessionTokens(sessions[activeIdx].id, ctx.getTotalTokensUsed());
   }
@@ -237,7 +236,7 @@ export function switchSession(ctx: SessionContext, idx: number): void {
   ctx.clearPendingToolCards();
   getChatStore(ctx.storeId).sess.setState({ activeIdx: idx });
 
-  // Switch session-scoped boards to the new session
+  // 切换会话级 board 到新会话
   const newSessionId = String(sessions[idx].id);
   const runtime = ctx.getRuntime?.();
   if (runtime) {
@@ -245,7 +244,7 @@ export function switchSession(ctx: SessionContext, idx: number): void {
     useAgentPanelStore.getState().setCurrentSessionId(newSessionId);
   }
 
-  // Restore token count for target session
+  // 恢复目标会话的 token 计数
   ctx.setTotalTokensUsed(st.sessionTokens[sessions[idx].id] || 0);
   ctx.setLastUsageText('');
   ctx.updateFooter();
@@ -263,15 +262,15 @@ export function closeSession(ctx: SessionContext, idx: number): void {
 
   const newSessions = [...st.sessions];
   newSessions.splice(idx, 1);
-  // Adjust activeIdx: if we closed a session before the active one, shift left;
-  // if we closed the active one, the next session becomes active (or clamp).
+  // 调整 activeIdx：若关闭的会话在活跃会话之前，则左移；
+  // 若关闭的是活跃会话，则下一个会话变为活跃（或钳制）。
   let newIdx = st.activeIdx;
   if (idx < st.activeIdx) newIdx = st.activeIdx - 1;
   if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
   if (newIdx < 0) newIdx = 0;
 
-  // Retarget proxy to the new active session BEFORE destroying old boards —
-  // prevents the orphaned board from being flushed (reviving deleted file)
+  // 在销毁旧 board 之前将代理重定向到新活跃会话 —
+  // 防止孤立的 board 被刷新（恢复已删除的文件）
   const runtime = ctx.getRuntime?.();
   const newSessionId = String(newSessions[newIdx].id);
   if (runtime) {
@@ -280,10 +279,10 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   }
 
   getChatStore(ctx.storeId).sess.setState({ sessions: newSessions, activeIdx: newIdx });
-  // ponytail: no restoreMessages — React reads from per-session store automatically
+  // ponytail: 无需 restoreMessages — React 自动从会话级 store 读取
   ctx.updateFooter();
 
-  // Now destroy the closed session's boards (best-effort, fire-and-forget)
+  // 现在销毁已关闭会话的 board（尽力而为，异步触发）
   if (runtime) {
     runtime.destroySessionBoards(String(s.id)).catch(() => {});
   }
@@ -307,8 +306,8 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
     return;
   }
   const st = getChatStore(ctx.storeId).sess.getState();
-  // ponytail: messages in per-session stores — no save/restore needed.
-  // Just save token count for the old session.
+  // ponytail: 消息在会话级 store 中 — 无需保存/恢复。
+  // 只需保存旧会话的 token 计数。
   if (st.activeIdx >= 0) {
     const oldSid = st.sessions[st.activeIdx].id;
     getChatStore(ctx.storeId).sess.getState().setSessionTokens(oldSid, ctx.getTotalTokensUsed());
@@ -325,7 +324,7 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
     activeIdx: st.sessions.length,
     nextSessionId: id + 1,
   });
-  // ponytail: create per-session messages store — the ONLY source of truth
+  // ponytail: 创建会话级消息 store — 唯一数据源
   msgStoreFor(ctx.storeId, id).getState().setMessages([]);
   resetMsgIdCounter();
   ctx.clearInputHistory();
@@ -333,7 +332,7 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   ctx.setTotalTokensUsed(0);
   getChatStore(ctx.storeId).sess.getState().setSessionTokens(id, 0);
 
-  // Switch session-scoped boards to the new session
+  // 切换会话级 board 到新会话
   const runtime = ctx.getRuntime?.();
   if (runtime) {
     runtime.setCurrentSession(String(id));
@@ -345,9 +344,9 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   ctx.updateFooter();
 }
 
-// ── Session persistence — one file per session, localStorage backup ──
+// ── 会话持久化 — 每个会话一个文件，localStorage 备份 ──
 
-/** Read a session file and parse as JSON. Handles read_file_content's line numbers. */
+/** 读取会话文件并解析为 JSON。处理 read_file_content 的行号。 */
 async function readSessionJSON(filePath: string): Promise<any> {
   const raw = await rpc<string>('read_file_content', { filePath });
   return JSON.parse(stripLineNumbers(raw));
@@ -369,7 +368,7 @@ function trackerFile(projectPath: string): string {
   return `${sessionsDir(projectPath)}/_active.json`;
 }
 
-/** Scan sessions directory for the highest numeric session ID. Returns 0 if no sessions found. */
+/** 扫描会话目录，查找最大的数字会话 ID。无会话时返回 0。 */
 export async function scanMaxSessionId(projectPath: string): Promise<number> {
   try {
     const raw = await rpc<string>('list_directory', { path: sessionsDir(projectPath), filter_ignored: false });
@@ -387,8 +386,8 @@ export async function scanMaxSessionId(projectPath: string): Promise<number> {
   }
 }
 
-/** Save the active session to its own file. Updates _active.json tracker.
- *  Also writes a sync localStorage backup so the session survives app crash / force-close. */
+/** 将活跃会话保存到其独立文件。更新 _active.json 跟踪器。
+ *  同时写入同步 localStorage 备份，确保会话在应用崩溃/强制关闭后仍可恢复。 */
 export async function saveActiveSession(ctx: SessionContext, projectPath: string): Promise<void> {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
   if (!projectPath || activeIdx < 0) return;
@@ -398,10 +397,10 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   if (!agent) return;
 
   const messages = agent.getSession();
-  // Don't persist empty sessions (only system prompt, no user messages)
+  // 不持久化空会话（仅系统提示，无用户消息）
   if (!messages.some((m) => m.role !== 'system')) return;
 
-  // ponytail: messages are already in per-session store — no saveCurrentMessages needed
+  // ponytail: 消息已在会话级 store 中 — 无需 saveCurrentMessages
   getChatStore(ctx.storeId).sess.getState().setSessionTokens(sMeta.id, ctx.getTotalTokensUsed());
 
   const data = {
@@ -412,17 +411,17 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
     tokensUsed: ctx.getTotalTokensUsed(),
   };
 
-  // 1) Sync localStorage backup — survives beforeunload timeout / process kill
+  // 1) 同步 localStorage 备份 — 可在 beforeunload 超时/进程被杀时存活
   const json = JSON.stringify(data);
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(lsKey(projectPath, sMeta.id), json);
     }
   } catch {
-    /* quota exceeded — disk write is the fallback */
+    /* 超出配额 — 磁盘写入作为兜底 */
   }
 
-  // 2) Async disk write (atomic: tmp → rename)
+  // 2) 异步磁盘写入（原子操作：tmp → rename）
   try {
     await rpc('write_file_content', {
       filePath: sessionFile(projectPath, sMeta.id),
@@ -438,14 +437,14 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
       content: JSON.stringify({ lastId: sMeta.id, nextId: getChatStore(ctx.storeId).sess.getState().nextSessionId }),
     });
   } catch {
-    /* non-critical */
+    /* 非关键 */
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Debounced auto-save — coalesces rapid-fire save triggers into
-// one write per 500ms window. Explicit saves (deactivate, settings
-// reinit) should call saveActiveSession directly.
+// 防抖自动保存 — 将密集的保存触发合并为
+// 每 500ms 窗口内一次写入。显式保存（失活、设置
+// 重新初始化）应直接调用 saveActiveSession。
 // ═══════════════════════════════════════════════════════════════
 
 const _autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -461,9 +460,9 @@ export function scheduleAutoSave(ctx: SessionContext, projectPath: string): void
   _autoSaveTimers.set(ctx.storeId, timer);
 }
 
-/** Incrementally append the last user/assistant message to backend NDJSON.
- *  Called on chat:turn-done — ensures most messages are already on disk
- *  before beforeunload fires, reducing reliance on the sync localStorage save. */
+/** 增量追加最后一条用户/助手消息到后端 NDJSON。
+ *  在 chat:turn-done 时调用 — 确保大部分消息在 beforeunload 触发前
+ *  已写入磁盘，减少对同步 localStorage 保存的依赖。 */
 export async function appendLastMessage(ctx: SessionContext, projectPath: string): Promise<void> {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
   if (!projectPath || activeIdx < 0) return;
@@ -472,7 +471,7 @@ export async function appendLastMessage(ctx: SessionContext, projectPath: string
   const agent = agentSessionState.getAgent(ctx.storeId, sMeta.id);
   if (!agent) return;
   const messages = agent.getSession();
-  // Find the last non-system message
+  // 查找最后一条非系统消息
   const last = [...messages].reverse().find((m) => m.role !== 'system');
   if (!last || !last.content) return;
   if (isInternalMessage(last.content)) return;
@@ -483,30 +482,30 @@ export async function appendLastMessage(ctx: SessionContext, projectPath: string
       message: { role: last.role, content: typeof last.content === 'string' ? last.content : JSON.stringify(last.content) },
     });
   } catch {
-    /* best-effort — saveActiveSession is the fallback */
+    /* best-effort — saveActiveSession 兜底 */
   }
 }
 
-/** Restore the last active session on project open.
- *  Tries file first, falls back to localStorage (survives app crash / force-close). */
+/** 恢复项目打开时最后活跃的会话。
+ *  优先尝试文件，回退到 localStorage（可在应用崩溃/强制关闭后恢复）。 */
 export async function autoRestoreLastSession(ctx: SessionContext, projectPath: string): Promise<void> {
   if (!getAgentFactory(ctx.storeId) || !projectPath) return;
 
   let curNextId = getChatStore(ctx.storeId).sess.getState().nextSessionId;
 
-  // ── Resolve last session id ──
+  // ── 解析最后会话 ID ──
   let lastId = 0;
-  // 1) Tracker file
+  // 1) 跟踪文件
   try {
     const t = await readSessionJSON(trackerFile(projectPath));
     lastId = t.lastId || 0;
     const trackerNextId = t.nextId || lastId + 1 || 1;
     curNextId = Math.max(curNextId, trackerNextId);
   } catch {
-    /* tracker missing — try localStorage scan below */
+    /* 跟踪文件缺失 — 尝试下方 localStorage 扫描 */
   }
 
-  // 2) If tracker missing, scan localStorage for newest session IN THIS WORKSPACE
+  // 2) 若跟踪文件缺失，扫描 localStorage 中本工作区最新的会话
   if (!lastId && typeof localStorage !== 'undefined') {
     const wsPrefix = lsKey(projectPath, 0).replace(/_0$/, '_');
     let newestTs = '';
@@ -520,7 +519,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
           lastId = d.id;
         }
       } catch {
-        /* skip corrupt entry */
+        /* 跳过损坏条目 */
       }
     }
     if (lastId) curNextId = lastId + 1;
@@ -531,27 +530,22 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     return;
   }
 
-  // ── Load session data (file first, localStorage fallback) ──
+  // ── 加载会话数据（优先文件，回退 localStorage）──
   let data: any = null;
-  // 1) Try disk file
-  try {
-    data = await readSessionJSON(sessionFile(projectPath, lastId));
-  } catch {
-    /* file missing — try localStorage */
-  }
+  // 1) 尝试磁盘文件
 
-  // 2) localStorage fallback (may be newer if beforeunload save didn't complete)
+  // 2) localStorage 回退（若 beforeunload 保存未完成，可能比文件更新）
   if (typeof localStorage !== 'undefined') {
     const lsRaw = localStorage.getItem(lsKey(projectPath, lastId));
     if (lsRaw) {
       try {
         const lsData = JSON.parse(lsRaw);
-        // Use localStorage if file was missing OR localStorage has newer data
+        // 若文件缺失或 localStorage 数据更新则使用 localStorage
         if (!data?.savedAt || (lsData.savedAt && lsData.savedAt > data.savedAt)) {
           data = lsData;
         }
       } catch {
-        /* corrupt localStorage entry */
+        /* localStorage 条目损坏 */
       }
     }
   }
@@ -560,8 +554,8 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     return;
   }
 
-  // ponytail: if the tracked session has no user messages (only system prompt),
-  // scan localStorage for a session with actual conversation (no backend dependency)
+  // ponytail: 若跟踪的会话无用户消息（仅有系统提示），
+  // 扫描 localStorage 查找有实际对话的会话（不依赖后端）
   {
     const convMsgs = (data.messages as any[]).filter((m: any) => m.role !== 'system');
     if (convMsgs.length === 0 && typeof localStorage !== 'undefined') {
@@ -574,7 +568,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
         try {
           const d = JSON.parse(localStorage.getItem(key)!);
           if (d.id && !d.deleted && d.savedAt > bestTs) {
-            // Quick check: does it have non-system messages?
+            // 快速检查：是否有非系统消息？
             const hasConv = (d.messages as any[])?.some?.((m: any) => m.role !== 'system');
             if (hasConv) {
               bestTs = d.savedAt;
@@ -582,7 +576,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
             }
           }
         } catch {
-          /* skip */
+          /* 跳过 */
         }
       }
       if (bestId > 0 && bestId !== lastId) {
@@ -593,7 +587,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
             lastId = bestId;
           }
         } catch {
-          /* keep original empty data */
+          /* 保留原始空数据 */
         }
       }
     }
@@ -610,7 +604,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   newAgent.setSession([...freshSys, ...conv]);
 
   const curSt = getChatStore(ctx.storeId).sess.getState();
-  // ponytail: messages in per-session stores — no saveCurrentMessages needed
+  // ponytail: 消息在会话级 store 中 — 无需 saveCurrentMessages
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();
@@ -623,7 +617,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     activeIdx: 0,
     nextSessionId: Math.max(curNextId, curSt.nextSessionId),
   });
-  // ponytail: create per-session messages store + populate from restored data
+  // ponytail: 创建会话级消息 store + 从恢复数据填充
   msgStoreFor(ctx.storeId, data.id).getState().setMessages([]);
 
   try {
@@ -636,7 +630,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   ctx.updateFooter();
 }
 
-/** Scan sessions directory — no agent required. */
+/** 扫描会话目录 — 无需 Agent。 */
 export async function listSavedSessions(
   _ctx: SessionContext,
   projectPath: string,
@@ -656,7 +650,7 @@ export async function listSavedSessions(
     return [];
   }
 
-  // Filter valid JSON session files (skip dirs, _active.json, non-json)
+  // 过滤有效的 JSON 会话文件（跳过目录、_active.json、非 json）
   const targets = entries.filter(
     (e) =>
       !e.is_dir &&
@@ -665,7 +659,7 @@ export async function listSavedSessions(
       !Number.isNaN(parseInt(e.name.replace('.json', ''), 10)),
   );
 
-  // ── Read all session files in parallel with a 10s timeout ──
+  // ── 并行读取所有会话文件，超时 10 秒 ──
   const TIMEOUT_MS = 10_000;
   type SessionEntry = { id: number; label: string; msgCount: number; savedAt: string };
   const readPromises: Promise<SessionEntry | null>[] = targets.map(async (e) => {
@@ -700,7 +694,7 @@ export async function listSavedSessions(
   return result;
 }
 
-/** Load a saved session from disk into a new tab. Falls back to localStorage. */
+/** 从磁盘加载已保存的会话到新标签页。回退到 localStorage。 */
 export async function loadSessionFromDisk(ctx: SessionContext, projectPath: string, sessionId: number): Promise<void> {
   if (!getAgentFactory(ctx.storeId)) {
     const extra = ctx.getLastAgentDiag() ? `\n诊断: ${ctx.getLastAgentDiag()}` : '';
@@ -709,21 +703,21 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
   }
 
   let data: any;
-  // 1) Try disk file
+  // 1) 尝试磁盘文件
   try {
     data = await readSessionJSON(sessionFile(projectPath, sessionId));
   } catch {
-    /* try localStorage */
+    /* 尝试 localStorage */
   }
 
-  // 2) localStorage fallback
+  // 2) localStorage 回退
   if (!data && typeof localStorage !== 'undefined') {
     const lsRaw = localStorage.getItem(lsKey(projectPath, sessionId));
     if (lsRaw) {
       try {
         data = JSON.parse(lsRaw);
       } catch {
-        /* corrupt */
+        /* 损坏 */
       }
     }
   }
@@ -751,7 +745,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
         ? firstUser.content?.slice(0, 28) + (firstUser.content?.length > 28 ? '…' : '')
         : `会话 ${st1.sessions.length + 1}`;
 
-  // ponytail: messages in per-session stores — no saveCurrentMessages needed
+  // ponytail: 消息在会话级 store 中 — 无需 saveCurrentMessages
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();
@@ -762,7 +756,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     sessions: [...st1.sessions, { id: sid, label }],
     activeIdx: st1.sessions.length,
   });
-  // ponytail: create per-session messages store
+  // ponytail: 创建会话级消息 store
   msgStoreFor(ctx.storeId, sid).getState().setMessages([]);
   if (typeof data.tokensUsed === 'number') {
     ctx.setTotalTokensUsed(data.tokensUsed);
@@ -784,9 +778,9 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
   ctx.addNotice(`已加载: ${label}`, 'info');
 }
 
-/** Mark a session file as deleted on disk. */
+/** 将磁盘上的会话文件标记为已删除。 */
 export async function deleteSessionFile(ctx: SessionContext, projectPath: string, sessionId: number): Promise<void> {
-  // Overwrite with deleted marker — listSavedSessions filters these out
+  // 用删除标记覆盖 — listSavedSessions 会过滤掉这些
   try {
     await rpc('write_file_content', {
       filePath: sessionFile(projectPath, sessionId),
@@ -795,24 +789,24 @@ export async function deleteSessionFile(ctx: SessionContext, projectPath: string
   } catch (e) {
     console.error('[chat] deleteSessionFile failed:', e);
     ctx.addNotice('删除会话文件失败', 'error');
-    return; // Don't close tab if write failed
+    return; // 写入失败则不关闭标签页
   }
-  // Clean localStorage backup
+  // 清理 localStorage 备份
   try {
     if (typeof localStorage !== 'undefined') localStorage.removeItem(lsKey(projectPath, sessionId));
   } catch {
-    /* ignore */
+    /* 忽略 */
   }
-  // If this session is open in a tab, close that tab
+  // 若该会话在标签页中打开，则关闭该标签页
   const idx = getChatStore(ctx.storeId)
     .sess.getState()
     .sessions.findIndex((s) => s.id === sessionId);
   if (idx >= 0) closeSession(ctx, idx);
 }
 
-// ── Session restore (internal helpers) ──
+// ── 会话恢复（内部辅助函数）──
 
-/** Walk through active agent's session array and build ChatMessage[] + turnPairs. */
+/** 遍历活跃 agent 的会话数组，构建 ChatMessage[] + turnPairs。 */
 function renderRestoredSession(ctx: SessionContext): void {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
   const sid = sessions[activeIdx]?.id;
@@ -824,8 +818,8 @@ function renderRestoredSession(ctx: SessionContext): void {
   ctx.addNotice(`已恢复 ${sessions.length} 个会话`, 'info');
 }
 
-/** Populate the active session's per-session messages store + turnPairs from the
- *  agent's getSession() raw messages. Pure data rebuild — no DOM, no notices. */
+/** 从 agent 的 getSession() 原始消息填充活跃会话的会话级消息 store + turnPairs。
+ *  纯数据重建 — 无 DOM 操作，无通知。 */
 export function rebuildMessagesFromMessages(
   msgs: Message[],
   storeId: string,
@@ -833,11 +827,11 @@ export function rebuildMessagesFromMessages(
 ): void {
   const rebuilt: ChatMessage[] = [];
 
-  // Preserve live SubAgentPart objects keyed by assistant-message ordinal.
-  // Sub-agent sinks hold references to these objects and keep streaming into
-  // them — rebuilding from provider messages alone would drop the cards and
-  // orphan the sinks (frozen cards, lost output). The same objects are
-  // re-attached to the rebuilt messages below.
+  // 保留按助手消息序号索引的活跃 SubAgentPart 对象。
+  // 子 Agent 汇持持有这些对象的引用并持续流式写入 —
+  // 仅从 provider 消息重建会丢弃卡片并使汇持孤立
+  // （冻结的卡片、丢失的输出）。同样的对象会在
+  // 下方重新附加到重建的消息中。
   const preservedSubAgents = new Map<number, SubAgentPart[]>();
   {
     const existing = msgStoreFor(storeId, sessionId).getState().messages;
@@ -947,9 +941,9 @@ export function rebuildMessagesFromMessages(
     });
   }
 
-  // Re-attach preserved sub-agent parts by assistant-message ordinal.
-  // Ordinals beyond the rebuilt range (e.g. a still-streaming turn not yet in
-  // provider messages) fall back to the last rebuilt assistant message.
+  // 按助手消息序号重新附加保留的子 Agent 部件。
+  // 超出重建范围的序号（如仍在流式输出但尚未出现在
+  // provider 消息中的轮次）回退到最后一条重建的助手消息。
   if (preservedSubAgents.size > 0) {
     const rebuiltAssistants = rebuilt.filter((m): m is AssistantMessage => m.role === 'assistant');
     for (const [ordinal, subs] of preservedSubAgents) {
@@ -958,12 +952,12 @@ export function rebuildMessagesFromMessages(
     }
   }
 
-  // ponytail: write to per-session store — the ONLY source of truth
+  // ponytail: 写入会话级 store — 唯一数据源
   msgStoreFor(storeId, sessionId).getState().setMessages(rebuilt);
   bumpSession(storeId, sessionId);
 }
 
-/** Wrapper that resolves the active agent's session and delegates to rebuildMessagesFromMessages. */
+/** 包装器：解析活跃 agent 的会话并委托给 rebuildMessagesFromMessages。 */
 export function _rebuildMessagesFromSession(ctx: SessionContext): void {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
   const sid = sessions[activeIdx]?.id;
@@ -974,15 +968,15 @@ export function _rebuildMessagesFromSession(ctx: SessionContext): void {
   rebuildMessagesFromMessages(agent.getSession(), ctx.storeId, sid);
 }
 
-// ── Turn retraction ──
+// ── 轮次撤回 ──
 
-/** Retract a turn from DOM and agent session. Returns userText or null. */
+/** 从 DOM 和 agent 会话中撤回一轮对话。返回 userText 或 null。 */
 export function retractTurn(ctx: SessionContext, idx: number): string | null {
   const tp = getTurnPairs(ctx.storeId);
   const pair = tp[idx];
   if (!pair) return null;
-  // ⚡ React handles DOM removal, just clean the model
-  // Remove from agent session — search by content if index is stale (inserted mid-run)
+  // ⚡ React 处理 DOM 移除，只需清理模型
+  // 从 agent 会话中移除 — 若索引已过期（运行中插入），按内容搜索
   let sessIdx = pair.sessionIndex;
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
   const agent = agentSessionState.getAgent(ctx.storeId, sessions[activeIdx]?.id ?? -1);
@@ -996,9 +990,9 @@ export function retractTurn(ctx: SessionContext, idx: number): string | null {
     }
   }
   if (sessIdx >= 0) agent?.retractTurnAt(sessIdx);
-  // Remove from turnPairs
+  // 从 turnPairs 中移除
   tp.splice(idx, 1);
-  // Re-index sessionIndex for remaining pairs from the actual session
+  // 从实际会话中重新索引剩余配对的 sessionIndex
   if (agent) {
     const agentSession = agent.getSession();
     const userMsgIndices: number[] = [];
@@ -1012,7 +1006,7 @@ export function retractTurn(ctx: SessionContext, idx: number): string | null {
   return pair.userText;
 }
 
-/** Retract a single user message (and its assistant response) from the model. */
+/** 从模型中撤回单条用户消息（及其助手回复）。 */
 export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
   const sid = sessions[activeIdx]?.id;
@@ -1044,7 +1038,7 @@ export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void
   }
 }
 
-// ── Conversation export ──
+// ── 对话导出 ──
 
 export async function exportSession(ctx: SessionContext): Promise<void> {
   const { sessions, activeIdx } = getChatStore(ctx.storeId).sess.getState();
@@ -1086,7 +1080,7 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
     }
   }
 
-  // Try Tauri save dialog, fallback to browser download
+  // 尝试 Tauri 保存对话框，回退到浏览器下载
   try {
     const { save } = await import('@tauri-apps/plugin-dialog');
     const filePath = await save({
@@ -1098,7 +1092,7 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
       ctx.addNotice(`会话已导出: ${filePath}`, 'info');
     }
   } catch {
-    // Browser fallback
+    // 浏览器回退
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

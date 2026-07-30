@@ -8,10 +8,10 @@ use rand::SeedableRng;
 use crate::graph::Graph;
 use crate::storage::MemoryIndex;
 
-/// A community = a set of node IDs.
+/// 社区 = 一组节点 ID。
 pub type Community = Vec<String>;
 
-/// A community with hierarchy metadata (level + parent).
+/// 带层次元数据（层级 + 父节点）的社区。
 #[derive(Debug, Clone)]
 pub struct HierarchicalCommunity {
     pub id: String,
@@ -22,7 +22,7 @@ pub struct HierarchicalCommunity {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Graph → adjacency helper
+// Graph → 邻接表辅助函数
 // ═══════════════════════════════════════════════════════════════
 
 fn build_adjacency(graph: &Graph) -> Option<(Vec<String>, Vec<Vec<(usize, f64)>>, Vec<f64>, f64)> {
@@ -96,14 +96,14 @@ fn build_adjacency_from_index(idx: &MemoryIndex) -> Option<(Vec<String>, Vec<Vec
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Core Louvain local-moving (Phase 1)
+// Louvain 核心局部移动（阶段 1）
 // ═══════════════════════════════════════════════════════════════
 
-/// Run Louvain local-moving on a weighted undirected graph.
-/// Returns communities sorted by size (largest first).
+/// 在加权无向图上运行 Louvain 局部移动。
+/// 返回按大小排序的社区（最大的在前）。
 ///
-/// ponytail: Vec-based community storage with reusable weight buffer.
-/// No HashMaps in the hot loop. 2-3x faster than HashMap-based Louvain.
+/// ponytail: 基于 Vec 的社区存储，带可复用的权重缓冲区。
+/// 热循环中无 HashMap。比基于 HashMap 的 Louvain 快 2-3 倍。
 fn run_louvain(
     node_ids: &[String],
     n: usize,
@@ -116,7 +116,7 @@ fn run_louvain(
     build_community_result(node_ids, &comm_nodes)
 }
 
-/// Core local-moving loop. Returns (comm_nodes, node_to_comm).
+/// 核心局部移动循环。返回 (comm_nodes, node_to_comm)。
 fn local_moving_core(
     n: usize,
     adj: &[Vec<(usize, f64)>],
@@ -128,11 +128,11 @@ fn local_moving_core(
     let mut node_to_comm: Vec<usize> = (0..n).collect();
     let mut comm_nodes: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
     let mut sigma_tot: Vec<f64> = degrees.to_vec();
-    // Reusable weight buffer — avoids HashMap allocation per node per iter
+    // 可复用的权重缓冲区 — 避免每个节点每次迭代分配 HashMap
     let mut weight_buf: Vec<f64> = vec![0.0; n + n / 4];
     let mut touched: Vec<usize> = Vec::new();
 
-    let tc = 2.0 * m * m; // precompute denominator constant
+    let tc = 2.0 * m * m; // 预计算分母常数
 
     let mut improved = true;
     let mut iter = 0;
@@ -146,13 +146,13 @@ fn local_moving_core(
             let old_comm = node_to_comm[i];
             let ki = degrees[i];
 
-            // Clear weight buffer (only touched entries — O(degree), not O(n))
+            // 清除权重缓冲区（仅 touched 条目 — O(degree)，非 O(n)）
             for &c in &touched {
                 weight_buf[c] = 0.0;
             }
             touched.clear();
 
-            // Accumulate neighbor community weights
+            // 累加邻居社区权重
             for &(neighbor, w) in &adj[i] {
                 let c = node_to_comm[neighbor];
                 if weight_buf[c] == 0.0 {
@@ -166,7 +166,7 @@ fn local_moving_core(
             let mut best_comm = old_comm;
             let mut best_gain = 0.0f64;
 
-            // Sort touched for deterministic tie-breaking
+            // 对 touched 排序以实现确定性平局打破
             touched.sort();
             for &c in &touched {
                 if c == old_comm {
@@ -206,14 +206,14 @@ fn local_moving_core(
             }
         }
 
-        // Renumber: compact non-empty communities
+        // 重新编号：压缩非空社区
         compact_communities(n, &mut comm_nodes, &mut sigma_tot, &mut node_to_comm);
     }
 
     (comm_nodes, node_to_comm)
 }
 
-/// Compact non-empty communities after a local-moving iteration.
+/// 在局部移动迭代后压缩非空社区。
 fn compact_communities(
     n: usize,
     comm_nodes: &mut Vec<Vec<usize>>,
@@ -231,7 +231,7 @@ fn compact_communities(
     for (new, &old) in live_comms.iter().enumerate() {
         map[old] = new;
     }
-    // Compact
+    // 压缩
     let mut new_comm_nodes: Vec<Vec<usize>> = Vec::with_capacity(live_count);
     let mut new_sigma_tot: Vec<f64> = Vec::with_capacity(live_count);
     for &old in &live_comms {
@@ -255,13 +255,13 @@ fn build_community_result(node_ids: &[String], comm_nodes: &[Vec<usize>]) -> Vec
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Hierarchical Louvain (plain Louvain at each condensation level)
+// 层次 Louvain（在每个压缩层级使用纯 Louvain）
 // ═══════════════════════════════════════════════════════════════
 
-/// Build Level 0 (Louvain) then iterative condensation for higher levels.
+/// 构建 Level 0（Louvain），然后迭代压缩以生成更高层级。
 ///
-/// Uses plain Louvain (local-moving only) — no Leiden refinement.
-/// L1+ uses the same algorithm on condensed super-graphs.
+/// 使用纯 Louvain（仅局部移动）— 无 Leiden 精化。
+/// L1+ 在压缩后的超图上使用相同算法。
 fn detect_hierarchical_from_base(
     base: &[Community],
     seed: u64,
@@ -270,7 +270,7 @@ fn detect_hierarchical_from_base(
     let mut result: Vec<HierarchicalCommunity> = Vec::new();
     if base.is_empty() { return result; }
 
-    // Level 0: base communities
+    // Level 0：基础社区
     for (i, nodes) in base.iter().enumerate() {
         result.push(HierarchicalCommunity {
             id: format!("l0_comm_{}", i),
@@ -283,7 +283,7 @@ fn detect_hierarchical_from_base(
 
     if base.len() <= 1 { return result; }
 
-    // Build dense node-ID → index mapping ONCE.
+    // 仅构建一次 dense node-ID → index 映射。
     let mut all_node_ids: Vec<&str> = base.iter()
         .flat_map(|c| c.iter().map(|s| s.as_str()))
         .collect();
@@ -295,14 +295,14 @@ fn detect_hierarchical_from_base(
         .map(|(i, &id)| (id, i))
         .collect();
 
-    // Iterative condensation
+    // 迭代压缩
     let mut current_communities: Vec<Vec<String>> = base.to_vec();
     let mut level = 0usize;
 
     loop {
         let n = current_communities.len();
 
-        // Build node → community-index map
+        // 构建 node → community-index 映射
         let mut node_to_ci: Vec<usize> = vec![0; node_count];
         for (ci, members) in current_communities.iter().enumerate() {
             for nid in members {
@@ -312,7 +312,7 @@ fn detect_hierarchical_from_base(
             }
         }
 
-        // Condense: accumulate cross-community edges — O(E) via sort-merge
+        // 压缩：累加跨社区边 — 通过排序合并实现 O(E)
         let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
         let mut degrees = vec![0.0f64; n];
         let mut m = 0.0f64;
@@ -330,7 +330,7 @@ fn detect_hierarchical_from_base(
         }
         edge_pairs.sort_by(|(a, _), (b, _)| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
-        // Merge adjacent entries
+        // 合并相邻条目
         let mut sorted_edges: Vec<((usize, usize), f64)> = Vec::new();
         for ((a, b), w) in edge_pairs {
             if let Some(last) = sorted_edges.last_mut() {
@@ -348,7 +348,7 @@ fn detect_hierarchical_from_base(
 
         if m == 0.0 { break; }
 
-        // Run Louvain on condensed graph (not Leiden — refinement less useful here)
+        // 在压缩图上运行 Louvain（非 Leiden — 精化在此处作用不大）
         let condensed_ids: Vec<String> = (0..n)
             .map(|i| format!("l{}_comm_{}", level, i))
             .collect();
@@ -400,19 +400,19 @@ fn detect_hierarchical_from_base(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Leiden refinement (Phase 2)
+// Leiden 精化（阶段 2）
 // ═══════════════════════════════════════════════════════════════
 
-/// Run Leiden Phase 2 refinement on the Louvain partition.
+/// 对 Louvain 分区运行 Leiden 阶段 2 精化。
 ///
-/// Algorithm:
-///   1. For each community C from Phase 1, run local-moving within C's
-///      induced subgraph to split C into well-separated sub-communities.
-///   2. After all communities are split, try merging each sub-community
-///      into a neighboring Phase-1 community if it improves modularity.
+/// 算法：
+///   1. 对阶段 1 的每个社区 C，在 C 的诱导子图内运行局部移动，
+///      将 C 拆分为分离良好的子社区。
+///   2. 所有社区拆分后，尝试将每个子社区合并到相邻的
+///      阶段 1 社区中（如果能改善模块度）。
 ///
-/// Returns refined communities. The result may have more communities
-/// than the input, but they are better separated.
+/// 返回精化后的社区。结果可能比输入有更多社区，
+/// 但分离度更好。
 fn leiden_refinement(
     node_ids: &[String],
     n: usize,
@@ -422,7 +422,7 @@ fn leiden_refinement(
     rng: &mut rand::rngs::StdRng,
     p1_comms: &[Vec<usize>],  // Phase 1: community → node indices
 ) -> Vec<Community> {
-    // ── Step 1: Build node→community mapping from Phase 1 ──
+    // ── 步骤 1：从阶段 1 构建 node→community 映射 ──
     let mut node_to_p1: Vec<usize> = vec![0; n];
     for (ci, comm) in p1_comms.iter().enumerate() {
         for &v in comm {
@@ -430,16 +430,16 @@ fn leiden_refinement(
         }
     }
 
-    // ── Step 2: Split each P1 community internally ──
-    // sub_comms: flat list of all sub-communities, each is Vec<usize>
-    // sub_parent: for each sub-community, which P1 community it came from
+    // ── 步骤 2：在 P1 社区内部拆分 ──
+    // sub_comms：所有子社区的扁平列表，每个为 Vec<usize>
+    // sub_parent：每个子社区来自哪个 P1 社区
     let mut sub_comms: Vec<Vec<usize>> = Vec::new();
     let mut sub_parent: Vec<usize> = Vec::new();
     let mut node_to_sub: Vec<usize> = vec![usize::MAX; n];
 
     for (p1_idx, comm) in p1_comms.iter().enumerate() {
         if comm.len() <= 2 {
-            // Too small to split — keep as-is
+            // 太小无法拆分 — 保持原样
             let mut members = comm.clone();
             members.sort();
             sub_comms.push(members);
@@ -450,7 +450,7 @@ fn leiden_refinement(
             continue;
         }
 
-        // Build induced subgraph for this community
+        // 为此社区构建诱导子图
         let k = comm.len();
         let old_to_new: HashMap<usize, usize> = comm.iter().enumerate()
             .map(|(new, &old)| (old, new))
@@ -480,10 +480,10 @@ fn leiden_refinement(
             continue;
         }
 
-        // Run local-moving within this community's subgraph
+        // 在此社区的子图内运行局部移动
         let (split_nodes, _split_map) = local_moving_core(k, &sub_adj, &sub_deg, sub_m, rng);
 
-        // Convert sub-indices back to global indices
+        // 将子索引转换回全局索引
         for split in &split_nodes {
             if split.is_empty() { continue; }
             let mut members: Vec<usize> = split.iter().map(|&si| comm[si]).collect();
@@ -497,12 +497,12 @@ fn leiden_refinement(
         }
     }
 
-    // ── Step 3: Merge sub-communities ──
-    // Each sub-community can stay with its parent P1 community, or switch
-    // to a neighboring P1 community if that improves modularity.
+    // ── 步骤 3：合并子社区 ──
+    // 每个子社区可以留在其父 P1 社区，或切换到
+    // 相邻的 P1 社区（如果能改善模块度）。
     let tc = 2.0 * m * m;
     let p1_count = p1_comms.len();
-    let mut p1_sigma: Vec<f64> = vec![0.0; p1_count]; // total degree in each P1 community
+    let mut p1_sigma: Vec<f64> = vec![0.0; p1_count]; // 每个 P1 社区的总度数
     for (ci, comm) in p1_comms.iter().enumerate() {
         p1_sigma[ci] = comm.iter().map(|&v| degrees[v]).sum();
     }
@@ -511,13 +511,13 @@ fn leiden_refinement(
     if sub_count == 0 {
         return vec![];
     }
-    // Each sub-community starts assigned to its parent P1 community
+    // 每个子社区初始分配到其父 P1 社区
     let mut sub_comm: Vec<usize> = sub_parent.clone();
     let sub_sigma: Vec<f64> = sub_comms.iter()
         .map(|sc| sc.iter().map(|&v| degrees[v]).sum())
         .collect();
 
-    // For each sub-community, try moving to a neighboring P1 community
+    // 对每个子社区，尝试移动到相邻的 P1 社区
     let mut improved = true;
     let mut iter = 0;
     while improved && iter < 10 {
@@ -525,7 +525,7 @@ fn leiden_refinement(
         iter += 1;
         for si in 0..sub_count {
             let old_p1 = sub_comm[si];
-            // Accumulate edge weight from this sub-community to each P1 community
+            // 累加此子社区到每个 P1 社区的边权重
             let mut p1_weight: Vec<f64> = vec![0.0; p1_count];
             let mut touched: Vec<usize> = Vec::new();
             for &v in &sub_comms[si] {
@@ -566,7 +566,7 @@ fn leiden_refinement(
         }
     }
 
-    // ── Step 4: Assemble final communities ──
+    // ── 步骤 4：组装最终社区 ──
     let mut final_comms: Vec<Vec<usize>> = vec![vec![]; p1_count];
     for si in 0..sub_count {
         let p1 = sub_comm[si];
@@ -586,19 +586,19 @@ fn leiden_refinement(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Public API
+// 公共 API
 // ═══════════════════════════════════════════════════════════════
 
-/// Run Leiden community detection on the graph (flat, single-level).
+/// 在 graph 上运行 Leiden 社区检测（扁平，单层）。
 ///
-/// Full Leiden algorithm: Phase 1 local-moving + Phase 2 refinement.
-/// The refinement step splits communities to improve modularity, then
-/// merges sub-communities that are well-connected within their parent.
-/// This produces better-separated communities than plain Louvain.
+/// 完整 Leiden 算法：阶段 1 局部移动 + 阶段 2 精化。
+/// 精化步骤拆分社区以改善模块度，然后
+/// 合并在其父社区内连接良好的子社区。
+/// 这比纯 Louvain 产生分离度更好的社区。
 ///
-/// NOTE: hierarchical condensation uses plain Louvain for its base
-/// (see detect_communities_louvain) because refinement produces too many
-/// base communities for the O(K²) condensation step to handle efficiently.
+/// 注意：层次压缩使用纯 Louvain 作为基础
+/// （见 detect_communities_louvain），因为精化产生过多
+/// 基础社区，O(K²) 压缩步骤无法高效处理。
 pub fn detect_communities(graph: &Graph, seed: u64) -> Vec<Community> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let Some((owned_ids, adj, degrees, m)) = build_adjacency(graph) else {
@@ -610,15 +610,15 @@ pub fn detect_communities(graph: &Graph, seed: u64) -> Vec<Community> {
         ids.sort();
         return ids.into_iter().map(|id| vec![id]).collect();
     }
-    // Phase 1: Louvain local-moving
+    // 阶段 1：Louvain 局部移动
     let (comm_nodes, _) = local_moving_core(n, &adj, &degrees, m, &rng);
     let p1_comms: Vec<Vec<usize>> = comm_nodes.into_iter().filter(|c| !c.is_empty()).collect();
-    // Phase 2: Leiden refinement
+    // 阶段 2：Leiden 精化
     leiden_refinement(&owned_ids, n, &adj, &degrees, m, &mut rng, &p1_comms)
 }
 
-/// Plain Louvain (no refinement) — used internally by hierarchical condensation
-/// where refinement's extra communities would blow up the O(K²) super-graph step.
+/// 纯 Louvain（无精化）— 供层次压缩内部使用，
+/// 精化的额外社区会导致 O(K²) 超图步骤爆炸。
 fn detect_communities_louvain(graph: &Graph, seed: u64) -> Vec<Community> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let Some((owned_ids, adj, degrees, m)) = build_adjacency(graph) else {
@@ -633,7 +633,7 @@ fn detect_communities_louvain(graph: &Graph, seed: u64) -> Vec<Community> {
     run_louvain(&owned_ids, n, &adj, &degrees, m, &mut rng)
 }
 
-/// Detect communities from MemoryIndex (Leiden).
+/// 从 MemoryIndex 检测社区（Leiden）。
 pub fn detect_communities_from_index(idx: &MemoryIndex, seed: u64) -> Vec<Community> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let Some((owned_ids, adj, degrees, m)) = build_adjacency_from_index(idx) else {
@@ -648,7 +648,7 @@ pub fn detect_communities_from_index(idx: &MemoryIndex, seed: u64) -> Vec<Commun
     leiden_refinement(&owned_ids, n, &adj, &degrees, m, &mut rng, &p1_comms)
 }
 
-/// Plain Louvain from MemoryIndex — used by hierarchical condensation path.
+/// 从 MemoryIndex 运行纯 Louvain — 供层次压缩路径使用。
 fn detect_communities_from_index_louvain(idx: &MemoryIndex, seed: u64) -> Vec<Community> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let Some((owned_ids, adj, degrees, m)) = build_adjacency_from_index(idx) else {
@@ -661,11 +661,11 @@ fn detect_communities_from_index_louvain(idx: &MemoryIndex, seed: u64) -> Vec<Co
     run_louvain(&owned_ids, n, &adj, &degrees, m, &mut rng)
 }
 
-// ── Hierarchical ──────────────────────────────────────────────
+// ── 层次化 ──────────────────────────────────────────────
 
-/// Hierarchical Louvain community detection.
-/// L0 uses plain Louvain (no refinement) for efficient condensation.
-/// For Leiden-refined flat communities, use detect_communities() instead.
+/// 层次 Louvain 社区检测。
+/// L0 使用纯 Louvain（无精化）以实现高效压缩。
+/// 如需 Leiden 精化的扁平社区，请改用 detect_communities()。
 pub fn detect_hierarchical_communities(graph: &Graph, seed: u64) -> Vec<HierarchicalCommunity> {
     let base = detect_communities_louvain(graph, seed);
     let leaf_edges: Vec<(String, String)> = graph.edges.values()
@@ -674,7 +674,7 @@ pub fn detect_hierarchical_communities(graph: &Graph, seed: u64) -> Vec<Hierarch
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
 
-/// Hierarchical Leiden with pre-computed base communities.
+/// 使用预计算基础社区的层次 Leiden。
 pub fn detect_hierarchical_communities_with_base(
     graph: &Graph,
     base: Vec<Community>,
@@ -686,7 +686,7 @@ pub fn detect_hierarchical_communities_with_base(
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
 
-/// Hierarchical Louvain from MemoryIndex.
+/// 从 MemoryIndex 运行层次 Louvain。
 pub fn detect_hierarchical_communities_from_index(
     idx: &MemoryIndex,
     seed: u64,
@@ -702,17 +702,17 @@ pub fn detect_hierarchical_communities_from_index(
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
 
-/// Run both flat (Leiden-refined) and hierarchical (Louvain) in one pass.
+/// 一次运行同时生成扁平（Leiden 精化）和层次（Louvain）社区。
 ///
-/// Flat communities use full Leiden (local-moving + refinement).
-/// Hierarchical condensation uses plain Louvain for efficiency —
-/// refinement's extra communities would blow up the O(K²) super-graph step.
+/// 扁平社区使用完整 Leiden（局部移动 + 精化）。
+/// 层次压缩使用纯 Louvain 以提高效率 —
+/// 精化的额外社区会导致 O(K²) 超图步骤爆炸。
 pub fn detect_communities_and_hierarchy(
     graph: &Graph,
     seed: u64,
 ) -> (Vec<Community>, Vec<HierarchicalCommunity>) {
-    let base = detect_communities(graph, seed);  // Leiden-refined flat
-    let hier_base = detect_communities_louvain(graph, seed);  // Louvain for hierarchy
+    let base = detect_communities(graph, seed);  // Leiden 精化的扁平社区
+    let hier_base = detect_communities_louvain(graph, seed);  // 用于层次化的 Louvain
     let leaf_edges: Vec<(String, String)> = graph.edges.values()
         .map(|e| (e.source.clone(), e.target.clone()))
         .collect();
@@ -721,26 +721,26 @@ pub fn detect_communities_and_hierarchy(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Stable community ID matching
+// 稳定社区 ID 匹配
 // ═══════════════════════════════════════════════════════════════
 
-/// Match new communities to previous ones via greedy maximum overlap.
+/// 通过贪心最大重叠将新社区匹配到旧社区。
 ///
-/// Given the new community partition and the old `node_id → community_id`
-/// mapping, returns a stable ID for each new community. Communities that
-/// overlap significantly with an old community inherit that old community's
-/// ID. Truly new communities get fresh IDs (continuing the counter).
+/// 给定新社区分区和旧的 `node_id → community_id`
+/// 映射，为每个新社区返回一个稳定 ID。与旧社区
+/// 重叠显著的新社区继承旧社区的 ID。真正的新社区
+/// 获得新 ID（延续计数器）。
 ///
-/// Algorithm: greedy matching by descending overlap count (ties broken by
-/// old ID, then new index — fully deterministic). Each old ID is claimed
-/// at most once, ensuring a 1:1 mapping.
+/// 算法：按重叠数降序贪心匹配（平局按
+/// 旧 ID 然后 new index 打破 — 完全确定性）。每个旧 ID 最多
+/// 被认领一次，确保 1:1 映射。
 pub fn match_communities_to_previous(
     new_communities: &[Community],
     old_assignment: &HashMap<String, usize>,
 ) -> Vec<usize> {
     use std::collections::HashSet;
 
-    // Build overlap pairs: (overlap_count, new_idx, old_id)
+    // 构建重叠对：(overlap_count, new_idx, old_id)
     let mut pairs: Vec<(usize, usize, usize)> = Vec::new();
     for (new_idx, comm) in new_communities.iter().enumerate() {
         let mut overlap: HashMap<usize, usize> = HashMap::new();
@@ -754,9 +754,9 @@ pub fn match_communities_to_previous(
         }
     }
 
-    // Greedy matching: highest overlap first. Ties broken deterministically
-    // by old ID then new index — equal-overlap merges always inherit the
-    // lowest old ID, so results don't depend on HashMap iteration order.
+    // 贪心匹配：最高重叠优先。平局按
+    // 旧 ID 然后 new index 确定性打破 — 相同重叠的合并总是继承
+    // 最低的旧 ID，因此结果不依赖于 HashMap 迭代顺序。
     pairs.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)).then(a.1.cmp(&b.1)));
 
     let mut result = vec![usize::MAX; new_communities.len()];
@@ -770,7 +770,7 @@ pub fn match_communities_to_previous(
         used_old.insert(old_id);
     }
 
-    // Assign fresh IDs to unmatched communities
+    // 为未匹配的社区分配新 ID
     let mut next_id = old_assignment.values().copied().max()
         .map(|m| m.saturating_add(1))
         .unwrap_or(0);
@@ -784,17 +784,17 @@ pub fn match_communities_to_previous(
     result
 }
 
-/// Assign `community_id` to nodes that don't have one, based on neighbor
-/// majority vote. Used in the incremental update path to avoid full
-/// re-clustering which would destabilize existing community IDs.
+/// 为没有 community_id 的节点分配社区，基于邻居
+/// 多数投票。用于增量更新路径，避免全量
+/// 重新聚类导致已有社区 ID 不稳定。
 ///
-/// Nodes that already have a `community_id` are left untouched. New nodes
-/// (community_id = None) inherit the most common community among their
-/// graph neighbors. Nodes with no community-bearing neighbors are left
-/// unassigned — they'll get a community on the next full analysis.
+/// 已有 `community_id` 的节点保持不变。新节点
+/// （community_id = None）继承其 graph 邻居中最常见的社区。
+/// 没有带社区邻居的节点保持
+/// 未分配 — 它们将在下次全量分析时获得社区。
 ///
-/// Returns the IDs of nodes that were assigned a community, so callers
-/// can persist the change (swap_index only replaces the in-memory index).
+/// 返回被分配社区的节点 ID，以便调用方
+/// 持久化变更（swap_index 仅替换内存中的索引）。
 pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
 
@@ -805,7 +805,7 @@ pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) -> Vec<S
 
     if new_ids.is_empty() { return Vec::new(); }
 
-    // Single pass over edges — accumulate community votes per new node
+    // 单次遍历边 — 为每个新节点累加社区投票
     let mut votes: HashMap<String, HashMap<usize, usize>> = HashMap::new();
     for edge in graph.edges.values() {
         if new_ids.contains(&edge.source) {
@@ -826,7 +826,7 @@ pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) -> Vec<S
 
     let mut assigned = Vec::new();
     for (nid, v) in &votes {
-        // Pick community with most votes; ties broken by lower ID (older = more stable)
+        // 选择投票最多的社区；平局按较低 ID 打破（更老 = 更稳定）
         if let Some(&best_cid) = v.iter()
             .max_by(|(cid_a, cnt_a), (cid_b, cnt_b)| {
                 cnt_a.cmp(cnt_b).then(cid_b.cmp(cid_a))
@@ -843,7 +843,7 @@ pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) -> Vec<S
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Tests
+// 测试
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -857,15 +857,15 @@ mod tests {
         for i in 0..6 {
             g.add_node(Node::new(format!("n{}", i), format!("Node{}", i), NodeKind::Symbol));
         }
-        // Cluster 1: n0-n1-n2
+        // 簇 1：n0-n1-n2
         g.add_edge_unchecked(Edge::new("e01", "n0", "n1", EdgeKind::Calls));
         g.add_edge_unchecked(Edge::new("e12", "n1", "n2", EdgeKind::Calls));
         g.add_edge_unchecked(Edge::new("e02", "n0", "n2", EdgeKind::Calls));
-        // Cluster 2: n3-n4-n5
+        // 簇 2：n3-n4-n5
         g.add_edge_unchecked(Edge::new("e34", "n3", "n4", EdgeKind::Calls));
         g.add_edge_unchecked(Edge::new("e45", "n4", "n5", EdgeKind::Calls));
         g.add_edge_unchecked(Edge::new("e35", "n3", "n5", EdgeKind::Calls));
-        // Bridge
+        // 桥接边
         g.add_edge_unchecked(Edge::new("e23", "n2", "n3", EdgeKind::Calls));
         g
     }
@@ -902,7 +902,7 @@ mod tests {
         g
     }
 
-    // ── Flat detection tests ──────────────────────────────────────────
+    // ── 扁平检测测试 ──────────────────────────────────────────
 
     #[test]
     fn test_louvain_two_clusters() {
@@ -929,7 +929,7 @@ mod tests {
         assert_eq!(communities.len(), 5, "each isolated node = own community");
     }
 
-    // ── Hierarchical tests ────────────────────────────────────────────
+    // ── 层次化测试 ────────────────────────────────────────────
 
     #[test]
     fn test_hierarchy_well_formed() {
@@ -1029,7 +1029,7 @@ mod tests {
         );
     }
 
-    // ── with_base backward-compat ────────────────────────────────────
+    // ── with_base 向后兼容 ────────────────────────────────────
 
     #[test]
     fn test_hierarchical_with_base_equals_direct() {
@@ -1107,7 +1107,7 @@ mod tests {
         }
     }
 
-    // ── MemoryIndex path ─────────────────────────────────────────────
+    // ── MemoryIndex 路径 ─────────────────────────────────────────────
 
     #[test]
     fn test_hierarchical_from_index_matches_graph() {
@@ -1129,7 +1129,7 @@ mod tests {
         assert_eq!(idx_l0.len(), graph_l0.len());
     }
 
-    // ── Edge cases ───────────────────────────────────────────────────
+    // ── 边界情况 ───────────────────────────────────────────────────
 
     #[test]
     fn test_condensation_all_singletons() {
@@ -1144,7 +1144,7 @@ mod tests {
         assert_eq!(supers.len(), 0, "no super-communities when all singletons");
     }
 
-    // ── Determinism ──────────────────────────────────────────────────
+    // ── 确定性 ──────────────────────────────────────────────────
 
     #[test]
     fn test_deterministic_same_seed() {
@@ -1157,7 +1157,7 @@ mod tests {
         }
     }
 
-    // ── communities_and_hierarchy integrates correctly ────────────────
+    // ── communities_and_hierarchy 集成正确性 ────────────────
 
     #[test]
     fn test_communities_and_hierarchy_combined() {
@@ -1178,11 +1178,11 @@ mod tests {
         assert_eq!(covered, expected);
     }
 
-    // ── Stable community ID matching ─────────────────────────────────
+    // ── 稳定社区 ID 匹配 ─────────────────────────────────
 
     #[test]
     fn test_match_first_run_empty_old() {
-        // First run: no old assignment → sequential IDs 0, 1, 2, ...
+        // 首次运行：无旧分配 → 顺序 ID 0, 1, 2, ...
         let comms = vec![
             vec!["a".to_string(), "b".to_string(), "c".to_string()],
             vec!["d".to_string(), "e".to_string()],
@@ -1194,7 +1194,7 @@ mod tests {
 
     #[test]
     fn test_match_same_graph_rerun_preserves_ids() {
-        // Same communities, rerun → same IDs
+        // 相同社区，重新运行 → 相同 ID
         let comms = vec![
             vec!["a".to_string(), "b".to_string(), "c".to_string()],
             vec!["d".to_string(), "e".to_string()],
@@ -1207,14 +1207,14 @@ mod tests {
         old.insert("e".into(), 3);
 
         let ids = match_communities_to_previous(&comms, &old);
-        // Community {a,b,c} should get ID 5, community {d,e} should get ID 3
+        // 社区 {a,b,c} 应获得 ID 5，社区 {d,e} 应获得 ID 3
         assert!(ids.contains(&5));
         assert!(ids.contains(&3));
     }
 
     #[test]
     fn test_match_reordered_communities_preserve_ids() {
-        // Same content, different sort order → same IDs
+        // 相同内容，不同排序 → 相同 ID
         let comms_v1 = vec![
             vec!["a".to_string(), "b".to_string(), "c".to_string()],
             vec!["d".to_string(), "e".to_string()],
@@ -1233,12 +1233,12 @@ mod tests {
         let ids_v1 = match_communities_to_previous(&comms_v1, &old);
         let ids_v2 = match_communities_to_previous(&comms_v2, &old);
 
-        // The community {a,b,c} should get ID 0 in both cases
-        // The community {d,e} should get ID 1 in both cases
-        assert_eq!(ids_v1[0], 0); // {a,b,c} is first in v1
-        assert_eq!(ids_v1[1], 1); // {d,e} is second in v1
-        assert_eq!(ids_v2[0], 1); // {d,e} is first in v2
-        assert_eq!(ids_v2[1], 0); // {a,b,c} is second in v2
+        // 社区 {a,b,c} 在两种情况下都应获得 ID 0
+        // 社区 {d,e} 在两种情况下都应获得 ID 1
+        assert_eq!(ids_v1[0], 0); // {a,b,c} 在 v1 中排第一
+        assert_eq!(ids_v1[1], 1); // {d,e} 在 v1 中排第二
+        assert_eq!(ids_v2[0], 1); // {d,e} 在 v2 中排第一
+        assert_eq!(ids_v2[1], 0); // {a,b,c} 在 v2 中排第二
     }
 
     #[test]
@@ -1246,26 +1246,26 @@ mod tests {
         let comms = vec![
             vec!["a".to_string(), "b".to_string()],
             vec!["c".to_string(), "d".to_string()],
-            vec!["e".to_string(), "f".to_string()],  // new community
+            vec!["e".to_string(), "f".to_string()],  // 新社区
         ];
         let mut old: HashMap<String, usize> = HashMap::new();
         old.insert("a".into(), 0);
         old.insert("b".into(), 0);
         old.insert("c".into(), 1);
         old.insert("d".into(), 1);
-        // e, f are new — not in old assignment
+        // e, f 是新节点 — 不在旧分配中
 
         let ids = match_communities_to_previous(&comms, &old);
         assert_eq!(ids[0], 0); // {a,b} → 0
         assert_eq!(ids[1], 1); // {c,d} → 1
-        assert_eq!(ids[2], 2); // {e,f} → fresh ID 2
+        assert_eq!(ids[2], 2); // {e,f} → 新 ID 2
     }
 
     #[test]
     fn test_match_community_disappears_others_stable() {
         let comms = vec![
             vec!["a".to_string(), "b".to_string()],
-            // community {c,d} disappeared
+            // 社区 {c,d} 已消失
         ];
         let mut old: HashMap<String, usize> = HashMap::new();
         old.insert("a".into(), 0);
@@ -1274,23 +1274,23 @@ mod tests {
         old.insert("d".into(), 7);
 
         let ids = match_communities_to_previous(&comms, &old);
-        assert_eq!(ids[0], 0); // {a,b} keeps ID 0
-        // ID 7 is now orphaned but that's fine — it's just unused
+        assert_eq!(ids[0], 0); // {a,b} 保留 ID 0
+        // ID 7 现在是孤立的，但没关系 — 只是未使用
     }
 
-    // ── Neighbor voting for incremental path ─────────────────────────
+    // ── 增量路径的邻居投票 ─────────────────────────
 
     #[test]
     fn test_assign_communities_to_new_nodes_basic() {
         let mut g = Graph::new();
-        // Existing nodes with community_id
+        // 已有 community_id 的节点
         let mut n0 = Node::new("n0", "A", NodeKind::Symbol);
         n0.community_id = Some(0);
         let mut n1 = Node::new("n1", "B", NodeKind::Symbol);
         n1.community_id = Some(0);
         let mut n2 = Node::new("n2", "C", NodeKind::Symbol);
         n2.community_id = Some(1);
-        // New node — no community_id
+        // 新节点 — 无 community_id
         let n3 = Node::new("n3", "D", NodeKind::Symbol);
 
         g.add_node(n0);
@@ -1298,14 +1298,14 @@ mod tests {
         g.add_node(n2);
         g.add_node(n3);
 
-        // n3 connected to n0 (comm 0) and n1 (comm 0) and n2 (comm 1)
+        // n3 连接到 n0（社区 0）、n1（社区 0）和 n2（社区 1）
         g.add_edge_unchecked(Edge::new("e1", "n3", "n0", EdgeKind::Calls));
         g.add_edge_unchecked(Edge::new("e2", "n3", "n1", EdgeKind::Calls));
         g.add_edge_unchecked(Edge::new("e3", "n3", "n2", EdgeKind::Calls));
 
         assign_communities_to_new_nodes(&mut g);
 
-        // n3 should join community 0 (2 votes vs 1)
+        // n3 应加入社区 0（2 票对 1 票）
         assert_eq!(g.nodes.get("n3").unwrap().community_id, Some(0));
     }
 
@@ -1314,15 +1314,15 @@ mod tests {
         let mut g = Graph::new();
         let mut n0 = Node::new("n0", "A", NodeKind::Symbol);
         n0.community_id = Some(0);
-        let n1 = Node::new("n1", "B", NodeKind::Symbol); // new, no community
+        let n1 = Node::new("n1", "B", NodeKind::Symbol); // 新节点，无社区
 
         g.add_node(n0);
         g.add_node(n1);
-        // No edges between n0 and n1
+        // n0 和 n1 之间无边
 
         assign_communities_to_new_nodes(&mut g);
 
-        // n1 has no neighbors with community_id → stays None
+        // n1 没有带 community_id 的邻居 → 保持 None
         assert_eq!(g.nodes.get("n1").unwrap().community_id, None);
     }
 
@@ -1331,7 +1331,7 @@ mod tests {
         let mut g = Graph::new();
         let mut n0 = Node::new("n0", "A", NodeKind::Symbol);
         n0.community_id = Some(5);
-        let n1 = Node::new("n1", "B", NodeKind::Symbol); // new
+        let n1 = Node::new("n1", "B", NodeKind::Symbol); // 新节点
 
         g.add_node(n0);
         g.add_node(n1);
@@ -1339,17 +1339,17 @@ mod tests {
 
         assign_communities_to_new_nodes(&mut g);
 
-        // n0 keeps its community_id = 5
+        // n0 保留其 community_id = 5
         assert_eq!(g.nodes.get("n0").unwrap().community_id, Some(5));
-        // n1 inherits community 5 from n0
+        // n1 从 n0 继承社区 5
         assert_eq!(g.nodes.get("n1").unwrap().community_id, Some(5));
     }
 
     #[test]
     fn test_match_merge_equal_overlap_deterministic() {
-        // Two old communities merge into one new community with EQUAL overlap
-        // counts — the lowest old ID must always win, regardless of HashMap
-        // iteration order.
+        // 两个旧社区合并为一个新社区，重叠数相等
+        // — 最低旧 ID 必须总是获胜，不论 HashMap
+        // 迭代顺序如何。
         let comms = vec![
             vec!["x".to_string(), "y".to_string(), "z".to_string(), "w".to_string()],
         ];
@@ -1359,18 +1359,18 @@ mod tests {
         old.insert("z".into(), 1);
         old.insert("w".into(), 1);
 
-        // Overlap is 2 with old ID 0 and 2 with old ID 1 → tie → lowest wins
+        // 与旧 ID 0 重叠为 2，与旧 ID 1 重叠为 2 → 平局 → 最低获胜
         let ids = match_communities_to_previous(&comms, &old);
         assert_eq!(ids, vec![0]);
     }
 
     #[test]
     fn test_match_split_competition_exclusive() {
-        // Old community 5 splits into two new communities — only the bigger
-        // remnant claims ID 5; the smaller one gets a fresh ID (1:1 mapping).
+        // 旧社区 5 拆分为两个新社区 — 只有较大的
+        // 残余认领 ID 5；较小的获得新 ID（1:1 映射）。
         let comms = vec![
-            vec!["a".to_string(), "b".to_string()],                     // overlap 2 with 5
-            vec!["c".to_string(), "d".to_string(), "e".to_string()],    // overlap 3 with 5
+            vec!["a".to_string(), "b".to_string()],                     // 与 5 重叠 2
+            vec!["c".to_string(), "d".to_string(), "e".to_string()],    // 与 5 重叠 3
         ];
         let mut old: HashMap<String, usize> = HashMap::new();
         old.insert("a".into(), 5);
@@ -1380,8 +1380,8 @@ mod tests {
         old.insert("e".into(), 5);
 
         let ids = match_communities_to_previous(&comms, &old);
-        assert_eq!(ids[1], 5); // bigger remnant keeps the ID
-        assert_eq!(ids[0], 6); // smaller remnant gets fresh ID (max old + 1)
+        assert_eq!(ids[1], 5); // 较大残余保留 ID
+        assert_eq!(ids[0], 6); // 较小残余获得新 ID（max old + 1）
     }
 
     #[test]
@@ -1389,8 +1389,8 @@ mod tests {
         let mut g = Graph::new();
         let mut n0 = Node::new("n0", "A", NodeKind::Symbol);
         n0.community_id = Some(2);
-        let n1 = Node::new("n1", "B", NodeKind::Symbol); // new, gets assigned
-        let n2 = Node::new("n2", "C", NodeKind::Symbol); // new, no neighbors
+        let n1 = Node::new("n1", "B", NodeKind::Symbol); // 新节点，将被分配
+        let n2 = Node::new("n2", "C", NodeKind::Symbol); // 新节点，无邻居
 
         g.add_node(n0);
         g.add_node(n1);
@@ -1399,7 +1399,7 @@ mod tests {
 
         let assigned = assign_communities_to_new_nodes(&mut g);
 
-        // Only n1 was assigned — callers persist exactly these nodes
+        // 仅 n1 被分配 — 调用方恰好持久化这些节点
         assert_eq!(assigned, vec!["n1".to_string()]);
     }
 }

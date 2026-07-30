@@ -8,22 +8,22 @@ export type Role = 'system' | 'user' | 'assistant' | 'tool';
 export interface Message {
   role: Role;
   content: string;
-  /** thinking-mode chain-of-thought, round-tripped on multi-turn */
+  /** thinking 模式的思维链，多轮对话中原样往返 */
   reasoning_content?: string;
-  /** opaque provider-issued proof for reasoning (Anthropic thinking signature) */
+  /** provider 签发的推理证明（Anthropic thinking signature） */
   reasoning_signature?: string;
-  /** set by assistant */
+  /** 由 assistant 设置 */
   tool_calls?: ToolCall[];
-  /** links a tool result to its call */
+  /** 将工具结果关联到其调用 */
   tool_call_id?: string;
-  /** tool message: tool name */
+  /** tool 消息：工具名称 */
   name?: string;
 }
 
 export interface ToolCall {
   id: string;
   name: string;
-  arguments: string; // raw JSON
+  arguments: string; // 原始 JSON
 }
 
 export interface ToolSchema {
@@ -47,7 +47,7 @@ export enum ChunkType {
   Usage = 4,
   Done = 5,
   Error = 6,
-  /** Partial tool args preview — emitted during input_json_delta for write/edit tools */
+  /** 部分工具参数预览 — 在 input_json_delta 期间为 write/edit 工具发出 */
   ToolArgPreview = 7,
 }
 
@@ -64,52 +64,52 @@ export interface Usage {
 export interface Chunk {
   type: ChunkType;
   text?: string;
-  signature?: string; // ChunkReasoning: Anthropic thinking signature
-  tool_call?: ToolCall; // ChunkToolCallStart (id+name only) or ChunkToolCall (complete)
-  /** Partial tool args preview (write_file content, edit_file diff, etc.) */
+  signature?: string; // ChunkReasoning：Anthropic thinking signature
+  tool_call?: ToolCall; // ChunkToolCallStart（仅 id+name）或 ChunkToolCall（完整）
+  /** 部分工具参数预览（write_file 内容、edit_file diff 等） */
   tool_arg_preview?: { tool_id: string; tool_name: string; content: string };
   usage?: Usage;
   err?: Error;
 }
 
-/** Provider is a chat-capable model backend. */
+/** Provider 是具备聊天能力的模型后端。 */
 export interface Provider {
   name(): string;
-  /** Start a streaming completion, yielding chunks. Cancelling signal aborts. */
+  /** 启动流式补全，yield chunks。取消 signal 会中止。 */
   stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk>;
-  /** Pre-warm the HTTP connection pool. Call once after creation to establish
-   *  TCP+TLS before the first real request. Best-effort — failures are silent. */
+  /** 预热 HTTP 连接池。创建后调用一次以在首次真实请求前建立
+   *  TCP+TLS 连接。尽力而为 — 失败静默处理。 */
   prewarm?(): void;
-  /** Fetch available models from the provider's /models API endpoint.
-   *  Returns ModelDescriptor[] with minimal metadata (cost/contextWindow unknown from API).
-   *  Best-effort — returns empty array on failure. */
+  /** 从 provider 的 /models API 端点获取可用模型。
+   *  返回 ModelDescriptor[]，仅含最小元数据（cost/contextWindow 从 API 不可知）。
+   *  尽力而为 — 失败时返回空数组。 */
   fetchModels?(): Promise<ModelDescriptor[]>;
 }
 
-// ---- Model catalog ----
+// ---- 模型目录 ----
 
-/** Cost per 1M tokens (USD). */
+/** 每百万 token 的费用（USD）。 */
 export interface ModelCost {
   input: number;
   output: number;
   cacheRead: number;
 }
 
-/** Static model descriptor — data-driven model selection, no manual entry needed. */
+/** 静态模型描述符 — 数据驱动的模型选择，无需手动输入。 */
 export interface ModelDescriptor {
-  id: string; // e.g. "deepseek-v4-pro"
-  name: string; // e.g. "DeepSeek V4 Pro"
-  kind: 'anthropic' | 'openai'; // which provider implementation to use
-  provider: string; // provider name (e.g. "deepseek", "anthropic")
-  baseUrl: string; // API endpoint
-  reasoning: boolean; // supports thinking/reasoning
+  id: string; // 例如 "deepseek-v4-pro"
+  name: string; // 例如 "DeepSeek V4 Pro"
+  kind: 'anthropic' | 'openai'; // 使用哪个 provider 实现
+  provider: string; // provider 名称（例如 "deepseek"、"anthropic"）
+  baseUrl: string; // API 端点
+  reasoning: boolean; // 是否支持 thinking/reasoning
   input: ('text' | 'image')[];
   cost: ModelCost;
   contextWindow: number;
   maxTokens: number;
 }
 
-// ---- Error classification ----
+// ---- 错误分类 ----
 
 /** 把 raw error 映射成人能看懂的分类和操作建议。 */
 export function classifyError(name: string, status: number, body: string, fetchErr?: string): string {
@@ -160,11 +160,11 @@ export function classifyError(name: string, status: number, body: string, fetchE
   return `[未知错误] "${name}" 返回了意外错误 (${status})：${snippet}。如不确定原因，请截图联系开发者。`;
 }
 
-// ---- Tool pairing sanitization ----
+// ---- 工具配对清理 ----
 
 const interruptedToolResult = '[no result: the previous turn was interrupted before this tool call completed]';
 
-/** Repair history so every assistant tool_calls has matching tool messages. */
+/** 修复历史记录，使每个 assistant tool_calls 都有匹配的 tool 消息。 */
 export function sanitizeToolPairing(msgs: Message[]): Message[] {
   const out: Message[] = [];
   let i = 0;
@@ -179,10 +179,10 @@ export function sanitizeToolPairing(msgs: Message[]): Message[] {
       continue;
     }
     if (m.role === 'tool') {
-      i++; // orphan tool message — drop
+      i++; // 孤立的 tool 消息 — 丢弃
       continue;
     }
-    // Skip empty assistant messages — DeepSeek rejects them
+    // 跳过空的 assistant 消息 — DeepSeek 会拒绝
     if (m.role === 'assistant' && !m.content && (!m.tool_calls || m.tool_calls.length === 0)) {
       i++;
       continue;

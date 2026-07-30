@@ -75,29 +75,29 @@ export function createMergeTool(
           conflicts++;
           const errMsg = mergeErr?.message || String(mergeErr);
 
-          // Check for degraded merge (worktree metadata corrupted but diff salvaged)
+          // 检查降级合并（worktree 元数据损坏但 diff 已保全）
           if (errMsg.startsWith('DEGRADED:')) {
             conflictDetails.push(`${entry.agentId} (${entry.description}): worktree 元数据损坏，diff 已降级提取`);
           } else {
             conflictDetails.push(`${entry.agentId} (${entry.description}): ${errMsg}`);
           }
 
-          // Best-effort: try to extract diff even after merge failure
+          // 尽力而为：合并失败后仍尝试提取 diff
           try {
             await enqueueIsolationOp(async () => {
               await exec('agent_isolation_diff', { agent_id: entry.isolationId });
             });
-          } catch { /* best-effort */ }
+          } catch { /* 尽力而为 */ }
 
-          // Clean up worktree — discard first, force_purge as fallback
+          // 清理 worktree — 先 discard，失败则 force_purge 兜底
           await enqueueIsolationOp(async () => {
             try {
               await exec('agent_isolation_discard', { agent_id: entry.isolationId });
             } catch {
-              // discard failed — force purge to clear registry
+              // discard 失败 — 强制清除以清理注册表
               try {
                 await exec('agent_isolation_force_purge', { agent_id: entry.isolationId });
-              } catch { /* best-effort */ }
+              } catch { /* 尽力而为 */ }
             }
           });
         }

@@ -1,16 +1,16 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// PromptShelf — unified prompt area between messages and input
-// Handles both ask_user cards and permission approvals.
-// Does NOT live inside the messages array — independent React root.
+// PromptShelf — 消息和输入框之间的统一提示区
+// 同时处理 ask_user 卡片和权限审批。
+// 不在消息数组内 — 独立的 React root。
 
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { iconSvg } from '../icons';
 import './prompt-shelf.css';
 
-// ── Types ──
+// ── 类型 ──
 
 export interface AskPrompt {
   type: 'ask';
@@ -33,13 +33,13 @@ export interface PermissionPrompt {
 
 export type PromptData = AskPrompt | PermissionPrompt;
 
-// ── Icons ──
+// ── 图标 ──
 
 function svgIcon(name: string, size: number = 12): string {
   return iconSvg(name, size);
 }
 
-// ── Ask card (Reasonix-inspired: keyboard nav, hover preview, multi-select) ──
+// ── 询问卡片（受 Reasonix 启发：键盘导航、悬停预览、多选） ──
 
 const AskCard: React.FC<{
   prompt: AskPrompt;
@@ -62,7 +62,7 @@ const AskCard: React.FC<{
         return next;
       });
 
-      // Single-select: auto-resolve after short delay
+      // 单选：短暂延迟后自动确认
       if (!prompt.multiSelect) {
         if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
         advanceTimer.current = window.setTimeout(() => {
@@ -81,7 +81,7 @@ const AskCard: React.FC<{
 
   const cancel = useCallback(() => onResolve(null), [onResolve]);
 
-  // Keyboard
+  // 键盘
   useEffect(() => {
     if (advanceTimer.current !== null) {
       const id = advanceTimer.current;
@@ -110,7 +110,7 @@ const AskCard: React.FC<{
 
   return (
     <div className="prompt-shelf__card" role="dialog" aria-modal="false">
-      {/* Header */}
+      {/* 头部 */}
       <div className="prompt-shelf__head">
         <span className="prompt-shelf__tag">{prompt.header.slice(0, 12)}</span>
         <span className="prompt-shelf__question">{prompt.question}</span>
@@ -119,7 +119,7 @@ const AskCard: React.FC<{
         </button>
       </div>
 
-      {/* Options */}
+      {/* 选项 */}
       <div className="prompt-shelf__options">
         {prompt.options.map((opt, i) => {
           const on = selected.has(i);
@@ -149,7 +149,7 @@ const AskCard: React.FC<{
         })}
       </div>
 
-      {/* Detail preview — always rendered at fixed height to prevent jitter */}
+      {/* 详情预览 — 始终以固定高度渲染以防抖动 */}
       <div className="prompt-shelf__detail">
         {hoveredOption?.description ? (
           <>
@@ -163,7 +163,7 @@ const AskCard: React.FC<{
         )}
       </div>
 
-      {/* Free-form input for custom answers beyond predefined options */}
+      {/* 用于输入预定义选项之外的自定义回答 */}
       <div className="prompt-shelf__custom">
         <input
           className="prompt-shelf__custom-input"
@@ -178,7 +178,7 @@ const AskCard: React.FC<{
         />
       </div>
 
-      {/* Multi-select confirm */}
+      {/* 多选确认 */}
       {prompt.multiSelect && selected.size > 0 && (
         <div className="prompt-shelf__actions">
           <button className="prompt-shelf__confirm" onClick={confirm} type="button">
@@ -190,7 +190,7 @@ const AskCard: React.FC<{
   );
 };
 
-// ── Permission card ──
+// ── 权限卡片 ──
 
 const PermCard: React.FC<{
   prompt: PermissionPrompt;
@@ -253,19 +253,19 @@ const PermCard: React.FC<{
   );
 };
 
-// ── Exposed imperative API（core 注册接口签名不变）──
+// ── 暴露的命令式 API（core 注册接口签名不变）──
 
 export interface PromptShelfHandle {
   readonly active: PromptData | null;
-  /** Show an ask prompt. Returns a Promise that resolves with selected labels or null if cancelled. */
+  /** 显示询问提示。返回 Promise，解析为选中的标签或 null（取消时）。 */
   showAsk(prompt: AskPrompt): Promise<string[] | null>;
-  /** Show a permission prompt. Returns a Promise that resolves with allow/remember. */
+  /** 显示权限提示。返回 Promise，解析为 allow/remember。 */
   showPermission(prompt: PermissionPrompt): Promise<{ allow: boolean; remember: boolean }>;
-  /** Dismiss current prompt (cancels pending Promise). */
+  /** 关闭当前提示（取消挂起的 Promise）。 */
   dismiss(): void;
 }
 
-// ── Shelf component（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
+// ── Shelf 组件（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
 // 句柄只创建一次（core 挂载时注册）；命令式读取一律走 ref 镜像，避免陈旧闭包。
 
 export const PromptShelf = forwardRef<PromptShelfHandle>(function PromptShelf(_props, ref) {
@@ -273,8 +273,8 @@ export const PromptShelf = forwardRef<PromptShelfHandle>(function PromptShelf(_p
   const activeRef = useRef<PromptData | null>(null);
   const resolverRef = useRef<((v: unknown) => void) | null>(null);
 
-  /** Clear current prompt and resolve the pending Promise with null (cancelled).
-   *  This prevents silent Promise leaks when a second prompt supersedes the first. */
+  /** 清除当前提示并以 null（取消）解析挂起的 Promise。
+   *  防止第二个提示取代第一个时 Promise 静默泄漏。 */
   const dismissCurrent = useCallback(() => {
     const prev = resolverRef.current;
     activeRef.current = null;

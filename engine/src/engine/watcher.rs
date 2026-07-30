@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// File watcher — notify-based incremental update with debounce and fallback.
-// Extracted from engine/mod.rs.
+// 文件 watcher — 基于 notify 的增量更新，带防抖和回退机制。
+// 从 engine/mod.rs 中提取。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -17,25 +17,25 @@ use crate::storage::incremental::IncrementalUpdater;
 use crate::storage::memory::MemoryIndex;
 
 impl Engine {
-    /// Whether the file watcher is currently running.
+    /// 文件 watcher 是否正在运行。
     pub fn is_watching(&self) -> bool {
         self.watcher_running.load(Ordering::SeqCst)
     }
 
-    /// Start the file watcher for this project.
+    /// 启动此项目的文件 watcher。
     ///
-    /// Uses OS-level filesystem events (notify crate) with a 2-second debounce.
-    /// On changes: tries incremental update first, falls back to full re-analysis
-    /// via Engine::analyze().
+    /// 使用操作系统级文件系统事件（notify crate），2 秒防抖。
+    /// 变更时：先尝试增量更新，失败则回退到通过 Engine::analyze()
+    /// 进行全量重新分析。
     ///
-    /// `on_change` is called after each successful update with a JSON summary string.
-    /// In MCP mode this is typically a no-op; in Tauri mode it emits `graph-updated`.
+    /// 每次成功更新后调用 `on_change`，传入 JSON 摘要字符串。
+    /// MCP 模式下通常为空操作；Tauri 模式下发出 `graph-updated` 事件。
     pub fn start_watcher(
         &self,
         project_root: PathBuf,
         on_change: Option<Box<dyn Fn(String) + Send + 'static>>,
     ) {
-        // Guard: don't start a second watcher if one is already running
+        // 守卫：如果已有 watcher 在运行，不启动第二个
         if self.is_watching() {
             info!("[engine watcher] already watching, skipping duplicate start");
             return;
@@ -73,8 +73,8 @@ impl Engine {
 
             info!("[engine watcher] watching {:?} for source changes", root);
 
-            // Source extensions — derived from grammar_loader so newly installed
-            // grammar DLLs are automatically tracked without code changes.
+            // 源文件扩展名 — 从 grammar_loader 派生，使新安装的
+            // 语法 DLL 无需修改代码即可自动跟踪。
             let source_exts: std::collections::HashSet<String> =
                 GRAMMAR_LOADER.supported_extensions().into_iter().collect();
 
@@ -93,7 +93,7 @@ impl Engine {
 
                 match rx.recv_timeout(poll_interval) {
                     Ok(Ok(event)) => {
-                        // Filter: only source file changes
+                        // 过滤：仅关注源文件变更
                         let is_source = match event.kind {
                             EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => true,
                             _ => false,
@@ -144,7 +144,7 @@ impl Engine {
                                 std::mem::take(&mut changed_paths);
                             seen_paths.clear();
                             if !paths.is_empty() {
-                                // Try incremental first, fall back to full re-analysis
+                                // 先尝试增量更新，失败则回退到全量重新分析
                                 let _ = Self::handle_watcher_changes(&root, &paths, &on_change);
                             }
                         }
@@ -158,8 +158,8 @@ impl Engine {
         }
     }
 
-    /// Stop the file watcher. Joins the watcher thread to guarantee it has exited
-    /// before returning (no blind sleep — the thread signals completion via JoinHandle).
+    /// 停止文件 watcher。等待 watcher 线程退出后再返回
+    /// （非盲目休眠 — 线程通过 JoinHandle 信号通知完成）。
     pub fn stop_watcher(&self) {
         self.watcher_running.store(false, Ordering::SeqCst);
         if let Ok(mut guard) = self.watcher_handle.lock() {
@@ -169,20 +169,20 @@ impl Engine {
         }
     }
 
-    /// Expose pending file changes from the watcher for staleness banners.
-    /// Returns list of (path, timestamp_ms, is_indexing).
+    /// 暴露 watcher 中待处理的文件变更，用于过期提示横幅。
+    /// 返回 (path, timestamp_ms, is_indexing) 列表。
     pub fn get_pending_files(&self) -> Vec<(String, u64, bool)> {
         self.pending_changes.lock().unwrap().clone()
     }
 
-    /// Clear pending file changes (called after a successful re-index).
+    /// 清除待处理的文件变更（成功重新索引后调用）。
     pub fn clear_pending_files(&self) {
         self.pending_changes.lock().unwrap().clear();
     }
 
-    /// Handle file changes from the watcher. Tries incremental update first,
-    /// falls back to full re-analysis. Static so it can be called from the
-    /// watcher thread via global ENGINE functions.
+    /// 处理来自 watcher 的文件变更。先尝试增量更新，
+    /// 失败则回退到全量重新分析。设为静态方法，以便 watcher 线程
+    /// 通过全局 ENGINE 函数调用。
     pub(super) fn handle_watcher_changes(
         root: &Path,
         changed_files: &[(PathBuf, String)],
@@ -192,8 +192,8 @@ impl Engine {
         let count = changed_files.len();
         info!("[engine watcher] {} file(s) changed, trying incremental update", count);
 
-        // Populate pending_changes so staleness banners fire for tools that
-        // query the index while the update is in progress (see staleness.rs).
+        // 填充 pending_changes，以便在更新进行中查询索引的工具
+        // 能触发过期提示横幅（参见 staleness.rs）。
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -208,7 +208,7 @@ impl Engine {
             }
         }
 
-        // Try incremental update via IncrementalUpdater (accesses store directly)
+        // 通过 IncrementalUpdater 尝试增量更新（直接访问 store）
         let inc_result = (|| -> Result<(), String> {
             let engine_guard = super::ENGINE.read();
             let engine = engine_guard
@@ -230,12 +230,12 @@ impl Engine {
             let (new_idx, errors) =
                 IncrementalUpdater::update(&paths, &store.index.read(), root, &store.db)?;
 
-            // ── Post-incremental synthesis ──
-            // The incremental updater preserves community_id for matched nodes.
-            // New nodes (community_id = None) get assigned via neighbor majority vote,
-            // avoiding full re-clustering that would destabilize existing IDs.
-            // Voted assignments are upserted to SQLite so they survive restarts —
-            // swap_index() only replaces the in-memory index.
+            // ── 增量后合成 ──
+            // 增量更新器为匹配的节点保留 community_id。
+            // 新节点（community_id = None）通过邻居多数投票分配社区，
+            // 避免全量重新聚类导致已有 ID 不稳定。
+            // 投票分配结果 upsert 到 SQLite 以在重启后保留 —
+            // swap_index() 仅替换内存中的索引。
             let synth_start = std::time::Instant::now();
             let mut graph = new_idx.to_graph();
             let voted_ids = crate::community::assign_communities_to_new_nodes(&mut graph);
@@ -292,7 +292,7 @@ impl Engine {
                 if let Some(ref cb) = on_change {
                     cb(String::from(r#"{"status":"updated"}"#));
                 }
-                // Clear pending_changes — index is now up-to-date
+                // 清除 pending_changes — 索引已更新
                 {
                     let engine_guard = super::ENGINE.read();
                     if let Some(engine) = engine_guard.as_ref() {
@@ -315,7 +315,7 @@ impl Engine {
             }
         }
 
-        // Fallback: full re-analysis via Engine::analyze()
+        // 回退：通过 Engine::analyze() 进行全量重新分析
         info!("[engine watcher] falling back to full re-analysis");
         match super::engine_analyze(root) {
             Ok(result) => {
@@ -338,7 +338,7 @@ impl Engine {
                 if let Some(ref cb) = on_change {
                     cb(summary);
                 }
-                // Clear pending_changes — full re-analysis succeeded
+                // 清除 pending_changes — 全量重新分析成功
                 {
                     let engine_guard = super::ENGINE.read();
                     if let Some(engine) = engine_guard.as_ref() {

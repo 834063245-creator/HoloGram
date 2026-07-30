@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Graph loading, analysis, background analysis, and engine query commands.
+// 图谱加载、分析、后台分析和引擎查询命令。
 
 use tauri::{Emitter, Manager};
 use hologram_engine::analysis::graph_summary;
@@ -145,7 +145,7 @@ pub(crate) async fn analyze_and_load(path: String, force: Option<bool>, app: tau
 pub(crate) async fn analyze_in_background(path: String, app: tauri::AppHandle) -> Result<String, String> {
     let app2 = app.clone();
     let path2 = path.clone();
-    // Snapshot current graph before analysis so we can compute a diff for incremental update.
+    // 在分析前快照当前图谱，以便计算增量更新的差异。
     let before = engine_api::engine_read_graph(|g| g.clone()).ok();
     std::thread::spawn(move || {
         match crate::utils::direct_analyze(&path2, true) {
@@ -173,7 +173,7 @@ pub(crate) async fn analyze_in_background(path: String, app: tauri::AppHandle) -
 }
 
 // ═══════════════════════════════════════════════════════
-// Engine graph query commands
+// 引擎图谱查询命令
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]

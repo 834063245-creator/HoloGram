@@ -1,29 +1,29 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// IncrementalUpdater — hot-reload changed files without full re-analysis.
+// IncrementalUpdater — 热重载变更文件，无需全量重新分析。
 //
-// Three phases (per spec §5):
-//   Phase 1 — Single-file tree-sitter re-parse
-//   Phase 2 — Intra-file diff (match nodes by name+kind)
-//   Phase 3 — Cross-file edge repair (re-derive imports via name_index)
+// 三个阶段（按规范 §5）：
+//   Phase 1 — 单文件 tree-sitter 重新解析
+//   Phase 2 — 文件内 diff（按 name+kind 匹配节点）
+//   Phase 3 — 跨文件边修复（通过 name_index 重新推导导入）
 //
-// Plus: rename detection (Jaccard ≥ 70%), validate guard, SQLite write-back.
+// 附加：重命名检测（Jaccard ≥ 70%）、验证守卫、SQLite 回写。
 //
-// ═══ Known gaps (ponytail: synthesis stages not re-run) ═══
-// After incremental update, the following pipeline stages are NOT re-executed:
-//   - Coupling analysis (edge-based coupling depth)
-//   - Community detection (global algorithm, new nodes get no community)
-//   - Dynamic dispatch synthesis (React/Vue/DI edges)
-//   - Framework route detection
-//   - Dynamic import / eval / cross-language detection
-//   - Snippet extraction
-// These are skipped because each stage operates on the FULL graph and
-// can't be run per-file without a major refactor. The fallback path
-// (full re-analysis on watcher failure) covers the complete picture.
-// Upgrade path: if incremental drift becomes visible, add a lightweight
-// "re-synthesize affected subgraph" pass that runs coupling + community
-// on new/changed nodes and their 1-hop neighbors only.
+// ═══ 已知差距（ponytail：合成阶段未重新执行）═══
+// 增量更新后，以下流水线阶段不会重新执行：
+//   - 耦合分析（基于边的耦合深度）
+//   - 社区检测（全局算法，新节点不会被分配社区）
+//   - 动态分派合成（React/Vue/DI 边）
+//   - 框架路由检测
+//   - 动态导入 / eval / 跨语言检测
+//   - 代码片段提取
+// 这些阶段被跳过是因为每个阶段都在完整 Graph 上操作，
+// 无法在不进行大规模重构的情况下按文件执行。回退路径
+//（监视器失败时全量重新分析）覆盖完整场景。
+// 升级路径：如果增量漂移变得明显，添加轻量级的
+// "重新合成受影响子图" 通行证，仅对新/变更节点及其 1 跳邻居
+// 运行耦合 + 社区检测。
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -35,16 +35,16 @@ use crate::graph::{Edge, Node};
 use crate::storage::memory::MemoryIndex;
 use crate::storage::sqlite::SqliteDb;
 
-/// Result of analyzing a single file with tree-sitter.
+/// 用 tree-sitter 分析单个文件的结果。
 struct FileAnalysis {
     nodes: Vec<Node>,
-    /// Edges visible within this file (cross-file edges are Phase 3).
+    /// 本文件内可见的边（跨文件的边在 Phase 3 处理）。
     edges: Vec<Edge>,
-    /// tree-sitter error count (non-zero = parse problems).
+    /// tree-sitter 错误计数（非零 = 解析问题）。
     error_count: usize,
 }
 
-/// Changes to apply to a single file's nodes after Phase 2 diff.
+/// Phase 2 diff 后应用到单个文件节点的变更。
 struct FileDiff {
     path: String,
     added_nodes: Vec<Node>,
@@ -53,17 +53,17 @@ struct FileDiff {
 
 }
 
-/// Incremental update engine.
+/// 增量更新引擎。
 pub struct IncrementalUpdater;
 
 impl IncrementalUpdater {
-    /// Build a new MemoryIndex by applying incremental changes.
+    /// 通过应用增量变更来构建新的 MemoryIndex。
     ///
-    /// `changed_files`: list of (path, action) — "created", "modified", "removed".
-    /// `old_index`: the current MemoryIndex (read-only, MCP queries still served from this).
-    /// `project_root`: project directory for tree-sitter re-parsing.
+    /// `changed_files`: (path, action) 列表 — "created"、"modified"、"removed"。
+    /// `old_index`: 当前 MemoryIndex（只读，MCP 查询仍从此读取）。
+    /// `project_root`: 项目目录，用于 tree-sitter 重新解析。
     ///
-    /// Returns a new MemoryIndex (built outside the lock), or an error if validation fails.
+    /// 返回新的 MemoryIndex（在锁外构建），验证失败则返回错误。
     pub fn update(
         changed_files: &[(PathBuf, &str)],
         old_index: &MemoryIndex,
@@ -71,12 +71,12 @@ impl IncrementalUpdater {
         db: &SqliteDb,
         ) -> Result<(MemoryIndex, usize), String> {
         let mut new_index = Self::clone_index_for_update(old_index);
-        // Flush pending edges from clone into CSR so recompute_edge_count works
+        // 将克隆中的待处理边刷入 CSR，以便 recompute_edge_count 正常工作
         new_index.flush_pending();
         let mut total_errors = 0usize;
         let old_edge_count = old_index.edge_count();
 
-        // Separate files by action
+        // 按操作类型分离文件
         let mut modified = Vec::new();
         let mut removed = Vec::new();
         let mut created = Vec::new();
@@ -90,7 +90,7 @@ impl IncrementalUpdater {
             }
         }
 
-        // ── Handle removed files ──
+        // ── 处理已删除文件 ──
         for path in &removed {
             let path_str = path.to_string_lossy().to_string();
             let node_ids = old_index.get_nodes_by_file(&path_str);
@@ -104,7 +104,7 @@ impl IncrementalUpdater {
             );
         }
 
-        // ── Phase 1: re-parse all changed files ──
+        // ── Phase 1：重新解析所有变更文件 ──
         let mut file_analyses: HashMap<String, FileAnalysis> = HashMap::new();
         for path in modified.iter().chain(created.iter()) {
             match Self::parse_file(path, project_root) {
@@ -119,7 +119,7 @@ impl IncrementalUpdater {
             }
         }
 
-        // ── Phase 2: intra-file diff ──
+        // ── Phase 2：文件内 diff ──
         let mut all_diffs: Vec<FileDiff> = Vec::new();
         for (path, analysis) in &file_analyses {
             let path_str = path.clone();
@@ -128,7 +128,7 @@ impl IncrementalUpdater {
             all_diffs.push(diff);
         }
 
-        // Apply Phase 2 changes to intermediate index
+        // 将 Phase 2 变更应用到中间索引
         for diff in &all_diffs {
             for nid in &diff.removed_node_ids {
                 new_index.remove_node(nid);
@@ -141,8 +141,8 @@ impl IncrementalUpdater {
             }
         }
 
-        // ── Phase 3: cross-file edge repair ──
-        // Use the intermediate index (old + Phase 2 changes) for name lookup
+        // ── Phase 3：跨文件边修复 ──
+        // 使用中间索引（旧 + Phase 2 变更）进行名称查找
         for diff in &all_diffs {
             let changed_node_ids: Vec<String> = diff
                 .added_nodes
@@ -156,14 +156,14 @@ impl IncrementalUpdater {
                 }
             }
         }
-        // Also repair edges from unchanged files pointing TO changed files
+        // 同时修复未变更文件指向已变更文件的边
         for diff in &all_diffs {
             for node in diff.added_nodes.iter().chain(diff.updated_nodes.iter()) {
                 Self::repair_incoming_from_unchanged(&node.id, old_index, &mut new_index, &diff.path);
             }
         }
 
-        // ── Validate ──
+        // ── 验证 ──
         let new_edge_count = new_index.recompute_edge_count();
         if (new_edge_count as f64) < (old_edge_count as f64) * 0.95 {
             return Err(format!(
@@ -174,15 +174,15 @@ impl IncrementalUpdater {
             ));
         }
 
-        // ── Flush pending mutations → rebuild dense index + CSR → THEN persist ──
-        // ponytail: clone_index_for_update() never calls rebuild_dense_index(),
-        // so node_by_idx is empty. to_sqlite() iterates node_by_idx to collect
-        // edges → would write 0 edges to SQLite (all old edges lost on restart).
+        // ── 刷入待处理变更 → 重建稠密索引 + CSR → 然后持久化 ──
+        // ponytail：clone_index_for_update() 从不调用 rebuild_dense_index()，
+        // 所以 node_by_idx 为空。to_sqlite() 遍历 node_by_idx 来收集边 →
+        // 会向 SQLite 写入 0 条边（重启后所有旧边丢失）。
         new_index.flush_pending();
 
-        // ── Write-back to SQLite ──
-        // ponytail: retry on lock contention (timeline writes on aux conn),
-        // 3 attempts × ~700ms total; escalate to error on final failure.
+        // ── 回写到 SQLite ──
+        // ponytail：锁竞争时重试（辅助连接上的时间线写入），
+        // 共 3 次尝试 × 约 700ms；最终失败则升级为错误。
         let mut write_err: Option<String> = None;
         for attempt in 0..3 {
             match new_index.to_sqlite(db) {
@@ -206,12 +206,12 @@ impl IncrementalUpdater {
         Ok((new_index, total_errors))
     }
 
-    // ── helpers ──
+    // ── 辅助方法 ──
 
     fn clone_index_for_update(old: &MemoryIndex) -> MemoryIndex {
-        // We need a mutable copy to apply diffs.
-        // For now, build from scratch by iterating.
-        // TODO: implement MemoryIndex::clone() for efficiency.
+        // 需要一个可变副本来应用 diff。
+        // 目前通过遍历从头构建。
+        // TODO：实现 MemoryIndex::clone() 以提升效率。
         let mut idx = MemoryIndex::new();
         for node in old.nodes_iter() {
             idx.insert_node(node.clone());
@@ -224,7 +224,7 @@ impl IncrementalUpdater {
         idx
     }
 
-    /// Phase 1: parse a single file with tree-sitter.
+    /// Phase 1：用 tree-sitter 解析单个文件。
     fn parse_file(path: &Path, _project_root: &Path) -> Result<FileAnalysis, String> {
         let ext = path
             .extension()
@@ -234,7 +234,7 @@ impl IncrementalUpdater {
             .map_err(|e| format!("read {}: {}", path.display(), e))?;
         let file_id = path.to_string_lossy().to_string();
 
-        // Use registry to find the right adapter
+        // 使用注册表查找合适的适配器
         let reg = registry::AdapterRegistry::new();
         let (nodes, edges, _tree) = match reg.get(ext) {
             Some(adapter) => adapter.analyze(&file_id, &source),
@@ -247,7 +247,7 @@ impl IncrementalUpdater {
             }
         };
 
-        // Count parse errors: nodes with empty names likely indicate incomplete parses
+        // 统计解析错误：名称为空的节点可能表示解析不完整
         let error_count = nodes.iter().filter(|n| n.name.is_empty()).count();
 
         Ok(FileAnalysis {
@@ -257,7 +257,7 @@ impl IncrementalUpdater {
         })
     }
 
-    /// Phase 2: diff old nodes vs new parse.
+    /// Phase 2：对比旧节点与新解析结果。
     fn diff_file(
         path: &str,
         old_node_ids: &[String],
@@ -268,7 +268,7 @@ impl IncrementalUpdater {
         let mut removed_node_ids = Vec::new();
         let mut updated_nodes = Vec::new();
 
-        // Build lookup: old nodes by name+kind
+        // 构建查找表：按 name+kind 索引旧节点
         let mut old_by_key: HashMap<(String, String), String> = HashMap::new(); // (name, kind) → id
         for nid in old_node_ids {
             if let Some(node) = old_index.get_node(nid) {
@@ -276,13 +276,13 @@ impl IncrementalUpdater {
             }
         }
 
-        // Build lookup: new nodes by name+kind
+        // 构建查找表：按 name+kind 索引新节点
         let mut new_by_key: HashMap<(String, String), &Node> = HashMap::new();
         for node in &analysis.nodes {
             new_by_key.insert((node.name.clone(), node.kind.as_str().to_string()), node);
         }
 
-        // Match: strategy 1 — same file + same name + same kind → update
+        // 匹配策略 1 — 同文件 + 同名 + 同 kind → 更新
         let mut matched_old: HashSet<String> = HashSet::new();
         let mut matched_new: HashSet<String> = HashSet::new(); // new node ids
 
@@ -290,7 +290,7 @@ impl IncrementalUpdater {
             let key = (name.clone(), kind.clone());
             if let Some(old_id) = old_by_key.get(&key) {
                 let mut updated = (*new_node).clone();
-                // Preserve old community_id and position if unchanged
+                // 保留旧 community_id 和位置（如果未变更）
                 if let Some(old_node) = old_index.get_node(old_id) {
                     updated.community_id = old_node.community_id;
                     if updated.position.is_none() {
@@ -305,7 +305,7 @@ impl IncrementalUpdater {
             }
         }
 
-        // Strategy 2: same file + same location (line:column) with tolerance ≤ 3
+        // 策略 2：同文件 + 同位置（行:列），容差 ≤ 3
         for new_node in &analysis.nodes {
             if matched_new.contains(&new_node.id) {
                 continue;
@@ -334,14 +334,14 @@ impl IncrementalUpdater {
             }
         }
 
-        // Remaining old nodes → removed
+        // 剩余旧节点 → 已删除
         for nid in old_node_ids {
             if !matched_old.contains(nid) {
                 removed_node_ids.push(nid.clone());
             }
         }
 
-        // Remaining new nodes → added
+        // 剩余新节点 → 已新增
         for node in &analysis.nodes {
             if !matched_new.contains(&node.id) {
                 added_nodes.push(node.clone());
@@ -356,16 +356,16 @@ impl IncrementalUpdater {
             }
     }
 
-    /// Check if two locations are "close" (line difference ≤ tolerance).
-    /// Handles both "path:line" and "path:line:column" formats.
+    /// 检查两个位置是否"接近"（行差 ≤ 容差）。
+    /// 同时处理 "path:line" 和 "path:line:column" 格式。
     fn location_close(a: &str, b: &str, tolerance: u32) -> bool {
         let parse_line = |loc: &str| -> Option<u32> {
-            // Format: "path:line" or "path:line:column"
-            // rsplit_once(':') on last colon gives column (or line if no column)
-            // To get the line reliably, count colons.
+            // 格式："path:line" 或 "path:line:column"
+            // rsplit_once(':') 取最后一个冒号后的部分（列号；若无列号则为行号）
+            // 为可靠获取行号，统计冒号数量。
             let colon_count = loc.chars().filter(|&c| c == ':').count();
             match colon_count {
-                0 => None, // no line info
+                0 => None, // 无行号信息
                 1 => {
                     // "path:line"
                     loc.rsplit_once(':')
@@ -373,7 +373,7 @@ impl IncrementalUpdater {
                 }
                 _ => {
                     // "path:line:column"
-                    // First rsplit gives column, second on the remainder gives line
+                    // 第一次 rsplit 得到列号，第二次对剩余部分 rsplit 得到行号
                     loc.rsplit_once(':') // ("path:line", "column")
                         .and_then(|(rest, _col)| {
                             rest.rsplit_once(':') // ("path", "line")
@@ -388,9 +388,9 @@ impl IncrementalUpdater {
         }
     }
 
-    /// Phase 3: rebuild cross-file edges for a node.
+    /// Phase 3：为节点重建跨文件边。
     fn repair_cross_file_edges(node_id: &str, analysis: &FileAnalysis, index: &mut MemoryIndex) {
-        // Find cross-file edges from the analysis where this node is the source
+        // 从分析结果中查找该节点为源节点的跨文件边
         for edge in &analysis.edges {
             if edge.source == node_id && edge.cross_file {
                 index.upsert_edge(&edge.source, &edge.target, edge.kind, edge.coupling_depth, edge.temporal_delay_sec);
@@ -398,29 +398,29 @@ impl IncrementalUpdater {
         }
     }
 
-    /// Phase 3: repair edges FROM unchanged files TO newly added/updated nodes.
-    /// For each new/updated node, check if any unchanged-file node had edges
-    /// pointing to the old version — re-establish those edges.
+    /// Phase 3：修复从未变更文件到新增/更新节点的边。
+    /// 对于每个新增/更新节点，检查是否有未变更文件的节点曾指向
+    /// 旧版本 —— 重新建立这些边。
     fn repair_incoming_from_unchanged(
         node_id: &str,
         old_index: &MemoryIndex,
         new_index: &mut MemoryIndex,
         changed_file: &str,
     ) {
-        // For each unchanged file that depended on symbols in `changed_file`,
-        // re-check their cross-file imports.
-        // This is conservative: re-derive incoming edges by checking
-        // if the node's name matches imports in other files.
+        // 对于依赖 `changed_file` 中符号的每个未变更文件，
+        // 重新检查其跨文件导入。
+        // 保守策略：通过检查节点名称是否匹配其他文件中的导入来
+        // 重新推导入边。
 
         if let Some(node) = new_index.get_node(node_id) {
             let name = node.name.clone();
-            // Find all nodes with this name
+            // 查找所有同名节点
             let candidates = old_index.get_nodes_by_name(&name);
             for cid in &candidates {
                 if cid == node_id {
                     continue;
                 }
-                // Check if cid had an edge to an old version of this node
+                // 检查 cid 是否有指向该节点旧版本的边
                 if let Some(old_node) = old_index.get_node(cid) {
                     if let Some(ref old_loc) = old_node.location {
                         let old_file = old_loc
@@ -428,10 +428,10 @@ impl IncrementalUpdater {
                             .map(|(f, _)| f)
                             .unwrap_or(old_loc);
                         if old_file != changed_file {
-                            // This is from an unchanged file — preserve edges
+                            // 来自未变更文件 —— 保留边
                             let targets = old_index.outgoing(cid, None);
                             for (tgt, kind, depth, _delay) in &targets {
-                                // If target was in the changed file, re-point
+                                // 如果目标在变更文件中，则重新指向
                                 let tgt_node = old_index.get_node(tgt);
                                 if let Some(tn) = tgt_node {
                                     if let Some(ref tl) = tn.location {
@@ -490,8 +490,8 @@ mod tests {
 
     #[test]
     fn test_location_close_same_line() {
-        // location_close only compares line numbers.
-        // "same file" precondition is checked at a higher level (diff_file).
+        // location_close 只比较行号。
+        // "同一文件" 前提在更高层级（diff_file）检查。
         assert!(IncrementalUpdater::location_close(
             "src/a.rs:42:10",
             "src/b.rs:42:10",
@@ -573,7 +573,7 @@ mod tests {
             &analysis,
             &old,
         );
-        // Name mismatch but location close → should match via strategy 2
+        // 名称不匹配但位置接近 → 应通过策略 2 匹配
         assert_eq!(diff.updated_nodes.len(), 1);
         assert_eq!(diff.removed_node_ids.len(), 0);
         assert_eq!(diff.added_nodes.len(), 0);

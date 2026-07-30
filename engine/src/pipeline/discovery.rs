@@ -5,10 +5,10 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// Discover source files in a project directory.
-/// Respects .gitignore patterns + hardcoded common exclusions.
+/// 发现项目目录中的源文件。
+/// 遵循 .gitignore 模式 + 硬编码的通用排除规则。
 pub fn discover_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
-    // Pre-scan: collect directory names to exclude from all .gitignore files.
+    // 预扫描：从所有 .gitignore 文件中收集要排除的目录名。
     let gitignore_dirs = collect_gitignore_dirs(root);
 
     let mut files = Vec::new();
@@ -48,9 +48,9 @@ pub fn discover_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     files
 }
 
-/// Collect directory names to exclude from all .gitignore files in the project tree.
-/// ponytail: single-pass walkdir scan, parses only .gitignore files.
-/// Skips glob patterns and negations — covers 95%+ of real-world exclusions.
+/// 从项目树中所有 .gitignore 文件收集要排除的目录名。
+/// ponytail: 单次 walkdir 扫描，仅解析 .gitignore 文件。
+/// 跳过 glob 模式和取反规则 — 覆盖 95%+ 的实际排除场景。
 fn collect_gitignore_dirs(root: &Path) -> HashSet<String> {
     let mut dirs = HashSet::new();
     for entry in WalkDir::new(root)
@@ -65,21 +65,21 @@ fn collect_gitignore_dirs(root: &Path) -> HashSet<String> {
                     if trimmed.is_empty() || trimmed.starts_with('#') {
                         continue;
                     }
-                    // Negation: if something is explicitly un-ignored, don't add it
+                    // 取反：如果某项被显式取消忽略，则不添加
                     if trimmed.starts_with('!') {
                         continue;
                     }
-                    // Glob patterns: skip (rare for directories, complex to match)
+                    // glob 模式：跳过（目录中少见，匹配复杂）
                     if trimmed.contains('*') || trimmed.contains('?') || trimmed.contains('[') {
                         continue;
                     }
-                    // Strip leading / (anchored), trailing / (directory marker),
-                    // then take the last path component.
+                    // 去掉前导 /（锚定路径）和尾部 /（目录标记），
+                    // 然后取最后一个路径分量。
                     let name = trimmed.trim_start_matches('/').trim_end_matches('/');
                     if let Some(last) = name.rsplit('/').next() {
                         if !last.is_empty() && !last.contains('.') {
-                            // Skip file patterns (names with extensions like "*.exe" already
-                            // filtered by glob check; "Thumbs.db" is a single file, not a dir)
+                            // 跳过文件模式（带扩展名的名称如 "*.exe" 已被
+                            // glob 检查过滤；"Thumbs.db" 是单个文件，不是目录）
                             dirs.insert(last.to_string());
                         }
                     }
@@ -90,9 +90,9 @@ fn collect_gitignore_dirs(root: &Path) -> HashSet<String> {
     dirs
 }
 
-/// Hardcoded common exclusions (tooling, VCS, build artifacts, HoloGram runtime).
-/// Shared by file discovery, watcher, and briefing (preflight) to ensure
-/// consistent filtering across all subsystems.
+/// 硬编码的通用排除规则（工具链、VCS、构建产物、HoloGram 运行时）。
+/// 由文件发现、watcher 和简报（preflight）共享，确保
+/// 所有子系统中的过滤行为一致。
 pub const IGNORED_DIRS: &[&str] = &[
     ".git", "__pycache__", "node_modules", "venv", ".venv", "env",
     ".tox", ".mypy_cache", ".pytest_cache", ".hg", ".svn",
@@ -100,10 +100,10 @@ pub const IGNORED_DIRS: &[&str] = &[
     ".hologram", "htmlcov", ".reasonix", ".codegraph", ".ruff_cache",
     ".next", ".nuxt", "out", ".angular", ".cache", "coverage",
     "vendored", "generated", "tests",
-    ".vscode", ".idea", ".fleet", ".cursor",  // editors
+    ".vscode", ".idea", ".fleet", ".cursor",  // 编辑器
 ];
 
-/// Check if a directory entry should be excluded from traversal.
+/// 检查目录条目是否应从遍历中排除。
 fn is_excluded(entry: &walkdir::DirEntry, gitignore_dirs: &HashSet<String>) -> bool {
     let name = entry.file_name().to_str().unwrap_or("");
     if !entry.file_type().is_dir() {
@@ -112,12 +112,12 @@ fn is_excluded(entry: &walkdir::DirEntry, gitignore_dirs: &HashSet<String>) -> b
     IGNORED_DIRS.contains(&name) || gitignore_dirs.contains(name)
 }
 
-/// Check if a file path falls within any ignored directory.
-/// Used by the briefing system (preflight) to filter out changes to files
-/// in `.hologram/`, `.git/`, `node_modules/`, etc. — these are tooling/runtime
-/// artifacts, not user source code, and should not generate constraint violations.
+/// 检查文件路径是否位于任何被忽略的目录中。
+/// 供简报系统（preflight）使用，用于过滤 `.hologram/`、`.git/`、
+/// `node_modules/` 等目录中文件的变更 — 这些是工具/运行时
+/// 产物，而非用户源代码，不应产生约束违规。
 ///
-/// Handles both `/` and `\` path separators for cross-platform compatibility.
+/// 同时处理 `/` 和 `\` 路径分隔符，以实现跨平台兼容。
 pub fn is_ignored_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
     for component in normalized.split('/') {
@@ -140,7 +140,7 @@ mod tests {
         fs::create_dir_all(tmp.join("sub")).unwrap();
         fs::create_dir_all(tmp.join("__pycache__")).unwrap();
 
-        // Create test files
+        // 创建测试文件
         fs::write(tmp.join("main.py"), "x=1").unwrap();
         fs::write(tmp.join("sub").join("util.py"), "y=2").unwrap();
         fs::write(tmp.join("__pycache__").join("cache.pyc"), "zzz").unwrap();

@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// FileTranslatorPanel — React rewrite of file-translator.ts.
-// LLM-powered code-to-human translation with three-column view.
-// Integrated into FileViewer. Caches results in .hologram/translations/
+// FileTranslatorPanel — file-translator.ts 的 React 重写。
+// 基于 LLM 的代码翻译（代码转人话），三列视图。
+// 集成到 FileViewer 中。结果缓存在 .hologram/translations/ 目录。
 
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -15,7 +15,7 @@ import { iconHtml } from '../icons';
 import { escapeAttr } from './helpers';
 import '../file-translator.css';
 
-// ── Types ──
+// ── 类型 ──
 
 type AuditType = 'bug' | 'risk' | 'smell' | 'ok' | '';
 
@@ -36,7 +36,7 @@ interface CacheData {
   lines: TranslationLine[];
 }
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
 async function hashContent(content: string): Promise<string> {
   const data = new TextEncoder().encode(content);
@@ -81,7 +81,7 @@ function alignLines(modelLines: TranslationLine[], codeLines: string[]): Transla
   return result;
 }
 
-// ── System Prompt ──
+// ── 系统提示词 ──
 
 const SYSTEM_PROMPT = `你是一个代码翻译器。你的唯一任务是把源代码翻译成目标自然语言。
 
@@ -128,7 +128,7 @@ const SYSTEM_PROMPT = `你是一个代码翻译器。你的唯一任务是把源
   ]
 }`;
 
-// ── Component ──
+// ── 组件 ──
 
 export const FileTranslatorApp: React.FC<{
   filePath: string | null;
@@ -136,7 +136,7 @@ export const FileTranslatorApp: React.FC<{
   onLayoutChange: () => void;
   getEditorContent: () => string | null;
 }> = ({ filePath, onClose, onLayoutChange, getEditorContent }) => {
-  // State
+  // 状态
   const [mode, setMode] = useState<'loading' | 'content' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
   const [lines, setLines] = useState<TranslationLine[]>([]);
@@ -152,7 +152,7 @@ export const FileTranslatorApp: React.FC<{
     ok: 0,
   });
 
-  // Refs
+  // 引用
   const panelRef = useRef<HTMLDivElement>(null);
   const dividerRef = useRef<HTMLDivElement>(null);
   const colBodiesRef = useRef<(HTMLDivElement | null)[]>([]);
@@ -161,10 +161,10 @@ export const FileTranslatorApp: React.FC<{
   const panelHeightRatio = useRef(0.45);
   const colWidths = useRef([1 / 3, 1 / 3, 1 / 3]);
 
-  // Resize state
+  // 缩放状态
   const [panelHeight, setPanelHeight] = useState(200);
 
-  // ── Hover highlight ──
+  // ── 悬停高亮 ──
 
   const highlightLine = useCallback((i: number) => {
     colBodiesRef.current.forEach((body) => {
@@ -178,7 +178,7 @@ export const FileTranslatorApp: React.FC<{
     });
   }, []);
 
-  // ── Sync scroll ──
+  // ── 同步滚动 ──
 
   const onColScroll = useCallback((colIdx: number) => {
     const srcBody = colBodiesRef.current[colIdx];
@@ -207,7 +207,7 @@ export const FileTranslatorApp: React.FC<{
     }
   }, []);
 
-  // ── Wire column body event listeners after render ──
+  // ── 渲染后为列体绑定事件监听器 ──
 
   const wireColumnListeners = useCallback(() => {
     colBodiesRef.current.forEach((body, i) => {
@@ -221,7 +221,7 @@ export const FileTranslatorApp: React.FC<{
     });
   }, [onColScroll, highlightLine, unhighlightLine]);
 
-  // ── Render columns as HTML ──
+  // ── 将列渲染为 HTML ──
 
   const renderColumnsHtml = useCallback((l: TranslationLine[]) => {
     const codeHtml = l
@@ -248,7 +248,7 @@ export const FileTranslatorApp: React.FC<{
     return { codeHtml, humanHtml, auditHtml };
   }, []);
 
-  // ── LLM API call ──
+  // ── LLM API 调用 ──
 
   const callApi = useCallback(
     async (
@@ -301,7 +301,7 @@ export const FileTranslatorApp: React.FC<{
     [],
   );
 
-  // ── Main translation flow ──
+  // ── 主翻译流程 ──
 
   const startTranslation = useCallback(
     async (fp: string) => {
@@ -337,14 +337,14 @@ export const FileTranslatorApp: React.FC<{
       setLines([]);
       setWaitSeconds(0);
 
-      // Start wait timer
+      // 启动等待计时器
       if (waitTimerRef.current) clearInterval(waitTimerRef.current);
       waitTimerRef.current = setInterval(() => {
         setWaitSeconds((w) => w + 3);
       }, 3000);
 
       try {
-        // Cache check
+        // 缓存检查
         const hash = await hashContent(content);
         const cachePath = `.hologram/translations/${hash}.json`;
         try {
@@ -364,16 +364,16 @@ export const FileTranslatorApp: React.FC<{
             return;
           }
         } catch {
-          /* cache miss */
+          /* 缓存未命中 */
         }
 
-        // API call
+        // API 调用
         const maxTokens = calcMaxTokens(lc, false);
         const language = settings.display.language === 'en' ? 'English' : '中文';
         const response = await callApi(provider, content, codeLines, lc, language, maxTokens);
         const aligned = alignLines(response.lines, codeLines);
 
-        // Write cache
+        // 写入缓存
         const cacheData: CacheData = {
           file: fn,
           hash,
@@ -386,7 +386,7 @@ export const FileTranslatorApp: React.FC<{
         try {
           await rpc('write_file_content', { filePath: cachePath, content: JSON.stringify(cacheData) });
         } catch {
-          /* ok */
+          /* 忽略 */
         }
 
         setLines(aligned);
@@ -422,7 +422,7 @@ export const FileTranslatorApp: React.FC<{
     setIssueStats({ bug, risk, smell, ok });
   }
 
-  // Trigger on filePath change
+  // filePath 变化时触发
   useEffect(() => {
     if (filePath) startTranslation(filePath);
     return () => {
@@ -431,15 +431,15 @@ export const FileTranslatorApp: React.FC<{
     };
   }, [filePath, startTranslation]);
 
-  // Wire column listeners after content render
+  // 内容渲染后绑定列监听器
   useEffect(() => {
     if (mode === 'content') {
-      // Use rAF to ensure DOM is painted
+      // 使用 rAF 确保 DOM 已绘制
       requestAnimationFrame(() => wireColumnListeners());
     }
   }, [mode, wireColumnListeners]);
 
-  // ── Divider drag ──
+  // ── 分隔条拖拽 ──
 
   const onDividerStart = useCallback(
     (e: React.PointerEvent) => {
@@ -468,7 +468,7 @@ export const FileTranslatorApp: React.FC<{
     [panelHeight, onLayoutChange],
   );
 
-  // ── Column resize ──
+  // ── 列宽调整 ──
 
   const onColResizerStart = useCallback((e: React.PointerEvent, colIdx: number) => {
     e.preventDefault();
@@ -513,7 +513,7 @@ export const FileTranslatorApp: React.FC<{
     document.addEventListener('pointerup', onUp);
   }, []);
 
-  // ── Compute header text ──
+  // ── 计算头部文本 ──
 
   const cacheLabel = cacheHit && translatedAt ? `缓存命中 · ${relativeTime(translatedAt)} 前` : '新翻译 · 刚刚';
   const issueParts: string[] = [];
@@ -534,12 +534,12 @@ export const FileTranslatorApp: React.FC<{
 
   return (
     <>
-      {/* Divider */}
+      {/* 分隔条 */}
       <div ref={dividerRef} className="ft-divider" onPointerDown={onDividerStart} />
 
-      {/* Panel */}
+      {/* 面板 */}
       <div ref={panelRef} className="ft-panel ft-open" style={{ height: panelHeight }}>
-        {/* Header */}
+        {/* 头部 */}
         <div className="ft-header">
           <span className="ft-title">{headerTitle}</span>
           <span className="ft-meta">{mode === 'content' ? `${cacheLabel} · ${issueLabel}` : ''}</span>
@@ -551,7 +551,7 @@ export const FileTranslatorApp: React.FC<{
           />
         </div>
 
-        {/* Loading */}
+        {/* 加载中 */}
         {mode === 'loading' && (
           <div className="ft-loading">
             <div className="ft-loading-icon" dangerouslySetInnerHTML={{ __html: iconHtml('translate', 32) }} />
@@ -560,7 +560,7 @@ export const FileTranslatorApp: React.FC<{
           </div>
         )}
 
-        {/* Error */}
+        {/* 错误 */}
         {mode === 'error' && (
           <div className="ft-error">
             <div className="ft-error-icon">⚠️</div>
@@ -568,7 +568,7 @@ export const FileTranslatorApp: React.FC<{
           </div>
         )}
 
-        {/* Three-column content */}
+        {/* 三列内容 */}
         {mode === 'content' && (
           <div className="ft-columns">
             <div className="ft-col" style={{ flex: colWidths.current[0] }}>

@@ -37,7 +37,7 @@ import { isSamePath, Workspace } from './workspace';
 import { WorkspaceStateMachine } from './lifecycle/state-machine';
 import { withTimeout } from './lifecycle/timeout';
 
-// Lazy FileViewer — avoids pulling Monaco (~5MB) into initial bundle
+// 懒加载 FileViewer — 避免将 Monaco（~5MB）拉入初始 bundle
 let _FileViewer: any = null;
 async function loadFileViewer(): Promise<void> {
   if (!_FileViewer) {
@@ -48,9 +48,9 @@ async function loadFileViewer(): Promise<void> {
 function FV(): any {
   return _FileViewer;
 }
-// ponytail: permission dialog now embedded inline via ChatPanel.showPermissionCard
+// ponytail：权限对话框现在通过 ChatPanel.showPermissionCard 内联嵌入
 
-// ── Worker layout helper ──
+// ── Worker 布局辅助函数 ──
 
 /**
  * 构建边索引对数组
@@ -113,7 +113,7 @@ function pushStatus(msg: string): void {
 }
 const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButtonElement;
 
-// ── State ──
+// ── 状态 ──
 let workspace: Workspace | null = null;
 // WebGL2 不可用时（旧 WebKitGTK / GPU 被驱动拉黑）构造会抛——
 // 兜底成提示层，保住 React shell 与其余 UI，不再整窗黑屏
@@ -128,14 +128,14 @@ try {
   graphEl.appendChild(tip);
 }
 let agentViz: AgentVisualizer | null = null;
-// Unified state machine — replaces ad-hoc _switching boolean.
-// Guards all workspace transitions (open, deactivate, switch, reanalyze).
+// 统一状态机 — 替代临时的 _switching 布尔值。
+// 守卫所有工作区转换（打开、停用、切换、重新分析）。
 const wsMachine = new WorkspaceStateMachine();
 
 // Panel singletons（dock 面板已收编进 App 树 — 开合/数据走 ui/dock-store）
 let chatPanel: ChatCore;
 
-// ── Folder picker ──
+// ── 文件夹选择器 ──
 
 async function pickFolder(): Promise<string | null> {
   try {
@@ -148,7 +148,7 @@ async function pickFolder(): Promise<string | null> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// switchWorkspace — unified entry point
+// switchWorkspace — 统一入口
 // ═══════════════════════════════════════════════════════════════
 
 async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; cachedGraph?: any }): Promise<void> {
@@ -174,10 +174,10 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
       return;
     }
 
-    // Disable the open button BEFORE the possibly-slow deactivate() await.
+    // 在可能缓慢的 deactivate() await 之前禁用打开按钮。
     setLoading(true, folder);
 
-    // Deactivate old workspace — with 5s timeout to prevent stuck switches
+    // 停用旧工作区 — 设 5 秒超时以防卡死
     if (workspace) {
       try {
         await withTimeout(
@@ -197,8 +197,8 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
 
     resetCheckPanelState();
 
-    // Create new — pass callbacks immediately so progress events during
-    // Workspace.open (analyze + render) push visible status updates.
+    // 创建新工作区 — 立即传入回调，使 Workspace.open（分析 + 渲染）期间
+    // 的进度事件推送可见的状态更新。
     const onStatusChange = (msg: string) => {
       pushStatus(msg);
     };
@@ -220,7 +220,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     ws.onStatusChange = onStatusChange;
     ws.onLoadingChange = onLoadingChange;
 
-    // Wire analysis failure callback for degraded mode
+    // 接线分析失败回调，用于降级模式
     ws.onAnalysisFailed = (err) => {
       console.warn('[switchWorkspace] background analysis failed:', err);
       pushStatus('⚠️ 后台分析未完成 — 缓存图谱可用，点击重新分析重试');
@@ -256,7 +256,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     ws.runCheck();
     await rpc('workspace_start_watcher').catch(() => {});
   } finally {
-    // Ensure state machine is not stuck in 'switching'
+    // 确保状态机未卡在 'switching' 状态
     if (wsMachine.state === 'switching') {
       wsMachine.forceState(workspace?._health === 'degraded' ? 'degraded' : (workspace ? 'active' : 'idle'));
     }
@@ -298,13 +298,13 @@ async function notifyAllPanels(ws: Workspace): Promise<void> {
   bus.emit('workspace:switched');
 }
 
-// ── Check ──
+// ── 简报 ──
 
 async function runCheck(): Promise<void> {
   if (workspace) await workspace.runCheck();
 }
 
-// ── Search ──
+// ── 搜索 ──
 
 function doSearch(query: string): void {
   const q = query.trim();
@@ -319,7 +319,7 @@ function doSearch(query: string): void {
   }
 }
 
-// ── Diff ──
+// ── 变更对比 ──
 
 let _diffActive = false;
 async function toggleDiff(): Promise<void> {
@@ -374,7 +374,7 @@ async function reanalyze(): Promise<void> {
     console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
     const raw = await rpc<string>('analyze_and_load', { path: ws.path, force: true });
     console.log('[reanalyze] step 2: analyze_and_load returned, length:', raw?.length);
-    // Guard against workspace switch during the long await.
+    // 在漫长的 await 期间防止工作区切换。
     if (workspace !== ws) {
       console.log('[reanalyze] workspace switched during analysis — discarding result');
       pushStatus('工作区已切换，重分析已取消');
@@ -400,9 +400,9 @@ async function reanalyze(): Promise<void> {
 // ── Esc 逐层关闭（快捷键经 useGlobalKeys → actions 分发到此）──
 
 function escLayer(): void {
-  // Graph-internal Escape states (was in graph.ts keydown, now unified)
+  // 图内部 Escape 状态（原在 graph.ts keydown 中，现已统一）
   if (starGraph?.handleEscape()) return;
-  // Global UI layers
+  // 全局 UI 层
   const dock = useDockStore.getState();
   if (starGraph?.isInsideGalaxy) starGraph.exitGalaxy();
   else if (dock.isOpen('check')) dock.closePanel('check');
@@ -412,11 +412,11 @@ function escLayer(): void {
   else starGraph?.clearAgentHighlight();
 }
 
-// ── Helper: set up agent with placeholder workspace (no project loaded) ──
+// ── 辅助：用占位工作区设置 agent（未加载项目）──
 async function setupPlaceholderAgent(): Promise<void> {
   if (workspace) return;
-  // Clear backend workspace binding — prevents stale PermissionContext from
-  // previous project leaking into the placeholder's read_file / list_directory calls.
+  // 清除后端工作区绑定 — 防止上一个项目的 PermissionContext
+  // 泄漏到占位工作区的 read_file / list_directory 调用中。
   await rpc('workspace_activate', { path: '' }).catch(() => {});
   const ws = Workspace.placeholder();
   ws.onStatusChange = (msg) => {
@@ -429,7 +429,7 @@ async function setupPlaceholderAgent(): Promise<void> {
   }
 }
 
-// ── Init ──
+// ── 初始化 ──
 
 async function init(): Promise<void> {
   // 禁用浏览器原生右键菜单（自定义 ContextMenu 不受影响）
@@ -437,7 +437,7 @@ async function init(): Promise<void> {
 
   setLang(loadSettings().display.language);
   document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
-  starGraph?.resize(); // CSS custom props changed → container shrunk → canvas must follow
+  starGraph?.resize(); // CSS 自定义属性变化 → 容器缩小 → canvas 必须跟随
 
   // Tauri 事件监听 — 纯浏览器 dev(mock) 环境无 __TAURI_INTERNALS__，
   // listen 会抛错并中断 init；降级为静默跳过（权限卡在 mock 下不会出现）
@@ -462,7 +462,7 @@ async function init(): Promise<void> {
       }
     });
 
-        // ── Backend permission-ask → frontend inline chat card bridge ──
+        // ── 后端权限请求 → 前端内联聊天卡片桥接 ──
     const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'git_stage', 'delete_file', 'move_file', 'create_directory']);
     const timedOutRequests = new Set<string>();
     await listen('permission-ask', (event: any) => {
@@ -476,7 +476,7 @@ async function init(): Promise<void> {
         suggestions: Array<{ rule: string; behavior: string }>;
       };
 
-      // Permission mode bypass: yolo → all auto, auto → safe edits only
+      // 权限模式旁路：yolo → 全部自动，auto → 仅安全编辑
       const permMode = getPanelStore(chatPanel.panelId).getState().permissionMode;
       if (permMode === 'yolo' || (permMode === 'auto' && AUTO_WHITELIST.has(p.tool))) {
         rpc('permission_ask_response', {
@@ -487,7 +487,7 @@ async function init(): Promise<void> {
         return;
       }
 
-      // Sub-agent permission asks get a shorter timeout (60s vs 120s)
+      // 子 Agent 权限请求使用更短的超时（60 秒 vs 120 秒）
       const isSubAgent = p.agentId && p.agentId !== 'main';
       const timeoutMs = isSubAgent ? 60_000 : 120_000;
 
@@ -500,7 +500,7 @@ async function init(): Promise<void> {
         });
       }, timeoutMs);
 
-      // Annotate reason with source agent for sub-agent visibility
+      // 为子 Agent 可见性标注来源 Agent 的原因
       const displayReason = isSubAgent
         ? `[子Agent ${p.agentId}] ${p.reason}`
         : p.reason;
@@ -533,10 +533,10 @@ async function init(): Promise<void> {
       });
     });
   } catch {
-    /* browser mock: no tauri event bus */
+    /* 浏览器 mock：无 Tauri 事件总线 */
   }
 
-  // Browser shortcut suppression
+  // 浏览器快捷键抑制
   (() => {
     const isEditing = () => {
       const el = document.activeElement;
@@ -568,10 +568,10 @@ async function init(): Promise<void> {
           }
           return;
         }
-        // App-specific shortcuts
+        // 应用专属快捷键
         if (mod && !shift && !alt && APP_CTRL_KEYS.has(key)) return;
         if (mod && !shift && !alt && APP_CTRL_KEYS_EXTRA.has(key)) return;
-        // Pass-through: standard browser copy/paste/select-all/undo/redo
+        // 放行：标准浏览器复制/粘贴/全选/撤销/重做
         if (mod && !shift && !alt && new Set(['c', 'v', 'x', 'a', 'z', 'y']).has(key)) return;
         if (!mod && !alt && !shift && (key === 'f' || key === 'escape' || key === 'b')) return;
         if (['f1', 'f3', 'f4', 'f5', 'f6', 'f7', 'f10', 'f11', 'f12'].includes(key)) {
@@ -595,7 +595,7 @@ async function init(): Promise<void> {
     );
   })();
 
-  // ── Sandbox health check ──
+  // ── 沙箱健康检查 ──
   rpc<string>('sandbox_status')
     .then((raw) => {
       const s = JSON.parse(raw);
@@ -610,17 +610,17 @@ async function init(): Promise<void> {
   useCoreStore.getState().setChatCore(chatPanel);
   if (starGraph) chatPanel.setStarGraph(starGraph);
 
-  // Agent visualizer
+  // Agent 可视化器
   agentViz = starGraph ? new AgentVisualizer(starGraph) : null;
   chatPanel.setOnTrailToggle(() => agentViz?.toggleTrail());
 
-  // Graph interaction
-  const _graphInteraction = new GraphInteraction(); // ponytail: side-effect constructor, event bus listeners
+  // 图交互
+  const _graphInteraction = new GraphInteraction(); // ponytail：副作用构造函数，事件总线监听器
 
   // Dock 面板外部依赖注入（组件已收编进 App 树，这里只写配置槽）
   if (starGraph) setDockStarGraph(starGraph);
 
-  // Wire NL→symbol fallback: if heuristic parser fails, use Agent to resolve
+  // 接线 NL→symbol 回退：如果启发式解析器失败，使用 Agent 解析
   setDataflowQueryParser(async (nl: string): Promise<string[]> => {
     try {
       if (!workspace?.prov) return [];
@@ -641,7 +641,7 @@ async function init(): Promise<void> {
         if (chunk.type === ChunkType.Text && chunk.text) parts.push(chunk.text);
       }
       const text = parts.join('').trim();
-      // Extract JSON array from response
+      // 从响应中提取 JSON 数组
       const match = text.match(/\[[\s\S]*\]/);
       if (match) return JSON.parse(match[0]);
       return [];
@@ -650,7 +650,7 @@ async function init(): Promise<void> {
     }
   });
 
-  // ── AppShell wiring — replaces bus commands with explicit dispatch ──
+  // ── AppShell 接线 — 用显式分发替代 bus 命令 ──
   shell.wire({
     navigateToNode: (name) => starGraph?.focusNode(name),
     navigateToFile: async (path, line) => {
@@ -667,10 +667,10 @@ async function init(): Promise<void> {
     },
   });
 
-  // ── Bus notifications (pure notification — sender doesn't care who listens) ──
+  // ── Bus 通知（纯通知 — 发送方不关心谁监听）──
   bus.on('chat:turn-done', () => {
     if (workspace?.path) {
-      // Incremental persistence — append last message to backend NDJSON
+      // 增量持久化 — 将最后一条消息追加到后端 NDJSON
       chatPanel.appendLastMessage(workspace.path);
       chatPanel.scheduleAutoSave(workspace.path);
     }
@@ -799,7 +799,7 @@ async function init(): Promise<void> {
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
     starGraph?.resize();
     if (workspace) {
-      // Save current conversation BEFORE re-initializing agent — avoids data loss
+      // 在重新初始化 agent 之前保存当前会话 — 避免数据丢失
       await chatPanel.saveActiveSession(workspace.path).catch((e) => console.error('[settings] saveActiveSession failed:', e));
       await workspace.setupAgent(chatPanel);
       if (workspace?.agent) {
@@ -811,33 +811,33 @@ async function init(): Promise<void> {
   });
   chatPanel.setOnOpenSettings(() => useDockStore.getState().openPanel('settings'));
 
-  // Save sessions on close — scheduleAutoSave is sync (sets timeout).
-  // LocalStorage write inside saveActiveSession is sync, so it completes
-  // before the window closes even if the RPC disk write doesn't.
-  // Also stop sub-agents synchronously (AbortController.abort is sync).
-  // E6: Flush session-scoped boards (DiscoveryBoard + TaskBoard) — clears
-  // debounce timers (sync) and fires flush (best-effort async).
+  // 关闭时保存会话 — scheduleAutoSave 是同步的（设置超时）。
+  // saveActiveSession 内的 LocalStorage 写入是同步的，因此即使 RPC 磁盘写入未完成，
+  // 也能在窗口关闭前完成。
+  // 同时同步停止子 Agent（AbortController.abort 是同步的）。
+  // E6：刷新会话级 boards（DiscoveryBoard + TaskBoard）— 清除
+  // debounce 定时器（同步）并触发刷新（尽力异步）。
   window.addEventListener('beforeunload', () => {
     if (workspace?.path) {
       try {
         chatPanel.scheduleAutoSave(workspace.path);
       } catch {
-        /* silent */
+        /* 静默 */
       }
       try {
         workspace.subAgentPool.stopAll();
       } catch {
-        /* silent */
+        /* 静默 */
       }
       try {
         void workspace.runtime?.flushAllBoards();
       } catch {
-        /* silent */
+        /* 静默 */
       }
     }
   });
 
-  // Open folder buttons（工具栏动作已入 actions 注册表，此处仅欢迎屏按钮）
+  // 打开文件夹按钮（工具栏动作已入 actions 注册表，此处仅欢迎屏按钮）
   const open = () => switchWorkspace();
   btnWelcomeOpen.addEventListener('click', open);
 
@@ -848,7 +848,7 @@ async function init(): Promise<void> {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // Cold start — resume cached project or show welcome
+  // 冷启动 — 恢复缓存的项目或显示欢迎界面
   // ═══════════════════════════════════════════════════════════════
 
   try {
@@ -857,12 +857,12 @@ async function init(): Promise<void> {
       const json = await rpc<string>('load_graph_json');
       graph = JSON.parse(json);
     } catch {
-      // No cached graph
+      // 无缓存图谱
     }
     if (!graph) {
       useShellStore.getState().setView('welcome');
       setLoading(false);
-      // Set up agent without workspace context (general chat only)
+      // 在无工作区上下文下设置 agent（仅通用聊天）
       await setupPlaceholderAgent();
       return;
     }
@@ -871,7 +871,7 @@ async function init(): Promise<void> {
     if (nodeCount > 0) {
       const root: string = graph.meta?.source_root || '';
       if (!root) {
-        // Graph exists but no path — render without workspace
+        // 图谱存在但无路径 — 无工作区渲染
         starGraph?.render(graph);
         pushStatus('⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目');
         useDockStore.getState().setProjectPath(null);
@@ -880,20 +880,20 @@ async function init(): Promise<void> {
         return;
       }
 
-      // Use unified switchWorkspace with cached graph
+      // 使用统一的 switchWorkspace 加载缓存图谱
       console.log('[init] cold start: switching to cached workspace', root);
       await switchWorkspace(root, { skipAnalysis: true, cachedGraph: graph });
       console.log('[init] cold start: switchWorkspace done');
       pushStatus(isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱');
-      // Engine warm-up happens via runCheck → engine_init (SQLite cache). Do NOT fire
-      // analyze_project here — it races with runCheck's analyze fallback and blocks workspace switches.
+      // 引擎预热通过 runCheck → engine_init（SQLite 缓存）完成。不要在此处触发
+      // analyze_project — 它会与 runCheck 的分析回退竞争并阻塞工作区切换。
       return;
     }
   } catch {
-    /* no cache */
+    /* 无缓存 */
   }
 
-  // No cached graph — show welcome
+  // 无缓存图谱 — 显示欢迎界面
   useShellStore.getState().setView('welcome');
   setLoading(false);
   await setupPlaceholderAgent();

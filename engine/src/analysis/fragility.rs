@@ -5,8 +5,8 @@ use crate::graph::Graph;
 use crate::storage::MemoryIndex;
 
 pub fn fragile_nodes(graph: &Graph, limit: usize) -> Vec<serde_json::Value> {
-    // Build per-node edge index: one O(E) pass instead of O(V×E) edge-scans per node.
-    // 20,655 nodes × 270,690 edges = 5.6B filter ops → ~300K ops.
+    // 构建按节点的边索引：一次 O(E) 遍历替代每个节点 O(V×E) 的边扫描。
+    // 20,655 个节点 × 270,690 条边 = 56 亿次过滤操作 → ~30 万次操作。
     let mut node_edges: std::collections::HashMap<&str, Vec<&crate::graph::Edge>> =
         std::collections::HashMap::with_capacity(graph.nodes.len());
     for e in graph.edges.values() {
@@ -131,7 +131,7 @@ mod tests {
         let mut b = Node::new("b", "low_coupling", NodeKind::Symbol);
         b.out_degree = 0; b.in_degree = 0;
         g.add_node(b);
-        // Node a has many high-coupling outgoing edges
+        // 节点 a 有许多高耦合的出边
         for i in 0..10 {
             let tid = format!("t{}", i);
             g.add_node(Node::new(&tid, &tid, NodeKind::Symbol));
@@ -139,7 +139,7 @@ mod tests {
             e.coupling_depth = 4;
             g.add_edge_unchecked(e);
         }
-        // Node b has one low-coupling edge
+        // 节点 b 有一条低耦合边
         g.add_edge_unchecked(Edge::new("eb", "b", "a", EdgeKind::Calls));
         let idx = MemoryIndex::from_existing_graph(g.nodes, g.edges);
         let result = fragile_nodes_from_index(&idx, 2);

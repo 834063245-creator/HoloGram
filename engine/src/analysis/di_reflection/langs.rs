@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Per-language DI/reflection/eval/cross-lang detectors.
+//! 按语言的 DI/reflection/eval/cross-lang 检测器。
 
 use std::collections::HashSet;
 use crate::engine::GRAMMAR_LOADER;
@@ -43,7 +43,7 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
                             extract_py_reflection_args(&args, source)
                         {
                             if is_resolved {
-                                // String literal attribute → create concrete edge
+                                // 字符串字面量属性 → 创建具体边
                                 let parent_func = find_py_enclosing_func(&node, source, file);
                                 let src_id = find_or_create_di_node(
                                     graph,
@@ -71,7 +71,7 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
                                         source: src_id,
                                         target: tgt_id,
                                         kind: EdgeKind::Calls,
-                                        coupling_depth: 3, // L3: hidden data coupling
+                                        coupling_depth: 3, // L3：隐藏数据耦合
                                         cross_file: false,
                                         temporal_delay_sec: None,
                                         lsp_resolved: false,
@@ -82,7 +82,7 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
                                     added += 1;
                                 }
                             } else {
-                                // Variable attribute name → unresolvable, create marker
+                                // 变量属性名 → 无法解析，创建标记
                                 let marker_name =
                                     format!("<reflection:{}()>", func_name);
                                 let marker_id = find_or_create_di_node(
@@ -111,7 +111,7 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
                                         source: src_id,
                                         target: marker_id,
                                         kind: EdgeKind::Calls,
-                                        coupling_depth: 4, // L4: unresolvable hidden coupling
+                                        coupling_depth: 4, // L4：不可解析的隐藏耦合
                                         cross_file: false,
                                         temporal_delay_sec: None,
                                         lsp_resolved: false,
@@ -137,8 +137,8 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
     added
 }
 
-/// Extract (object_ref, attribute_ref, is_resolved) from getattr/setattr args.
-/// is_resolved=false when the attribute name is a variable (not a string literal).
+/// 从 getattr/setattr 参数中提取 (object_ref, attribute_ref, is_resolved)。
+/// 当属性名是变量（非字符串字面量）时 is_resolved=false。
 pub(crate) fn extract_py_reflection_args(
     args: &tree_sitter::Node,
     source: &str,
@@ -161,11 +161,11 @@ pub(crate) fn extract_py_reflection_args(
                     obj_ref = text.to_string();
                     seen_first = true;
                 }
-                // If we see a second identifier, it's the variable attr name
+                // 如果看到第二个 identifier，则是变量属性名
             }
             "string" => {
                 if seen_first {
-                    // String literal attribute → resolvable!
+                    // 字符串字面量属性 → 可解析！
                     attr_ref = text
                         .trim_matches(&['\'', '"', 'r', 'b', 'f'][..])
                         .to_string();
@@ -211,7 +211,7 @@ pub(crate) fn find_py_enclosing_func(node: &tree_sitter::Node, source: &str, def
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Java: @Autowired / @Inject / @Resource DI annotations
+// Java：@Autowired / @Inject / @Resource DI 注解
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usize {
@@ -239,7 +239,7 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
     let mut cursor = root.walk();
     let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
 
-    // Track class context for field injection
+    // 跟踪类上下文用于字段注入
     let mut current_class: Option<String> = None;
 
     while let Some(node) = stack.pop() {
@@ -251,7 +251,7 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
                 }
             }
             "field_declaration" => {
-                // Check for @Autowired / @Inject / @Resource on field
+                // 检查字段上是否有 @Autowired / @Inject / @Resource
                 if let Some(_annotation_name) =
                     find_di_annotation(&node, source, &di_annotations)
                 {
@@ -291,7 +291,7 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
                 }
             }
             "constructor_declaration" => {
-                // Check constructor parameters for @Autowired
+                // 检查构造函数参数是否有 @Autowired
                 if let Some(params) = node.child_by_field_name("parameters") {
                     let mut pc = params.walk();
                     for param in params.children(&mut pc) {
@@ -351,7 +351,7 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
     added
 }
 
-/// Check if a node has a DI annotation (@Autowired, @Inject, @Resource).
+/// 检查节点是否有 DI 注解（@Autowired、@Inject、@Resource）。
 pub(crate) fn find_di_annotation(
     node: &tree_sitter::Node,
     source: &str,
@@ -372,8 +372,8 @@ pub(crate) fn find_di_annotation(
                 }
             }
         }
-        // Also check annotation directly on node (tree-sitter Java grammar
-        // puts annotations before modifiers in some cases)
+        // 也直接检查节点上的 annotation（tree-sitter Java 语法
+        // 在某些情况下会将 annotation 放在 modifiers 之前）
         if child.kind() == "marker_annotation" {
             if let Some(name_node) = child.child_by_field_name("name") {
                 let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
@@ -425,7 +425,7 @@ pub(crate) fn extract_java_param_type(node: &tree_sitter::Node, source: &str) ->
 }
 
 // ═══════════════════════════════════════════════════════════════
-// TypeScript: @Injectable() / @Inject() decorators
+// TypeScript：@Injectable() / @Inject() 装饰器
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize {
@@ -447,15 +447,15 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
     let root = tree.root_node();
     let mut cursor = root.walk();
 
-    // Walk program-level children: decorator and class_declaration are siblings
-    // under export_statement (or directly under program for non-exported classes).
+    // 遍历 program 级子节点：decorator 和 class_declaration 是兄弟节点，
+    // 位于 export_statement 下（或直接在 program 下，对于非导出类）。
     let mut stack: Vec<tree_sitter::Node<'_>> = root.children(&mut cursor).collect();
     stack.reverse();
 
     while let Some(node) = stack.pop() {
         match node.kind() {
             "export_statement" => {
-                // Walk children of export_statement looking for decorator + class pairs
+                // 遍历 export_statement 的子节点，查找 decorator + class 对
                 let mut ec = node.walk();
                 let export_children: Vec<_> = node.children(&mut ec).collect();
                 let mut deco_injectable = false;
@@ -472,7 +472,7 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
                             let line = ec_node.start_position().row + 1;
 
                             if deco_injectable {
-                                // Mark the class as injectable
+                                // 将类标记为 injectable
                                 let marker_name = format!("<Injectable:{}>", class_name);
                                 let src_id = find_or_create_di_node(graph, &class_name, file, line);
                                 let tgt_id = find_or_create_di_node(graph, &marker_name, file, line);
@@ -494,7 +494,7 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
                                 }
                             }
 
-                            // Extract constructor dependencies
+                            // 提取构造函数依赖
                             added += extract_ts_constructor_deps_v2(
                                 ec_node, source, &class_name, file, graph, added,
                             );
@@ -503,8 +503,8 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
                 }
             }
             "class_declaration" => {
-                // Non-exported class with possible sibling decorator
-                // Walk backwards through siblings to find decorator
+                // 非导出类，可能有兄弟 decorator
+                // 向前遍历兄弟节点查找 decorator
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let class_name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
 
@@ -520,8 +520,8 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
     added
 }
 
-/// Extract constructor parameter dependencies from a class_declaration node.
-/// Returns the number of new edges added.
+/// 从 class_declaration 节点提取构造函数参数依赖。
+/// 返回新增边的数量。
 pub(crate) fn extract_ts_constructor_deps_v2(
     class_node: &tree_sitter::Node,
     source: &str,
@@ -535,7 +535,7 @@ pub(crate) fn extract_ts_constructor_deps_v2(
         if child.kind() == "class_body" {
             let mut bc = child.walk();
             for member in child.children(&mut bc) {
-                // Constructor is a method_definition with property_identifier "constructor"
+                // 构造函数是 property_identifier 为 "constructor" 的 method_definition
                 if member.kind() == "method_definition" {
                     let is_constructor = member.children(&mut member.walk()).any(|c| {
                         c.kind() == "property_identifier"
@@ -548,7 +548,7 @@ pub(crate) fn extract_ts_constructor_deps_v2(
                                 if param.kind() == "required_parameter"
                                     || param.kind() == "optional_parameter"
                                 {
-                                    // Get type from type_annotation child
+                                    // 从 type_annotation 子节点获取类型
                                     let param_type = extract_ts_param_type_v2(&param, source);
                                     if !param_type.is_empty() {
                                         let line = param.start_position().row + 1;
@@ -624,8 +624,8 @@ pub(crate) fn detect_python_dynamic_import(graph: &mut Graph, file: &str, source
         if node.kind() == "call" {
             if let Some(func) = node.child_by_field_name("function") {
                 let func_name = func.utf8_text(source.as_bytes()).unwrap_or("");
-                // __import__(name) — built-in dynamic import
-                // importlib.import_module(name) / import_module(name) — stdlib dynamic import
+                // __import__(name) — 内置动态导入
+                // importlib.import_module(name) / import_module(name) — 标准库动态导入
                 let is_dyn_import = func_name == "__import__"
                     || func_name.ends_with(".import_module")
                     || func_name == "import_module";
@@ -634,7 +634,7 @@ pub(crate) fn detect_python_dynamic_import(graph: &mut Graph, file: &str, source
                     let line = node.start_position().row + 1;
                     let enclosing = find_py_enclosing_func(&node, source, file);
 
-                    // Find the module name argument (first string or variable)
+                    // 查找模块名参数（第一个字符串或变量）
                     let module_arg = if let Some(args) = node.child_by_field_name("arguments") {
                         let mut ac = args.walk();
                         let children: Vec<_> = args.children(&mut ac).collect();
@@ -690,10 +690,10 @@ pub(crate) fn detect_js_ts_dynamic_import(graph: &mut Graph, file: &str, source:
             if let Some(func) = node.child_by_field_name("function") {
                 let func_text = func.utf8_text(source.as_bytes()).unwrap_or("");
 
-                // import(variable) — the function node is the "import" keyword
+                // import(variable) — function 节点是 "import" 关键字
                 let is_dyn_import_keyword = func_text == "import";
 
-                // require(expr) where expr is NOT a string literal
+                // require(expr) 其中 expr 不是字符串字面量
                 let is_dyn_require = func_text == "require"
                     && !is_first_arg_string_literal(&node, source);
 
@@ -726,7 +726,7 @@ pub(crate) fn detect_js_ts_dynamic_import(graph: &mut Graph, file: &str, source:
     added
 }
 
-/// Check if a call_expression's first argument is a string literal.
+/// 检查 call_expression 的第一个参数是否为字符串字面量。
 pub(crate) fn detect_python_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
 
@@ -800,7 +800,7 @@ pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> 
             "call_expression" => {
                 if let Some(func) = node.child_by_field_name("function") {
                     let func_text = func.utf8_text(source.as_bytes()).unwrap_or("");
-                    // eval(code) — direct eval
+                    // eval(code) — 直接 eval
                     if func_text == "eval" {
                         let line = node.start_position().row + 1;
                         let enclosing = find_js_enclosing_func(&node, source, file);
@@ -821,7 +821,7 @@ pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> 
                 }
             }
             "new_expression" => {
-                // new Function(body) — dynamic code generation
+                // new Function(body) — 动态代码生成
                 if let Some(ctor) = node.child_by_field_name("constructor") {
                     let ctor_text = ctor.utf8_text(source.as_bytes()).unwrap_or("");
                     if ctor_text == "Function" {
@@ -856,9 +856,9 @@ pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> 
 
 // ═══════════════════════════════════════════════════════════════
 pub(crate) fn detect_cs_di(graph: &mut Graph, file: &str, source: &str) -> usize {
-    // C# DI patterns are primarily [FromServices] / constructor injection.
-    // Static tree-sitter resolution is limited; we do a line-based scan
-    // for Assembly.Load / Type.GetType / Activator.CreateInstance.
+    // C# DI 模式主要是 [FromServices] / 构造函数注入。
+    // 静态 tree-sitter 解析能力有限；我们采用基于行的扫描
+    // 来查找 Assembly.Load / Type.GetType / Activator.CreateInstance。
     let mut added = 0usize;
     for (line_idx, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -950,7 +950,7 @@ pub(crate) fn detect_cs_cross_lang(graph: &mut Graph, file: &str, source: &str) 
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Ruby: send, method_missing, eval, autoload, system
+// Ruby：send、method_missing、eval、autoload、system
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn detect_ruby_di(graph: &mut Graph, file: &str, source: &str) -> usize {
@@ -1039,7 +1039,7 @@ pub(crate) fn detect_ruby_cross_lang(graph: &mut Graph, file: &str, source: &str
 }
 
 // ═══════════════════════════════════════════════════════════════
-// PHP: ReflectionClass, eval, require_once(expr), exec
+// PHP：ReflectionClass、eval、require_once(expr)、exec
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn detect_php_di(graph: &mut Graph, file: &str, source: &str) -> usize {
@@ -1126,7 +1126,7 @@ pub(crate) fn detect_php_cross_lang(graph: &mut Graph, file: &str, source: &str)
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Go: reflect
+// Go：reflect
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn detect_go_di(graph: &mut Graph, file: &str, source: &str) -> usize {
@@ -1151,7 +1151,7 @@ pub(crate) fn detect_go_di(graph: &mut Graph, file: &str, source: &str) -> usize
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Kotlin: @Inject, Koin, ProcessBuilder
+// Kotlin：@Inject、Koin、ProcessBuilder
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn detect_kotlin_di(graph: &mut Graph, file: &str, source: &str) -> usize {
@@ -1194,7 +1194,7 @@ pub(crate) fn detect_kotlin_cross_lang(graph: &mut Graph, file: &str, source: &s
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Rust: dynamic-code eval (proc macros)
+// Rust：动态代码 eval（proc macros）
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn detect_rust_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
@@ -1234,12 +1234,12 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
     let mut cursor = root.walk();
     let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
 
-    // FFI loaders → <cross-lang:ffi>
+    // FFI 加载器 → <cross-lang:ffi>
     let ffi_loaders: HashSet<&str> = [
         "CDLL", "cdll", "WinDLL", "windll", "dlopen",
     ].iter().cloned().collect();
 
-    // HTTP clients → <cross-lang:http>
+    // HTTP 客户端 → <cross-lang:http>
     let http_methods: HashSet<&str> = [
         "get", "post", "put", "delete", "patch", "head", "options", "request",
     ].iter().cloned().collect();
@@ -1253,14 +1253,14 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                 let mut marker = String::new();
                 let mut is_cross = false;
 
-                // subprocess.Popen / os.system / etc.
+                // subprocess.Popen / os.system 等
                 if func_name.ends_with(".Popen") || func_name.ends_with(".run")
                     || func_name.ends_with(".call") || func_name.ends_with(".check_output")
                 {
                     marker = format!("<cross-lang:subprocess:{}>", func_name);
                     is_cross = true;
                 } else if func_name == "system" || func_name == "popen" || func_name == "exec_command" {
-                    // os.system / os.popen / etc. — need attribute check
+                    // os.system / os.popen 等 — 需要检查 attribute
                     if func.kind() == "attribute" {
                         marker = format!("<cross-lang:subprocess:{}>", func_name);
                         is_cross = true;
@@ -1273,7 +1273,7 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                         marker = format!("<cross-lang:ffi:{}>", func_name);
                         is_cross = true;
                     } else {
-                        // Check for HTTP client: requests.get, httpx.post, etc.
+                        // 检查 HTTP 客户端：requests.get、httpx.post 等
                         let parts: Vec<&str> = func_name.rsplitn(2, '.').collect();
                         if parts.len() == 2 {
                             let module = parts[1];
@@ -1297,7 +1297,7 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                     if graph.get_edge(&edge_id).is_none() {
                         graph.add_edge_unchecked(Edge {
                             id: edge_id, source: src_id, target: tgt_id,
-                            kind: EdgeKind::Calls, coupling_depth: 4, // L4: cross-lang boundary
+                            kind: EdgeKind::Calls, coupling_depth: 4, // L4：跨语言边界
                             cross_file: true, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None,
                         });
                         added += 1;
@@ -1313,7 +1313,7 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
     added
 }
 
-// ── JS/TS: child_process.exec/spawn, fetch, axios ──
+// ── JS/TS：child_process.exec/spawn、fetch、axios ──
 
 pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
@@ -1340,17 +1340,17 @@ pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                 let enclosing = find_js_enclosing_func(&node, source, file);
                 let mut marker = String::new();
 
-                // fetch() — global HTTP bridge (identifier, not member_expression)
+                // fetch() — 全局 HTTP 桥接（identifier，非 member_expression）
                 if func_text == "fetch" {
                     marker = "<cross-lang:http:fetch>".to_string();
                 }
-                // exec() / spawn() — may be destructured from child_process
+                // exec() / spawn() — 可能从 child_process 解构而来
                 else if func_text == "exec" || func_text == "spawn"
                     || func_text == "execSync" || func_text == "fork"
                 {
                     marker = format!("<cross-lang:subprocess:{}>", func_text);
                 }
-                // member_expression patterns: child_process.exec, axios.get, etc.
+                // member_expression 模式：child_process.exec、axios.get 等
                 else if func.kind() == "member_expression" {
                     if func_text.ends_with(".exec") || func_text.ends_with(".spawn")
                         || func_text.ends_with(".execSync") || func_text.ends_with(".fork")
@@ -1395,7 +1395,7 @@ pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) 
     added
 }
 
-// ── Java: Runtime.exec, ProcessBuilder, HttpClient ──
+// ── Java：Runtime.exec、ProcessBuilder、HttpClient ──
 
 pub(crate) fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
@@ -1446,7 +1446,7 @@ pub(crate) fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str
     added
 }
 
-// ── Go: exec.Command, os/exec, net/http ──
+// ── Go：exec.Command、os/exec、net/http ──
 
 pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
@@ -1471,7 +1471,7 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                 let line = node.start_position().row + 1;
                 let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
 
-                // exec.Command / exec.CommandContext → subprocess
+                // exec.Command / exec.CommandContext → 子进程
                 let is_exec = func_text == "exec.Command" || func_text == "exec.CommandContext"
                     || func_text.ends_with(".Command") || func_text.ends_with(".CommandContext");
                 if is_exec {
@@ -1488,7 +1488,7 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                     }
                 }
 
-                // http.Get / http.Post / http.NewRequest — HTTP bridge
+                // http.Get / http.Post / http.NewRequest — HTTP 桥接
                 if func.kind() == "selector_expression"
                     && (func_text.ends_with(".Get") || func_text.ends_with(".Post")
                         || func_text.ends_with(".Do") || func_text.ends_with(".NewRequest"))

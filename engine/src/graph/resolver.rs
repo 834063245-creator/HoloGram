@@ -7,9 +7,9 @@ use std::sync::OnceLock;
 use super::{Edge, Graph};
 use crate::engine::GRAMMAR_LOADER;
 
-/// Source-code file extensions, derived dynamically from GRAMMAR_LOADER.
-/// Automatically includes newly installed grammar DLLs without code changes.
-/// Cached via OnceLock — `supported_extensions()` is only called once.
+/// 源码文件扩展名，从 GRAMMAR_LOADER 动态派生。
+/// 自动包含新安装的语法 DLL，无需修改代码。
+/// 通过 OnceLock 缓存 — `supported_extensions()` 只调用一次。
 fn code_extensions() -> &'static [String] {
     static EXT: OnceLock<Vec<String>> = OnceLock::new();
     EXT.get_or_init(|| GRAMMAR_LOADER.supported_extensions())
@@ -19,13 +19,13 @@ fn is_common_extension(s: &str) -> bool {
     code_extensions().iter().any(|ext| ext == s)
 }
 
-/// Extract the file stem: filename without extension.
+/// 提取文件名主干：不含扩展名的文件名。
 ///
-/// Examples:
+/// 示例：
 ///   "a.rs"        → "a"
 ///   "app/models.py" → "models"
 ///   "foo.bar.baz.ts" → "baz"
-///   "django.http.HttpResponse" → "HttpResponse"  (last segment not an extension)
+///   "django.http.HttpResponse" → "HttpResponse"  （最后一段不是扩展名）
 fn file_stem(name: &str) -> String {
     let parts: Vec<&str> = name.rsplit(&['/', '\\', '.']).collect();
     if parts.len() >= 2 && is_common_extension(parts[0]) {
@@ -35,28 +35,28 @@ fn file_stem(name: &str) -> String {
     }
 }
 
-/// Cross-file edge resolver.
+/// 跨文件边解析器。
 ///
-/// After all files are parsed and merged, resolves edge targets by matching
-/// short names / file stems against full node IDs.
+/// 在所有文件解析和合并完成后，通过将短名称/文件主干
+/// 与完整 node ID 匹配来解析边目标。
 ///
-/// Resolution strategies (tried in order):
-///   1. Exact ID match (source/target already a valid node key)
-///   2. Short-name match  — "fn_a" → "a.rs.fn_a"
-///   3. File-stem match   — "b"    → "b.rs"
-///   4. Multi-candidate qualified match (e.g. "models.User" vs N "User"s)
+/// 解析策略（按顺序尝试）：
+///   1. 精确 ID 匹配（source/target 已是有效的 node 键）
+///   2. 短名称匹配 — "fn_a" → "a.rs.fn_a"
+///   3. 文件主干匹配 — "b"    → "b.rs"
+///   4. 多候选项限定匹配（如 "models.User" 对比 N 个 "User"）
 ///
-/// Edges that cannot be resolved are logged and then removed as orphans.
+/// 无法解析的边将被记录日志，然后作为孤儿边移除。
 pub struct CrossFileResolver;
 
 impl CrossFileResolver {
-    /// Resolve all cross-file edges in the graph.
-    /// Returns count of resolved edges (including orphan cleanups).
+    /// 解析图中所有跨文件边。
+    /// 返回已解析边的数量（包括孤儿边清理）。
     pub fn resolve(graph: &mut Graph) -> usize {
-        // ── Index 1: short name → node IDs ──
+        // ── 索引 1：短名称 → node ID ──
         // "User" → ["app.models.User", "auth.models.User"]
         let mut name_index: HashMap<String, Vec<String>> = HashMap::new();
-        // ── Index 2: file stem → node IDs (for import resolution) ──
+        // ── 索引 2：文件主干 → node ID（用于 import 解析）──
         // "a" → ["a.rs"], "models" → ["app/models.py"]
         let mut stem_index: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -64,7 +64,7 @@ impl CrossFileResolver {
             let short = short_name(&node.name);
             name_index.entry(short.clone()).or_default().push(id.clone());
 
-            // File / Module nodes: also index by stem for import edges
+            // File / Module 节点：也按主干索引以支持 import 边
             if node.kind == super::node::NodeKind::File
                 || node.kind == super::node::NodeKind::Module
             {
@@ -81,24 +81,24 @@ impl CrossFileResolver {
         let mut to_remove: Vec<String> = Vec::new();
         let mut ambiguous_edges: Vec<String> = Vec::new();
 
-        // ── Diagnostic: categorize unresolved edges ──
-        let mut diag_no_short: usize = 0;        // short_name not in any index
-        let mut diag_bare_external: usize = 0;   // bare name, no candidates at all
-        let mut diag_dotted_method: usize = 0;   // contains dot (obj.method style)
-        let mut diag_source_missing: usize = 0;  // source not found
-        let mut diag_bare_multi: usize = 0;      // bare name, candidates exist but best_qualified_match rejects (match_len<2)
-        let mut diag_dotted_no_suffix: usize = 0;// dotted name, short exists but suffix mismatch
+        // ── 诊断：分类未解析的边 ──
+        let mut diag_no_short: usize = 0;        // short_name 不在任何索引中
+        let mut diag_bare_external: usize = 0;   // 裸名，完全没有候选项
+        let mut diag_dotted_method: usize = 0;   // 包含点号（obj.method 风格）
+        let mut diag_source_missing: usize = 0;  // source 未找到
+        let mut diag_bare_multi: usize = 0;      // 裸名，候选项存在但 best_qualified_match 拒绝（match_len<2）
+        let mut diag_dotted_no_suffix: usize = 0;// 点分名，短名存在但后缀不匹配
         let mut diag_by_kind: HashMap<String, usize> = HashMap::new();
 
         for (eid, edge) in &graph.edges {
-            // ponytail: only resolve cross-file edges. Intra-file edges (Usage, Writes,
-            // same-file Calls) have bare-name targets that aren't node IDs — they're
-            // valid as-is and must not be orphan-cleaned.
+            // ponytail: 仅解析跨文件边。文件内边（Usage、Writes、
+            // 同文件 Calls）的 target 是裸名而非 node ID — 它们
+            // 原样有效，不能被作为孤儿边清理。
             if !edge.cross_file {
                 continue;
             }
-            // Try to resolve source if not in graph.
-            // Use edge.source itself to infer the source language for filtering.
+            // 尝试解析 source（如果不在图中）。
+            // 使用 edge.source 本身推断 source 语言用于过滤。
             let src_lang = infer_language(&edge.source);
             let src_id = if graph.nodes.contains_key(&edge.source) {
                 Some(edge.source.clone())
@@ -106,8 +106,8 @@ impl CrossFileResolver {
                 resolve_name(&edge.source, &name_index, &stem_index, graph, src_lang)
             };
 
-            // Try to resolve target if not in graph.
-            // Use the source's language to prefer same-language targets.
+            // 尝试解析 target（如果不在图中）。
+            // 使用 source 的语言来优先选择同语言的 target。
             let tgt_lang = src_id.as_ref()
                 .map(|id| infer_language(id))
                 .flatten()
@@ -123,7 +123,7 @@ impl CrossFileResolver {
 
             if let (Some(s), Some(t)) = (src_id, tgt_id) {
                 if s != edge.source || t != edge.target {
-                    // Edge targets changed — create resolved version
+                    // 边目标已改变 — 创建解析后的版本
                     let mut new_edge = edge.clone();
                     new_edge.id = format!("{}_resolved", edge.id);
                     new_edge.source = s;
@@ -135,7 +135,7 @@ impl CrossFileResolver {
                 }
             } else {
                 unresolved_count += 1;
-                // ── categorize failure ──
+                // ── 分类失败原因 ──
                 *diag_by_kind.entry(format!("{:?}", edge.kind)).or_default() += 1;
                 if !src_ok && !graph.nodes.contains_key(&edge.source) {
                     diag_source_missing += 1;
@@ -150,11 +150,11 @@ impl CrossFileResolver {
                         if has_dot { diag_dotted_method += 1; }
                         if !has_dot { diag_bare_external += 1; }
                     } else if !has_dot {
-                        diag_bare_multi += 1; // short exists, but bare → best_qualified_match rejects
+                        diag_bare_multi += 1; // 短名存在，但裸名 → best_qualified_match 拒绝
                     } else {
-                        diag_dotted_no_suffix += 1; // short exists, dotted, but suffix mismatch
+                        diag_dotted_no_suffix += 1; // 短名存在，点分名，但后缀不匹配
                     }
-                    // Candidates existed but couldn't be uniquely resolved — mark as ambiguous
+                    // 候选项存在但无法唯一解析 — 标记为歧义
                     if in_index || in_stem {
                         ambiguous_edges.push(eid.clone());
                     }
@@ -169,14 +169,14 @@ impl CrossFileResolver {
             }
         }
 
-        // Print diagnostic summary
+        // 打印诊断摘要
         if unresolved_count > 0 {
             eprintln!(
                 "[cross-file diag] unresolved={} | no_short={} (dotted={}, bare_ext={}) | bare_multi={} | dotted_no_suffix={} | src_miss={}",
                 unresolved_count, diag_no_short, diag_dotted_method, diag_bare_external,
                 diag_bare_multi, diag_dotted_no_suffix, diag_source_missing
             );
-            // Top 5 edge kinds among unresolved
+            // 未解析边中前 5 种 edge kind
             let mut kind_counts: Vec<(String, usize)> = diag_by_kind.into_iter().collect();
             kind_counts.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
             let top_kinds: Vec<String> = kind_counts.iter().take(5)
@@ -185,7 +185,7 @@ impl CrossFileResolver {
             eprintln!("[cross-file diag] by kind: {}", top_kinds.join(", "));
         }
 
-        // Remove old unresolved edges, add resolved ones
+        // 移除旧的未解析边，添加已解析的边
         for eid in &to_remove {
             graph.remove_edge(eid);
         }
@@ -195,7 +195,7 @@ impl CrossFileResolver {
             }
         }
 
-        // Mark ambiguous edges for user/LSP resolution instead of deleting them.
+        // 将歧义边标记为待用户/LSP 解析，而非删除。
         for eid in &ambiguous_edges {
             if let Some(edge) = graph.edges.get_mut(eid) {
                 edge.metadata = Some(serde_json::json!({
@@ -205,10 +205,10 @@ impl CrossFileResolver {
             }
         }
 
-        // Cleanup: remove cross-file edges with non-existent endpoints.
-        // Intra-file edges (Usage, Writes, same-file Calls) have bare-name
-        // targets that aren't node IDs — they're valid as-is.
-        // Ambiguous edges (marked above) are preserved for user/LSP resolution.
+        // 清理：移除端点不存在的跨文件边。
+        // 文件内边（Usage、Writes、同文件 Calls）的 target 是裸名
+        // 而非 node ID — 它们原样有效。
+        // 歧义边（上面标记的）保留供用户/LSP 解析。
         let orphan_edges: Vec<String> = graph
             .edges
             .iter()
@@ -219,7 +219,7 @@ impl CrossFileResolver {
                 if graph.nodes.contains_key(&e.source) && graph.nodes.contains_key(&e.target) {
                     return false;
                 }
-                // Preserve ambiguous edges
+                // 保留歧义边
                 !e.metadata.as_ref()
                     .and_then(|m| m.get("ambiguous"))
                     .and_then(|v| v.as_bool())
@@ -255,24 +255,24 @@ impl CrossFileResolver {
             }
         }
 
-        resolved // NOTE: orphans are NOT counted as resolved — they're just stale cleanup
+        resolved // 注意：孤儿边不计入已解析 — 它们只是过时清理
     }
 }
 
-/// Get the short name from a full qualified name.
+/// 从完整限定名中获取短名称。
 ///
-/// Strips known file extensions first so that file nodes are indexable
-/// by their logical module name (not their extension).
+/// 先剥离已知的文件扩展名，使文件节点可以
+/// 按逻辑模块名索引（而非按扩展名）。
 ///
 /// "django.http.response.HttpResponse" → "HttpResponse"
 /// "a.rs"                               → "a"
 /// "app/models.py"                      → "models"
 /// "app.views.index"                    → "index"
 fn short_name(full: &str) -> String {
-    // If the last dot-segment looks like a file extension, strip it first
+    // 如果最后一段点分路径看起来像文件扩展名，先剥离它
     let last = full.rsplit('.').next().unwrap_or(full);
     if is_common_extension(last) {
-        // Strip ".ext" and recompute — also split on path separators
+        // 剥离 ".ext" 并重新计算 — 同时按路径分隔符分割
         if let Some(stripped) = full.strip_suffix(&format!(".{}", last)) {
             return stripped
                 .rsplit(&['.', '/', '\\'])
@@ -284,18 +284,18 @@ fn short_name(full: &str) -> String {
     full.rsplit('.').next().unwrap_or(full).to_string()
 }
 
-/// Infer the language family from a node ID or file path.
+/// 从 node ID 或文件路径推断语言族。
 ///
-/// Scans dot-separated segments for known file extensions and returns
-/// the language family as a static string. Used to filter cross-file
-/// resolution candidates so that e.g. a TypeScript function's call to
-/// `clear` resolves to another TS `clear`, not a Rust `clear`.
+/// 扫描点分隔的段落以查找已知文件扩展名，返回
+/// 语言族静态字符串。用于过滤跨文件解析候选项，
+/// 使得例如 TypeScript 函数对 `clear` 的调用
+/// 解析到另一个 TS 的 `clear`，而非 Rust 的 `clear`。
 ///
-/// Node IDs encode the file extension as a segment:
+/// Node ID 将文件扩展名编码为一段：
 ///   "D:...events.ts.EventBus.clear" → Some("typescript")
 ///   "D:...graph.rs.Graph.clear"     → Some("rust")
 ///
-/// Paths work the same way:
+/// 路径同理：
 ///   "src-ui/src/ui/events.ts"       → Some("typescript")
 ///   "engine/src/graph/graph.rs"     → Some("rust")
 pub fn infer_language(id_or_path: &str) -> Option<&'static str> {
@@ -329,9 +329,9 @@ pub fn infer_language(id_or_path: &str) -> Option<&'static str> {
     None
 }
 
-/// Filter candidates to those matching the given language, if known.
-/// Returns a Vec of references to the matching candidates.
-/// If `lang` is None or no same-language candidates exist, returns all candidates.
+/// 将候选项过滤为匹配给定语言的候选项（如果已知）。
+/// 返回匹配候选项的引用 Vec。
+/// 如果 `lang` 为 None 或没有同语言候选项，则返回所有候选项。
 fn filter_by_language<'a>(
     candidates: &'a [String],
     lang: Option<&str>,
@@ -344,7 +344,7 @@ fn filter_by_language<'a>(
     if same_lang.is_empty() { all } else { same_lang }
 }
 
-/// Try to resolve a name reference to an actual node ID.
+/// 尝试将名称引用解析为实际的 node ID。
 fn resolve_name(
     name: &str,
     name_index: &HashMap<String, Vec<String>>,
@@ -352,25 +352,25 @@ fn resolve_name(
     graph: &Graph,
     source_lang: Option<&str>,
 ) -> Option<String> {
-    // ── Strategy 1: exact match ──
+    // ── 策略 1：精确匹配 ──
     if graph.nodes.contains_key(name) {
         return Some(name.to_string());
     }
 
-    // ── Strategy 2: short-name match ──
-    // Works for bare fn/class names: "fn_a" → "a.rs.fn_a"
+    // ── 策略 2：短名称匹配 ──
+    // 适用于裸 fn/class 名："fn_a" → "a.rs.fn_a"
     let short = short_name(name);
     if let Some(candidates) = name_index.get(&short) {
         let filtered = filter_by_language(candidates, source_lang);
         if filtered.len() == 1 && !name.contains('.') {
             return Some(filtered[0].clone());
         }
-        // Multiple candidates — pick the most qualified (longest) match
+        // 多候选项 — 选择限定程度最高（最长）的匹配
         if let Some(c) = best_qualified_match(name, &filtered) {
             return Some(c);
         }
-        // ponytail: bare names can't suffix-match (match_len < 2).
-        // Fall back to heuristic: prefer Function/Class, then shortest path.
+        // ponytail: 裸名无法后缀匹配（match_len < 2）。
+        // 回退到启发式：优先 Function/Class，然后最短路径。
         if !name.contains('.') {
             if let Some(c) = best_bare_match(&filtered, graph, source_lang) {
                 return Some(c);
@@ -378,8 +378,8 @@ fn resolve_name(
         }
     }
 
-    // ── Strategy 3: file-stem match ──
-    // Works for bare module imports: "b" → "b.rs", "os" → "os.py"
+    // ── 策略 3：文件主干匹配 ──
+    // 适用于裸模块导入："b" → "b.rs"、"os" → "os.py"
     let stem = file_stem(name);
     if stem != short {
         if let Some(candidates) = stem_index.get(&stem) {
@@ -390,7 +390,7 @@ fn resolve_name(
             if let Some(c) = best_qualified_match(name, &filtered) {
                 return Some(c);
             }
-            // Same bare-name fallback for stem matches
+            // 文件主干匹配的裸名回退
             if !name.contains('.') {
                 if let Some(c) = best_bare_match(&filtered, graph, source_lang) {
                     return Some(c);
@@ -399,8 +399,8 @@ fn resolve_name(
         }
     }
 
-    // ── Strategy 4: normalize path separators ──
-    // Handles "::" in Rust paths and mixed "./\" in import targets
+    // ── 策略 4：规范化路径分隔符 ──
+    // 处理 Rust 路径中的 "::" 和 import 目标中混合的 "./\"
     let normalized = name.replace("::", ".").replace(['\\', '/'], ".");
     if normalized != *name {
         let short_norm = short_name(&normalized);
@@ -415,8 +415,8 @@ fn resolve_name(
         }
     }
 
-    // ── Strategy 5: dotted import → try appending file extensions ──
-    // "app.models" → checks for "app.models.py", "utils.helpers" → "utils.helpers.py"
+    // ── 策略 5：点分 import → 尝试追加文件扩展名 ──
+    // "app.models" → 检查 "app.models.py"、"utils.helpers" → "utils.helpers.py"
     if name.contains('.') {
         for ext in code_extensions() {
             let with_ext = format!("{}.{}", name, ext);
@@ -426,10 +426,10 @@ fn resolve_name(
         }
     }
 
-    // ── Strategy 6: progressive strip for obj.method()-style calls ──
-    // "self.client.get" → try "client.get" → try bare "get"
-    // ponytail: common receiver prefixes (self, this, cls) are stripped;
-    // the remaining bare name falls through to best_bare_match.
+    // ── 策略 6：对 obj.method() 风格调用的渐进剥离 ──
+    // "self.client.get" → 尝试 "client.get" → 尝试裸名 "get"
+    // ponytail: 剥离常见的接收者前缀（self、this、cls）；
+    // 剩余裸名回退到 best_bare_match。
     if name.contains('.') {
         let mut stripped = name.to_string();
         while let Some(dot_pos) = stripped.find('.') {
@@ -455,9 +455,9 @@ fn resolve_name(
     None
 }
 
-/// Pick the best candidate when multiple nodes share the same short name.
-/// "models.User" vs candidates ["auth.models.User", "shop.models.User"]
-/// → matches suffix-wise against "auth.models.User" (both end with "models.User").
+/// 当多个节点共享同一短名称时选择最佳候选项。
+/// "models.User" 对比候选项 ["auth.models.User", "shop.models.User"]
+/// → 按后缀匹配 "auth.models.User"（两者都以 "models.User" 结尾）。
 fn best_qualified_match(name: &str, candidates: &[&String]) -> Option<String> {
     let name_parts: Vec<&str> = name.rsplit('.').collect();
     let mut best: Option<&&String> = None;
@@ -467,7 +467,7 @@ fn best_qualified_match(name: &str, candidates: &[&String]) -> Option<String> {
         let cand_parts: Vec<&str> = candidate.rsplit('.').collect();
         let match_len = name_parts.len().min(cand_parts.len());
         if match_len >= 2 && name_parts[..match_len] == cand_parts[..match_len] {
-            let score = cand_parts.len(); // longer full path = more qualified
+            let score = cand_parts.len(); // 完整路径越长 = 限定程度越高
             if score > best_score {
                 best_score = score;
                 best = Some(candidate);
@@ -478,22 +478,22 @@ fn best_qualified_match(name: &str, candidates: &[&String]) -> Option<String> {
     best.map(|c| (*c).clone())
 }
 
-/// Fallback for bare names with multiple candidates.
+/// 裸名多候选项的回退策略。
 ///
-/// When the query is a single bare name (e.g., "render") and multiple
-/// nodes share that short name, suffix matching is impossible. This
-/// heuristic picks the best candidate by:
-///   1. Prefer same-language candidates (+10000 bonus)
-///   2. Prefer Function over Class over other node kinds
-///   3. Prefer shorter paths (less nested = more likely to be the intended target)
+/// 当查询是单个裸名（如 "render"）且多个节点
+/// 共享该短名称时，后缀匹配不可行。此启发式
+/// 按以下规则选择最佳候选项：
+///   1. 优先同语言候选项（+10000 加分）
+///   2. 优先 Function，然后 Class，再其他 NodeKind
+///   3. 优先较短路径（嵌套越少 = 越可能是目标）
 ///
-/// ponytail: this is a heuristic, not a guarantee. For precise call resolution,
-/// use hologram_resolve_call (LSP-based) on individual edges.
+/// ponytail: 这是启发式而非保证。精确的 call 解析
+/// 请对单条边使用 hologram_resolve_call（基于 LSP）。
 fn best_bare_match(candidates: &[&String], graph: &Graph, source_lang: Option<&str>) -> Option<String> {
     use super::node::NodeKind;
 
-    // Score: lang_match * 100000 + kind_prio * 1000 + path depth
-    // Same-language candidates always outrank cross-language ones.
+    // 评分：lang_match * 100000 + kind_prio * 1000 + 路径深度
+    // 同语言候选项始终优先于跨语言候选项。
     let scored: Vec<(&&String, usize)> = candidates
         .iter()
         .filter_map(|c| {
@@ -541,7 +541,7 @@ mod tests {
     use super::*;
     use crate::graph::{EdgeKind, Node, NodeKind};
 
-    // ── short_name / file_stem unit tests ──
+    // ── short_name / file_stem 单元测试 ──
 
     #[test]
     fn test_short_name() {
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn test_short_name_strips_file_extensions() {
-        // File nodes should index by module name, not extension
+        // File 节点应按模块名索引，而非扩展名
         assert_eq!(short_name("a.rs"), "a");
         assert_eq!(short_name("app.models.py"), "models");
         assert_eq!(short_name("src/lib.go"), "lib");
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn test_short_name_non_extension_unchanged() {
-        // Non-extension last segments should still work
+        // 非扩展名的最后一段应仍然有效
         assert_eq!(short_name("fn_a"), "fn_a");
         assert_eq!(short_name("User"), "User");
         assert_eq!(short_name("index"), "index");
@@ -577,10 +577,10 @@ mod tests {
         assert_eq!(file_stem("simple"), "simple");
     }
 
-    // ── Resolver tests ──
+    // ── 解析器测试 ──
 
-    // ponytail: helper to create cross-file edges for tests.
-    // CrossFileResolver only processes edges with cross_file=true.
+    // ponytail: 用于创建跨文件边的测试辅助函数。
+    // CrossFileResolver 仅处理 cross_file=true 的边。
     fn cross_edge(id: &str, src: &str, tgt: &str, kind: EdgeKind) -> Edge {
         let mut e = Edge::new(id, src, tgt, kind);
         e.cross_file = true;
@@ -591,17 +591,17 @@ mod tests {
     fn test_resolve_cross_file_calls() {
         let mut g = Graph::new();
 
-        // File A: defines User
+        // 文件 A：定义 User
         let mut user = Node::new("models.User", "User", NodeKind::Symbol);
         user.location = Some("app/models.py".into());
         g.add_node(user);
 
-        // File B: imports User, defines index
+        // 文件 B：import User，定义 index
         let mut index = Node::new("views.index", "index", NodeKind::Symbol);
         index.location = Some("app/views.py".into());
         g.add_node(index);
 
-        // Edge: index → "User" (short name, needs resolution)
+        // 边：index → "User"（短名称，需要解析）
         let mut e = Edge::new("e1", "views.index", "User", EdgeKind::Calls);
         e.cross_file = true;
         g.add_edge_unchecked(e);
@@ -617,7 +617,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("lib.fn_a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("lib.fn_b", "fn_b", NodeKind::Symbol));
-        // Both source and target need resolution
+        // source 和 target 都需要解析
         g.add_edge_unchecked(cross_edge("e1", "fn_a", "fn_b", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
@@ -630,15 +630,15 @@ mod tests {
     #[test]
     fn test_resolve_multiple_candidates_best_match() {
         let mut g = Graph::new();
-        // Two modules define a "User" class
+        // 两个模块都定义了 "User" 类
         g.add_node(Node::new("auth.models.User", "User", NodeKind::Symbol));
         g.add_node(Node::new("shop.models.User", "User", NodeKind::Symbol));
-        // Reference uses qualified name "models.User"
+        // 引用使用限定名 "models.User"
         g.add_node(Node::new("views.index", "index", NodeKind::Symbol));
         g.add_edge_unchecked(cross_edge("e1", "views.index", "models.User", EdgeKind::Calls));
 
         let _resolved = CrossFileResolver::resolve(&mut g);
-        // Should resolve to auth.models.User (first registered, or best match)
+        // 应解析为 auth.models.User（先注册的，或最佳匹配）
         let e = g.get_edge("e1_resolved");
         assert!(e.is_some(), "should resolve even with ambiguity");
     }
@@ -648,7 +648,7 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
         g.add_node(Node::new("b", "fn_b", NodeKind::Symbol));
-        // Edge already has correct IDs
+        // 边已有正确的 ID
         g.add_edge_unchecked(cross_edge("e1", "a", "b", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
@@ -660,11 +660,11 @@ mod tests {
     fn test_orphan_edge_cleanup() {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
-        // Edge to non-existent node
+        // 指向不存在节点的边
         g.add_edge_unchecked(cross_edge("e1", "a", "nonexistent", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // Orphan edge should be cleaned, but NOT counted as resolved
+        // 孤儿边应被清理，但不计入已解析
         assert!(g.get_edge("e1").is_none(), "orphan edge should be removed");
         assert_eq!(resolved, 0, "orphan cleanup does not count as resolved");
     }
@@ -673,22 +673,22 @@ mod tests {
     fn test_resolve_no_name_match() {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
-        // Edge to a name that doesn't match anything
+        // 指向不匹配任何内容的名称的边
         g.add_edge_unchecked(cross_edge("e1", "a", "totally_unknown_name", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // Should be cleaned as orphan
+        // 应作为孤儿边清理
         assert!(g.get_edge("e1").is_none());
         assert_eq!(resolved, 0, "unresolved edge → orphan, not resolved");
     }
 
-    // ── NEW: file-stem resolution for import edges ──
+    // ── 新增：import 边的文件主干解析 ──
 
     #[test]
     fn test_resolve_import_edge_by_file_stem() {
         let mut g = Graph::new();
 
-        // File nodes as created by tree_sitter generic_walk
+        // tree_sitter generic_walk 创建的 File 节点
         let mut file_a = Node::new("a.rs", "a.rs", NodeKind::File);
         file_a.location = Some("a.rs".into());
         g.add_node(file_a);
@@ -697,7 +697,7 @@ mod tests {
         file_b.location = Some("b.rs".into());
         g.add_node(file_b);
 
-        // Import edge: a.rs → "b" (bare module name from tree_sitter)
+        // import 边：a.rs → "b"（来自 tree_sitter 的裸模块名）
         g.add_edge_unchecked(cross_edge("imp_1", "a.rs", "b", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
@@ -716,7 +716,7 @@ mod tests {
         g.add_node(Node::new("b.rs", "b.rs", NodeKind::File));
         g.add_node(Node::new("c.rs", "c.rs", NodeKind::File));
 
-        // Cyclic imports: a → b → c → a
+        // 循环 import：a → b → c → a
         g.add_edge_unchecked(cross_edge("e1", "a.rs", "b", EdgeKind::Imports));
         g.add_edge_unchecked(cross_edge("e2", "b.rs", "c", EdgeKind::Imports));
         g.add_edge_unchecked(cross_edge("e3", "c.rs", "a", EdgeKind::Imports));
@@ -724,7 +724,7 @@ mod tests {
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 3, "all 3 import edges should resolve");
 
-        // Verify all edges now point to real nodes
+        // 验证所有边现在都指向真实节点
         let e1 = g.get_edge("e1_resolved").unwrap();
         assert_eq!(e1.target, "b.rs");
         let e2 = g.get_edge("e2_resolved").unwrap();
@@ -732,7 +732,7 @@ mod tests {
         let e3 = g.get_edge("e3_resolved").unwrap();
         assert_eq!(e3.target, "a.rs");
 
-        // Verify cycle detection works on resolved graph
+        // 验证在解析后的 Graph 上循环检测正常工作
         let cycles = crate::analysis::cycles::detect_cycles(&g);
         assert_eq!(cycles.len(), 1, "should detect the import cycle");
         assert_eq!(cycles[0]["size"], 3);
@@ -742,17 +742,17 @@ mod tests {
     fn test_resolve_three_file_call_cycle() {
         let mut g = Graph::new();
 
-        // File-level nodes
+        // 文件级节点
         g.add_node(Node::new("a.rs", "a.rs", NodeKind::File));
         g.add_node(Node::new("b.rs", "b.rs", NodeKind::File));
         g.add_node(Node::new("c.rs", "c.rs", NodeKind::File));
 
-        // Function nodes inside files
+        // 文件内的 Function 节点
         g.add_node(Node::new("a.rs.fn_a", "fn_a", NodeKind::Function));
         g.add_node(Node::new("b.rs.fn_b", "fn_b", NodeKind::Function));
         g.add_node(Node::new("c.rs.fn_c", "fn_c", NodeKind::Function));
 
-        // Cross-file calls: fn_a → fn_b → fn_c → fn_a (bare names)
+        // 跨文件调用：fn_a → fn_b → fn_c → fn_a（裸名）
         g.add_edge_unchecked(cross_edge("e1", "a.rs.fn_a", "fn_b", EdgeKind::Calls));
         g.add_edge_unchecked(cross_edge("e2", "b.rs.fn_b", "fn_c", EdgeKind::Calls));
         g.add_edge_unchecked(cross_edge("e3", "c.rs.fn_c", "fn_a", EdgeKind::Calls));
@@ -760,12 +760,12 @@ mod tests {
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 3);
 
-        // Verify resolution
+        // 验证解析结果
         assert_eq!(g.get_edge("e1_resolved").unwrap().target, "b.rs.fn_b");
         assert_eq!(g.get_edge("e2_resolved").unwrap().target, "c.rs.fn_c");
         assert_eq!(g.get_edge("e3_resolved").unwrap().target, "a.rs.fn_a");
 
-        // Verify cycle detection
+        // 验证循环检测
         let cycles = crate::analysis::cycles::detect_cycles(&g);
         assert_eq!(cycles.len(), 1, "should detect cross-file call cycle");
         assert_eq!(cycles[0]["size"], 3);
@@ -778,7 +778,7 @@ mod tests {
         g.add_node(Node::new("a.rs", "a.rs", NodeKind::File));
         g.add_node(Node::new("b.rs", "b.rs", NodeKind::File));
 
-        // Rust-style import: "crate::b" (with :: separators)
+        // Rust 风格 import："crate::b"（带 :: 分隔符）
         g.add_edge_unchecked(cross_edge("e1", "a.rs", "crate::b", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
@@ -793,7 +793,7 @@ mod tests {
         g.add_node(Node::new("app.models.py", "app/models.py", NodeKind::File));
         g.add_node(Node::new("app.views.py", "app/views.py", NodeKind::File));
 
-        // Python: "from app.models import User" → edge target "app.models"
+        // Python："from app.models import User" → 边目标 "app.models"
         g.add_edge_unchecked(cross_edge("e1", "app.views.py", "app.models", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
@@ -808,7 +808,7 @@ mod tests {
         g.add_node(Node::new("utils.helpers.py", "utils/helpers.py", NodeKind::File));
         g.add_node(Node::new("main.py", "main.py", NodeKind::File));
 
-        // "from utils.helpers import foo" → target "utils.helpers"
+        // "from utils.helpers import foo" → 目标 "utils.helpers"
         g.add_edge_unchecked(cross_edge("e1", "main.py", "utils.helpers", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
@@ -821,11 +821,11 @@ mod tests {
         let mut g = Graph::new();
         g.add_node(Node::new("main.py", "main.py", NodeKind::File));
 
-        // "import os" — os.py is not in the project graph
+        // "import os" — os.py 不在项目 Graph 中
         g.add_edge_unchecked(cross_edge("e1", "main.py", "os", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // Edge should be cleaned as orphan (can't resolve stdlib)
+        // 边应作为孤儿边清理（无法解析标准库）
         assert!(g.get_edge("e1").is_none());
         assert!(g.get_edge("e1_resolved").is_none());
         assert_eq!(resolved, 0, "stdlib import not resolved → orphan, not counted");
@@ -834,8 +834,8 @@ mod tests {
     #[test]
     fn test_bare_multi_fallback_prefers_function() {
         let mut g = Graph::new();
-        // Two nodes share short name "render":
-        // One is a Function, one is a Variable — Function should win.
+        // 两个节点共享短名 "render"：
+        // 一个是 Function，一个是 Variable — Function 应胜出。
         g.add_node(Node::new("django.shortcuts.render", "render", NodeKind::Function));
         g.add_node(Node::new("django.views.View.render", "render", NodeKind::Function));
         g.add_node(Node::new("some.module.render_var", "render", NodeKind::Variable));
@@ -846,8 +846,8 @@ mod tests {
         let resolved = CrossFileResolver::resolve(&mut g);
         assert_eq!(resolved, 1, "bare name with multiple candidates should resolve");
         let e = g.get_edge("e1_resolved").unwrap();
-        // Should pick a Function node (kind prio 0) with shortest path
-        // Both Function nodes have depth 3, so first in HashMap order wins
+        // 应选择 Function 节点（kind 优先级 0）且路径最短
+        // 两个 Function 节点深度均为 3，因此 HashMap 顺序中第一个胜出
         let target_kind = g.nodes.get(&e.target).map(|n| &n.kind);
         assert_eq!(target_kind, Some(&NodeKind::Function), "should prefer Function over Variable");
     }
@@ -855,14 +855,14 @@ mod tests {
     #[test]
     fn test_cross_language_isolation_ts_caller_to_rs_target_blocked() {
         let mut g = Graph::new();
-        // Two "clear" functions: one in Rust, one in TypeScript
+        // 两个 "clear" 函数：一个 Rust，一个 TypeScript
         g.add_node(Node::new(
             "D:.HoloGramHG.engine.src.graph.graph.rs.Graph.clear",
             "clear", NodeKind::Function));
         g.add_node(Node::new(
             "D:.HoloGramHG.src-ui.src.ui.events.ts.EventBus.clear",
             "clear", NodeKind::Function));
-        // A TS file calling clear()
+        // 一个 TS 文件调用 clear()
         g.add_node(Node::new(
             "D:.HoloGramHG.src-ui.src.ui.chat-store.ts.ChatStore.save",
             "save", NodeKind::Function));
@@ -907,15 +907,15 @@ mod tests {
     #[test]
     fn test_cross_language_filter_does_not_break_same_language() {
         let mut g = Graph::new();
-        // Two Python "render" candidates with different path depths — no tie.
-        // A TS "render" candidate should be filtered out by language.
+        // 两个 Python "render" 候选项，路径深度不同 — 无平局。
+        // 一个 TS "render" 候选项应被语言过滤排除。
         g.add_node(Node::new(
             "django.shortcuts.py.render",
-            "render", NodeKind::Function));  // depth 4
+            "render", NodeKind::Function));  // 深度 4
         g.add_node(Node::new(
-            "flask.render",                    // depth 2 — shorter path wins
+            "flask.render",                    // 深度 2 — 路径更短者胜出
             "render", NodeKind::Function));
-        // Cross-language candidate that should be filtered out
+        // 应被语言过滤排除的跨语言候选项
         g.add_node(Node::new(
             "app.tsx.render",
             "render", NodeKind::Function));
@@ -933,9 +933,9 @@ mod tests {
 
     #[test]
     fn test_best_bare_match_returns_none_on_tie() {
-        // Two candidates with identical depth → tie → ambiguous (preserved, not resolved)
+        // 两个深度相同的候选项 → 平局 → 歧义（保留，不解析）
         let mut g = Graph::new();
-        // Two "render" functions at same depth — neither is better
+        // 两个 "render" 函数深度相同 — 无优劣之分
         g.add_node(Node::new("mod_a.render", "render", NodeKind::Function));
         g.add_node(Node::new("mod_b.render", "render", NodeKind::Function));
         g.add_node(Node::new("caller.py.index", "index", NodeKind::Function));
@@ -944,7 +944,7 @@ mod tests {
             "render", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // Should NOT resolve (tie) — edge should be preserved as ambiguous
+        // 不应解析（平局）— 边应作为歧义保留
         assert_eq!(resolved, 0, "tie should not produce a resolved edge");
         let edge = g.get_edge("e1").expect("ambiguous edge should be preserved");
         let meta = edge.metadata.as_ref().expect("ambiguous edge must have metadata");

@@ -60,7 +60,7 @@ export class GraphTooltip {
   detailCard!: HTMLDivElement;
   selectedIdx = -1;
 
-  // ── Prompt bar ──
+  // ── 提问栏 ──
   _promptBarEl!: HTMLDivElement;
   _promptTitleEl!: HTMLSpanElement;
   _promptBtnEl!: HTMLButtonElement;
@@ -75,7 +75,7 @@ export class GraphTooltip {
     this.host = host;
   }
 
-  // ── Tooltip ──────────────────────────────────────────────
+  // ── 工具提示 ──────────────────────────────────────────────
 
   setupTooltip(): void {
     this.tooltipEl = document.createElement('div');
@@ -98,7 +98,7 @@ export class GraphTooltip {
     deg: number[],
     nodePositions: Float32Array,
   ): void {
-    // Galaxy hover takes priority
+    // 星系悬停优先
     if (foldMode && hoveredGalaxyIdx >= 0) return;
     if (hoveredIdx < 0 || hoveredIdx >= _nodeCount) {
       this.tooltipEl.classList.remove('visible');
@@ -132,7 +132,7 @@ export class GraphTooltip {
     this.tooltipEl.classList.add('visible');
   }
 
-  // ── Detail Card ──────────────────────────────────────────
+  // ── 详情卡片 ──────────────────────────────────────────
 
   setupDetailCard(): void {
     this.detailCard = document.createElement('div');
@@ -171,12 +171,12 @@ export class GraphTooltip {
       '</div>';
     this.host.container.appendChild(this.detailCard);
 
-    // Close
+    // 关闭
     this.detailCard.querySelector('.dc-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this.hideDetail();
     });
-    // Focus subgraph
+    // 聚焦子图
     this.detailCard.querySelector('.dc-focus-btn')?.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
@@ -186,7 +186,7 @@ export class GraphTooltip {
         this.host.enterFocusSubgraph(idx);
       }
     });
-    // Blast radius
+    // 波及半径
     this.detailCard.querySelector('.dc-blast-btn')?.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
@@ -198,7 +198,7 @@ export class GraphTooltip {
       const panel = this.detailCard.querySelector('.dc-blast-filters') as HTMLElement;
       if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
     });
-    // Open file
+    // 打开文件
     this.detailCard.querySelector('.dc-open-btn')?.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
@@ -214,7 +214,7 @@ export class GraphTooltip {
         }
       }
     });
-    // Ask Agent
+    // 询问 Agent
     this.detailCard.querySelector('.dc-agent-btn')?.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       e.preventDefault();
@@ -238,7 +238,7 @@ export class GraphTooltip {
   ): void {
     this.selectedIdx = idx;
     const node = graphNodes[idx];
-    // Emit file path for file tree <-> graph linking
+    // 为文件树 ↔ 星图联动发送文件路径
     if (node.location) {
       const _filePath =
         node.location.indexOf(':') >= 0 ? node.location.substring(0, node.location.lastIndexOf(':')) : node.location;
@@ -324,7 +324,7 @@ export class GraphTooltip {
     this.detailCard.style.top = `${top}px`;
   }
 
-  // ── Prompt bar ───────────────────────────────────────────
+  // ── 提问栏 ───────────────────────────────────────────
 
   setupPromptBar(): void {
     this._promptBarEl = document.createElement('div');

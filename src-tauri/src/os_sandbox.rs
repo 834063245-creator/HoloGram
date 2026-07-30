@@ -1,31 +1,31 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// OS-level sandbox (spec §6)
-// Phase 4a: Windows Job Object — die-with-parent process lifecycle.
-//   AppContainer (Phase 4b) has been removed — it conflicted with general-purpose
-//   dev toolchains that spawn deep process trees loading DLLs from unpredictable
-//   paths. File-system and network isolation are handled by the permission engine.
+// OS 级沙箱 (spec §6)
+// Phase 4a: Windows Job Object — die-with-parent 进程生命周期管理。
+//   AppContainer (Phase 4b) 已移除 — 它与通用
+//   开发工具链冲突，后者会生成深层进程树从不可预测的
+//   路径加载 DLL。文件系统和网络隔离由权限引擎处理。
 // Phase 5: macOS sandbox-exec + Linux bubblewrap (spec §6.4–§6.7)
-// ponytail: pure Win32 FFI + platform tools, zero new crate deps.
+// ponytail: 纯 Win32 FFI + 平台工具，零新增 crate 依赖。
 
 use std::io::{self, Read};
 use std::process::ExitStatus;
 use std::time::Duration;
 
 // ═══════════════════════════════════════════════════════════════
-// Spawn retry — transient fork/spawn errors are retried
+// 进程启动重试 — 瞬态 fork/spawn 错误会重试
 // ═══════════════════════════════════════════════════════════════
 
-// ponytail: spawn retry is only used on non-Windows platforms (Linux seccomp,
-// macOS sandbox-exec). On Windows, job objects handle it differently.
+// ponytail: spawn 重试仅用于非 Windows 平台（Linux seccomp、
+// macOS sandbox-exec）。在 Windows 上，Job Object 以不同方式处理。
 #[cfg_attr(windows, allow(dead_code))]
 const SPAWN_RETRY_COUNT: u32 = 3;
 #[cfg_attr(windows, allow(dead_code))]
 const SPAWN_RETRY_BASE_DELAY: Duration = Duration::from_millis(200);
 
-/// Retry a process spawn on transient errors (EAGAIN, ENOMEM, etc.).
-/// Returns the first non-retryable error or the last retryable error.
+/// 在瞬态错误（EAGAIN、ENOMEM 等）时重试进程启动。
+/// 返回第一个不可重试的错误或最后一个可重试的错误。
 #[cfg_attr(windows, allow(dead_code))]
 fn retry_spawn<F>(mut spawn_fn: F) -> io::Result<std::process::Child>
 where
@@ -58,8 +58,8 @@ where
     Err(last_err.unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "spawn: unreachable")))
 }
 
-/// Check raw OS error for transient spawn failures.
-/// EAGAIN (11), ENOMEM (12) on Unix; ERROR_NO_SYSTEM_RESOURCES (1450) on Windows.
+/// 检查原始 OS 错误是否为瞬态启动失败。
+/// Unix 上 EAGAIN (11)、ENOMEM (12)；Windows 上 ERROR_NO_SYSTEM_RESOURCES (1450)。
 #[cfg_attr(windows, allow(dead_code))]
 fn is_transient_spawn_error(e: &io::Error) -> bool {
     match e.raw_os_error() {
@@ -72,21 +72,21 @@ fn is_transient_spawn_error(e: &io::Error) -> bool {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Cross-platform public API
+// 跨平台公共 API
 // ═══════════════════════════════════════════════════════════════
 
-/// Sandbox availability status for UI/warning display (spec §6.6–§6.7).
+/// 沙箱可用性状态，用于 UI/警告显示 (spec §6.6–§6.7)。
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub enum SandboxStatus {
-    /// Full sandbox active (Job Object on Windows).
+    /// 完整沙箱已激活（Windows 上为 Job Object）。
     Available,
-    /// Unavailable — no OS sandbox (permission engine is the fallback).
+    /// 不可用 — 无 OS 沙箱（权限引擎作为回退）。
     Unavailable,
 }
 
-/// Sandboxed process handle — wraps a std::process::Child,
-/// assigned to the Job Object (Windows) or plain spawn (other platforms).
+/// 沙箱化进程句柄 — 包装 std::process::Child，
+/// 已分配到 Job Object（Windows）或普通启动（其他平台）。
 pub struct SandboxedChild {
     inner: std::process::Child,
 }
@@ -127,11 +127,11 @@ impl SandboxedChild {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Public functions
+// 公共函数
 // ═══════════════════════════════════════════════════════════════
 
-/// One-time init — call at app startup. Creates Job Object (Windows).
-/// On Linux, checks bubblewrap availability and logs status.
+/// 一次性初始化 — 在应用启动时调用。创建 Job Object (Windows)。
+/// 在 Linux 上，检查 bubblewrap 可用性并记录状态。
 pub fn init() {
     #[cfg(windows)]
     imp::job::init();
@@ -153,7 +153,7 @@ pub fn init() {
     }
 }
 
-/// Query the current sandbox status for UI display (spec §6.6).
+/// 查询当前沙箱状态用于 UI 显示 (spec §6.6)。
 pub fn status() -> SandboxStatus {
     #[cfg(windows)]
     { imp::status() }
@@ -165,10 +165,10 @@ pub fn status() -> SandboxStatus {
     { SandboxStatus::Unavailable }
 }
 
-/// Spawn a shell command in the sandbox. On Windows this assigns the
-/// process to the Job Object for die-with-parent lifecycle management.
-/// On macOS this uses sandbox-exec; on Linux, bubblewrap.
-/// Falls back to plain spawn when the OS sandbox tool is not available.
+/// 在沙箱中启动 shell 命令。在 Windows 上，将进程
+/// 分配到 Job Object 以实现 die-with-parent 生命周期管理。
+/// 在 macOS 上使用 sandbox-exec；在 Linux 上使用 bubblewrap。
+/// 当 OS 沙箱工具不可用时回退到普通启动。
 pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     #[cfg(windows)]
     {
@@ -211,8 +211,8 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     }
 }
 
-/// Plain shell spawn without any sandbox wrapping — used as fallback when
-/// OS sandbox is unavailable (spec §6.7). Retries on transient fork errors.
+/// 无沙箱包装的普通 shell 启动 — 在 OS 沙箱不可用时
+/// 作为回退使用 (spec §6.7)。对瞬态 fork 错误进行重试。
 #[cfg(not(windows))]
 fn spawn_plain(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     let cmd = command.to_string();
@@ -229,9 +229,9 @@ fn spawn_plain(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     Ok(SandboxedChild { inner: child })
 }
 
-/// Assign an already-spawned std::process::Child to the Job Object.
-/// Non-sandboxed infrastructure spawns (LSP, MCP, Unity) use this.
-/// Returns true on success, false if Job Object unavailable.
+/// 将已启动的 std::process::Child 分配到 Job Object。
+/// 非沙箱化基础设施启动（LSP、MCP、Unity）使用此方法。
+/// 成功返回 true，Job Object 不可用时返回 false。
 pub fn assign_to_job(child: &std::process::Child) -> bool {
     #[cfg(windows)]
     { imp::job::assign(child) }
@@ -240,11 +240,11 @@ pub fn assign_to_job(child: &std::process::Child) -> bool {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Helpers
+// 辅助函数
 // ═══════════════════════════════════════════════════════════════
 
-/// Single-quote a command for bash -c. Single quotes escape EVERYTHING
-/// (including $, &, !, `, \), only ' itself needs special handling.
+/// 为 bash -c 单引号包裹命令。单引号转义所有内容
+/// （包括 $、&、!、`、\），只有 ' 本身需要特殊处理。
 #[cfg(windows)]
 fn quote_cmd(cmd: &str) -> String {
     let escaped = cmd.replace('\'', "'\\''");
@@ -252,7 +252,7 @@ fn quote_cmd(cmd: &str) -> String {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Windows implementation — Job Object only
+// Windows 实现 — 仅 Job Object
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(windows)]
@@ -264,7 +264,7 @@ pub mod imp {
 
     use super::SandboxStatus;
 
-    // ── FFI declarations ──
+    // ── FFI 声明 ──
 
     extern "system" {
                 // Job Object
@@ -273,7 +273,7 @@ pub mod imp {
             job: isize, info_class: i32, info: *const std::ffi::c_void, info_len: u32,
         ) -> i32;
         fn AssignProcessToJobObject(job: isize, process: isize) -> i32;
-        // Pipe creation
+        // 管道创建
         fn CreatePipe(
             read: *mut isize, write: *mut isize,
             attrs: *mut std::ffi::c_void, size: u32,
@@ -282,20 +282,20 @@ pub mod imp {
         fn CloseHandle(handle: isize) -> i32;
     }
 
-    // ── Constants ──
+    // ── 常量 ──
 
     const DETACHED_PROCESS: u32 = 0x00000008;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     const HANDLE_FLAG_INHERIT: u32 = 1;
 
-    // Job Object limits
+    // Job Object 限制
     const JOB_OBJECT_LIMIT_DIE_ON_JOB_CLOSE: u32 = 0x00002000;
     const JOB_OBJECT_LIMIT_BREAKAWAY_OK: u32 = 0x00000800;
     const JOB_OBJECT_LIMIT_ACTIVE_PROCESS: u32 = 0x00000008;
     const JOB_OBJECT_LIMIT_JOB_MEMORY: u32 = 0x00000200;
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
 
-    // ── FFI structs ──
+    // ── FFI 结构体 ──
 
     #[repr(C)]
     struct JobObjectExtendedLimitInformationRaw {
@@ -326,7 +326,7 @@ pub mod imp {
         read_transfer_count: u64, write_transfer_count: u64, other_transfer_count: u64,
     }
 
-    // ── Shell detection ──
+    // ── Shell 检测 ──
 
     #[derive(Clone)]
     pub enum Shell {
@@ -377,7 +377,7 @@ pub mod imp {
         Shell::Cmd
     }
 
-    /// Smoke-test: spawn `bash -c "exit 0"` to verify bash actually works.
+    /// 冒烟测试：启动 `bash -c "exit 0"` 验证 bash 是否实际可用。
     fn smoke_test_bash(bash_path: &str) -> bool {
         let cmdline = format!("\"{}\" -c {}", bash_path, super::quote_cmd("exit 0"));
         match spawn(&cmdline, ".") {
@@ -393,7 +393,7 @@ pub mod imp {
         DETECTED_SHELL.get_or_init(detect_shell_inner).clone()
     }
 
-    /// Convert a Windows path to POSIX form for Git Bash.
+    /// 将 Windows 路径转换为 POSIX 格式（用于 Git Bash）。
     /// "C:\\Users\\foo\\bar" → "/c/Users/foo/bar"
     pub fn windows_to_posix_path(path: &str) -> String {
         let path = path.strip_prefix("\\\\?\\").unwrap_or(path);
@@ -464,7 +464,7 @@ pub mod imp {
         }
     }
 
-    // ── Sandbox status ──
+    // ── 沙箱状态 ──
 
     pub fn status() -> SandboxStatus {
         if job::is_active() {
@@ -474,20 +474,20 @@ pub mod imp {
         }
     }
 
-    // ── Sandboxed spawn (Job Object only) ──
+    // ── 沙箱化启动（仅 Job Object）──
 
-    /// Spawn a shell command and assign it to the Job Object.
-    /// Uses non-inheritable stdout/stderr pipes so grandchild processes
-    /// (e.g. cargo test binaries spawned by bash) cannot hold the pipe
-    /// open after the immediate child exits.
+    /// 启动 shell 命令并分配到 Job Object。
+    /// 使用不可继承的 stdout/stderr 管道，使孙进程
+    /// （如 bash 启动的 cargo test 二进制）不能在直接子进程
+    /// 退出后保持管道打开。
     pub fn spawn(cmdline: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
         use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
 
         let (program, args) = split_cmdline(cmdline);
 
-        // Create stdout/stderr pipes with child ends marked non-inheritable.
-        // This prevents subprocesses (cargo → test binaries) from holding
-        // the pipe handles open, which would cause read_to_end to block forever.
+        // 创建 stdout/stderr 管道，子端标记为不可继承。
+        // 这防止子进程（cargo → test 二进制）持有
+        // 管道句柄打开，导致 read_to_end 永久阻塞。
         let (stdout_read, stdout_write) = create_non_inheritable_pipe()?;
         let (stderr_read, stderr_write) = create_non_inheritable_pipe()?;
 
@@ -502,8 +502,8 @@ pub mod imp {
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
         let mut child = c.spawn()?;
 
-        // Replace child's stdout/stderr with our reader handles.
-        // Command::spawn leaves stdout/stderr as None when custom Stdio is used.
+        // 用我们的读取句柄替换子进程的 stdout/stderr。
+        // Command::spawn 在使用自定义 Stdio 时会将 stdout/stderr 留为 None。
         child.stdout = Some(unsafe {
             std::process::ChildStdout::from(OwnedHandle::from_raw_handle(
                 stdout_read as RawHandle,
@@ -519,8 +519,8 @@ pub mod imp {
         Ok(super::SandboxedChild { inner: child })
     }
 
-    /// Create a pipe where the child (write) end is marked non-inheritable.
-    /// Returns (parent_read_handle, child_write_as_stdio).
+    /// 创建一个管道，子端（写入端）标记为不可继承。
+    /// 返回 (parent_read_handle, child_write_as_stdio)。
     fn create_non_inheritable_pipe() -> io::Result<(isize, std::process::Stdio)> {
         use std::os::windows::io::{FromRawHandle, RawHandle};
         let mut read: isize = 0;
@@ -531,8 +531,8 @@ pub mod imp {
         if ret == 0 {
             return Err(io::Error::last_os_error());
         }
-        // Mark child's write handle as non-inheritable.
-        // read (parent) handle stays inheritable so Rust can manage it.
+        // 将子端写入句柄标记为不可继承。
+        // read（父端）句柄保持可继承，使 Rust 能管理它。
         let ret = unsafe {
             SetHandleInformation(write, HANDLE_FLAG_INHERIT, 0)
         };
@@ -543,16 +543,16 @@ pub mod imp {
             }
             return Err(io::Error::last_os_error());
         }
-        // Convert write handle to Stdio — consumed by Command::stdout/stderr
+        // 将写入句柄转换为 Stdio — 由 Command::stdout/stderr 消费
         let child_stdio = unsafe {
             std::process::Stdio::from_raw_handle(write as RawHandle)
         };
         Ok((read, child_stdio))
     }
 
-    // ── Command-line helpers ──
+    // ── 命令行辅助函数 ──
 
-    /// Split "bash" -c '...' into ("bash", ["-c", "..."]).
+    /// 将 "bash" -c '...' 拆分为 ("bash", ["-c", "..."])。
     fn split_cmdline(cmdline: &str) -> (String, Vec<String>) {
         let mut parts: Vec<String> = Vec::new();
         let mut current = String::new();
@@ -585,7 +585,7 @@ pub mod imp {
         (program, parts)
     }
 
-    /// Strip one layer of matching quotes.
+    /// 去掉一层匹配的引号。
     fn unquote(s: &str) -> String {
         let s = s.trim();
         if s.len() >= 2 {
@@ -599,7 +599,7 @@ pub mod imp {
         s.to_string()
     }
 
-    // ── Tests ──
+    // ── 测试 ──
 
     #[cfg(test)]
     mod tests {
@@ -668,7 +668,7 @@ pub mod imp {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// macOS implementation — sandbox-exec (spec §6.4)
+// macOS 实现 — sandbox-exec (spec §6.4)
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(target_os = "macos")]
@@ -691,11 +691,11 @@ mod mac {
             return Err(io::Error::new(io::ErrorKind::NotFound, "sandbox-exec not found"));
         }
         let profile = build_profile(cwd);
-        // Wrap with ulimit for resource bounds (8 GiB VM, 300s CPU)
+        // 用 ulimit 包裹以限制资源（8 GiB VM, 300s CPU）
         let limited_cmd = format!(
             "ulimit -v {} -t {} && exec {}",
-            8 * 1024 * 1024, // 8 GiB in KiB
-            300,             // 300s CPU time
+            8 * 1024 * 1024, // 8 GiB（以 KiB 为单位）
+            300,             // 300秒 CPU 时间
             command
         );
         let child = super::retry_spawn(|| {
@@ -740,7 +740,7 @@ mod mac {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Linux implementation — bubblewrap (spec §6.5)
+// Linux 实现 — bubblewrap (spec §6.5)
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(target_os = "linux")]
@@ -750,9 +750,9 @@ mod linux {
 
     use super::{SandboxStatus, SandboxedChild};
 
-    /// Check if bwrap binary is available on PATH.
+    /// 检查 bwrap 二进制是否在 PATH 中可用。
     fn bwrap_path() -> Option<PathBuf> {
-        // Check common locations first (faster than `which`)
+        // 先检查常见位置（比 `which` 更快）
         let candidates = [
             "/usr/bin/bwrap",
             "/usr/local/bin/bwrap",
@@ -762,7 +762,7 @@ mod linux {
                 return Some(PathBuf::from(c));
             }
         }
-        // Fall back to PATH lookup
+        // 回退到 PATH 查找
         let output = std::process::Command::new("which")
             .arg("bwrap")
             .stdout(std::process::Stdio::piped())
@@ -795,39 +795,39 @@ mod linux {
         let ro_binds = existing_ro_binds();
         let temp = std::env::temp_dir();
 
-        // Collect home directory for read-only bind (needed for ~/.cargo, ~/.rustup, ~/.nvm, etc.)
+        // 收集 home 目录用于只读绑定（需要 ~/.cargo, ~/.rustup, ~/.nvm 等）
         let home = std::env::var("HOME").unwrap_or_default();
 
-        // Wrap command with resource limits: 8 GiB virtual memory, 300s CPU time.
-        // ulimit -v limits address space (stack+heap+mmap), catches most runaway
-        // processes without requiring cgroup or systemd-run. SIGKILL on exceed.
+        // 用资源限制包裹命令：8 GiB 虚拟内存，300s CPU 时间。
+        // ulimit -v 限制地址空间（栈+堆+mmap），可捕获大多数失控
+        // 进程，无需 cgroup 或 systemd-run。超限时 SIGKILL。
         let limited_cmd = format!(
             "ulimit -v {} -t {} && exec {}",
-            8 * 1024 * 1024, // 8 GiB in KiB
-            300,             // 300s CPU time
+            8 * 1024 * 1024, // 8 GiB（以 KiB 为单位）
+            300,             // 300秒 CPU 时间
             command
         );
 
         let mut cmd = std::process::Command::new(&bwrap);
 
-        // Read-only system paths
+        // 只读系统路径
         for (src, dst) in &ro_binds {
             cmd.arg("--ro-bind").arg(src).arg(dst);
         }
 
-        // Read-only home directory (dev toolchains need to read ~/.cargo, ~/.nvm, ~/.rustup)
+        // 只读 home 目录（开发工具链需要读取 ~/.cargo, ~/.nvm, ~/.rustup）
         if !home.is_empty() && Path::new(&home).exists() {
             cmd.arg("--ro-bind").arg(&home).arg(&home);
         }
 
-        // Read-write: project directory and temp
+        // 读写：项目目录和临时目录
         cmd.arg("--bind").arg(cwd).arg(cwd);
         cmd.arg("--bind").arg(temp.as_os_str()).arg("/tmp");
 
-        // Process lifecycle: die with parent
+        // 进程生命周期：随父进程退出
         cmd.arg("--die-with-parent");
 
-        // Allow new namespaces (needed for nested process spawning)
+        // 允许新命名空间（嵌套进程启动需要）
         cmd.arg("--unshare-pid");
 
         cmd.arg("--")
@@ -852,7 +852,7 @@ mod linux {
             ("/sbin", "/sbin"),
             ("/etc", "/etc"),
             ("/proc", "/proc"),
-            ("/dev", "/dev"), // needed for PTY, /dev/null, etc.
+            ("/dev", "/dev"), // PTY, /dev/null 等需要
         ];
         candidates
             .iter()

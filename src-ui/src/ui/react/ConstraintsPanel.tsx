@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// ConstraintsPanel — React rewrite of constraints.ts.
-// Edit hologram.constraints.yaml with a GUI form.
+// ConstraintsPanel — constraints.ts 的 React 重写。
+// 用 GUI 表单编辑 hologram.constraints.yaml。
 
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -18,7 +18,7 @@ interface ConstraintsData {
   denylist: { keywords: string[] };
 }
 
-// ── YAML helpers (pure functions) ──
+// ── YAML 辅助函数（纯函数） ──
 
 function parseYamlSimple(yaml: string): ConstraintsData {
   const result: ConstraintsData = {
@@ -123,7 +123,7 @@ const THRESHOLD_LABELS: Record<string, string> = {
   l4_threshold_change_tolerance: '数值阈值变更容忍',
 };
 
-// ── Component ──
+// ── 组件 ──
 
 const ConstraintsPanelApp: React.FC<{
   projectPath: string | null;
@@ -140,7 +140,7 @@ const ConstraintsPanelApp: React.FC<{
   const loadedPath = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load constraints when path changes（旧版每次 open 都重挂载重载 — 关闭即令缓存失效复现之）
+  // 路径变化时加载约束（旧版每次 open 都重挂载重载 — 关闭即令缓存失效复现之）
   useEffect(() => {
     if (!visible) {
       loadedPath.current = null;
@@ -163,7 +163,7 @@ const ConstraintsPanelApp: React.FC<{
 
   const markDirty = useCallback(() => setDirty(true), []);
 
-  // ── Handlers ──
+  // ── 处理函数 ──
 
   const handleRoutingToggle = useCallback(
     (key: string) => {
@@ -264,7 +264,7 @@ const ConstraintsPanelApp: React.FC<{
     onClose();
   }, [dirty, onClose]);
 
-  // ── Render helpers ──
+  // ── 渲染辅助函数 ──
 
   const renderTagList = (listKey: string, items: string[], placeholder: string) => (
     <div>
@@ -297,7 +297,7 @@ const ConstraintsPanelApp: React.FC<{
     </div>
   );
 
-  // ── Error / Loading ──
+  // ── 错误 / 加载中 ──
 
   if (error) {
     return <div style={{ color: '#e05555', fontSize: 'calc(12px * var(--font-scale))', padding: 12 }}>{error}</div>;
@@ -311,7 +311,7 @@ const ConstraintsPanelApp: React.FC<{
 
   return (
     <>
-      {/* Header */}
+      {/* 头部 */}
       <div className="cs-header">
         <span
           className="cs-header-title"
@@ -332,9 +332,9 @@ const ConstraintsPanelApp: React.FC<{
         </div>
       </div>
 
-      {/* Content */}
+      {/* 内容 */}
       <div className="cs-content-wrap">
-        {/* ── Routing ── */}
+        {/* ── 路由 ── */}
         <div className="cs-section">
           <div
             className="cs-section-title"
@@ -354,7 +354,7 @@ const ConstraintsPanelApp: React.FC<{
           ))}
         </div>
 
-        {/* ── Thresholds ── */}
+        {/* ── 阈值 ── */}
         <div className="cs-section">
           <div
             className="cs-section-title"
@@ -380,7 +380,7 @@ const ConstraintsPanelApp: React.FC<{
           ))}
         </div>
 
-        {/* ── Allowlist ── */}
+        {/* ── 白名单 ── */}
         <div className="cs-section">
           <div
             className="cs-section-title"
@@ -392,7 +392,7 @@ const ConstraintsPanelApp: React.FC<{
           {renderTagList('allow-files', data.allowlist.files, '添加文件模式…')}
         </div>
 
-        {/* ── Denylist ── */}
+        {/* ── 黑名单 ── */}
         <div className="cs-section">
           <div
             className="cs-section-title"
@@ -401,7 +401,7 @@ const ConstraintsPanelApp: React.FC<{
           {renderTagList('deny-keywords', data.denylist.keywords, '添加关键词…')}
         </div>
 
-        {/* ── Actions ── */}
+        {/* ── 操作 ── */}
         <div className="cs-actions">
           <button
             className="cs-btn cs-btn-save"
@@ -430,7 +430,7 @@ const ConstraintsPanelApp: React.FC<{
   );
 };
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
 function getListEntry(data: ConstraintsData, key: string): string[] | null {
   switch (key) {
@@ -445,7 +445,7 @@ function getListEntry(data: ConstraintsData, key: string): string[] | null {
   }
 }
 
-// ── Panel root（P3：直接挂 DockPanel 树，Controller 包装已删）──
+// ── 面板根（P3：直接挂 DockPanel 树，Controller 包装已删）──
 // 内联样式与旧 Controller 完全一致（position:absolute 覆盖样式表的 fixed，保持原样）。
 
 export function ConstraintsPanel() {

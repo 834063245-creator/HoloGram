@@ -30,7 +30,7 @@ import type {
 import { getMessagesStore } from '../messages-store';
 import { getSessionStore } from '../session-store';
 
-// ── Constants ──
+// ── 常量 ──
 
 const BOTTOM_THRESHOLD = 80;
 const REASONING_TAIL_CHARS = 12_000;
@@ -57,7 +57,7 @@ function truncateReasoning(text: string): string {
   return truncated ? '…\n' + out : out;
 }
 
-// ── Callbacks ──
+// ── 回调 ──
 
 export interface ChatMessagesCallbacks {
   onEditUserMessage?: (msg: UserMessage) => void;
@@ -67,21 +67,21 @@ export interface ChatMessagesCallbacks {
   onNavigateToNode?: (nodeName: string) => void;
 }
 
-// ── Icons ──
+// ── 图标 ──
 
 function svgIcon(name: string, size: number = 12): string {
   return iconSvg(name, size);
 }
 
-// ── Node name linkification ──
-// ReactMarkdown renders `code` as <code> elements. We iterate over inline
-// <code> elements (not block <pre><code>) and wrap them as clickable links.
+// ── 节点名链接化 ──
+// ReactMarkdown 将 `code` 渲染为 <code> 元素。我们遍历行内
+// <code> 元素（非块级 <pre><code>），将其包装为可点击链接。
 
 function linkifyNodeNames(container: HTMLElement, onNavigate?: (name: string) => void): void {
   if (!onNavigate) return;
   const codeEls = container.querySelectorAll('code:not(pre code)');
   codeEls.forEach((el) => {
-    if (el.querySelector('.node-link')) return; // already linkified
+    if (el.querySelector('.node-link')) return; // 已链接化
     const name = el.textContent || '';
     if (!name) return;
     const span = document.createElement('span');
@@ -95,7 +95,7 @@ function linkifyNodeNames(container: HTMLElement, onNavigate?: (name: string) =>
   });
 }
 
-// ── react-markdown code component (hljs highlighting) ──
+// ── react-markdown 代码组件（hljs 高亮） ──
 
 function MarkdownCode({ className, children }: { className?: string; children?: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -105,10 +105,10 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
   const _lang = match?.[1];
   const isBlock = match !== null || text.includes('\n');
 
-  // Highlight code blocks — skip already-highlighted elements via data attribute.
-  // During streaming, the completed portion re-renders react-markdown on every
-  // paragraph boundary crossing. Without this guard, hljs rescans every <pre code>
-  // on each re-render even if the content hasn't changed.
+  // 高亮代码块 — 通过 data 属性跳过已高亮的元素。
+  // 流式时，已完成部分在每次段落边界跨越时重新渲染 react-markdown。
+  // 如果不加此保护，hljs 会在每次重新渲染时重扫每个 <pre code>，
+  // 即使内容未变。
   useEffect(() => {
     if (!ref.current) return;
     ref.current.querySelectorAll('pre code:not([data-highlighted])').forEach((block) => {
@@ -116,7 +116,7 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
         hljs.highlightElement(block as HTMLElement);
         block.setAttribute('data-highlighted', 'true');
       } catch {
-        /* noop */
+        /* 无操作 */
       }
     });
   }, [text]);
@@ -133,37 +133,36 @@ function MarkdownCode({ className, children }: { className?: string; children?: 
   return <code className="md-code">{children}</code>;
 }
 
-// ── Markdown content (streaming-aware) ──
+// ── Markdown 内容（流式感知） ──
 
-// ── Incremental streaming block splitter ──
-// Splits streaming text at the last safe paragraph boundary (double newline
-// outside code blocks). Completed portion renders as markdown; trailing
-// incomplete portion renders as plain text with breathing cursor.
-// Also detects open ``` code fences for editor-style rendering.
+// ── 增量流式分块器 ──
+// 在最后一个安全段落边界（代码块外的双换行）处分割流式文本。
+// 已完成部分渲染为 markdown；尾部未完成部分以纯文本渲染并带呼吸光标。
+// 同时检测未闭合的 ``` 代码围栏，用于编辑器风格渲染。
 
 function splitStreamingBlocks(text: string): { completed: string; tail: string } {
   if (!text) return { completed: '', tail: '' };
 
-  // Normalize Windows-style line endings so \r\n\r\n is treated as \n\n
+  // 规范化 Windows 换行符，将 \r\n\r\n 视为 \n\n
   text = text.replace(/\r\n/g, '\n');
 
-  // Find all ``` positions (crude but in practice ``` rarely appears in prose)
+  // 查找所有 ``` 位置（粗略但在实际中 ``` 很少出现在普通文本中）
   const fences: number[] = [];
   let fi = 0;
   while (fi < text.length) {
     const idx = text.indexOf('\n```', fi);
     if (idx === -1) break;
-    fences.push(idx + 1); // position of the backtick after \n
+    fences.push(idx + 1); // \n 后反引号的位置
     fi = idx + 4;
   }
-  // Also check if text starts with ```
+  // 同时检查文本是否以 ``` 开头
   if (text.startsWith('```')) fences.unshift(0);
 
-  // Search backwards for the last safe \n\n
+  // 向后搜索最后一个安全的 \n\n
   let lastSafe = -1;
   for (let pos = text.length - 2; pos >= 0; pos--) {
     if (text.slice(pos, pos + 2) === '\n\n') {
-      // Count fences before this position
+      // 统计此位置之前的围栏数
       let open = 0;
       for (const f of fences) if (f < pos) open++;
       if (open % 2 === 0) {
@@ -178,7 +177,7 @@ function splitStreamingBlocks(text: string): { completed: string; tail: string }
 }
 
 function RenderStreamingTail({ text }: { text: string }) {
-  // Detect open code fence: line starting with ``` not yet closed
+  // 检测未闭合的代码围栏：以 ``` 开头但尚未闭合的行
   const fenceMatch = text.match(/^```(\S*)\n([\s\S]*)/);
   if (fenceMatch) {
     const lang = fenceMatch[1] || '';
@@ -193,7 +192,7 @@ function RenderStreamingTail({ text }: { text: string }) {
   return <div className="msg-streaming-text">{text}</div>;
 }
 
-// ── Markdown content (streaming-aware, incremental rendering) ──
+// ── Markdown 内容（流式感知，增量渲染） ──
 
 const MarkdownContent: React.FC<{
   text: string;
@@ -202,20 +201,20 @@ const MarkdownContent: React.FC<{
 }> = React.memo(({ text, streaming, onNavigateToNode }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Linkify node names after render (on finalised content)
+  // 渲染后链接化节点名（在已完成内容上）
   useEffect(() => {
     if (streaming || !onNavigateToNode) return;
     const el = containerRef.current;
     if (el) linkifyNodeNames(el, onNavigateToNode);
   }, [streaming, onNavigateToNode]);
 
-  // ── Always call hooks unconditionally ──
+  // ── 始终无条件调用 hooks ──
   const { completed, tail } = useMemo(
     () => (streaming ? splitStreamingBlocks(text) : { completed: '', tail: '' }),
     [text, streaming],
   );
 
-  // Finalised — full markdown render
+  // 已完成 — 完整 markdown 渲染
   if (!streaming) {
     return (
       <div ref={containerRef} className="msg-text msg-markdown">
@@ -232,7 +231,7 @@ const MarkdownContent: React.FC<{
     );
   }
 
-  // ── Streaming: incremental rendering ──
+  // ── 流式：增量渲染 ──
   return (
     <div ref={containerRef} className="msg-text msg-markdown streaming">
       {completed ? (
@@ -254,8 +253,8 @@ const MarkdownContent: React.FC<{
   );
 });
 
-// ── Reasoning block ──
-// Auto-expand while streaming; auto-collapse when done (respects user manual toggle).
+// ── 推理块 ──
+// 流式时自动展开；完成后自动折叠（尊重用户手动切换）。
 
 const ReasoningBlock: React.FC<{
   text: string;
@@ -266,7 +265,7 @@ const ReasoningBlock: React.FC<{
   const userOverridden = useRef(false);
   const [open, setOpen] = useState(streaming);
 
-  // Auto open/close on streaming state transitions
+  // 流式状态转换时自动开/关
   useEffect(() => {
     if (streaming) {
       if (!userOverridden.current) setOpen(true);
@@ -308,7 +307,7 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
   }
   const name = part.name;
 
-  // write_file_content — show the file content being written
+  // write_file_content — 显示正在写入的文件内容
   if ((name === 'write_file' || name === 'write_file_content') && typeof args.content === 'string') {
     const content = args.content as string;
     const filePath = (args.filePath as string) || (args.file_path as string) || '';
@@ -320,7 +319,7 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
     );
   }
 
-  // edit_file — show the real diff (old → new) using LCS
+  // edit_file — 使用 LCS 显示真实差异（旧 → 新）
   if (name === 'edit_file' && (typeof args.oldString === 'string' || typeof args.newString === 'string')) {
     const oldStr = (args.oldString as string) || '';
     const newStr = (args.newString as string) || '';
@@ -342,18 +341,18 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
   return null;
 }
 
-// ── Tool card ──
+// ── 工具卡片 ──
 
-// ponytail: NOT wrapped in React.memo — part-mutator mutates ToolCallPart in-place
-// (tr.status = 'error'), so the object reference never changes. React.memo
-// would block re-renders when tool status transitions (e.g. pending→running→done/error).
+// ponytail: 未用 React.memo 包装 — part-mutator 就地修改 ToolCallPart
+// (tr.status = 'error')，因此对象引用不变。React.memo
+// 会在工具状态转换时阻止重新渲染（如 pending→running→done/error）。
 const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> = ({
   part,
   expanded,
   onToggle,
 }) => {
-  // Auto-expand running tools immediately (no useState+useEffect delay)
-  // so streaming shell output is visible from the first chunk.
+  // 立即展开运行中的工具（无 useState+useEffect 延迟）
+  // 使流式 shell 输出从第一个数据块即可见。
   const isExpanded = expanded || part.status === 'running';
   const icon =
     part.status === 'running'
@@ -407,7 +406,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
   );
 };
 
-// ── Tool summary ──
+// ── 工具摘要 ──
 
 const ToolSummary: React.FC<{
   tools: ToolCallPart[];
@@ -434,14 +433,14 @@ const ToolSummary: React.FC<{
   );
 };
 
-// ── Sub-agent reasoning (collapsed except last) ──
+// ── 子 Agent 推理（除最后一个外折叠） ──
 
 const SubReasoningBlock: React.FC<{
   part: { type: 'reasoning'; text: string };
   parts: AssistantPart[];
   index: number;
 }> = ({ part, parts, index }) => {
-  // Find index of the LAST reasoning part — only that one renders expanded
+  // 查找最后一个推理部分的索引 — 只有该部分展开渲染
   let lastIdx = -1;
   for (let i = parts.length - 1; i >= 0; i--) {
     if (parts[i].type === 'reasoning') {
@@ -452,7 +451,7 @@ const SubReasoningBlock: React.FC<{
   const isLast = index === lastIdx;
   const [open, setOpen] = useState(isLast);
 
-  // Sync open state when a NEW part becomes the last (streaming progress)
+  // 当新部分成为最后一个时同步展开状态（流式进度）
   useEffect(() => {
     setOpen(isLast);
   }, [isLast]);
@@ -478,7 +477,7 @@ const SubReasoningBlock: React.FC<{
   );
 };
 
-// ── Plan review card — full-width markdown content + approve/revise/reject ──
+// ── 计划审批卡片 — 全宽 markdown 内容 + 批准/修改/拒绝 ──
 
 const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeId }) => {
   const [feedbackText, setFeedbackText] = React.useState('');
@@ -519,7 +518,7 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
       margin: '8px 0',
       background: 'var(--bg-secondary, #1a1a2e)',
     }}>
-      {/* Header */}
+      {/* 头部 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
         <span style={{ fontSize: '16px' }}>{statusIcon}</span>
         <strong style={{ fontSize: '14px' }}>计划审批</strong>
@@ -531,14 +530,14 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
         </span>
       </div>
 
-      {/* Plan content — full markdown */}
+      {/* 计划内容 — 完整 markdown */}
       {!collapsed && (
         <div className="plan-card__content" style={{ maxHeight: '400px', overflow: 'auto', marginBottom: '12px' }}>
           <MarkdownContent text={part.content} streaming={false} />
         </div>
       )}
 
-      {/* Options (if multiple approaches) */}
+      {/* 选项（多方案时显示） */}
       {!collapsed && part.options && part.options.length >= 2 && (
         <div style={{ marginBottom: '12px' }}>
           <div style={{ fontSize: '12px', color: 'var(--text-secondary, #888)', marginBottom: '6px' }}>选择方案：</div>
@@ -564,7 +563,7 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
         </div>
       )}
 
-      {/* Feedback input (for revise) */}
+      {/* 反馈输入（用于修改） */}
       {showFeedback && isPending && (
         <div style={{ marginBottom: '12px' }}>
           <textarea
@@ -596,7 +595,7 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
         </div>
       )}
 
-      {/* Action buttons */}
+      {/* 操作按钮 */}
       {isPending && !showFeedback && (
         <div style={{ display: 'flex', gap: '8px' }}>
           {!part.options || part.options.length < 2 ? (
@@ -622,7 +621,7 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
         </div>
       )}
 
-      {/* Resolved status */}
+      {/* 已决定状态 */}
       {!isPending && (
         <div style={{ fontSize: '12px', color: 'var(--text-secondary, #888)' }}>
           {part.status === 'approved' && (part.selectedLabel ? `已批准：${part.selectedLabel}` : '已批准')}
@@ -634,15 +633,15 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
   );
 };
 
-// ── Sub-agent block ──
-// Renders a nested collapsible group for sub-agent output inside an assistant message.
-// Auto-expands while running; auto-collapses on done (respects user manual toggle).
+// ── 子 Agent 块 ──
+// 在助手消息内渲染嵌套的可折叠组，用于子 Agent 输出。
+// 运行时自动展开；完成时自动折叠（尊重用户手动切换）。
 
-// ponytail: NOT wrapped in React.memo — subagent-sink mutates SubAgentPart in-place
-// (push to parts[], version++), so the object reference never changes. React.memo
-// with any comparator on the same reference would always bail out, blocking
-// streaming re-renders entirely. Performance is handled by useMemo on renderedParts;
-// auto-scroll lives in the MutationObserver effect inside the component.
+// ponytail: 未用 React.memo 包装 — subagent-sink 就地修改 SubAgentPart
+// (push 到 parts[], version++)，因此对象引用不变。React.memo
+// 在同一引用上用任何比较器都会跳过，完全阻止
+// 流式重新渲染。性能由 renderedParts 上的 useMemo 处理；
+// 自动滚动在组件内的 MutationObserver effect 中实现。
 const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: string) => void }> = ({ part, onNavigateToNode }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
@@ -653,11 +652,11 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: st
     if (part.status !== 'running' && !userOverridden.current) setExpanded(false);
   }, [part.status]);
 
-  // Auto-scroll body div to bottom as new content streams in.
-  // rAF-throttled to avoid synchronous layout thrashing from MutationObserver
-  // firing on every DOM mutation during rapid streaming.
-  // Sticks to bottom only when the user is already near it — scrolling up
-  // inside the card must not be yanked back down by incoming chunks.
+  // 新内容流入时自动滚动 body div 到底部。
+  // 使用 rAF 节流，避免 MutationObserver 在快速流式时
+  // 每次 DOM 变化都触发同步布局抖动。
+  // 仅当用户已接近底部时才贴底 — 在卡片内向上滚动
+  // 不应被新流入的内容拉回底部。
   useEffect(() => {
     const el = bodyRef.current;
     if (!el || !expanded) return;
@@ -696,8 +695,8 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: st
 
   const streaming = part.status === 'running';
 
-  // Memoized parts list — re-builds only when sub-agent content changes,
-  // not on every parent re-render (performance fix for large chat histories).
+  // 记忆化部分列表 — 仅在子 Agent 内容变化时重建，
+  // 不在每次父组件重新渲染时重建（大型聊天记录的性能优化）。
   const renderedParts = useMemo(() => {
     const items: React.ReactNode[] = [];
     let i = 0;
@@ -806,7 +805,7 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: st
   );
 };
 
-// ── User message ──
+// ── 用户消息 ──
 
 const UserBubble: React.FC<{
   msg: UserMessage;
@@ -850,13 +849,12 @@ const UserBubble: React.FC<{
   </div>
 ));
 
-// ── Assistant message ──
-// React.memo with pure reference comparison. This is ONLY correct because of
-// the store's single write path rule (messages-store.ts): every in-place
-// mutation of a message or its parts is committed via touchMessage /
-// touchMessageContaining, which swaps in a new message object. No new
-// reference ⇒ no re-render — so any future mutation path that skips the
-// store commit will silently freeze the bubble. Mutate, then touch.
+// ── 助手消息 ──
+// React.memo 使用纯引用比较。这仅因 store 的单一写入路径规则
+// (messages-store.ts) 而正确：消息或其部分的每次就地修改
+// 都通过 touchMessage / touchMessageContaining 提交，
+// 后者会替换为新的消息对象。无新引用 ⇒ 不重新渲染 —
+// 因此任何跳过 store 提交的未来修改路径都会静默冻结气泡。先修改，再 touch。
 
 const AssistantBubble: React.FC<{
   msg: AssistantMessage;
@@ -882,15 +880,15 @@ const AssistantBubble: React.FC<{
   }) => {
   const streaming = msg.status === 'streaming';
 
-  // Count reasoning blocks so we know which one is "last" (still streaming)
+  // 统计推理块数量，以确定哪个是"最后一个"（仍在流式）
   let reasoningTotal = 0;
   for (const p of msg.parts) {
     if (p.type === 'reasoning') reasoningTotal++;
   }
   let reasoningSeen = 0;
 
-  // Build flat render groups — reasoning blocks are NOT pulled out to top;
-  // they render inline, interspersed with tool groups and text.
+  // 构建扁平渲染组 — 推理块不被提取到顶部；
+  // 它们内联渲染，穿插在工具组和文本之间。
   const groups: Array<
     | { kind: 'tool'; tools: ToolCallPart[] }
     | { kind: 'reasoning'; text: string; idx: number }
@@ -938,7 +936,7 @@ const AssistantBubble: React.FC<{
             const allDone = doneCount === tools.length && tools.length >= 3;
             const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
             const groupExpanded = tools.some((t) => expandedTools.has(t.toolId));
-            // ponytail: when collapsed, show summary ONLY; when expanded, show cards + summary as toggle
+            // ponytail: 折叠时仅显示摘要；展开时显示卡片 + 摘要作为切换
             const collapsed = allDone && !groupExpanded;
             return (
               <div key={gi} className="msg-tool-wrapper">
@@ -1028,21 +1026,20 @@ const AssistantBubble: React.FC<{
     </div>
   );
 }, (prev, next) =>
-  // Pure reference comparison — safe because every mutation is committed
-  // through the store's touch methods, which always produce a new message
-  // object (see messages-store.ts SINGLE WRITE PATH RULE).
+  // 纯引用比较 — 安全，因为每次修改都通过 store 的 touch 方法提交，
+  // 后者总是产生新的消息对象（见 messages-store.ts 单一写入路径规则）。
   prev.msg === next.msg && prev.expandedTools === next.expandedTools,
 );
 
-// ── Notice ──
+// ── 通知 ──
 
 const NoticeBubble: React.FC<{ msg: NoticeMessage }> = ({ msg }) => (
   <div className={`msg-notice msg-notice-${msg.level}`}>{msg.text}</div>
 );
 
-// ── Permission card ──
+// ── 权限卡片 ──
 
-// ── Main component ──
+// ── 主组件 ──
 // P2′-2b：直接挂在 ChatBeacon 树里（Controller 包装已删）。
 // React.memo 隔离 ChatBeacon 重渲染（模式/角标变化不触碰消息树）；
 // 消息更新走 store 订阅，与旧独立 root 语义一致。
@@ -1052,8 +1049,8 @@ export const ChatMessagesApp: React.FC<{
   scrollContainer?: HTMLElement;
   panelId: string;
 }> = React.memo(({ callbacks, scrollContainer, panelId }) => {
-  // ponytail: messages live in per-session stores — subscribe to the active session's store.
-  // React re-renders automatically on session switch because activeSessionId changes.
+  // ponytail: 消息存储在每会话 store 中 — 订阅活动会话的 store。
+  // 会话切换时 React 自动重新渲染，因为 activeSessionId 变化。
   const sessStore = useMemo(() => getSessionStore(panelId), [panelId]);
   const activeSessionId = useStore(sessStore, (s) => {
     const active = s.sessions[s.activeIdx];
@@ -1077,11 +1074,11 @@ export const ChatMessagesApp: React.FC<{
   const lastMsgCount = useRef(0);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
-  // Resolve the actual scrollable element (外部指定或自身)
+  // 解析实际可滚动元素（外部指定或自身）
   const scrollEl = scrollContainer ?? listEl;
 
-  // ── Virtual list setup ──
-  // Pretext provides estimated heights; measureElement corrects after render.
+  // ── 虚拟列表设置 ──
+  // pretext 提供估算高度；measureElement 在渲染后修正。
   const containerWidthRef = useRef(300);
 
   const messagesRef = useRef(messages);
@@ -1092,8 +1089,8 @@ export const ChatMessagesApp: React.FC<{
     return msgs[i] ? estimateMessageHeight(msgs[i], containerWidthRef.current) : 60;
   }, []);
 
-  // Key measurements by message id, not index — otherwise session switches and
-  // history truncation (edit/resend) reattach stale heights to the wrong messages.
+  // 按消息 id 而非索引做关键测量 — 否则会话切换和
+  // 历史截断（编辑/重发）会将过期高度错误地关联到其他消息。
   const getItemKey = useCallback((i: number) => messagesRef.current[i]?._id ?? i, []);
 
   const virtualizer = useVirtualizer({
@@ -1107,8 +1104,8 @@ export const ChatMessagesApp: React.FC<{
   const virtualizerRef = useRef(virtualizer);
   virtualizerRef.current = virtualizer;
 
-  // Track container width for text-wrap estimation, and force the virtualizer
-  // to re-estimate when it actually changes — estimates are width-dependent.
+  // 跟踪容器宽度用于文本换行估算，并在实际变化时强制虚拟列表
+  // 重新估算 — 估算值依赖于宽度。
   useEffect(() => {
     if (!scrollEl) return;
     let lastWidth = scrollEl.clientWidth;
@@ -1124,11 +1121,11 @@ export const ChatMessagesApp: React.FC<{
     return () => ro.disconnect();
   }, [scrollEl]);
 
-  // Reset stick-to-bottom when switching sessions — don't inherit the
-  // scroll position (and stickRef state) from the previous session.
-  // Also reset lastMsgCount so the messages-length effect doesn't mistake
-  // a session switch for a new-user-message arrival, and scroll synchronously
-  // to avoid the delayed rAF "jump" when the previous session was streaming.
+  // 切换会话时重置贴底状态 — 不继承上一会话的
+  // 滚动位置（和 stickRef 状态）。
+  // 同时重置 lastMsgCount，使消息长度 effect 不会将
+  // 会话切换误认为新用户消息到达，并同步滚动
+  // 以避免上一会话流式时的延迟 rAF "跳跃"。
   useEffect(() => {
     stickRef.current = true;
     lastMsgCount.current = messages.length;
@@ -1138,7 +1135,7 @@ export const ChatMessagesApp: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, scrollEl]);
 
-  // Auto-scroll: coalesce into single pending rAF
+  // 自动滚动：合并为单个挂起的 rAF
   useEffect(
     () => {
       if (messages.length === 0) return;
@@ -1160,12 +1157,12 @@ export const ChatMessagesApp: React.FC<{
     [scrollEl?.style, messages.length, messages] as const,
   ); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-scroll during streaming — driven by messages reference change.
-  // Previously used MutationObserver, but with virtualization the DOM node
-  // count is ~10, and the messages array already changes on every streaming
-  // bump (via _streamingBump's reference swap). The effect above already
-  // handles scroll on messages.length change; this covers in-place text
-  // mutations that don't change length (same message, growing text).
+  // 流式时自动滚动 — 由 messages 引用变化驱动。
+  // 以前使用 MutationObserver，但虚拟化后 DOM 节点
+  // 数量约 10 个，且 messages 数组在每次流式 bump 时
+  // 已变化（通过 _streamingBump 的引用交换）。上面的 effect 已
+  // 处理 messages.length 变化时的滚动；此处处理不改变长度的
+  // 就地文本修改（同一消息，文本增长）。
   useEffect(() => {
     if (!stickRef.current) return;
     if (autoScrollRaf.current !== null) return;
@@ -1185,9 +1182,9 @@ export const ChatMessagesApp: React.FC<{
     };
   }, []);
 
-  // Scroll tracking: capture phase wheel + scroll event
-  // ponytail: direction-aware — only re-enable auto-scroll when user actively
-  // scrolls DOWN to the bottom. A scroll-up near the bottom won't re-engage it.
+  // 滚动跟踪：capture 阶段 wheel + scroll 事件
+  // ponytail: 方向感知 — 仅当用户主动向下滚动到底部时
+  // 才重新启用自动滚动。底部附近的向上滚动不会重新启用。
   useEffect(() => {
     const el = scrollEl;
     if (!el) return;
@@ -1195,7 +1192,7 @@ export const ChatMessagesApp: React.FC<{
     let lastScrollTop = el.scrollTop;
 
     const onWheelCapture = (e: WheelEvent) => {
-      // Ignore ctrl+wheel (zoom), horizontal scroll, scroll-down
+      // 忽略 ctrl+wheel（缩放）、水平滚动、向下滚动
       if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.deltaY >= 0) return;
       stickRef.current = false;
     };

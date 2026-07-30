@@ -15,7 +15,7 @@ use crate::engine::GRAMMAR_LOADER;
 use crate::pipeline::discovery::discover_files;
 use crate::pipeline::parser::{FileData, ParallelParser};
 
-/// Analysis pipeline result.
+/// 分析流水线结果。
 pub struct PipelineResult {
     pub graph: Graph,
     pub files_discovered: usize,
@@ -24,35 +24,35 @@ pub struct PipelineResult {
     pub nodes_total: usize,
     pub edges_total: usize,
     pub elapsed_secs: f64,
-    /// Parse cache: file_path → (source_code, parsed_tree).
-    /// Carried forward so synthesis passes (Steps 4-6) can re-walk the same
-    /// ASTs without re-reading + re-parsing files from disk.
+    /// 解析缓存：file_path → (source_code, parsed_tree)。
+    /// 传递给后续合成阶段（步骤 4-6），使其可以重新遍历相同的
+    /// AST，而无需从磁盘重新读取和重新解析文件。
     pub parse_cache: HashMap<String, (String, Option<tree_sitter::Tree>)>,
-    /// Discovered source files (absolute paths).
-    /// Carried forward so synthesis passes can iterate this list instead of
-    /// re-walking the entire project directory tree (3× walkdir eliminated).
+    /// 已发现的源文件（绝对路径）。
+    /// 传递给后续合成阶段，使其可以遍历此列表而非
+    /// 重新遍历整个项目目录树（消除了 3 次 walkdir）。
     pub discovered_files: Vec<std::path::PathBuf>,
 }
 
-/// Run the full analysis pipeline on a project directory.
-/// 1. Discover Python files
-/// 2. Parse in parallel with rayon
-/// 3. Merge into single graph (incremental index)
-/// 4. Build parse cache for downstream synthesis
+/// 对项目目录运行完整的分析流水线。
+/// 1. 发现源文件
+/// 2. 使用 rayon 并行解析
+/// 3. 合并为单个 graph（增量索引）
+/// 4. 为下游合成阶段构建解析缓存
 pub fn analyze_project(root: &Path) -> PipelineResult {
     let start = Instant::now();
 
-    // Step 1: Discovery
+    // 步骤 1：文件发现
     let exts: Vec<String> = GRAMMAR_LOADER.supported_extensions();
     let ext_strs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
     let files = discover_files(root, &ext_strs);
     info!("[pipeline] discovered {} source files", files.len());
 
-    // Step 2: Batched parallel parse + serial merge.
-    // ponytail: v1 collected all parses into Vec (memory explosion: 4.4 GB for 64K files).
-    // v2 streamed through par_iter+filter_map+for_each with merger.lock() (mutex contention
-    // → superlinear slowdown). v3 batches: parse N files in parallel, merge serially,
-    // drop batch memory, repeat. No locks, bounded memory, linear merge.
+    // 步骤 2：分批并行解析 + 串行合并。
+    // ponytail: v1 将所有解析结果收集到 Vec 中（内存爆炸：64K 文件需 4.4 GB）。
+    // v2 通过 par_iter+filter_map+for_each 流式处理并使用 merger.lock()（mutex 竞争
+    // → 超线性减速）。v3 分批：并行解析 N 个文件，串行合并，
+    // 释放批次内存，重复。无锁，内存有界，线性合并。
     const BATCH: usize = 200;
     let parser = ParallelParser::new();
     let file_count = files.len();
@@ -69,7 +69,7 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     let mut files_failed = 0usize;
 
     for batch in files.chunks(BATCH) {
-        // ── Parse batch in parallel (no locks) ──
+        // ── 并行解析批次（无锁）──
         let t0 = Instant::now();
         let batch_results: Vec<(std::path::PathBuf, Option<FileData>)> = batch
             .par_iter()
@@ -77,7 +77,7 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
             .collect();
         let parse_ms = t0.elapsed().as_millis();
 
-        // ── Merge batch serially (single thread, no lock) ──
+        // ── 串行合并批次（单线程，无锁）──
         let t1 = Instant::now();
         let mut batch_trees: Vec<tree_sitter::Tree> = Vec::with_capacity(BATCH);
         for (path, result) in batch_results {
@@ -94,19 +94,19 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
             merger.merge_slices(&result.nodes, &result.edges);
             let abs_path = normalize_path(&result.path.to_string_lossy());
             parse_cache.insert(abs_path, (result.source, None));
-            // ponytail: collect CST trees per-batch, drop on background thread.
-            // ts_tree_delete() is O(tree.nodes) — synchronous drop of 200 large-file
-            // trees blocks the merge loop for 10s+. Background drop frees memory
-            // without blocking, at cost of ~2×BATCH trees in flight at worst.
+            // ponytail: 按批收集 CST 树，在后台线程释放。
+            // ts_tree_delete() 为 O(tree.nodes) — 同步释放 200 个大文件的
+            // 树会阻塞合并循环 10 秒以上。后台释放可以在
+            // 不阻塞的情况下回收内存，代价是最多有 ~2×BATCH 棵树在途。
             if let Some(t) = result.tree {
                 batch_trees.push(t);
             }
         }
         let merge_ms = t1.elapsed().as_millis();
-        // batch_results dropped here → batch memory fully released (nodes, edges, source)
+        // batch_results 在此处 drop → 批次内存完全释放（nodes, edges, source）
 
-        // Drop CST trees on background thread — ts_tree_delete is O(nodes) and
-        // can take 100-500ms per large file. This runs while next batch parses.
+        // 在后台线程释放 CST 树 — ts_tree_delete 为 O(nodes)，
+        // 每个大文件可能耗时 100-500ms。此操作在下一批解析时并行执行。
         if !batch_trees.is_empty() {
             std::thread::spawn(move || drop(batch_trees));
         }
@@ -130,7 +130,7 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
     let edges_total = graph.edge_count();
     let elapsed = start.elapsed();
 
-    // Health assertion: if >5% of discovered files failed, warn loudly.
+    // 健康检查：如果超过 5% 的已发现文件解析失败，则发出明显警告。
     if files_failed > 0 && files_failed > file_count / 20 {
         tracing::warn!(
             "[pipeline] HEALTH: {}/{} files failed to parse ({:.1}%) — analysis may be incomplete. \
@@ -212,7 +212,7 @@ mod tests {
 
         let result = analyze_project(&tmp);
         assert!(result.files_parsed >= 1);
-        // Rust tree-sitter should find at least main + add
+        // Rust tree-sitter 应至少找到 main + add
         assert!(result.nodes_total >= 2, "should find main + add in Rust file");
 
         let _ = fs::remove_dir_all(&tmp);
@@ -260,7 +260,7 @@ mod tests {
         fs::write(tmp.join("ok.py"), "def bar():\n    pass\n").unwrap();
 
         let result = analyze_project(&tmp);
-        // Should not crash; should parse at least the valid file
+        // 不应崩溃；应至少解析有效的文件
         assert!(result.files_parsed >= 1);
 
         let _ = fs::remove_dir_all(&tmp);

@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Explore — unified query aggregator.
+//! Explore — 统一查询聚合器。
 //!
-//! Input: natural language query or pre-parsed symbol names.
-//! Output: Flow + Blast Radius + Relationships + Source Code + Architecture Alerts.
-//! Eliminates the "search → neighbors → path → Read" chain.
+//! 输入：自然语言查询或预解析的符号名称。
+//! 输出：Flow + Blast Radius + Relationships + Source Code + Architecture Alerts。
+//! 消除 "search → neighbors → path → Read" 链。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
@@ -18,12 +18,12 @@ use crate::graph::{EdgeKind, Graph, Node, NodeKind};
 use crate::graph::query;
 
 // ═══════════════════════════════════════════════════════════════
-// Public API
+// 公共 API
 // ═══════════════════════════════════════════════════════════════
 
-/// Execute an explore query. Returns a `serde_json::Value` ready for MCP response.
-/// Accepts either a natural language `query` string or pre-parsed `symbol_names` array.
-/// If `query` is provided, NL parsing extracts symbol names automatically.
+/// 执行 explore 查询。返回可直接用于 MCP 响应的 `serde_json::Value`。
+/// 接受自然语言 `query` 字符串或预解析的 `symbol_names` 数组。
+/// 如果提供了 `query`，会自动通过 NL 解析提取符号名称。
 pub fn explore(
     graph: &Graph,
     project_root: &Path,
@@ -31,7 +31,7 @@ pub fn explore(
     query: Option<&str>,
     include_source: bool,
 ) -> serde_json::Value {
-    // NL parsing: extract symbol names from natural language query
+    // NL 解析：从自然语言查询中提取符号名称
     let effective_symbols: Vec<String> = if !symbol_names.is_empty() {
         symbol_names.to_vec()
     } else if let Some(q) = query {
@@ -48,11 +48,11 @@ pub fn explore(
         named_files: HashSet::new(),
     };
 
-    // Step 1: Resolve symbols → nodes
+    // 步骤 1：解析符号 → 节点
     for sym in &effective_symbols {
         let results = query::search_nodes(graph, sym);
-        // Prefer exact name match, then take first
-        // results: Vec<&Node>
+        // 优先精确名称匹配，然后取第一个
+        // 结果：Vec<&Node>
         let best: Option<&Node> = results.iter()
             .find(|n| n.name == *sym)
             .copied()
@@ -78,16 +78,16 @@ pub fn explore(
         });
     }
 
-    // Step 2: Flow
+    // 步骤 2：Flow
     let flow = compute_flow(&ctx);
 
-    // Step 3: Blast radius
+    // 步骤 3：Blast radius
     let blast_radius = compute_blast_radius(&ctx);
 
-    // Step 4: Relationships
+    // 步骤 4：Relationships
     let relationships = compute_relationships(&ctx);
 
-    // Step 5: Source code
+    // 步骤 5：Source code
     let mut output_truncated = false;
     let mut truncation_hint = String::new();
     let source_code = if ctx.include_source {
@@ -96,10 +96,10 @@ pub fn explore(
         Vec::new()
     };
 
-    // Step 6: Architecture alerts
+    // 步骤 6：Architecture alerts
     let architecture_alerts = compute_alerts(&ctx);
 
-    // Step 7: Collect node IDs for 3D linkage
+    // 步骤 7：收集节点 ID 用于 3D 联动
     let node_ids: Vec<String> = ctx.named_ids.iter().cloned().collect();
 
     let total_found = ctx.named_nodes.len();
@@ -127,7 +127,7 @@ pub fn explore(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Internal context
+// 内部上下文
 // ═══════════════════════════════════════════════════════════════
 
 struct ExploreCtx<'a> {
@@ -140,14 +140,14 @@ struct ExploreCtx<'a> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// NL → Symbol Resolution (Spec lines 85-167)
+// NL → 符号解析（规范 85-167 行）
 // ═══════════════════════════════════════════════════════════════
 
-/// Parse a natural language query into symbol names.
-/// Step 0: Normalize — Erlang fn/N → fn, Lua mod:fn → mod.fn
-/// Step 1: Tokenize — split on whitespace/punctuation, filter to code-like tokens.
-/// Step 2: Classify — PascalCase = context, qualified (:: or .) = exact, rest = simple.
-/// Step 3: Disambiguate — use PascalCase context to scope simple tokens.
+/// 将自然语言查询解析为符号名称。
+/// 步骤 0：归一化 — Erlang fn/N → fn，Lua mod:fn → mod.fn
+/// 步骤 1：分词 — 按空白/标点分割，过滤为类代码 token。
+/// 步骤 2：分类 — PascalCase = 上下文，限定名（:: 或 .）= 精确，其余 = 简单。
+/// 步骤 3：消歧 — 使用 PascalCase 上下文来限定简单 token 的范围。
 fn parse_nl_query(graph: &Graph, query: &str) -> Vec<String> {
     let normalized = normalize_query_spelling(query);
     let tokens = tokenize(&normalized);
@@ -155,7 +155,7 @@ fn parse_nl_query(graph: &Graph, query: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    // Classify tokens
+    // 分类 token
     let mut pascal_tokens: Vec<String> = Vec::new();
     let mut qualified_tokens: Vec<String> = Vec::new();
     let mut simple_tokens: Vec<String> = Vec::new();
@@ -172,16 +172,16 @@ fn parse_nl_query(graph: &Graph, query: &str) -> Vec<String> {
 
     let mut result: Vec<String> = Vec::new();
 
-    // Qualified tokens → direct lookup (exact match by qualified name)
+    // 限定 token → 直接查找（按限定名精确匹配）
     for qt in &qualified_tokens {
-        // Search by the full qualified name
+        // 按完整限定名搜索
         let matches = query::search_nodes(graph, qt);
         if let Some(best) = matches.iter().find(|n| n.name == *qt).or_else(|| matches.first()) {
             result.push(best.name.clone());
         }
     }
 
-    // Simple tokens → disambiguate with PascalCase context
+    // 简单 token → 用 PascalCase 上下文消歧
     for st in &simple_tokens {
         let matches = query::search_nodes(graph, st);
         let filtered = disambiguate(&matches, &pascal_tokens);
@@ -190,7 +190,7 @@ fn parse_nl_query(graph: &Graph, query: &str) -> Vec<String> {
         }
     }
 
-    // PascalCase tokens: add if they resolve (and don't match project/package name)
+    // PascalCase token：如果能解析则添加（且不匹配项目/包名）
     for pt in &pascal_tokens {
         let matches = query::search_nodes(graph, pt);
         if matches.len() == 1 {
@@ -200,21 +200,21 @@ fn parse_nl_query(graph: &Graph, query: &str) -> Vec<String> {
         }
     }
 
-    // Deduplicate, cap at 16
+    // 去重，上限 16
     let mut seen = HashSet::new();
     result.retain(|s| seen.insert(s.clone()));
     result.truncate(16);
     result
 }
 
-/// Normalize Erlang/Lua spelling: fn/3 → fn, mod:fn → mod.fn
+/// 归一化 Erlang/Lua 拼写：fn/3 → fn，mod:fn → mod.fn
 fn normalize_query_spelling(query: &str) -> String {
-    // Erlang arity: fn/N → fn
+    // Erlang 元数：fn/N → fn
     static RE_ARITY: OnceLock<regex::Regex> = OnceLock::new();
     let re_arity = RE_ARITY.get_or_init(||
         regex::Regex::new(r"\b([A-Za-z_][\w@]*)/\d{1,3}\b").unwrap()
     );
-    // Lua mod:fn → mod.fn (but skip protocol prefixes like "kind:", "lang:", etc.)
+    // Lua mod:fn → mod.fn（但跳过协议前缀如 "kind:"、"lang:" 等）
     static RE_COLON: OnceLock<regex::Regex> = OnceLock::new();
     let re_colon = RE_COLON.get_or_init(||
         regex::Regex::new(r"\b([a-z_][\w@]*):([A-Za-z_][\w@]*)\b").unwrap()
@@ -223,7 +223,7 @@ fn normalize_query_spelling(query: &str) -> String {
     re_colon.replace_all(&s, "$1.$2").to_string()
 }
 
-/// Tokenize: split on whitespace/punctuation, keep code-like tokens only.
+/// 分词：按空白/标点分割，仅保留类代码 token。
 fn tokenize(query: &str) -> Vec<String> {
     static SPLIT_RE: OnceLock<regex::Regex> = OnceLock::new();
     static ID_RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -238,36 +238,36 @@ fn tokenize(query: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    // Filter: must match identifier pattern, not a file extension, length >= 2
+    // 过滤：必须匹配标识符模式，非文件扩展名，长度 >= 2
     tokens.retain(|t| {
         id_re.is_match(t) && !ext_re.is_match(t) && t.len() >= 2
     });
 
-    // Deduplicate
+    // 去重
     let mut seen = HashSet::new();
     tokens.retain(|t| seen.insert(t.clone()));
     tokens.truncate(16);
     tokens
 }
 
-/// PascalCase: first char uppercase ASCII, at least 4 chars.
+/// PascalCase：首字符为大写 ASCII，至少 4 个字符。
 fn is_pascal_case(s: &str) -> bool {
     s.len() >= 4
         && s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Disambiguate simple tokens using PascalCase context tokens.
-/// If candidates ≤ 3, keep all. Otherwise filter by container name match.
+/// 使用 PascalCase 上下文 token 对简单 token 进行消歧。
+/// 如果候选 ≤ 3，全部保留。否则按容器名匹配过滤。
 fn disambiguate<'a>(candidates: &[&'a Node], pascal_tokens: &[String]) -> Vec<&'a Node> {
     if candidates.len() <= 3 {
         return candidates.to_vec();
     }
 
-    // Keep candidates whose container (qualified name prefix) matches a PascalCase token
+    // 保留容器（限定名前缀）匹配某个 PascalCase token 的候选
     let in_context: Vec<&Node> = candidates.iter().filter(|n| {
-        // Get the container: everything before the last :: in the qualified name.
-        // The id typically looks like "src.module.ClassName.method"
+        // 获取容器：限定名中最后一个 :: 之前的所有内容。
+        // id 通常形如 "src.module.ClassName.method"
         let container = n.id.rsplit_once('.').map(|x| x.0).unwrap_or("");
         pascal_tokens.iter().any(|pt| {
             container.eq_ignore_ascii_case(pt)
@@ -278,7 +278,7 @@ fn disambiguate<'a>(candidates: &[&'a Node], pascal_tokens: &[String]) -> Vec<&'
     if !in_context.is_empty() {
         in_context.into_iter().take(4).collect()
     } else {
-        // Fallback: prefer higher-degree nodes (more connected = more important)
+        // 回退：优先高度数节点（连接越多 = 越重要）
         let mut sorted: Vec<&&Node> = candidates.iter().collect();
         sorted.sort_by_key(|n| n.in_degree.saturating_add(n.out_degree));
         sorted.reverse();
@@ -287,7 +287,7 @@ fn disambiguate<'a>(candidates: &[&'a Node], pascal_tokens: &[String]) -> Vec<&'
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Step 2: Flow — BFS path between named symbols
+// 步骤 2：Flow — 命名符号间的 BFS 路径
 // ═══════════════════════════════════════════════════════════════
 
 fn compute_flow(ctx: &ExploreCtx) -> serde_json::Value {
@@ -295,8 +295,8 @@ fn compute_flow(ctx: &ExploreCtx) -> serde_json::Value {
         return json!(null);
     }
 
-    // Try to find paths between every pair of named symbols
-    // Prefer calls edges, fall back to all edges
+    // 尝试在每对命名符号之间查找路径
+    // 优先 Calls 边，回退到所有边
     let mut best_path: Option<Vec<String>> = None;
 
     for edge_kind_filter in &[Some(EdgeKind::Calls), None] {
@@ -337,7 +337,7 @@ fn compute_flow(ctx: &ExploreCtx) -> serde_json::Value {
                     }));
                 }
                 if k < path_ids.len() - 1 {
-                    // Find edge between this and next
+                    // 查找当前与下一个之间的边
                     let edge_kind = find_edge_kind(ctx.graph, &path_ids[k], &path_ids[k + 1]);
                     steps.push(json!({ "edge": edge_kind, "hop": k + 1 }));
                 }
@@ -348,7 +348,7 @@ fn compute_flow(ctx: &ExploreCtx) -> serde_json::Value {
             })
         }
         None => {
-            // No static path found — scan for dynamic boundaries
+            // 未找到静态路径 — 扫描动态边界
             let boundaries = scan_boundaries_at_breakpoints(ctx);
             json!({
                 "path": [],
@@ -359,8 +359,8 @@ fn compute_flow(ctx: &ExploreCtx) -> serde_json::Value {
     }
 }
 
-/// When no static BFS path exists between named symbols, scan their source
-/// files for dynamic dispatch patterns (computed calls, reflection, event dispatch).
+/// 当命名符号之间不存在静态 BFS 路径时，扫描其源
+/// 文件中的动态分发模式（计算式调用、反射、事件分发）。
 fn scan_boundaries_at_breakpoints(ctx: &ExploreCtx) -> Vec<serde_json::Value> {
     let mut results: Vec<serde_json::Value> = Vec::new();
     let mut seen_files = HashSet::new();
@@ -428,11 +428,11 @@ fn bfs_path(
 
     visited.insert(from.to_string());
     queue.push_back(from.to_string());
-    prev.insert(from.to_string(), String::new()); // sentinel
+    prev.insert(from.to_string(), String::new()); // 哨兵值
 
     while let Some(cur) = queue.pop_front() {
         if cur == to {
-            // Reconstruct path
+            // 重建路径
             let mut path = Vec::new();
             let mut c = to.to_string();
             while c != from {
@@ -441,19 +441,19 @@ fn bfs_path(
             }
             path.push(from.to_string());
             path.reverse();
-            // Check depth
+            // 检查深度
             if path.len() - 1 <= MAX_DEPTH {
                 return Some(path);
             }
         }
 
-        // Compute current depth to enforce MAX_DEPTH
+        // 计算当前深度以强制 MAX_DEPTH
         let cur_depth = path_depth(&prev, from, &cur);
         if cur_depth >= MAX_DEPTH {
             continue;
         }
 
-        // Check outgoing edges
+        // 检查出边
         let out_edges = ctx.graph.outgoing_edges(&cur);
         for edge in &out_edges {
             if explore_count >= MAX_EXPLORE {
@@ -471,7 +471,7 @@ fn bfs_path(
                 explore_count += 1;
             }
         }
-        // Check incoming edges (data flows upstream)
+        // 检查入边（数据逆向流动）
         let in_edges = ctx.graph.incoming_edges(&cur);
         for edge in &in_edges {
             if explore_count >= MAX_EXPLORE {
@@ -518,7 +518,7 @@ fn find_edge_kind(graph: &Graph, from: &str, to: &str) -> String {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Step 3: Blast Radius
+// 步骤 3：Blast Radius
 // ═══════════════════════════════════════════════════════════════
 
 fn compute_blast_radius(ctx: &ExploreCtx) -> serde_json::Value {
@@ -565,7 +565,7 @@ fn is_test_node(node: &Node, file: &str) -> bool {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Step 4: Relationships — edges grouped by type between named symbols
+// 步骤 4：Relationships — 命名符号间按类型分组的边
 // ═══════════════════════════════════════════════════════════════
 
 fn compute_relationships(ctx: &ExploreCtx) -> serde_json::Value {
@@ -596,7 +596,7 @@ fn compute_relationships(ctx: &ExploreCtx) -> serde_json::Value {
         }
     }
 
-    // Deduplicate within each kind
+    // 在每种类型内去重
     let mut result = serde_json::Map::new();
     for (kind, mut edges) in by_kind {
         edges.sort_by_key(|e| format!("{}-{}", e["source"], e["target"]));
@@ -607,10 +607,10 @@ fn compute_relationships(ctx: &ExploreCtx) -> serde_json::Value {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Adaptive Explore Budget (tiered by project size)
+// 自适应 Explore 预算（按项目规模分层）
 // ═══════════════════════════════════════════════════════════════
 
-/// Project file count → recommended explore_deps call count.
+/// 项目文件数 → 推荐的 explore_deps 调用次数。
 pub fn explore_budget(file_count: usize) -> usize {
     match file_count {
         n if n < 500 => 1,
@@ -650,7 +650,7 @@ pub fn explore_output_budget(file_count: usize) -> ExploreOutputBudget {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Step 5: Source Code
+// 步骤 5：Source Code
 // ═══════════════════════════════════════════════════════════════
 
 fn read_source_sections(ctx: &ExploreCtx, truncated: &mut bool, hint: &mut String) -> Vec<serde_json::Value> {
@@ -664,7 +664,7 @@ fn read_source_sections(ctx: &ExploreCtx, truncated: &mut bool, hint: &mut Strin
     let mut total_chars = 0usize;
     let mut total_files_matched = 0usize;
 
-    // Collect files from named nodes, ordered by relevance (first = most relevant)
+    // 从命名节点收集文件，按相关性排序（首个 = 最相关）
     for node in &ctx.named_nodes {
         if let Some(ref loc) = node.location {
             let fk = file_key(loc);
@@ -686,7 +686,7 @@ fn read_source_sections(ctx: &ExploreCtx, truncated: &mut bool, hint: &mut Strin
         }
     }
 
-    // Also try to read files from blast radius nodes (neighbors)
+    // 也尝试从 blast radius 节点（邻居）读取文件
     for node in &ctx.named_nodes {
         for edge in ctx.graph.outgoing_edges(&node.id) {
             if total_chars >= max_output || file_sections.len() >= max_files {
@@ -766,17 +766,17 @@ fn read_file_section(
         1
     };
 
-    // Take a window around the center line, bounded by max_chars
+    // 在中心行周围取一个窗口，受 max_chars 限制
     let mut start = center.saturating_sub(20);
     let mut end = (center + 40).min(total_lines);
 
-    // Expand window while under char budget
+    // 在字符预算内扩展窗口
     let mut char_count = 0usize;
     for i in start..end {
-        char_count += all_lines[i].len() + 1; // +1 for \n
+        char_count += all_lines[i].len() + 1; // +1 为换行符
     }
 
-    // Shrink if over budget
+    // 超预算时收缩
     while char_count > max_chars && end > start + 1 {
         if end - center > center - start {
             end -= 1;
@@ -787,7 +787,7 @@ fn read_file_section(
         }
     }
 
-    // Expand if under budget
+    // 在预算内时扩展
     while char_count < max_chars && (start > 0 || end < total_lines) {
         if start > 0 {
             start -= 1;
@@ -831,13 +831,13 @@ fn guess_language(file: &str) -> &'static str {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Step 6: Architecture Alerts
+// 步骤 6：Architecture Alerts
 // ═══════════════════════════════════════════════════════════════
 
 fn compute_alerts(ctx: &ExploreCtx) -> serde_json::Value {
     let mut alerts = serde_json::Map::new();
 
-    // Cycles — check if any named node is in a cycle
+    // 环 — 检查是否有命名节点在环中
     let all_cycles = detect_cycles(ctx.graph);
     if !all_cycles.is_empty() {
         let relevant: Vec<_> = all_cycles.iter().filter(|c| {
@@ -854,7 +854,7 @@ fn compute_alerts(ctx: &ExploreCtx) -> serde_json::Value {
         }
     }
 
-    // Fragile modules — check if named nodes' files are in top fragile
+    // 脆弱模块 — 检查命名节点的文件是否在 top fragile 中
     let fragile = fragile_nodes(ctx.graph, 10);
     if !fragile.is_empty() {
         let relevant: Vec<_> = fragile.iter().filter(|f| {
@@ -867,7 +867,7 @@ fn compute_alerts(ctx: &ExploreCtx) -> serde_json::Value {
         }
     }
 
-    // High coupling — check coupling for each named node's file
+    // 高耦合 — 检查每个命名节点文件的耦合度
     let mut high_coupling = Vec::new();
     for file in &ctx.named_files {
         let report = coupling_report(ctx.graph, file);
@@ -885,7 +885,7 @@ fn compute_alerts(ctx: &ExploreCtx) -> serde_json::Value {
         alerts.insert("highCoupling".into(), json!(high_coupling));
     }
 
-    // Thread conflicts — check medium nodes connected to named nodes
+    // 线程冲突 — 检查连接到命名节点的 Medium 节点
     let mut thread_conflicts = Vec::new();
     for node in &ctx.named_nodes {
         for edge in ctx.graph.outgoing_edges(&node.id) {
@@ -917,10 +917,10 @@ fn compute_alerts(ctx: &ExploreCtx) -> serde_json::Value {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Utilities
+// 工具函数
 // ═══════════════════════════════════════════════════════════════
 
-/// Extract file path and line number from location string like "src/main.rs:42".
+/// 从位置字符串（如 "src/main.rs:42"）提取文件路径和行号。
 fn parse_location(loc: &Option<String>) -> (String, usize) {
     let raw = match loc {
         Some(l) => l.as_str(),
@@ -930,7 +930,7 @@ fn parse_location(loc: &Option<String>) -> (String, usize) {
         if let Ok(line) = line_str.parse::<usize>() {
             return (path.to_string(), line);
         }
-        // Maybe the colon is part of a Windows path like C:\... — check
+        // 也许冒号是 Windows 路径的一部分如 C:\... — 检查
         if raw.len() > 2 && raw.as_bytes()[1] == b':' {
             return (raw.to_string(), 0);
         }
@@ -939,11 +939,11 @@ fn parse_location(loc: &Option<String>) -> (String, usize) {
     (raw.to_string(), 0)
 }
 
-/// Normalize a file path for dedup comparison.
+/// 归一化文件路径用于去重比较。
 fn file_key(loc: &str) -> String {
-    // Strip line number suffix if present
+    // 去除行号后缀（如存在）
     let path = if let Some((p, _)) = loc.rsplit_once(':') {
-        // Guard against Windows drive letters
+        // 防止 Windows 驱动器号被误判
         if p.len() > 1 && p.as_bytes()[p.len() - 1] == b':' {
             loc
         } else {
@@ -962,7 +962,7 @@ mod tests {
 
     fn test_graph() -> Graph {
         let mut g = Graph::new();
-        // Two named symbols connected by a call
+        // 两个通过调用连接的命名符号
         let mut a = Node::new("a", "DataRequest.task", NodeKind::Symbol);
         a.location = Some("Source/Core/DataRequest.swift:142".into());
         a.out_degree = 1;
@@ -974,18 +974,18 @@ mod tests {
         b.out_degree = 1;
         g.add_node(b);
 
-        // A dependent
+        // 一个依赖方
         let mut c = Node::new("c", "UploadService", NodeKind::Symbol);
         c.location = Some("Source/Services/UploadService.swift:45".into());
         c.out_degree = 1;
         g.add_node(c);
 
-        // A test
+        // 一个测试
         let mut t = Node::new("t1", "testValidateResponse", NodeKind::Symbol);
         t.location = Some("Tests/DataRequestTests.swift:87".into());
         g.add_node(t);
 
-        // Edges
+        // 边
         let mut e1 = Edge::new("e1", "a", "b", EdgeKind::Calls);
         e1.coupling_depth = 1;
         g.add_edge_unchecked(e1);
@@ -998,7 +998,7 @@ mod tests {
         e3.coupling_depth = 1;
         g.add_edge_unchecked(e3);
 
-        // Protocol implementation
+        // 协议实现
         let mut proto = Node::new("proto", "RequestProtocol", NodeKind::Symbol);
         proto.location = Some("Source/Protocols/RequestProtocol.swift:10".into());
         g.add_node(proto);
@@ -1016,22 +1016,22 @@ mod tests {
         let tmp = std::env::temp_dir();
         let result = explore(&g, &tmp, &["DataRequest.task".into(), "DataRequest.validate".into()], None, true);
 
-        // Flow should exist
+        // Flow 应存在
         assert!(result["flow"]["path"].is_array());
         let path = result["flow"]["path"].as_array().unwrap();
         assert!(!path.is_empty(), "Flow path should not be empty");
 
-        // Blast radius should have dependents
+        // Blast radius 应包含依赖方
         let deps = &result["blastRadius"]["dependents"];
         assert!(deps.is_array());
         let tests = &result["blastRadius"]["tests"];
         assert!(tests.is_array());
 
-        // Relationships should have calls
+        // Relationships 应包含 calls
         let calls = &result["relationships"]["calls"];
         assert!(calls.is_array());
 
-        // Node IDs
+        // 节点 ID
         let ids = result["nodeIds"].as_array().unwrap();
         assert!(!ids.is_empty());
     }
@@ -1064,7 +1064,7 @@ mod tests {
     fn test_parse_location_windows_drive() {
         let loc = Some("D:\\project\\src\\main.rs:55".into());
         let (file, line) = parse_location(&loc);
-        // The rsplit_once(':') should split at the last colon (before 55)
+        // rsplit_once(':') 应在最后一个冒号处分割（55 之前）
         assert_eq!(line, 55);
         assert!(file.contains("main.rs"));
     }
@@ -1091,7 +1091,7 @@ mod tests {
         assert!(!is_test_node(&n2, "src/business.rs"));
     }
 
-    // ── NL Parser tests ──
+    // ── NL 解析器测试 ──
 
     #[test]
     fn test_tokenize_simple() {
@@ -1104,7 +1104,7 @@ mod tests {
     #[test]
     fn test_tokenize_filters_chinese() {
         let tokens = tokenize("DataRequest 怎么 validate 一个 task");
-        // Chinese characters should be filtered out
+        // 中文字符应被过滤掉
         assert!(tokens.contains(&"DataRequest".to_string()));
         assert!(tokens.contains(&"validate".to_string()));
         assert!(tokens.contains(&"task".to_string()));
@@ -1113,7 +1113,7 @@ mod tests {
     #[test]
     fn test_tokenize_filters_short() {
         let tokens = tokenize("a b c ab");
-        // Single chars filtered (<2)
+        // 单字符被过滤（<2）
         assert!(!tokens.contains(&"a".to_string()));
         assert!(!tokens.contains(&"b".to_string()));
         assert!(!tokens.contains(&"c".to_string()));
@@ -1131,9 +1131,9 @@ mod tests {
     fn test_is_pascal_case() {
         assert!(is_pascal_case("DataRequest"));
         assert!(is_pascal_case("UserService"));
-        assert!(!is_pascal_case("dataRequest")); // starts lowercase
-        assert!(!is_pascal_case("URL"));           // too short (<4)
-        assert!(!is_pascal_case("abc"));           // too short + lowercase
+        assert!(!is_pascal_case("dataRequest")); // 小写开头
+        assert!(!is_pascal_case("URL"));           // 太短（<4）
+        assert!(!is_pascal_case("abc"));           // 太短 + 小写
     }
 
     #[test]
@@ -1141,7 +1141,7 @@ mod tests {
         let g = test_graph();
         let candidates: Vec<&Node> = g.nodes.values().collect();
         let pascal: Vec<String> = vec![];
-        // With 3 or fewer candidates, all are kept
+        // 候选 ≤ 3 时全部保留
         let few: Vec<&Node> = candidates.iter().take(3).copied().collect();
         let result = disambiguate(&few, &pascal);
         assert_eq!(result.len(), 3);

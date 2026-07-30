@@ -9,8 +9,8 @@ pub(crate) fn is_flask_candidate(file: &str) -> bool {
     lower.ends_with(".py")
 }
 
-/// Detect Flask `@app.route("/path", methods=["GET"])` decorator.
-/// Same tree-sitter pattern as FastAPI but decorator name is `route` (not an HTTP method).
+/// 检测 Flask `@app.route("/path", methods=["GET"])` 装饰器。
+/// 与 FastAPI 使用相同的 tree-sitter 模式，但装饰器名为 `route`（不是 HTTP 方法）。
 pub(crate) fn detect_flask_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
@@ -63,8 +63,8 @@ pub(crate) fn detect_flask_routes(file: &str, source: &str) -> Vec<DetectedRoute
     result
 }
 
-/// Extract (HTTP_METHOD, route_path) from Flask @app.route decorator.
-/// Pattern: @app.route("/path", methods=["GET", "POST"]) or just @app.route("/path")
+/// 从 Flask @app.route 装饰器中提取 (HTTP_METHOD, route_path)。
+/// 模式：@app.route("/path", methods=["GET", "POST"]) 或仅 @app.route("/path")
 fn extract_flask_decorator(
     decorator: &tree_sitter::Node,
     source: &str,
@@ -72,10 +72,10 @@ fn extract_flask_decorator(
     let mut dec_cursor = decorator.walk();
     let children: Vec<_> = decorator.children(&mut dec_cursor).collect();
 
-    // Find the call node
+    // 查找 call 节点
     let call_node = children.iter().find(|c| c.kind() == "call")?;
 
-    // Check that function is an attribute ending with "route"
+    // 检查函数是否为以 "route" 结尾的属性
     let func = call_node.child_by_field_name("function")?;
     if func.kind() != "attribute" {
         return None;
@@ -89,22 +89,22 @@ fn extract_flask_decorator(
         return None;
     }
 
-    // Extract path from first string argument
+    // 从第一个字符串参数中提取路径
     let args = call_node.child_by_field_name("arguments")?;
     let mut args_cursor = args.walk();
     let mut path = String::new();
-    let mut methods: Vec<String> = vec!["GET".into()]; // default Flask method
+    let mut methods: Vec<String> = vec!["GET".into()]; // Flask 默认方法
 
     for child in args.children(&mut args_cursor) {
         if child.kind() == "string" && path.is_empty() {
             path = child.utf8_text(source.as_bytes()).unwrap_or("")
                 .trim_matches(&['\'', '"', 'r', 'b'][..]).to_string();
         }
-        // Look for methods=["GET", "POST"] keyword
+        // 查找 methods=["GET", "POST"] 关键字
         if child.kind() == "keyword_argument" {
             let kw_text = child.utf8_text(source.as_bytes()).unwrap_or("");
             if kw_text.starts_with("methods=") {
-                // Extract method names from the list
+                // 从列表中提取方法名
                 let mut kw_cursor = child.walk();
                 for kw_child in child.children(&mut kw_cursor) {
                     if kw_child.kind() == "string" {

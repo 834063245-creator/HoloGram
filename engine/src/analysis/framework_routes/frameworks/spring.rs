@@ -10,18 +10,18 @@ pub(crate) fn is_spring_candidate(file: &str) -> bool {
     lower.ends_with(".java") || lower.ends_with(".kt")
 }
 
-/// Detect Spring `@GetMapping("/path")`, `@PostMapping`, `@RequestMapping(...)` annotations.
+/// 检测 Spring `@GetMapping("/path")`、`@PostMapping`、`@RequestMapping(...)` 注解。
 ///
-/// D1: Class-level `@RequestMapping` prefix is merged with method-level paths.
-/// e.g. class `@RequestMapping("/api")` + method `@GetMapping("/users")` → `/api/users`.
-/// The class-level annotation itself does NOT produce a route — it's a prefix only.
+/// D1：类级 `@RequestMapping` 前缀与方法级路径合并。
+/// 例如类 `@RequestMapping("/api")` + 方法 `@GetMapping("/users")` → `/api/users`。
+/// 类级注解本身不产生路由——它仅作为前缀。
 pub(crate) fn detect_spring_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
-    // Determine language
+    // 确定语言
     let is_kotlin = file.ends_with(".kt") || file.ends_with(".kts");
     let lang: tree_sitter::Language = if is_kotlin {
-        // Kotlin tree-sitter isn't wired yet, skip
+        // Kotlin tree-sitter 尚未接入，跳过
         return result;
     } else {
         match GRAMMAR_LOADER.get("java") { Some(l) => l, None => return result }
@@ -38,13 +38,13 @@ pub(crate) fn detect_spring_routes(file: &str, source: &str) -> Vec<DetectedRout
 
     let root = tree.root_node();
     let mut cursor = root.walk();
-    // Stack carries (node, class_prefix) — class_prefix is the @RequestMapping path
-    // from the enclosing class declaration (empty if none).
+    // 栈携带 (node, class_prefix) —— class_prefix 是来自
+    // 外层 class 声明的 @RequestMapping 路径（无则为空）。
     let mut stack: Vec<(tree_sitter::Node<'_>, String)> = vec![(root, String::new())];
 
     while let Some((node, class_prefix)) = stack.pop() {
         if node.kind() == "class_declaration" {
-            // Extract class-level @RequestMapping prefix — does NOT create a route.
+            // 提取类级 @RequestMapping 前缀——不创建路由。
             let prefix = extract_class_request_mapping_prefix(&node, source);
             let children: Vec<_> = node.children(&mut cursor).collect();
             for child in children.into_iter().rev() {
@@ -59,11 +59,11 @@ pub(crate) fn detect_spring_routes(file: &str, source: &str) -> Vec<DetectedRout
                 handler_name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
             }
 
-            // Check for Spring annotations among modifiers/annotations
+            // 在 modifiers/annotations 中检查 Spring 注解
             let mut node_cursor = node.walk();
             for child in node.children(&mut node_cursor) {
                 if child.kind() == "modifiers" || child.kind() == "annotation" {
-                    // Scan for @GetMapping, @PostMapping, etc. (method-level annotations only)
+                    // 扫描 @GetMapping、@PostMapping 等（仅方法级注解）
                     find_spring_annotations(&child, source, &mut result, &handler_name, file, &class_prefix);
                 }
             }
@@ -78,8 +78,8 @@ pub(crate) fn detect_spring_routes(file: &str, source: &str) -> Vec<DetectedRout
     result
 }
 
-/// Extract the class-level `@RequestMapping` path prefix from a class_declaration node.
-/// Returns empty string if no class-level `@RequestMapping` is found.
+/// 从 class_declaration 节点中提取类级 `@RequestMapping` 路径前缀。
+/// 如果未找到类级 `@RequestMapping`，则返回空字符串。
 fn extract_class_request_mapping_prefix(class_node: &tree_sitter::Node, source: &str) -> String {
     let mut node_cursor = class_node.walk();
     for child in class_node.children(&mut node_cursor) {
@@ -93,7 +93,7 @@ fn extract_class_request_mapping_prefix(class_node: &tree_sitter::Node, source: 
     String::new()
 }
 
-/// Search a modifiers/annotation subtree for a `@RequestMapping` annotation and return its path.
+/// 在 modifiers/annotation 子树中搜索 `@RequestMapping` 注解并返回其路径。
 fn find_request_mapping_in_node(node: &tree_sitter::Node, source: &str) -> String {
     let mut cursor = node.walk();
     let mut stack: Vec<tree_sitter::Node<'_>> = node.children(&mut cursor).collect();
@@ -121,8 +121,8 @@ fn find_request_mapping_in_node(node: &tree_sitter::Node, source: &str) -> Strin
     String::new()
 }
 
-/// Merge a class-level prefix with a method-level path.
-/// e.g. ("/api", "/users") → "/api/users"; ("", "/users") → "/users"
+/// 合并类级前缀与方法级路径。
+/// 例如 ("/api", "/users") → "/api/users"；("", "/users") → "/users"
 fn merge_spring_paths(prefix: &str, path: &str) -> String {
     if prefix.is_empty() {
         return path.to_string();
@@ -144,8 +144,8 @@ fn find_spring_annotations(
     file: &str,
     class_prefix: &str,
 ) {
-    // D1: Method-level annotations only — RequestMapping at method level is valid,
-    // but class-level @RequestMapping is handled separately as a prefix.
+    // D1：仅方法级注解——方法级 RequestMapping 是有效的，
+    // 但类级 @RequestMapping 作为前缀单独处理。
     let spring_annotations: HashSet<&str> = [
         "RequestMapping", "GetMapping", "PostMapping", "PutMapping",
         "DeleteMapping", "PatchMapping",
@@ -159,13 +159,13 @@ fn find_spring_annotations(
 
     while let Some(child) = stack.pop() {
         if child.kind() == "annotation" || child.kind() == "marker_annotation" {
-            // Extract annotation name
+            // 提取注解名称
             let mut ac = child.walk();
             for ac_child in child.children(&mut ac) {
                 if ac_child.kind() == "identifier" {
                     let name = ac_child.utf8_text(source.as_bytes()).unwrap_or("");
                     if spring_annotations.contains(name) {
-                        // Map annotation name to HTTP method
+                        // 将注解名称映射到 HTTP 方法
                         let method = match name {
                             "GetMapping" => "GET",
                             "PostMapping" => "POST",
@@ -174,10 +174,10 @@ fn find_spring_annotations(
                             "PatchMapping" => "PATCH",
                             _ => "ALL",
                         };
-                        // Find path string in annotation arguments
+                        // 在注解参数中查找路径字符串
                         let path = extract_spring_path(&child, source)
                             .unwrap_or_else(|| "/".to_string());
-                        // D1: Merge class-level prefix with method-level path
+                        // D1：合并类级前缀与方法级路径
                         let merged_path = merge_spring_paths(class_prefix, &path);
                         let line = child.start_position().row + 1;
                         result.push((
@@ -209,7 +209,7 @@ fn extract_spring_path(annotation: &tree_sitter::Node, source: &str) -> Option<S
                     return Some(arg.utf8_text(source.as_bytes()).unwrap_or("")
                         .trim_matches(&['\'', '"'][..]).to_string());
                 }
-                // annotation_member: value = "/path"
+                // annotation_member：value = "/path"
                 if arg.kind() == "annotation_member" || arg.kind() == "element_value_pair" {
                     let mut mc = arg.walk();
                     for mchild in arg.children(&mut mc) {

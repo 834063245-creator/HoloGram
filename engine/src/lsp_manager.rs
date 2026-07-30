@@ -557,8 +557,8 @@ impl LspManager {
         let root = project_root.to_string();
         for cfg in SERVER_CONFIGS {
             let cmd = cfg.command;
-            // Skip servers already running in the pool — avoids killing
-            // healthy processes on repeated warm calls (e.g. engine_status poll).
+            // 跳过池中已在运行的服务器 —— 避免在重复 warm 调用
+            //（如 engine_status 轮询）时杀死健康的进程。
             {
                 let pool = mgr.pool.read().unwrap();
                 if let Some(arc) = pool.get(cmd) {

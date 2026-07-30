@@ -65,8 +65,8 @@ export class PreflightHookRegistry {
     this.hooks.push(hook);
   }
 
-  /** Run all matching hooks and aggregate their warnings (was first-match-wins,
-   *  which silently shadowed every hook after the graph preflight). */
+  /** 运行所有匹配的 hook 并聚合其警告（原来是首个匹配生效，
+   *  会静默遮蔽 graph preflight 之后的每个 hook）。 */
   check(toolName: string, args: Record<string, unknown>): string | null {
     const warnings: string[] = [];
     for (const hook of this.hooks) {
@@ -85,28 +85,28 @@ export class PreflightHookRegistry {
 
 // ── GraphContext —— 图数据查询接口 ──
 
-/** Engine-level snapshot loaded from hologram_call (fragile_modules + project_health).
- *  Populated asynchronously after agent setup. Null until first fetch completes. */
+/** 引擎层快照，从 hologram_call 加载（fragile_modules + project_health）。
+ *  在 agent 设置后异步填充。首次 fetch 完成前为 null。 */
 export interface EngineSnapshot {
-  /** Top fragile modules: [file, score] */
+  /** 脆弱度最高的模块：[file, score] */
   fragilityRanks: Array<{ file: string; score: number }>;
-  /** Total cycle count */
+  /** 循环依赖总数 */
   cycleCount: number;
-  /** Coupling density score 0-100 */
+  /** 耦合密度得分 0-100 */
   healthScore: number;
-  /** Session baseline — drift tracking */
+  /** 会话基线 — 用于漂移追踪 */
   baselineFragility: Map<string, number>;
-  /** Drift since session start: positive = degraded */
+  /** 会话开始以来的漂移：正值 = 退化 */
   sessionDrift: number;
-  /** LSP: files with high-call-count symbols (top 20) */
+  /** LSP: 高调用次数符号的文件（前 20） */
   lspHotspots: Array<{ file: string; symbol: string; callers: number }>;
-  /** LSP: real call-resolution data from resolve_call (on-demand per-file) */
+  /** LSP: 来自 resolve_call 的真实调用解析数据（按需 per-file） */
   lspCallers: Map<string, Array<{ symbol: string; count: number }>>;
-  /** Synthesis: blindspot markers grouped by type */
+  /** 合成：按类型分组的盲点标记 */
   synthesisAlerts: Array<{ type: string; count: number; detail: string }>;
-  /** Vector: semantic neighbor map: file -> similar symbol names */
+  /** 向量：语义邻居映射：file -> 相似符号名 */
   semanticNeighbors: Map<string, Array<{ name: string; file: string }>>;
-  /** Vector: ready flag */
+  /** 向量：就绪标志 */
   vectorReady: boolean;
 }
 
@@ -114,7 +114,7 @@ export interface GraphContext {
   getNodesInFile(filePath: string): NodeBrief[];
   getImpactSummary(filePath: string): string | null;
   getSearchContext(files: string[]): string | null;
-  /** Engine snapshot — null until async fetch completes. Read by preflight hook. */
+  /** 引擎快照 — 异步 fetch 完成前为 null。由 preflight hook 读取。 */
   engine: EngineSnapshot | null;
 }
 
@@ -140,7 +140,7 @@ export function buildFileNodeIndex(graphData: any): {
   const nodes = Array.isArray(graphData.nodes) ? graphData.nodes : Object.values(graphData.nodes || {});
   const edges = Array.isArray(graphData.edges) ? graphData.edges : Object.values(graphData.edges || {});
 
-  // Pass 1: count degrees
+  // 第一遍：计算度数
   for (const e of edges) {
     const src = (e as any).source,
       tgt = (e as any).target;
@@ -150,13 +150,13 @@ export function buildFileNodeIndex(graphData: any): {
     }
   }
 
-  // Pass 2: build file index
+  // 第二遍：构建文件索引
   for (const n of nodes) {
     const loc: string = (n as any).location || '';
     let fp = loc;
     const colonIdx = loc.lastIndexOf(':');
     if (colonIdx > 1) {
-      // Only strip if the part after last : looks like a line number
+      // 仅当最后一个 : 之后的部分看起来像行号时才截取
       const after = loc.slice(colonIdx + 1);
       if (/^\d+$/.test(after)) fp = loc.slice(0, colonIdx);
     }
@@ -185,21 +185,21 @@ export function buildGraphSnapshot(graphData: any): string {
   const nodes: any[] = Array.isArray(graphData.nodes) ? graphData.nodes : Object.values(graphData.nodes || {});
   const edges: any[] = Array.isArray(graphData.edges) ? graphData.edges : Object.values(graphData.edges || {});
 
-  // Community distribution
+  // 社区分布
   const communityMap = new Map<number, number>();
   for (const n of nodes) {
     const cid = n.community_id ?? n.communityId;
     if (cid != null) communityMap.set(cid, (communityMap.get(cid) || 0) + 1);
   }
 
-  // Edge type breakdown
+  // 边类型分布
   const edgeTypes = new Map<string, number>();
   for (const e of edges) {
     const k = e.kind || e.edge_type || '?';
     edgeTypes.set(k, (edgeTypes.get(k) || 0) + 1);
   }
 
-  // Top fan-in nodes
+  // 高扇入节点
   const fanIn = new Map<string, number>();
   for (const e of edges) {
     if (e.target) fanIn.set(e.target, (fanIn.get(e.target) || 0) + 1);
@@ -210,32 +210,32 @@ export function buildGraphSnapshot(graphData: any): string {
     .sort((a, b) => b.fanIn - a.fanIn)
     .slice(0, 5);
 
-  // Inherits edges — count distinct
+  // 继承边 — 去重计数
   const inheritsEdges = edges.filter((e) => (e.kind || e.edge_type) === 'inherits');
   const classCount = nodes.filter((n) => (n.kind || '').toLowerCase() === 'class').length;
 
   const parts: string[] = [];
   parts.push(`${nodes.length} 节点 / ${edges.length} 边`);
 
-  // Communities
+  // 社区
   if (communityMap.size > 0) {
     const sizes = [...communityMap.values()].sort((a, b) => b - a).slice(0, 5);
     parts.push(`${communityMap.size} 个社区（规模: ${sizes.join('/')}）`);
   }
 
-  // Edge types
+  // 边类型
   const typeParts: string[] = [];
   for (const [k, v] of [...edgeTypes.entries()].sort((a, b) => b[1] - a[1])) {
     typeParts.push(`${k}:${v}`);
   }
   parts.push(`边: ${typeParts.join(', ')}`);
 
-  // Class hierarchy
+  // 类层次结构
   if (classCount > 0) {
     parts.push(`${classCount} 个类/接口, ${inheritsEdges.length} 条继承边`);
   }
 
-  // Hotspots
+  // 热点
   if (topFanIn.length > 0) {
     parts.push(`枢纽: ${topFanIn.map((n) => `\`${n.name}\`(${n.fanIn})`).join(', ')}`);
   }
@@ -294,7 +294,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
     },
 
     async enrich(toolName: string, args: Record<string, unknown>, result: string): Promise<string> {
-      // Skip if result too large or looks like an error
+      // 结果过大或看起来是错误时跳过
       if (result.length > MAX_RESULT_BYTES) return result;
       if (/^(error|Error|❌)/.test(result.trimStart())) return result;
 
@@ -311,7 +311,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             if (hasFuncs && snippet) {
               snippet += ' 共享变量/异步链 → trace_dataflow 追踪。';
             }
-            // Engine-layer: fragility rank
+            // 引擎层：脆弱度排名
             if (ctx.engine) {
               const normFp = fp.replace(/\\/g, '/').toLowerCase();
               const rankEntry = ctx.engine.fragilityRanks.find(
@@ -328,7 +328,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           break;
         }
         case 'search_content': {
-          // Extract symbol names from matched lines, cross-reference with fileIndex
+          // 从匹配行中提取符号名，与 fileIndex 交叉引用
           const graphSymbols = extractGraphSymbolsFromSearch(result, (fp: string) => ctx.getNodesInFile(fp));
           if (graphSymbols.length > 0) {
             const parts = graphSymbols.map((s) => {
@@ -346,7 +346,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             const files = extractFilesFromSearchResult(result);
             if (files.length > 0) {
               snippet = ctx.getSearchContext(files.slice(0, 3));
-              // Engine-layer: flag if any match is a high-fragility file
+              // 引擎层：标记是否有匹配在高脆弱度文件中
               if (ctx.engine) {
                 const hot = files.filter((f) => {
                   const nf = f.replace(/\\/g, '/').toLowerCase();
@@ -382,7 +382,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           if (nodes.length > 0) {
             const names = nodes.map((n) => `\`${n.name}\``).join(', ');
             snippet = `命中 ${nodes.length} 个节点（${names}${nodes.length > 3 ? '…' : ''}）。→ 调 get_neighbors 查看依赖`;
-            // Engine-layer: highlight high-fragility files among search hits
+            // 引擎层：在搜索命中中高亮高脆弱度文件
             if (ctx.engine) {
               const rankHit = nodes.some((node) =>
                 ctx.engine?.fragilityRanks.some((r) => r.file.toLowerCase().includes(node.name.toLowerCase())),
@@ -400,7 +400,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             if (parsed.community) {
               snippet = `社区归属: ${parsed.community}。→ 调 get_community 查看同社区节点`;
             }
-            // Engine-layer: tag synthesis alerts
+            // 引擎层：标记合成告警
             if (ctx.engine && ctx.engine.synthesisAlerts.length > 0) {
               const alerts = ctx.engine.synthesisAlerts.map((a) => a.type).join(', ');
               snippet = (snippet || '') + ` 合成标记: ${alerts}`;
@@ -412,7 +412,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           const files = extractFilesFromDiffResult(result);
           if (files.length > 0) {
             snippet = ctx.getSearchContext(files.slice(0, 3));
-            // Engine-layer: fragility summary for changed files
+            // 引擎层：变更文件的脆弱度摘要
             if (ctx.engine) {
               const hot = files.filter((f) => {
                 const nf = f.replace(/\\/g, '/').toLowerCase();
@@ -435,14 +435,14 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             if (parsed) {
               cacheBuildResult(parsed);
               snippet = parsed.outcome === 'pass' ? `✅ ${parsed.summary}` : `❌ ${parsed.summary}`;
-              // Engine-layer: on failure, report fragility context
+              // 引擎层：失败时报告脆弱度上下文
               if (parsed.outcome === 'fail' && ctx.engine && ctx.engine.fragilityRanks.length > 0) {
                 const top = ctx.engine.fragilityRanks[0];
                 snippet += ` | 最脆弱模块: ${top.file.split('/').pop()} (${top.score.toFixed(0)}) → 考虑是否本次改动触发了退化`;
               }
             } else {
-              // Fallback: output format not recognized, cache a generic result
-              // so the agent knows the command ran — just can't parse the outcome
+              // 回退：无法识别输出格式，缓存通用结果
+              // 让 agent 知道命令已运行 — 只是无法解析结果
               const label = cmd.split(' ').slice(0, 2).join(' ');
               const tail = result.slice(-200).replace(/\n/g, ' ');
               cacheBuildResult({ command: label, outcome: 'pass', summary: `完成 (输出未解析)`, ts: Date.now() });
@@ -451,7 +451,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           }
           break;
         }
-        // ── LSP tools: inject graph context from resolution results ──
+        // ── LSP 工具：从解析结果注入图上下文 ──
         case 'resolve_call': {
           try {
             const parsed = JSON.parse(result);
@@ -459,7 +459,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               const top = parsed.resolved.slice(0, 3);
               const names = top.map((r: any) => `\`${r.callee_qn}\``).join(', ');
               snippet = `解析到 ${parsed.resolved.length} 个调用目标: ${names}${parsed.resolved.length > 3 ? '…' : ''}。`;
-              // Check graph for callee impact
+              // 检查图中 callee 的影响
               const fp = String(args.file_path || '');
               if (fp && parsed.resolved[0].callee_qn) {
                 snippet += ` → 调 trace_impact "${parsed.resolved[0].callee_qn}" 看下游`;
@@ -498,7 +498,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
             const refs = parsed.references;
             if (refs && Array.isArray(refs) && refs.length > 0) {
               const count = refs.length;
-              // Extract unique files from references
+              // 从引用中提取唯一文件
               const refFiles = new Set<string>();
               for (const r of refs) {
                 if (r.file) refFiles.add(r.file);
@@ -515,8 +515,8 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
       }
 
       if (snippet && snippet.length > 0) {
-        // Enforce the promised injection budget — engine-layer additions
-        // (fragility/cycles/LSP hotspots) used to grow the block unbounded.
+        // 强制执行承诺的注入预算 — 引擎层附加内容
+        // （脆弱度/循环/LSP 热点）曾经无限增长。
         if (snippet.length > MAX_ENRICH_BYTES) {
           snippet = snippet.slice(0, MAX_ENRICH_BYTES) + '…';
         }
@@ -532,8 +532,8 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// State hooks — inject self-maintaining project facts into tool results.
-// Data sources: LSP diagnostics, Git status/blame, Check/briefing.
+// 状态 hooks — 将自维护的项目事实注入工具结果。
+// 数据来源：LSP 诊断、Git status/blame、Check/简报。
 // ═══════════════════════════════════════════════════════════════
 
 import {
@@ -546,8 +546,8 @@ import {
 
 const _MAX_STATE_BYTES = 600;
 
-/** Pre-read hook — injects diagnostics + blame when agent reads a file.
- *  diagSource is workspace-injected (UI owns the LSP client). */
+/** Pre-read hook — agent 读文件时注入诊断 + blame。
+ *  diagSource 由 workspace 注入（UI 拥有 LSP 客户端）。 */
 export function createStateReadHook(projectPath: string, diagSource: DiagnosticsSource): Hook {
   return {
     name: 'state-read',
@@ -558,7 +558,7 @@ export function createStateReadHook(projectPath: string, diagSource: Diagnostics
       const filePath = String(args.filePath || args.file_path || '');
       if (!filePath) return result;
 
-      // Fire-and-forget: refresh blame for next time
+      // 发后即忘：为下次刷新 blame
       refreshGitBlame(projectPath, filePath).catch(() => {});
 
       const block = buildPreReadBlock(filePath, diagSource);
@@ -573,13 +573,13 @@ export function createStateReadHook(projectPath: string, diagSource: Diagnostics
   };
 }
 
-/** Preflight hook — adds diagnostics context before editing a file. */
+/** Preflight hook — 编辑文件前添加诊断上下文。 */
 export function createStatePreflightHook(diagSource: DiagnosticsSource): PreflightHook {
   return {
     name: 'state-preflight',
     shouldCheck(toolName) {
-      // Tool names must match the registry (coding.ts): edit_file / write_file.
-      // ('write_file_content' never existed — this hook was dead until fixed.)
+      // 工具名必须与注册表（coding.ts）匹配：edit_file / write_file。
+      // （'write_file_content' 从未存在过 — 此 hook 在修复前是死代码。）
       return ['edit_file', 'write_file'].includes(toolName);
     },
     check(_toolName, args) {
@@ -590,11 +590,11 @@ export function createStatePreflightHook(diagSource: DiagnosticsSource): Preflig
   };
 }
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
-// ── Build/test output parser ──
+// ── 构建/测试输出解析器 ──
 
-/** Parse stdout/stderr from a build or test command into a structured result. */
+/** 将构建或测试命令的 stdout/stderr 解析为结构化结果。 */
 function parseBuildOutput(
   cmd: string,
   output: string,
@@ -642,7 +642,7 @@ function parseBuildOutput(
     return null;
   }
 
-  // Generic build (make, cmake, npm install, pip, yarn)
+  // 通用构建（make, cmake, npm install, pip, yarn）
   if (/make|cmake|npm\s+install|pip\s+install|npx|yarn/.test(cmd)) {
     const errors = (output.match(/^error(\[|:)/gm) || []).length + (output.match(/\bERROR\b/g) || []).length;
     if (errors > 0) return { command: label, outcome: 'fail', summary: `${errors} errors`, ts };
@@ -665,15 +665,15 @@ interface SearchGraphSymbol {
   file: string;
 }
 
-/** Extract identifier-like words from a line of code. */
+/** 从代码行中提取类标识符的词。 */
 function extractIdentifiers(text: string): string[] {
   const m = text.match(/\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b/g);
   if (!m) return [];
   return [...new Set(m)];
 }
 
-/** Cross-reference search_content matches with fileIndex: which matched
- *  identifiers are known graph symbols? Returns top 5 matches sorted by fanIn. */
+/** 将 search_content 匹配结果与 fileIndex 交叉引用：哪些匹配的
+ *  标识符是已知的图符号？返回按 fanIn 排序的前 5 个匹配。 */
 function extractGraphSymbolsFromSearch(result: string, getNodes: (fp: string) => NodeBrief[]): SearchGraphSymbol[] {
   try {
     const parsed = JSON.parse(result);
@@ -687,15 +687,15 @@ function extractGraphSymbolsFromSearch(result: string, getNodes: (fp: string) =>
       const file = m.file || '';
       if (!file) continue;
 
-      // Extract identifiers from matched content
+      // 从匹配内容中提取标识符
       const content = m.match_content || m.content || m.line || '';
       const idents = extractIdentifiers(content);
 
-      // Get symbols in this file from the in-memory fileIndex
+      // 从内存中的 fileIndex 获取此文件的符号
       const fileNodes = getNodes(file);
       if (fileNodes.length === 0) continue;
 
-      // Cross-reference: which identifiers are actual graph symbols?
+      // 交叉引用：哪些标识符是实际的图符号？
       for (const n of fileNodes) {
         if (idents.includes(n.name) && !seen.has(n.name)) {
           seen.add(n.name);
@@ -726,7 +726,7 @@ function extractFilesFromSearchResult(result: string): string[] {
       return [...files];
     }
   } catch {
-    /* not JSON, ignore */
+    /* 非 JSON，忽略 */
   }
   return [];
 }
@@ -817,12 +817,12 @@ export function createGraphContext(
     const nodes = getNodesInFile(filePath);
     if (nodes.length === 0) return null;
 
-    // Downstream: who depends on this file's symbols
+    // 下游：谁依赖此文件的符号
     const downstream = [...nodes]
       .filter((n) => n.fanIn > 0)
       .sort((a, b) => b.fanIn - a.fanIn)
       .slice(0, 5);
-    // Upstream: what this file's symbols depend on
+    // 上游：此文件的符号依赖什么
     const upstream = [...nodes]
       .filter((n) => n.fanOut > 0)
       .sort((a, b) => b.fanOut - a.fanOut)
@@ -967,7 +967,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
         lines.push(`│  → ${verb}前建议调 trace_impact "${topName}" 查看完整波及范围`);
       }
 
-      // ── Engine-layer data: compact tag-style summary (was 6 sections, ~20 lines) ──
+      // ── 引擎层数据：紧凑标签式摘要（原来是 6 个区块，约 20 行）──
       if (ctx.engine) {
         const eng = ctx.engine;
         const normFp = fp.replace(/\\/g, '/').toLowerCase();
@@ -977,7 +977,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
             normFp.includes(r.file.replace(/\\/g, '/').toLowerCase()),
         );
         if (rankEntry || eng.cycleCount > 0 || eng.sessionDrift > 0) {
-          // Line 1: fragility + cycles + drift + health
+          // 第 1 行：脆弱度 + 循环 + 漂移 + 健康度
           const tags: string[] = [];
           if (rankEntry) tags.push(`脆弱#${eng.fragilityRanks.indexOf(rankEntry) + 1}(${rankEntry.score.toFixed(0)})`);
           if (eng.cycleCount > 0) tags.push(`循环×${eng.cycleCount}`);
@@ -991,7 +991,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
           tags.push(`健康${eng.healthScore}/100`);
           lines.push(`│  引擎: ${tags.join(' ')}`);
 
-          // Line 2: LSP hotspots + callers + semantic neighbors + synthesis (if any)
+          // 第 2 行：LSP 热点 + 调用者 + 语义邻居 + 合成（如有）
           const lspParts: string[] = [];
           const fileHit = eng.lspHotspots.filter(
             (h) =>
@@ -1026,9 +1026,9 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
             lines.push(`│  LSP: ${lspParts.join(' ')}`);
           }
 
-          // Upgrade risk level if drift is severe
+          // 漂移严重时升级风险等级
           if (eng.sessionDrift > 0.1) {
-            // Update the risk level line we already pushed
+            // 更新已推送的风险等级行
             const riskIdx = lines.findIndex((l) => l.includes('风险等级'));
             if (riskIdx >= 0) lines[riskIdx] = `│  风险等级: ${riskLevel} ⚠退化>10%`;
           }

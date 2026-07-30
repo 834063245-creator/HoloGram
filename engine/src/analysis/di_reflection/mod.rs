@@ -1,29 +1,29 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Runtime-hidden dependency synthesis — fills graph edges that static
-//! analysis misses due to runtime dispatch, dynamic code, and reflection.
+//! 运行时隐藏依赖合成 — 填充因运行时分派、动态代码和反射而
+//! 被静态分析遗漏的 Graph 边。
 //!
 //! ========================================
-//! Blind spots covered (README §已知局限)
+//! 覆盖的盲点（README §已知局限）
 //! ========================================
-//! 1. DI / Reflection (Phase 2 — 10 languages):
-//!    - Python: `getattr`/`setattr` · Java: `@Autowired`/`@Inject`
-//!    - TypeScript: `@Injectable`/`@Inject` · C#: `Assembly.Load`/`Type.GetType`
-//!    - Ruby: `send`/`method_missing` · PHP: `ReflectionClass`/`call_user_func`
-//!    - Go: `reflect.ValueOf` · Kotlin: `@Inject`/`Koin`
-//! 2. Dynamic import:
-//!    - JS/TS, Python, C# (Assembly.Load), Ruby (autoload/require), PHP (require_once)
-//! 3. Eval / dynamic code (marked as unresolvable):
-//!    - JS/TS, Python, C# (CodeDom), Ruby (eval/instance_eval), PHP (eval/create_function), Rust (proc_macro)
-//! 4. Cross-language call boundaries:
-//!    - Subprocess: Py/JS/Java/Go/C#/Ruby/PHP/Kotlin
-//!    - HTTP client: Py/JS/Go/C#/Ruby/PHP
-//!    - FFI: Python (ctypes)
+//! 1. DI / Reflection（Phase 2 — 10 种语言）：
+//!    - Python：`getattr`/`setattr` · Java：`@Autowired`/`@Inject`
+//!    - TypeScript：`@Injectable`/`@Inject` · C#：`Assembly.Load`/`Type.GetType`
+//!    - Ruby：`send`/`method_missing` · PHP：`ReflectionClass`/`call_user_func`
+//!    - Go：`reflect.ValueOf` · Kotlin：`@Inject`/`Koin`
+//! 2. 动态导入：
+//!    - JS/TS、Python、C#（Assembly.Load）、Ruby（autoload/require）、PHP（require_once）
+//! 3. Eval / 动态代码（标记为不可解析）：
+//!    - JS/TS、Python、C#（CodeDom）、Ruby（eval/instance_eval）、PHP（eval/create_function）、Rust（proc_macro）
+//! 4. 跨语言调用边界：
+//!    - 子进程：Py/JS/Java/Go/C#/Ruby/PHP/Kotlin
+//!    - HTTP 客户端：Py/JS/Go/C#/Ruby/PHP
+//!    - FFI：Python（ctypes）
 //!
-//! Synthesized edges use coupling_depth=3 (L3 — hidden coupling) or
-//! coupling_depth=4 (L4 — unresolvable). All edge IDs use the `di_`
-//! prefix for tooling to filter/identify reflection edges.
+//! 合成边使用 coupling_depth=3（L3 — 隐藏耦合）或
+//! coupling_depth=4（L4 — 不可解析）。所有边 ID 使用 `di_`
+//! 前缀，供工具过滤/识别 reflection 边。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -31,17 +31,17 @@ use std::path::Path;
 use crate::graph::{Graph, Node, NodeKind};
 use crate::graph::resolver::infer_language;
 
-/// Parsed source held in the pipeline parse cache.
+/// 管道解析缓存中保存的已解析源码。
 
 mod langs;
 
-/// Parsed source held in the pipeline parse cache.
+/// 管道解析缓存中保存的已解析源码。
 pub(crate) type ParseCache = HashMap<String, (String, Option<tree_sitter::Tree>)>;
 
 
-/// Run DI/reflection detection on the graph for all supported languages.
-/// Uses the parse cache from Step 1 to avoid re-reading + re-parsing files.
-/// Returns the number of synthesized edges added.
+/// 对 Graph 运行所有支持语言的 DI/reflection 检测。
+/// 使用 Step 1 的解析缓存以避免重新读取和重新解析文件。
+/// 返回新增的合成边数量。
 pub fn detect_di_reflection(
     graph: &mut Graph,
     project_root: &Path,
@@ -50,7 +50,7 @@ pub fn detect_di_reflection(
 ) -> usize {
     let mut added = 0usize;
 
-    // Filter pipeline-discovered files to JS/TS/Python/Java only
+    // 将管道发现的文件筛选为仅 JS/TS/Python/Java
     let mut files: HashSet<String> = HashSet::new();
     for p in discovered_files {
         let s = p.to_string_lossy();
@@ -248,19 +248,19 @@ pub fn detect_eval(
 
 pub(crate) fn find_or_create_di_node(graph: &mut Graph, name: &str, file: &str, line: usize) -> String {
     let file_lang = infer_language(file);
-    // Try exact match first — prefer same-language nodes
+    // 先尝试精确匹配 — 优先同语言节点
     for (id, node) in &graph.nodes {
         if node.name == name && file_lang == infer_language(id) {
             return id.clone();
         }
     }
-    // Fallback: exact match regardless of language (synthesized markers may be langless)
+    // 回退：不限语言的精确匹配（合成标记可能无语言）
     for (id, node) in &graph.nodes {
         if node.name == name {
             return id.clone();
         }
     }
-    // Try last-component match (for qualified names) — same-language first
+    // 尝试末尾组件匹配（用于限定名）— 优先同语言
     if let Some(last_part) = name.rsplit('.').next() {
         if last_part != name {
             for (id, node) in &graph.nodes {
@@ -268,7 +268,7 @@ pub(crate) fn find_or_create_di_node(graph: &mut Graph, name: &str, file: &str, 
                     return id.clone();
                 }
             }
-            // Fallback: last-component match regardless of language
+            // 回退：不限语言的末尾组件匹配
             for (id, node) in &graph.nodes {
                 if node.name == last_part {
                     return id.clone();
@@ -276,7 +276,7 @@ pub(crate) fn find_or_create_di_node(graph: &mut Graph, name: &str, file: &str, 
             }
         }
     }
-    // Create placeholder
+    // 创建占位节点
     let node_id = format!("di_syn_{}_{}", file.replace(['.', '/', '\\'], "_"), name);
     let mut node = Node::new(&node_id, name, NodeKind::Symbol);
     node.location = Some(format!("{}:{}", file, line));
@@ -353,14 +353,14 @@ pub fn detect_cross_lang_calls(
     added
 }
 
-// ── Python: subprocess, os.system, ctypes, requests ──
+// ── Python：subprocess、os.system、ctypes、requests ──
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── Python tests ──
+    // ── Python 测试 ──
 
     #[test]
     fn test_detect_getattr_string_literal() {
@@ -392,7 +392,7 @@ def dynamic_access(obj, attr_name):
     return getattr(obj, attr_name)
 "#;
         let added = langs::detect_python_reflection(&mut g, "reflect.py", source);
-        // Variable attribute → unresolvable marker edge
+        // 变量属性 → 不可解析的标记边
         assert!(added >= 1, "Should create unresolvable marker for variable attr, got {}", added);
     }
 
@@ -404,7 +404,7 @@ def dynamic_access(obj, attr_name):
         assert_eq!(added, 0, "No reflection patterns → 0 edges");
     }
 
-    // ── Java tests ──
+    // ── Java 测试 ──
 
     #[test]
     fn test_detect_autowired_field() {
@@ -440,7 +440,7 @@ public class OrderService {
         assert_eq!(added, 0, "No DI annotations → 0 edges");
     }
 
-    // ── TypeScript tests ──
+    // ── TypeScript 测试 ──
 
     #[test]
     fn test_detect_injectable_class() {
@@ -452,7 +452,7 @@ export class UserService {
 }
 "#;
         let added = langs::detect_ts_di(&mut g, "user.service.ts", source);
-        // Should detect: Injectable marker + constructor param
+        // 应检测到：Injectable 标记 + 构造函数参数
         assert!(added >= 1, "Should detect @Injectable + constructor DI, got {}", added);
     }
 
@@ -477,7 +477,7 @@ export class Worker {
         assert_eq!(added, 0, "No decorators → 0 edges");
     }
 
-    // ── Integration test ──
+    // ── 集成测试 ──
 
     #[test]
     fn test_full_di_detection_multi_language() {
@@ -496,7 +496,7 @@ export class Worker {
         assert!(g.node_count() >= 5, "Should have multiple synthesized nodes, got {}", g.node_count());
     }
 
-    // ── Dynamic import tests ──
+    // ── 动态导入测试 ──
 
     #[test]
     fn test_detect_js_import_variable() {
@@ -552,7 +552,7 @@ def dynamic_load(name):
         assert!(added >= 1, "Should detect __import__, got {}", added);
     }
 
-    // ── Eval tests ──
+    // ── Eval 测试 ──
 
     #[test]
     fn test_detect_js_eval() {
@@ -608,7 +608,7 @@ def execute(code):
         assert_eq!(added, 0, "No eval → 0 edges");
     }
 
-    // ── Cross-language tests ──
+    // ── 跨语言测试 ──
 
     #[test]
     fn test_detect_py_subprocess_popen() {

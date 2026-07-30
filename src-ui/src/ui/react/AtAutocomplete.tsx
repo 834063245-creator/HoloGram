@@ -9,14 +9,14 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { rpc } from '../../bridge';
 import { getChatStore } from '../chat-store';
 
-// ── Types ──
+// ── 类型 ──
 
 interface AtItem {
   kind: string;
   name: string;
 }
 
-// ── Helper: parse @ trigger position from text ──
+// ── 辅助函数：从文本中解析 @ 触发位置 ──
 
 function findAtTrigger(textBefore: string): number {
   for (let i = textBefore.length - 1; i >= 0; i--) {
@@ -39,7 +39,7 @@ function buildToken(kind: string, name: string): string {
   return `[@${base}](${name})`;
 }
 
-// ── Exposed imperative API（core 注册接口签名不变）──
+// ── 暴露的命令式 API（core 注册接口签名不变）──
 // P2′-2b：navigate/select/open 重写为状态驱动（旧版是 DOM-scraping hack）。
 // 句柄只创建一次（core 挂载时注册）；命令式读取一律走 ref 镜像，避免陈旧闭包。
 
@@ -56,7 +56,7 @@ export interface AtAutocompleteHandle {
   readonly open: boolean;
 }
 
-// ── React Component ──
+// ── React 组件 ──
 
 const CACHE_TTL = 30000;
 
@@ -90,7 +90,7 @@ export const AtAutocomplete = forwardRef<
     onSelectRef.current = onSelect;
   });
 
-  // Fetch files when visible
+  // 可见时获取文件列表
   useEffect(() => {
     if (!visible) {
       setItems([]);
@@ -102,7 +102,7 @@ export const AtAutocomplete = forwardRef<
       setLoading(true);
       let files: string[] = [];
 
-      // Use cached glob results
+      // 使用缓存的 glob 结果
       try {
         let cache = cacheRef.current;
         const projectPath = getChatStore(panelId).panel.getState().projectPath || '.';
@@ -118,7 +118,7 @@ export const AtAutocomplete = forwardRef<
         const parsed = JSON.parse(cache.data);
         files = (parsed.results || []).map((r: any) => r.path).slice(0, 100);
       } catch {
-        /* glob failed — use empty */
+        /* glob 失败 — 使用空数组 */
       }
 
       if (cancelled) return;
@@ -142,7 +142,7 @@ export const AtAutocomplete = forwardRef<
     };
   }, [visible, query, panelId, nodeNames]);
 
-  // Scroll active item into view
+  // 将活动项滚动到可见区域
   useEffect(() => {
     const el = popupRef.current?.querySelector('.at-item.active') as HTMLElement;
     el?.scrollIntoView({ block: 'nearest' });

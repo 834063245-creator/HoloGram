@@ -50,24 +50,24 @@ export class StarGraph {
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
   private container: HTMLElement;
-  private galaxyGroup = new THREE.Group(); // parent for full-mode rotation
+  private galaxyGroup = new THREE.Group(); // 全模式旋转的父容器
   private nodeGroup = new THREE.Group();
   private edgeGroup = new THREE.Group();
   private highlightEdgeGroup = new THREE.Group();
   private legendEl!: HTMLDivElement;
   private glowTex: THREE.Texture;
 
-  // Graph data
+  // 图数据
   private graphNodes: GraphNode[] = [];
   private edgeDataList: EdgeData[] = [];
   private _nodeCount = 0;
-  private _deadIndices: Set<number> = new Set(); // ponytail: dead node indices (removed but kept for index stability)
+  private _deadIndices: Set<number> = new Set(); // ponytail: 死亡节点索引（已删除但保留以维持索引稳定）
   private hoveredIdx = -1;
 
-  // Labels
+  // 标签
   private labelsContainer!: HTMLDivElement;
 
-  // Focus subgraph (detail-card button triggered)
+  // 聚焦子图（详情卡片按钮触发）
   private focusSubgraphActive = false;
   private focusSubgraphIdx = -1;
   private focusSubgraphVisibleIndices = new Set<number>();
@@ -80,10 +80,10 @@ export class StarGraph {
   private _userInteracting = false;
   private _renderInProgress = false;
 
-  // Blast + Path — delegated to GraphAnalysis
+  // Blast + Path — 委托给 GraphAnalysis
   private _analysis: GraphAnalysis;
 
-  // ── Community / Galaxy fold overlay ──────────────────────
+  // ── 社区 / 星系折叠覆盖 ──────────────────────
   private _fold: GraphFold;
 
   // ── DOM 交互层（tooltip/detail card/select rect/prompt bar）─
@@ -97,11 +97,11 @@ export class StarGraph {
   private _focus: GraphFocusController;
   private _lifecycle: GraphSceneLifecycle;
 
-  // Post-processing (full mode only)
+  // 后处理（仅全模式）
   private composer!: EffectComposer;
   private bloomPass!: UnrealBloomPass;
 
-  // Reusable geometry
+  // 可复用几何
   sphereGeo!: THREE.SphereGeometry;
   private _labels!: GraphLabelSystem;
   private _edges!: GraphEdgeRenderer;
@@ -128,13 +128,13 @@ export class StarGraph {
   focusFlash = 0;
   _focusStartTime = 0;
 
-  // Nebula + HoloGrid
+  // 星云 + 全息网格
   private nebulaDust!: THREE.Points;
   nebulaPhases: number[] | null = null;
   holoGrid: THREE.Mesh | null = null;
   holoGridY = 0;
 
-  // Animation
+  // 动画
   private pulseTime = 0;
 
   constructor(container: HTMLElement) {
@@ -144,9 +144,9 @@ export class StarGraph {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(bg);
-    // No fog — dark-universe rendering handles depth through contrast, not distance blur
+    // 无雾 — 深空渲染通过对比度而非距离模糊处理深度
 
-    this.camera = new THREE.PerspectiveCamera(40, 2, 0.5, 500000); // near/far widened after layout
+    this.camera = new THREE.PerspectiveCamera(40, 2, 0.5, 500000); // 布局后放宽 near/far
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -167,16 +167,16 @@ export class StarGraph {
     // 窗口跨屏移动（HiDPI↔普通屏）时 DPR 变化不触发 resize — 监听并重设，否则画布发虚
     this.watchDpr();
 
-    // ── Post-processing pipeline ──
+    // ── 后处理管线 ──
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // ponytail: bloom at 1/4 resolution — full-res bloom on 4K pixelRatio=2
-    // is ~16M pixels × 5 blur passes = GPU murder. Quarter-res fixes it.
+    // ponytail: bloom 在 1/4 分辨率 — 4K pixelRatio=2 下全分辨率 bloom
+    // 约 1600 万像素 × 5 次模糊 = GPU 杀手。四分之一分辨率解决。
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(Math.floor(container.clientWidth / 4), Math.floor(container.clientHeight / 4)),
-      0.35, // strength — low default, bright objects still bloom on hover
-      0.3, // radius — tight bloom, no global glow fog
-      0.85, // threshold — only bright things bloom (hover highlights)
+      0.35, // 强度 — 低默认值，明亮物体在 hover 时仍有 bloom
+      0.3, // 半径 — 紧凑 bloom，无全局辉光雾
+      0.85, // 阈值 — 仅明亮物体有 bloom（hover 高亮）
     );
     this.composer.addPass(this.bloomPass);
 
@@ -194,10 +194,10 @@ export class StarGraph {
       this._userInteracting = false;
     });
     this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.15; // quick stop
-    this.controls.rotateSpeed = 0.5; // halved — no whip
-    this.controls.zoomSpeed = 1.0; // responsive zoom
-    this.controls.screenSpacePanning = true; // right-drag to pan = recenter orbit target
+    this.controls.dampingFactor = 0.15; // 快速停止
+    this.controls.rotateSpeed = 0.5; // 减半 — 无甩鞭
+    this.controls.zoomSpeed = 1.0; // 灵敏缩放
+    this.controls.screenSpacePanning = true; // 右键拖拽平移 = 重新居中轨道目标
     this.controls.minDistance = 5;
     this.controls.maxDistance = 12000;
     this.controls.maxDistance = 4000;
@@ -218,12 +218,12 @@ export class StarGraph {
     this._analysis = new GraphAnalysis(this as unknown as AnalysisHost);
     this._tooltip = new GraphTooltip(this as unknown as TooltipHost);
 
-    // starfield disabled
+    // 星场已禁用
     // if (true) this.buildStarfield();
-    // nebulaDust disabled
+    // 星云尘埃已禁用
     // if (mode === 'full') this.buildNebulaDust();
 
-    // Holographic grid removed — natural 3D star field doesn't need a floor
+    // 全息网格已移除 — 自然 3D 星场不需要地面
 
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
@@ -238,7 +238,7 @@ export class StarGraph {
     this._tooltip.setupDetailCard();
     this._tooltip.setupPromptBar();
 
-    // Labels container (not in minimal mode — but always create, hide via CSS)
+    // 标签容器（非最小模式 — 但始终创建，通过 CSS 隐藏）
     this.labelsContainer = document.createElement('div');
     this.labelsContainer.id = 'graph-labels';
     if (false) this.labelsContainer.style.display = 'none';
@@ -247,10 +247,10 @@ export class StarGraph {
     this.buildLegend();
     this._focus.buildFocusBanner();
 
-    // Rebuild legend + focus banner on language change
+    // 语言变更时重建图例 + 聚焦横幅
     this._langHandler = ({ lang }: { lang: string }) => {
       setLang(lang as 'zh' | 'en');
-      // Remove old DOM elements before rebuilding
+      // 重建前移除旧 DOM 元素
       if (this.legendEl) {
         this.legendEl.remove();
       }
@@ -261,7 +261,7 @@ export class StarGraph {
       }
       this._focus.buildFocusBanner();
       if (this.focusSubgraphActive && this.focusSubgraphIdx >= 0) {
-        // Refresh focus banner text while staying in focus mode
+        // 在聚焦模式下刷新聚焦横幅文本
         const node = this.graphNodes[this.focusSubgraphIdx];
         this.focusSubgraphBanner.innerHTML = `${iconHtml('focus', 12)}<span class="fb-name">${t('focus.title')} · ${node.name}</span><span class="fb-meta">${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} · ${t('focus.exit')}</span>`;
         this.focusSubgraphBanner.style.display = 'flex';
@@ -285,27 +285,27 @@ export class StarGraph {
       if (pointerDragged) return;
       this._interaction.onClick(e);
     });
-    // Prevent browser context menu on canvas
+    // 阻止画布上的浏览器右键菜单
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
 
     this.onResize();
     window.addEventListener('resize', this.onResize);
     this._lifecycle.animate();
 
-    // Kick off WebGPU compute pipeline init (non-blocking)
+    // 启动 WebGPU 计算管线初始化（非阻塞）
     gpuLayout
       .init()
       .then((ready) => {
         if (ready) console.log('[StarGraph] GPU layout ready');
       })
       .catch(() => {
-        /* GPU init failure is non-critical; CPU fallback used */
+        /* GPU 初始化失败非关键；使用 CPU 回退 */
       });
   }
 
-  // ── Starfield ────────────────────────────────────────────
+  // ── 星场 ────────────────────────────────────────────
 
-  // ── Nebula dust → graph-scene.ts ──
+  // ── 星云尘埃 → graph-scene.ts ──
 
   private buildNebulaDust(): void {
     const res = Scene.buildNebulaDust(this.scene, this.glowTex);
@@ -331,12 +331,12 @@ export class StarGraph {
   initEdgeParticles(_pos: Float32Array, _data: import('./graph-types').EdgeData[]): void {}
   initTwinkleData(_n: number): void {}
 
-  // ── Path finding — delegated to GraphAnalysis ──────────────
+  // ── 路径查找 — 委托给 GraphAnalysis ──────────────
 
   // ── i18n ──
   private _langHandler: ((data: { lang: string }) => void) | null = null;
 
-  // ── Step 3: Alt+drag rectangle selection → graph-tooltip.ts ──
+  // ── Step 3: Alt+拖拽矩形选择 → graph-tooltip.ts ──
 
   // ── GPU 缓冲委托（fold/analysis/tooltip host 契约 + 兄弟模块共用）──
 
@@ -380,19 +380,19 @@ export class StarGraph {
     return this._nodes.getNodeBaseScale(i);
   }
 
-  /** Find a node's array index by name (fuzzy). Returns -1 if not found. */
+  /** 按名称模糊查找节点的数组索引。未找到返回 -1。 */
   private _findNodeIndexByName(query: string): number {
     return this._highlight._findNodeIndexByName(query);
   }
 
-  // ── Camera / focus public API → graph-focus-controller ─────
+  // ── 相机 / 聚焦公共 API → graph-focus-controller ─────
 
-  /** Reset camera to the default overview position with smooth animation. */
+  /** 将相机重置到默认概览位置，带平滑动画。 */
   resetCamera(): void {
     this._focus.resetCamera();
   }
 
-  /** Return all visible node names for autocomplete / search. */
+  /** 返回所有可见节点名称，用于自动补全 / 搜索。 */
   getNodeNames(): string[] {
     const names: string[] = [];
     for (let i = 0; i < this._nodeCount; i++) {
@@ -406,14 +406,14 @@ export class StarGraph {
     return this._focus.focusNode(query);
   }
 
-  // ── Highlight / filter / lens / trail → graph-highlight ────
+  // ── 高亮 / 过滤 / 透镜 / 轨迹 → graph-highlight ────
 
-  /** Highlight all nodes belonging to a file (match by location prefix). */
+  /** 高亮属于某个文件的所有节点（按位置前缀匹配）。 */
   highlightFile(filePath: string): void {
     this._highlight.highlightFile(filePath);
   }
 
-  /** Highlight all nodes under a directory (recursive prefix match). */
+  /** 高亮某个目录下的所有节点（递归前缀匹配）。 */
   highlightFolder(folderPath: string): void {
     this._highlight.highlightFolder(folderPath);
   }
@@ -422,27 +422,27 @@ export class StarGraph {
     this._highlight.clearFileHighlight();
   }
 
-  /** Highlight only edges of one type, dim all others. null = clear filter. */
+  /** 仅高亮一种边类型，其余调暗。null = 清除过滤。 */
   setEdgeTypeFilter(edgeType: string | null): void {
     this._highlight.setEdgeTypeFilter(edgeType);
   }
 
-  /** Dim all nodes except those matching a kind filter. null = clear. */
+  /** 调暗所有不匹配类型过滤的节点。null = 清除。 */
   setNodeKindFilter(filter: string | null): void {
     this._highlight.setNodeKindFilter(filter);
   }
 
-  /** Highlight a set of nodes by name (fuzzy match). Matched nodes glow in the given color; others dim. */
+  /** 按名称高亮一组节点（模糊匹配）。匹配的节点以指定颜色发光；其余调暗。 */
   highlightNodeNames(names: string[], colorHex?: string): void {
     this._highlight.highlightNodeNames(names, colorHex);
   }
 
-  /** Clear all Agent-triggered highlights (path + node highlight). */
+  /** 清除所有 Agent 触发的高亮（路径 + 节点高亮）。 */
   clearAgentHighlight(): void {
     this._highlight.clearAgentHighlight();
   }
 
-  /** Color nodes belonging to hotspot files with intensity proportional to L4 recurrence count. */
+  /** 按热点文件为节点着色，强度与 L4 复发次数成正比。 */
   highlightHotspots(hotspots: Array<{ file: string; count: number }>): void {
     this._highlight.highlightHotspots(hotspots);
   }
@@ -451,24 +451,24 @@ export class StarGraph {
     this._highlight.clearHotspots();
   }
 
-  /** Dim all nodes except those matching the given names to 1% opacity. */
+  /** 将不匹配给定名称的所有节点调暗至 1% 透明度。 */
   setAgentLens(nodeNames: Set<string>): void {
     this._highlight.setAgentLens(nodeNames);
   }
 
-  /** Restore normal rendering from agent lens mode. */
+  /** 从 agent 透镜模式恢复正常渲染。 */
   clearAgentLens(): void {
     this._highlight.clearAgentLens();
   }
 
-  /** Activate retrospective trail mode: highlight all visited nodes, dim others
-   *  to 30% (not 2.5% — still visible, just backgrounded), draw a thick glowing
-   *  trail line through the exploration sequence, and fly camera to the centroid. */
+  /** 激活回溯轨迹模式：高亮所有已访问节点，其余调暗
+   *  至 30%（非 2.5% — 仍可见，只是作为背景），绘制一条粗发光
+   *  轨迹线穿过探索序列，并将相机飞向质心。 */
   showAgentTrail(visitedNames: Set<string>, trailNames: string[]): void {
     this._highlight.showAgentTrail(visitedNames, trailNames);
   }
 
-  /** Restore normal rendering from trail mode. */
+  /** 从轨迹模式恢复正常渲染。 */
   hideAgentTrail(): void {
     this._highlight.hideAgentTrail();
   }
@@ -478,7 +478,7 @@ export class StarGraph {
   }
 
   // ══════════════════════════════════════════════════════════
-  // Community / Galaxy fold overlay — delegated to GraphFold
+  // 社区 / 星系折叠覆盖 — 委托给 GraphFold
   // ══════════════════════════════════════════════════════════
 
   get isFolded(): boolean {
@@ -513,9 +513,9 @@ export class StarGraph {
     this._fold.showGalaxyLabel(gm);
   }
 
-  // ── Diff overlay → graph-diff-overlay ─────────────────────
+  // ── Diff 覆盖 → graph-diff-overlay ─────────────────────
 
-  /** Apply diff coloring: green=added, red=removed, orange=modified. */
+  /** 应用 diff 着色：绿色=新增，红色=删除，橙色=修改。 */
   showDiff(diffJson: {
     added_nodes?: Array<{ id: string }>;
     removed_nodes?: Array<{ id: string }>;
@@ -524,7 +524,7 @@ export class StarGraph {
     this._diffOverlay.showDiff(diffJson);
   }
 
-  /** Remove diff coloring, restore normal colors. */
+  /** 移除 diff 着色，恢复正常颜色。 */
   clearDiff(): void {
     this._diffOverlay.clearDiff();
   }
@@ -537,16 +537,15 @@ export class StarGraph {
   }
 
   /**
-   * Apply a graph diff incrementally — no layout recalc, no camera reset,
-   * no progressive reveal. Preserves hover/selected/blast/filter/diff state.
-   * Falls back to full render() if no existing graph.
+   * 增量应用图 diff — 无布局重算、无相机重置、
+   * 无渐进揭示。保留 hover/selected/blast/filter/diff 状态。
+   * 无已有图时回退到全量 render()。
    */
   async applyGraphDiff(diff: GraphDiffJson, fullGraph: GraphJSON): Promise<void> {
     return this._lifecycle.applyGraphDiff(diff, fullGraph);
   }
 
-  // ── Render ───────────────────────────────────────────────
-
+  // ── 渲染 ───────────────────────────────────────────────
   async render(graph: GraphJSON): Promise<void> {
     try {
       await this._lifecycle.renderImpl(graph);
@@ -557,7 +556,7 @@ export class StarGraph {
       try {
         this._lifecycle.clearGraph();
       } catch {
-        /* best effort */
+      /* 尽力而为 */
       }
       this.updateStatus(0, 0);
     }
@@ -575,8 +574,7 @@ export class StarGraph {
     );
   }
 
-  // ── Focus subgraph (detail-card button triggered) ────────────
-
+  // ── 聚焦子图（详情卡片按钮触发）────────────
   private enterFocusSubgraph(idx: number): void {
     this._focus.enterFocusSubgraph(idx);
   }
@@ -607,7 +605,7 @@ export class StarGraph {
     }
   }
 
-  // ── Status ───────────────────────────────────────────────
+  // ── 状态 ───────────────────────────────────────────────
 
   // P1：状态写入 shell-store（StatusBar 遥测区），不再直接操作 DOM。
   private updateStatus(nodeCount: number, edgeCount: number, meta?: Record<string, unknown>): void {
@@ -634,9 +632,9 @@ export class StarGraph {
     });
   }
 
-  // ── Resize ───────────────────────────────────────────────
+  // ── 调整大小 ───────────────────────────────────────────────
 
-  /** Public resize — call after CSS layout changes (e.g. --font-scale, --toolbar-h) */
+  /** 公共 resize — 在 CSS 布局变化后调用（如 --font-scale、--toolbar-h）*/
   resize(): void {
     this.onResize();
   }
@@ -661,7 +659,7 @@ export class StarGraph {
     this._lifecycle.handleResize();
   };
 
-  // ── Destroy ──────────────────────────────────────────────
+  // ── 销毁 ──────────────────────────────────────────────
 
   destroy(): void {
     this._lifecycle.destroy();

@@ -10,22 +10,21 @@ pub(crate) fn is_chi_candidate(file: &str) -> bool {
     lower.ends_with(".go")
 }
 
-/// Content gate for Chi detection. Chi shares the Go selector-call shape with
-/// Gin/Echo/Fiber, so the dispatcher confirms Chi markers (import path or
-/// constructor) before claiming the file.
+/// Chi 检测的内容门控。Chi 与 Gin/Echo/Fiber 共享 Go 的
+/// selector-call 形式，因此调度器在认领文件之前需确认 Chi 标记
+/// （import 路径或构造函数）。
 pub(crate) fn has_chi_content(source: &str) -> bool {
     source.contains("chi.NewRouter") || source.contains("go-chi/chi")
 }
 
-/// Detect Chi routes (go-chi/chi). Mirrors gin.rs; `{id}` path params are kept
-/// exactly as written (no `:id` normalization — the engine does not normalize
-/// framework param styles).
-/// Patterns:
-///   r.Get("/path", handler) — capitalized method names → uppercased method
-///   r.Route("/api", func(r chi.Router) { ... }) — single-level prefix
-///       propagation: routes inside the closure body get the prefix (tracked
-///       via the closure's byte range). Nested Route closures beyond one level
-///       are out of scope — the innermost prefix wins, no composition.
+/// 检测 Chi 路由（go-chi/chi）。与 gin.rs 一致；`{id}` 路径参数保持
+/// 原样（不做 `:id` 规范化——引擎不规范化框架参数风格）。
+/// 模式：
+///   r.Get("/path", handler) —— 首字母大写的方法名 → 转为大写
+///   r.Route("/api", func(r chi.Router) { ... }) —— 单层前缀
+///       传播：闭包体内的路由获取前缀（通过闭包的字节范围跟踪）。
+///       超过一层的嵌套 Route 闭包不在处理范围内——
+///       最内层前缀生效，不做组合。
 pub(crate) fn detect_chi_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
@@ -50,16 +49,16 @@ pub(crate) fn detect_chi_routes(file: &str, source: &str) -> Vec<DetectedRoute> 
     let mut cursor = root.walk();
     let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
 
-    // Byte ranges of Route closure bodies → their prefix. Recorded in document
-    // order (outermost first); a route call takes the innermost range's prefix.
+    // Route 闭包体的字节范围 → 其前缀。按文档顺序记录
+    // （最外层在前）；路由调用取最内层范围的前缀。
     let mut route_scopes: Vec<(usize, usize, String)> = Vec::new();
 
     while let Some(node) = stack.pop() {
-        // Chi routes are selector_expression calls: r.Get("/path", handler)
+        // Chi 路由是 selector_expression 调用：r.Get("/path", handler)
         if node.kind() == "call_expression" {
             if let Some(func) = node.child_by_field_name("function") {
                 if func.kind() == "selector_expression" {
-                    // selector_expression: r.Get → field "Get"
+                    // selector_expression：r.Get → field "Get"
                     let mut sel_cursor = func.walk();
                     let method = match func.children(&mut sel_cursor)
                         .find(|c| c.kind() == "field_identifier")
@@ -69,8 +68,8 @@ pub(crate) fn detect_chi_routes(file: &str, source: &str) -> Vec<DetectedRoute> 
                         };
 
                     if method == "Route" {
-                        // r.Route("/api", func(r chi.Router) { ... }) — record the
-                        // closure's byte range; Route itself emits no route
+                        // r.Route("/api", func(r chi.Router) { ... }) —— 记录
+                        // 闭包的字节范围；Route 本身不发出路由
                         if let Some(args) = node.child_by_field_name("arguments") {
                             if let Some(prefix) = first_string_arg(&args, source) {
                                 let mut c = args.walk();
@@ -85,7 +84,7 @@ pub(crate) fn detect_chi_routes(file: &str, source: &str) -> Vec<DetectedRoute> 
                         if let Some(args) = node.child_by_field_name("arguments") {
                             let line = node.start_position().row + 1;
                             if let Some((m, path, handler)) = extract_chi_route(&args, &method, source) {
-                                // Innermost recorded scope containing this call wins.
+                                // 包含此调用的最内层记录范围生效。
                                 let mut prefix = String::new();
                                 for (start, end, p) in &route_scopes {
                                     if node.start_byte() >= *start && node.end_byte() <= *end {
@@ -109,8 +108,8 @@ pub(crate) fn detect_chi_routes(file: &str, source: &str) -> Vec<DetectedRoute> 
     result
 }
 
-/// path = first string literal arg; handler = first non-punctuation arg after it.
-/// Method is uppercased (Chi writes them capitalized: Get/Post/...).
+/// path = 第一个字符串字面量参数；handler = 其后第一个非标点参数。
+/// 方法名转为大写（Chi 中写为首字母大写：Get/Post/...）。
 fn extract_chi_route(
     args: &tree_sitter::Node,
     method: &str,

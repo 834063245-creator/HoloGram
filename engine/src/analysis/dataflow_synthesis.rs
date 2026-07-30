@@ -1,23 +1,22 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Dataflow synthesis — produces Reads/Writes/Shares/Triggers/Awaits/Sequences edges
-//! from tree-sitter AST data.
+//! 数据流合成 — 从 tree-sitter AST 数据生成 Reads/Writes/Shares/Triggers/Awaits/Sequences 边
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use crate::graph::Graph;
 
-/// Parsed source held in the pipeline parse cache.
+/// 管道解析缓存中保存的已解析源码。
 type ParseCache = HashMap<String, (String, Option<tree_sitter::Tree>)>;
 
-/// Dataflow synthesis is on-demand via `query_file_dataflow()` in
-/// dataflow_engine.rs. The pipeline no longer precomputes dataflow edges
-/// during graph construction — Agent tools call the query engine directly
-/// when tracing specific variables or functions.
+/// 数据流合成已改为按需方式，通过 dataflow_engine.rs 中的
+/// `query_file_dataflow()` 调用。管道不再在 Graph 构建期间
+/// 预计算数据流边 — Agent 工具在追踪特定变量或函数时
+/// 直接调用查询引擎。
 ///
-/// This function exists for API compatibility; it always returns 0.
+/// 此函数为 API 兼容性而保留；始终返回 0。
 pub fn synthesize_dataflow_edges(
     _graph: &mut Graph,
     _project_root: &Path,

@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// safetyCheck — bypass-immune safety layer (spec §4.5)
-// Even if rules say Allow, safety_check can force Ask for protected paths.
+// safetyCheck — 不可绕过的安全层 (spec §4.5)
+// 即使规则允许，safety_check 仍可对受保护路径强制 Ask。
 use std::path::Path;
 
 pub struct SafetyCheckResult {
@@ -10,28 +10,28 @@ pub struct SafetyCheckResult {
     pub message: String,
 }
 
-/// Check if a path is safe to READ.
-/// Like check_path_safety but skips the .hologram/ config check — reading
-/// HoloGram's own data files (memory, sessions, logs) is safe and necessary
-/// for normal operation. Only writing them is dangerous.
+/// 检查路径是否可以安全读取。
+/// 类似 check_path_safety，但跳过 .hologram/ 配置检查 — 读取
+/// HoloGram 自身的数据文件（memory、sessions、logs）是安全且必要的，
+/// 是正常操作的一部分。只有写入它们才是危险的。
 /// ponytail: 读路径不检查 dangerous_dir — 浏览 .vscode/.git/.idea 是正常操作,
 /// 只有写这些目录才需要保护. 之前读也拦导致文件树展开 .vscode 被 safety Ask 拦截.
 pub fn check_path_safety_read(path: &Path) -> SafetyCheckResult {
     let path_str = path.to_string_lossy();
 
-    // 1. Windows suspicious path patterns
+    // 1. Windows 可疑路径模式
     #[cfg(windows)]
     if has_suspicious_windows_path(&path_str) {
         return SafetyCheckResult { safe: false, message: "可疑的 Windows 路径模式".into() };
     }
 
-    // 1b. Linux/macOS — /proc/self/fd/* can leak other process' file descriptors
+    // 1b. Linux/macOS — /proc/self/fd/* 可能泄露其他进程的文件描述符
     #[cfg(unix)]
     if is_suspicious_unix_read_path(&path_str) {
         return SafetyCheckResult { safe: false, message: "受保护的系统路径".into() };
     }
 
-    // 2. Dangerous system config files — protect reads too (credentials)
+    // 2. 危险的系统配置文件 — 读取也保护（凭据）
     if is_dangerous_file(path) {
         return SafetyCheckResult { safe: false, message: "系统配置文件受保护".into() };
     }
@@ -39,12 +39,12 @@ pub fn check_path_safety_read(path: &Path) -> SafetyCheckResult {
     SafetyCheckResult { safe: true, message: String::new() }
 }
 
-/// Check if a path is safe to WRITE (or any operation).
-/// Bypass-immune: rules/mode cannot override this.
+/// 检查路径是否可以安全写入（或任何操作）。
+/// 不可绕过：规则/模式无法覆盖此项。
 pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
     let path_str = path.to_string_lossy();
 
-    // 1. Windows suspicious path patterns (NTFS ADS, 8.3 short names, trailing dots, DOS devices)
+    // 1. Windows 可疑路径模式（NTFS ADS、8.3 短文件名、尾部点号、DOS 设备名）
     #[cfg(windows)]
     if has_suspicious_windows_path(&path_str) {
         return SafetyCheckResult {
@@ -53,7 +53,7 @@ pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
         };
     }
 
-    // 1b. Linux/macOS suspicious paths (/proc, /sys, /dev writes)
+    // 1b. Linux/macOS 可疑路径（/proc、/sys、/dev 写入）
     #[cfg(unix)]
     if is_suspicious_unix_path(&path_str) {
         return SafetyCheckResult {
@@ -62,7 +62,7 @@ pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
         };
     }
 
-    // 2. HoloGram config files — always protected
+    // 2. HoloGram 配置文件 — 始终受保护
     if is_hologram_config_path(path) {
         return SafetyCheckResult {
             safe: false,
@@ -70,7 +70,7 @@ pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
         };
     }
 
-    // 3. Dangerous system config files
+    // 3. 危险的系统配置文件
     if is_dangerous_file(path) {
         return SafetyCheckResult {
             safe: false,
@@ -78,7 +78,7 @@ pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
         };
     }
 
-    // 4. Dangerous directories (with worktree exemption)
+    // 4. 危险目录（worktree 豁免）
     if is_dangerous_dir(path) {
         return SafetyCheckResult {
             safe: false,
@@ -92,9 +92,9 @@ pub fn check_path_safety(path: &Path) -> SafetyCheckResult {
     }
 }
 
-/// HoloGram config paths — `.hologram/` directory contents.
-/// Runtime data dirs (memory, sessions, logs, worktrees) are EXEMPT —
-/// HoloGram UI writes to them during normal operation.
+/// HoloGram 配置路径 — `.hologram/` 目录内容。
+/// 运行时数据目录（memory、sessions、logs、worktrees）被豁免 —
+/// HoloGram UI 在正常运行时会写入这些目录。
 fn is_hologram_config_path(path: &Path) -> bool {
     let components: Vec<&str> = path
         .components()
@@ -102,7 +102,7 @@ fn is_hologram_config_path(path: &Path) -> bool {
         .collect();
     for i in 0..components.len() {
         if components[i] == ".hologram" {
-            // Runtime data dirs exempt — HoloGram UI writes to these
+            // 运行时数据目录被豁免 — HoloGram UI 会写入这些目录
             if let Some(sub) = components.get(i + 1) {
                 if *sub == "worktrees" || *sub == "memory" || *sub == "logs" || *sub == "sessions" {
                     return false;
@@ -114,7 +114,7 @@ fn is_hologram_config_path(path: &Path) -> bool {
     false
 }
 
-/// Dangerous system config files — never allow write.
+/// 危险的系统配置文件 — 永远不允许写入。
 fn is_dangerous_file(path: &Path) -> bool {
     let name = path
         .file_name()
@@ -140,29 +140,29 @@ fn is_dangerous_file(path: &Path) -> bool {
     if dangerous_names.contains(&name) {
         return true;
     }
-    // Check full path for .ssh directory
+    // 检查完整路径中的 .ssh 目录
     let path_str = path.to_string_lossy().replace('\\', "/");
     if path_str.contains("/.ssh/") {
         return true;
     }
-    // Check full path for .aws directory (AWS credentials)
+    // 检查完整路径中的 .aws 目录 (AWS 凭据)
     if path_str.contains("/.aws/") {
         return true;
     }
-    // Check full path for .docker directory (Docker config)
+    // 检查完整路径中的 .docker 目录 (Docker 配置)
     if path_str.contains("/.docker/") {
         return true;
     }
-    // Check full path for .kube directory (Kubernetes config)
+    // 检查完整路径中的 .kube 目录 (Kubernetes 配置)
     if path_str.contains("/.kube/") {
         return true;
     }
     false
 }
 
-/// Dangerous directories — .git, .vscode, .idea, .hologram (non-worktree)
+/// 危险目录 — .git, .vscode, .idea, .hologram (非 worktree)
 fn is_dangerous_dir(path: &Path) -> bool {
-    // Check if any path component is a dangerous directory
+    // 检查路径中是否有任何组件是危险目录
     for component in path.components() {
         if let Some(s) = component.as_os_str().to_str() {
             if s.eq_ignore_ascii_case(".git")
@@ -179,28 +179,28 @@ fn is_dangerous_dir(path: &Path) -> bool {
 
 #[cfg(windows)]
 fn has_suspicious_windows_path(path_str: &str) -> bool {
-    // NTFS Alternate Data Stream: file.txt:stream
-    // Drive letter colons are OK: "C:\..." or "\\?\C:\..." (long path prefix)
+    // NTFS 备用数据流: file.txt:stream
+    // 盘符冒号是合法的: "C:\..." 或 "\\?\C:\..." (长路径前缀)
     let bytes = path_str.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
         if b == b':' {
-            // Position 1: "C:\..." drive letter
+            // 位置 1: "C:\..." 盘符
             if i == 1 && bytes.get(i.wrapping_sub(1)).is_some_and(|b| b.is_ascii_alphabetic()) {
                 continue;
             }
-            // Position 5: "\\?\C:\..." long path drive letter
+            // 位置 5: "\\?\C:\..." 长路径盘符
             if i == 5 && path_str.starts_with("\\\\?\\") && bytes.get(4).is_some_and(|b| b.is_ascii_alphabetic()) {
                 continue;
             }
-            // Any other colon is suspicious (ADS)
+            // 其他位置的冒号均可疑 (ADS)
             return true;
         }
     }
-    // Trailing dot or space (NTFS strips them but some APIs preserve)
+    // 尾部点号或空格 (NTFS 会去除但某些 API 会保留)
     if path_str.ends_with('.') || path_str.ends_with(' ') {
         return true;
     }
-    // DOS device names
+    // DOS 设备名
     let dos_names = &[
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
         "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
@@ -210,12 +210,12 @@ fn has_suspicious_windows_path(path_str: &str) -> bool {
             return true;
         }
     }
-    // Raw device paths: \\.\PhysicalDrive0, \\.\C:, etc.
+    // 原始设备路径: \\.\PhysicalDrive0, \\.\C: 等
     let lower = path_str.to_lowercase();
     if lower.starts_with("\\\\.\\physicaldrive") {
         return true;
     }
-    // \\.\C: pattern (raw volume access)
+    // \\.\C: 模式 (原始卷访问)
     if lower.starts_with("\\\\.\\") {
         let rest = &path_str[4..]; // after "\\.\"
         if rest.len() >= 1 && rest.as_bytes()[0].is_ascii_alphabetic() {
@@ -224,32 +224,32 @@ fn has_suspicious_windows_path(path_str: &str) -> bool {
             }
         }
     }
-    // \\?\GLOBALROOT prefix
+    // \\?\GLOBALROOT 前缀
     if lower.starts_with("\\\\?\\globalroot") {
         return true;
     }
     false
 }
 
-/// Linux/macOS suspicious paths for WRITE operations.
-/// /proc and /sys are kernel interfaces — writing can crash the system.
-/// /dev device files — writing can corrupt hardware state.
+/// Linux/macOS 写操作的可疑路径。
+/// /proc 和 /sys 是内核接口 — 写入可能导致系统崩溃。
+/// /dev 设备文件 — 写入可能损坏硬件状态。
 #[cfg(unix)]
 fn is_suspicious_unix_path(path_str: &str) -> bool {
     let p = path_str;
 
-    // /proc/self/* — symlink escape (can access other process' memory, fd, etc.)
+    // /proc/self/* — 符号链接逃逸 (可访问其他进程的内存、fd 等)
     if p.starts_with("/proc/self/") || p == "/proc/self" {
         return true;
     }
 
-    // /sys — kernel interface, writing is dangerous
+    // /sys — 内核接口，写入很危险
     if p.starts_with("/sys/") || p == "/sys" {
         return true;
     }
 
-    // /dev — device files, writing can corrupt hardware
-    // Allow /dev/null, /dev/zero, /dev/urandom (common in scripts)
+    // /dev — 设备文件，写入可能损坏硬件
+    // 允许 /dev/null, /dev/zero, /dev/urandom (脚本中常用)
     if (p.starts_with("/dev/") || p == "/dev")
         && !p.ends_with("/dev/null")
         && !p.ends_with("/dev/zero")
@@ -263,13 +263,13 @@ fn is_suspicious_unix_path(path_str: &str) -> bool {
         return true;
     }
 
-    // /boot — kernel images, bootloader config
+    // /boot — 内核镜像，引导加载器配置
     if p.starts_with("/boot/") || p == "/boot" {
         return true;
     }
 
-    // /etc — system configuration (write)
-    // Reads are allowed (browsing configs is normal), writes are blocked
+    // /etc — 系统配置 (写入)
+    // 读取允许 (浏览配置是正常操作)，写入被阻止
     if p.starts_with("/etc/") || p == "/etc" {
         return true;
     }
@@ -277,40 +277,40 @@ fn is_suspicious_unix_path(path_str: &str) -> bool {
     false
 }
 
-/// Linux/macOS suspicious paths for READ operations.
-/// More permissive than write — allows /etc and /dev reads.
-/// Only blocks /proc/self/fd/* (can leak file descriptors from other processes).
+/// Linux/macOS 读操作的可疑路径。
+/// 比写操作更宽松 — 允许读取 /etc 和 /dev。
+/// 仅阻止 /proc/self/fd/* (可能泄露其他进程的文件描述符)。
 #[cfg(unix)]
 fn is_suspicious_unix_read_path(path_str: &str) -> bool {
-    // /proc/self/fd/* — can leak file descriptors from the HoloGram process
+    // /proc/self/fd/* — 可能泄露 HoloGram 进程的文件描述符
     if path_str.starts_with("/proc/self/fd/") {
         return true;
     }
-    // /proc/self/mem — process memory dump
+    // /proc/self/mem — 进程内存转储
     if path_str.starts_with("/proc/self/mem") {
         return true;
     }
-    // /proc/self/environ — environment variables (may contain secrets)
+    // /proc/self/environ — 环境变量 (可能包含密钥)
     if path_str.starts_with("/proc/self/environ") {
         return true;
     }
-    // /proc/self/maps — ASLR leak (memory layout)
+    // /proc/self/maps — ASLR 泄露 (内存布局)
     if path_str.starts_with("/proc/self/maps") {
         return true;
     }
-    // /proc/self/cmdline — command line arguments
+    // /proc/self/cmdline — 命令行参数
     if path_str.starts_with("/proc/self/cmdline") {
         return true;
     }
-    // /proc/self/status — process status (may leak sensitive info)
+    // /proc/self/status — 进程状态 (可能泄露敏感信息)
     if path_str.starts_with("/proc/self/status") {
         return true;
     }
-    // /proc/self/cgroup — cgroup membership info
+    // /proc/self/cgroup — cgroup 成员信息
     if path_str.starts_with("/proc/self/cgroup") {
         return true;
     }
-    // /proc/self/mountinfo — mount namespace info
+    // /proc/self/mountinfo — 挂载命名空间信息
     if path_str.starts_with("/proc/self/mountinfo") {
         return true;
     }
@@ -357,11 +357,11 @@ mod tests {
         assert!(!r.safe);
     }
 
-    // ── Read safety (check_path_safety_read) exempts .hologram/ ──
+    // ── 读取安全检查 (check_path_safety_read) 豁免 .hologram/ ──
 
     #[test]
     fn test_read_safety_allows_hologram() {
-        // Reading .hologram/ files is safe — they're HoloGram's own data
+        // 读取 .hologram/ 文件是安全的 — 它们是 HoloGram 自身的数据
         let r = check_path_safety_read(Path::new(".hologram/memory/MEMORY.md"));
         assert!(r.safe, "memory reads should be allowed");
         let r = check_path_safety_read(Path::new(".hologram/logs/bridge.log"));
@@ -372,20 +372,20 @@ mod tests {
 
     #[test]
     fn test_read_safety_blocks_dangerous() {
-        // Dangerous system files are still blocked for reads (credentials)
+        // 危险系统文件读取仍被阻止 (凭据)
         let r = check_path_safety_read(Path::new("/home/user/.bashrc"));
         assert!(!r.safe, "bashrc reads should be blocked");
         let r = check_path_safety_read(Path::new("/home/user/.ssh/id_rsa"));
         assert!(!r.safe, "ssh key reads should be blocked");
-        // ponytail: .git/config reads are now allowed — dangerous_dir check is
-        // write-only. File tree needs to browse .vscode/.idea etc without Ask popup.
+        // ponytail: .git/config 读取现在允许 — dangerous_dir 检查仅针对写。
+        // 文件树需要浏览 .vscode/.idea 等目录而不触发 Ask 弹窗。
         let r = check_path_safety_read(Path::new(".git/config"));
         assert!(r.safe, ".git/config reads should be allowed (only writes to .git are blocked)");
         let r = check_path_safety_read(Path::new(".vscode/settings.json"));
         assert!(r.safe, ".vscode reads should be allowed");
     }
 
-    // ── Write safety exempts runtime dirs (memory/logs/sessions/worktrees) ──
+    // ── 写入安全检查豁免运行时目录 (memory/logs/sessions/worktrees) ──
 
     #[test]
     fn test_write_safety_exempts_runtime_dirs() {
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_write_safety_blocks_config() {
-        // Actual config files are still protected
+        // 实际配置文件仍受保护
         let r = check_path_safety(Path::new(".hologram/permissions.json"));
         assert!(!r.safe, "permissions.json writes should be blocked");
         let r = check_path_safety(Path::new(".hologram/baseline.json"));
@@ -412,7 +412,7 @@ mod tests {
         assert!(!r.safe, ".git/config writes should be blocked");
     }
 
-    // ── Unix path safety ──
+    // ── Unix 路径安全 ──
 
     #[cfg(unix)]
     #[test]
@@ -477,11 +477,11 @@ mod tests {
         assert!(r.safe, "/etc reads should be allowed");
     }
 
-    // ── Fix 1: is_dangerous_dir case-insensitive ──
+    // ── 修复 1: is_dangerous_dir 大小写不敏感 ──
 
     #[test]
     fn test_dangerous_dir_case_insensitive_git() {
-        // .GIT should be blocked just like .git
+        // .GIT 应像 .git 一样被阻止
         let r = check_path_safety(Path::new(".GIT/config"));
         assert!(!r.safe, ".GIT/config writes should be blocked (case-insensitive)");
     }
@@ -504,7 +504,7 @@ mod tests {
         assert!(!r.safe, ".CURSOR writes should be blocked (case-insensitive)");
     }
 
-    // ── Fix 2: is_suspicious_unix_read_path extra /proc/self paths ──
+    // ── 修复 2: is_suspicious_unix_read_path 额外 /proc/self 路径 ──
 
     #[cfg(unix)]
     #[test]
@@ -541,7 +541,7 @@ mod tests {
         assert!(!r.safe, "/proc/self/mountinfo reads should be blocked");
     }
 
-    // ── Fix 3: has_suspicious_windows_path device paths ──
+    // ── 修复 3: has_suspicious_windows_path 设备路径 ──
 
     #[cfg(windows)]
     #[test]
@@ -564,7 +564,7 @@ mod tests {
         assert!(!r.safe, "GLOBALROOT should be blocked");
     }
 
-    // ── Fix 4: is_dangerous_file extra sensitive files ──
+    // ── 修复 4: is_dangerous_file 额外敏感文件 ──
 
     #[test]
     fn test_dangerous_file_npmrc() {

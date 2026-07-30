@@ -1,11 +1,10 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Chat Stream — streaming render pipeline
-// ponytail: messages live in per-session stores (getMessagesStore(`${storeId}:${sid}`)).
-// No panel-level messages array, no sessionMessageModels cache, no manual sync.
-// Streaming writes directly to the session's store — always correct regardless of
-// which tab is active.
+// Chat Stream — 流式渲染管线
+// ponytail: 消息存放在会话级 store 中（getMessagesStore(`${storeId}:${sid}`)）。
+// 无面板级消息数组，无 sessionMessageModels 缓存，无手动同步。
+// 流式写入直接指向会话的 store — 无论哪个标签页活跃都始终正确。
 
 import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
@@ -17,7 +16,7 @@ import type { AssistantMessage, ChatMessage, FileAttachment, MessageId, PlanPart
 import { createAssistantMessage, createNoticeMessage, createUserMessage } from './message-model';
 import { applyEventToParts } from './part-mutator';
 
-// ── Turn pair type (shared with chat-session) ──
+// ── 轮次配对类型（与 chat-session 共享）──
 type TurnPair = {
   userText: string;
   userBubble: HTMLElement | null;
@@ -30,13 +29,13 @@ type TurnPair = {
 export interface StreamContext {
   storeId: string;
 
-  // ── Per-session messages stores (ponytail: single source of truth) ──
+  // ── 会话级消息 store（ponytail: 唯一数据源）──
   getSessionMessages: (sid: number) => ChatMessage[];
   getActiveMessages: () => ChatMessage[];
   setSessionMessages: (sid: number, msgs: ChatMessage[]) => void;
   bumpSessionMessages: (sid: number) => void;
 
-  // ── Streaming state (panel-level — one stream per panel) ──
+  // ── 流式状态（面板级 — 每个面板一个流）──
   getStreamingAssistantId: () => MessageId | null;
   setStreamingAssistantId: (id: MessageId | null) => void;
   getUserScrolledUp: () => boolean;
@@ -44,7 +43,7 @@ export interface StreamContext {
   getSyncRafId: () => number | null;
   setSyncRafId: (id: number | null) => void;
 
-  // ── Streaming target session (replaces _pendingStreamingSessions global Map) ──
+  // ── 流式目标会话（替代 _pendingStreamingSessions 全局 Map）──
   getStreamingTargetSid: () => number | null;
   setStreamingTargetSid: (sid: number | null) => void;
 
@@ -57,7 +56,7 @@ export interface StreamContext {
   // ── Graph ──
   getStarGraph: () => StarGraph | null;
 
-  // ── Callbacks ──
+  // ── 回调 ──
   updateFooter: () => void;
   setLastUsageText: (s: string) => void;
   addNotice: (text: string, level?: string) => void;
@@ -81,14 +80,14 @@ export interface StreamContext {
   getExpandedReasoning: () => Set<number>;
 }
 
-// ── Session routing ───────────────────────────────────────
-// ponytail: resolve which session owns the streaming assistant.
-// Strategy:
-//   1. If assistantId is known → scan session stores for it (O(sessions), ≤10)
-//   2. If no assistant yet → check pendingStreamingSession (set by sendMessage before agent.run)
-//   3. Fallback → active session
-// This prevents the race where user switches tabs after sendMessage but before
-// the first text event arrives (streamingAssistantId still null at that point).
+// ── 会话路由 ───────────────────────────────────────
+// ponytail: 解析哪个会话拥有流式助手。
+// 策略：
+//   1. 若 assistantId 已知 → 扫描会话 store 查找（O(sessions)，≤10）
+//   2. 若尚无 assistant → 检查 pendingStreamingSession（由 sendMessage 在 agent.run 前设置）
+//   3. 兜底 → 活跃会话
+// 防止用户在 sendMessage 后、第一个文本事件到达前切换标签页的竞态
+// （此时 streamingAssistantId 仍为 null）。
 
 interface SessionTarget {
   sessionId: number;
@@ -96,18 +95,18 @@ interface SessionTarget {
   isActive: boolean;
 }
 
-/** Track which session started the current streaming run.
- *  Set by sendMessage (or sendAgentText/runGoal) before agent.run(),
- *  cleared in _finaliseStreamingAssistant or by the caller's finally block.
- *  Now stored on RenderContext (getStreamingTargetSid/setStreamingTargetSid)
- *  instead of a module-level Map — eliminates global mutable state. */
+/** 跟踪哪个会话启动了当前流式运行。
+ *  由 sendMessage（或 sendAgentText/runGoal）在 agent.run() 前设置，
+ *  在 _finaliseStreamingAssistant 或调用者的 finally 块中清除。
+ *  现存储在 RenderContext 上（getStreamingTargetSid/setStreamingTargetSid）
+ *  而非模块级 Map — 消除全局可变状态。 */
 
 function _resolveSessionTarget(ctx: StreamContext, assistantId: MessageId | null): SessionTarget | null {
   const sessStore = getChatStore(ctx.storeId).sess;
   const { sessions, activeIdx } = sessStore.getState();
   const activeSid = sessions[activeIdx]?.id;
 
-  // 1) Known assistant → find its owner session
+  // 1) 已知 assistant → 查找其所属会话
   if (assistantId) {
     for (const s of sessions) {
       const msgs = ctx.getSessionMessages(s.id);
@@ -117,14 +116,14 @@ function _resolveSessionTarget(ctx: StreamContext, assistantId: MessageId | null
     }
   }
 
-  // 2) No assistant yet → use the session that started the run
+  // 2) 尚无 assistant → 使用启动运行的会话
   const pendingSid = ctx.getStreamingTargetSid();
   if (pendingSid != null) {
     const msgs = ctx.getSessionMessages(pendingSid);
     return { sessionId: pendingSid, messages: msgs, isActive: pendingSid === activeSid };
   }
 
-  // 3) Last resort: active session
+  // 3) 最后手段：活跃会话
   if (activeSid != null) {
     return {
       sessionId: activeSid,
@@ -135,13 +134,13 @@ function _resolveSessionTarget(ctx: StreamContext, assistantId: MessageId | null
   return null;
 }
 
-// ── Streaming assistant helper ─────────────────────────────
+// ── 流式助手辅助函数 ─────────────────────────────
 
 function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   const id = ctx.getStreamingAssistantId();
   const target = _resolveSessionTarget(ctx, id);
   if (!target) {
-    // ponytail: no session → can't render. Shouldn't happen (panel always has ≥1 session).
+    // ponytail: 无会话 → 无法渲染。不应发生（面板始终有 ≥1 个会话）。
     return createAssistantMessage('');
   }
 
@@ -157,21 +156,21 @@ function _streamingAssistant(ctx: StreamContext): AssistantMessage {
   msgs.push(assistant);
   ctx.setStreamingAssistantId(assistant._id);
 
-  // Persist + bump the session's store
+  // 持久化 + 递增会话的 store
   ctx.setSessionMessages(target.sessionId, [...msgs]);
   ctx.bumpSessionMessages(target.sessionId);
-  // ponytail: assistant ID is now established — future events find it via
-  // session store scan. Streaming target no longer needed for this run.
+  // ponytail: assistant ID 已确立 — 后续事件通过会话 store
+  // 扫描找到它。流式目标不再需要用于本次运行。
   ctx.setStreamingTargetSid(null);
   return assistant;
 }
 
-/** Push a notice message to the log. Dedupes identical text within a 10-minute window. */
+/** 推送通知消息到日志。在 10 分钟窗口内去重相同文本。 */
 const NOTICE_DEDUP_MS = 10 * 60 * 1000;
-const _recentNotices = new Map<string, number>(); // storeId:text → last-shown ts
+const _recentNotices = new Map<string, number>(); // storeId:text → 上次显示时间戳
 
 function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info' | 'warn' | 'error'): void {
-  // L3 dedup: skip if same text was shown within the time window (scoped per storeId to avoid cross-session suppression)
+  // L3 去重：若相同文本在时间窗口内已显示则跳过（按 storeId 限定作用域，避免跨会话抑制）
   const now = Date.now();
   const dedupKey = `${ctx.storeId}:${text}`;
   const lastShown = _recentNotices.get(dedupKey);
@@ -179,7 +178,7 @@ function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info' | 'wa
     return;
   }
   _recentNotices.set(dedupKey, now);
-  // Prune stale entries to prevent unbounded growth
+  // 清理过期条目，防止无限增长
   if (_recentNotices.size > 50) {
     for (const [key, ts] of _recentNotices) {
       if (now - ts >= NOTICE_DEDUP_MS) _recentNotices.delete(key);
@@ -205,7 +204,7 @@ function _addNoticeMessage(ctx: StreamContext, text: string, level: 'info' | 'wa
   _scheduleSync(ctx);
 }
 
-// ── Public notice ──
+// ── 公共通知 ──
 
 export function addNotice(ctx: StreamContext, text: string, level: 'info' | 'warn' | 'error'): void {
   _addNoticeMessage(ctx, text, level);
@@ -215,7 +214,7 @@ export function addNotice(ctx: StreamContext, text: string, level: 'info' | 'war
 // _finaliseStreamingAssistant
 // ═══════════════════════════════════════════════════════════
 
-/** Mark the current streaming assistant as done. */
+/** 标记当前流式助手为完成。 */
 function _finaliseStreamingAssistant(ctx: StreamContext): void {
   const sid = ctx.getStreamingAssistantId();
   const target = _resolveSessionTarget(ctx, sid);
@@ -230,22 +229,22 @@ function _finaliseStreamingAssistant(ctx: StreamContext): void {
         (part as any).status = 'error';
       }
     }
-    // Swap in a new message object: AssistantBubble's memo comparator bails
-    // when prev.msg === next.msg, so in-place mutation alone would never
-    // render the streaming→done transition (stuck spinners/cursors).
-    // Shallow copy shares the parts array — live part mutations stay visible.
+    // 替换为新的消息对象：AssistantBubble 的 memo 比较器在
+    // prev.msg === next.msg 时直接跳过，因此仅原地修改永远不会
+    // 渲染流式→完成的转换（卡住的旋转器/光标）。
+    // 浅拷贝共享 parts 数组 — 实时的 part 修改保持可见。
     const idx = msgs.indexOf(assistant);
     if (idx >= 0) msgs[idx] = { ...assistant };
   }
 
-  // Flush pending render
+  // 刷新待渲染
   const timerId = ctx.getSyncRafId();
   if (timerId !== null) {
     clearTimeout(timerId);
     ctx.setSyncRafId(null);
   }
 
-  // Final bump while streamingAssistantId is still set
+  // 在 streamingAssistantId 仍设置时做最终递增
   if (sid && target) {
     ctx.setSessionMessages(target.sessionId, [...msgs]);
     ctx.bumpSessionMessages(target.sessionId);
@@ -254,22 +253,22 @@ function _finaliseStreamingAssistant(ctx: StreamContext): void {
   }
 
   ctx.setStreamingAssistantId(null);
-  // ponytail: do NOT clear pending here. TurnStarted fires _finaliseStreamingAssistant
-  // BEFORE the first Text event creates the new assistant. If the user switches tabs
-  // in that window, pending is the only clue _resolveSessionTarget has. Clear pending
-  // in _streamingAssistant after the assistant ID is established.
+  // ponytail: 不要在此清除 pending。TurnStarted 在第一个 Text 事件创建新 assistant 之前
+  // 触发 _finaliseStreamingAssistant。若用户在此窗口内切换标签页，
+  // pending 是 _resolveSessionTarget 唯一的线索。在 _streamingAssistant 中
+  // assistant ID 确立后清除 pending。
 }
 
 // ═══════════════════════════════════════════════════════════
-// Streaming bump — trigger re-render for the streaming session
+// 流式递增 — 触发流式会话的重新渲染
 // ═══════════════════════════════════════════════════════════
 
 function _streamingBump(ctx: StreamContext): void {
   const sid = ctx.getStreamingAssistantId();
   const target = _resolveSessionTarget(ctx, sid);
   if (target) {
-    // SINGLE WRITE PATH: swap the streaming message's reference so memoized
-    // bubbles observe the in-place part mutations (see messages-store.ts).
+    // 单一写入路径：替换流式消息的引用，使 memoized 的
+    // 气泡能观察到原地 part 修改（见 messages-store.ts）。
     if (sid) {
       const idx = target.messages.findIndex((m) => m._id === sid);
       if (idx >= 0) target.messages[idx] = { ...target.messages[idx] };
@@ -277,8 +276,8 @@ function _streamingBump(ctx: StreamContext): void {
     ctx.setSessionMessages(target.sessionId, [...target.messages]);
     ctx.bumpSessionMessages(target.sessionId);
   } else {
-    // ponytail: fallback — bump the active session's store (React subscribes to
-    // per-session stores, not the panel-level msg store that bumpChat targets).
+    // ponytail: 兜底 — 递增活跃会话的 store（React 订阅的是
+    // 会话级 store，而非 bumpChat 所针对的面板级 msg store）。
     const sessStore = getChatStore(ctx.storeId).sess;
     const { sessions, activeIdx } = sessStore.getState();
     const activeSid = sessions[activeIdx]?.id;
@@ -294,12 +293,12 @@ function _streamingBump(ctx: StreamContext): void {
 // _scheduleSync
 // ═══════════════════════════════════════════════════════════
 
-// ponytail: setTimeout(16) debounce instead of requestAnimationFrame.
-// rAF can be paused/throttled in Tauri WebView (background/minimized tabs),
-// causing the syncRafId guard to permanently block subsequent streaming
-// renders. setTimeout always fires — no stuck-flag bug, no safety timeout
-// needed. (Recurring bug: same rAF-guard pattern also froze graph-scene;
-// fixed there with a 15s safety timeout in a231b89.)
+// ponytail: 使用 setTimeout(16) 防抖替代 requestAnimationFrame。
+// rAF 在 Tauri WebView 中（后台/最小化标签页）可能被暂停/节流，
+// 导致 syncRafId 守卫永久阻塞后续流式渲染。
+// setTimeout 总会触发 — 无卡死标志 bug，无需安全超时。
+// （复发 bug：相同的 rAF 守卫模式也曾冻结 graph-scene；
+// 在 a231b89 中用 15 秒安全超时修复。）
 export function _scheduleSync(ctx: StreamContext): void {
   if (ctx.getSyncRafId() !== null) return;
   const timerId = window.setTimeout(() => {
@@ -310,7 +309,7 @@ export function _scheduleSync(ctx: StreamContext): void {
 }
 
 // ═══════════════════════════════════════════════════════════
-// renderEvent — Agent event dispatch
+// renderEvent — Agent 事件分发
 // ═══════════════════════════════════════════════════════════
 
 export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
@@ -334,7 +333,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         const t = ev.tool;
         ctx._recordToolUsage(t.name, t.args || '');
         ctx._updateStatusBar('running', `执行 ${t.name}`);
-        // agent_spawn renders via SubAgentBlock — skip ToolCard
+        // agent_spawn 通过 SubAgentBlock 渲染 — 跳过 ToolCard
         if (t.name !== 'agent_spawn') {
           applyEventToParts(_streamingAssistant(ctx).parts, ev);
         }
@@ -409,7 +408,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Bubble helpers (data-driven model)
+// 气泡辅助函数（数据驱动模型）
 // ═══════════════════════════════════════════════════════════
 
 export function appendUserBubble(
@@ -432,7 +431,7 @@ export function appendUserBubble(
   const activeSid = st.sessions[st.activeIdx]?.id;
   if (activeSid != null) {
     ctx.setSessionMessages(activeSid, [...msgs]);
-    // ponytail: bump via bumpSession so React (subscribed to per-session store) re-renders
+  // ponytail: 通过 bumpSession 递增，使 React（订阅会话级 store）重新渲染
     if (ctx.bumpSessionMessages) ctx.bumpSessionMessages(activeSid);
   }
 
@@ -441,11 +440,11 @@ export function appendUserBubble(
 }
 
 export function addTurnSep(_ctx: StreamContext): void {
-  // No-op with the new message model — visual separation is CSS-only.
+  // 新消息模型下为空操作 — 视觉分隔由 CSS 处理。
 }
 
 // ═══════════════════════════════════════════════════════════
-// Turn lifecycle
+// 轮次生命周期
 // ═══════════════════════════════════════════════════════════
 
 function finishCurrentTurn(ctx: StreamContext): void {

@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// LSP Manager — Language Server Protocol integration.
-// Architecture: Monaco ↔ Tauri IPC ↔ Rust ↔ stdio ↔ Language Server.
-// Pattern: same as MCP manager (JSON-RPC over stdio, crash tracking).
+// LSP 管理器 — Language Server Protocol 集成。
+// 架构：Monaco ↔ Tauri IPC ↔ Rust ↔ stdio ↔ Language Server。
+// 模式：与 MCP 管理器相同（基于 stdio 的 JSON-RPC，崩溃追踪）。
 //
-// Response routing: requests (textDocument/completion, hover, definition, etc.)
-// create a oneshot channel. The reader thread matches JSON-RPC "id" fields
-// to pending senders. Notifications (textDocument/did*) skip this — they
-// flow to the frontend via the lsp-message event for diagnostics.
+// 响应路由：请求（textDocument/completion、hover、definition 等）
+// 创建一个 oneshot channel。读取线程通过匹配 JSON-RPC "id" 字段
+// 找到等待中的 sender。通知（textDocument/did*）跳过此步骤 — 它们
+// 通过 lsp-message 事件流向前端，用于诊断信息。
 
 #[cfg(windows)] use std::os::windows::process::CommandExt;
 
@@ -27,7 +27,7 @@ struct LspServer {
     child: Child,
     stdin: Arc<Mutex<Box<dyn Write + Send>>>,
     request_id: AtomicU32,
-    /// Pending requests waiting for a JSON-RPC response.
+    /// 等待 JSON-RPC 响应的 pending 请求。
     pending: Arc<Mutex<HashMap<u32, oneshot::Sender<Value>>>>,
 }
 
@@ -35,7 +35,7 @@ type LspMap = Arc<Mutex<HashMap<u32, LspServer>>>;
 static SERVERS: std::sync::LazyLock<LspMap> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-/// Detect which LSP is available for a given language.
+/// 检测给定语言可用的 LSP。
 fn detect_lsp(language: &str) -> Option<(&str, Vec<&str>)> {
     match language {
         "python" => Some(("pyright-langserver", vec!["--stdio"])),
@@ -67,7 +67,7 @@ fn detect_lsp(language: &str) -> Option<(&str, Vec<&str>)> {
     }
 }
 
-/// Start an LSP server for a language. Returns session ID or error.
+/// 为语言启动 LSP 服务器。返回会话 ID 或错误。
 #[tauri::command]
 pub async fn lsp_start(
     app_handle: AppHandle,
@@ -97,14 +97,14 @@ pub async fn lsp_start(
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let req_id = Arc::new(AtomicU32::new(1));
 
-    // Shared map for routing JSON-RPC responses back to pending requesters
+    // 用于将 JSON-RPC 响应路由回等待中请求者的共享 map
     let pending: Arc<Mutex<HashMap<u32, oneshot::Sender<Value>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let pending_reader = Arc::clone(&pending);
 
-    // Reader thread: forward LSP messages.
-    // - Notifications (no "id") → emit lsp-message to frontend (diagnostics, etc.)
-    // - Responses (has "id")   → try oneshot sender first; fall back to lsp-message
+    // 读取线程：转发 LSP 消息。
+    // - 通知（无 "id"）→ 发出 lsp-message 到前端（诊断等）
+    // - 响应（有 "id"）  → 先尝试 oneshot sender；回退到 lsp-message
     let sessions = Arc::clone(&SERVERS);
     let sid = id;
     let handle = app_handle.clone();
@@ -114,18 +114,18 @@ pub async fn lsp_start(
             if let Ok(text) = line {
                 if text.is_empty() { continue; }
                 if let Ok(msg) = serde_json::from_str::<Value>(&text) {
-                    // Route responses with an id through the oneshot channel
+                    // 通过 oneshot channel 路由带 id 的响应
                     if let Some(resp_id) = msg.get("id").and_then(|v| v.as_u64()) {
                         let rid = resp_id as u32;
                         let sender = pending_reader.lock().unwrap().remove(&rid);
                         if let Some(tx) = sender {
-                            // Don't care if receiver already dropped (timeout)
+                            // 不关心接收方是否已丢弃（超时）
                             let _ = tx.send(msg);
-                            continue; // routed — don't re-emit to frontend
+                            continue; // 已路由 — 不再重新发送到前端
                         }
-                        // No oneshot waiting — emit as event anyway (e.g. late response)
+                        // 无 oneshot 等待 — 仍作为事件发送（如延迟响应）
                     }
-                    // Notification or unclaimed response → forward to frontend
+                    // 通知或无人认领的响应 → 转发到前端
                     let _ = handle.emit("lsp-message", serde_json::json!({
                         "session_id": sid,
                         "message": msg,
@@ -133,18 +133,18 @@ pub async fn lsp_start(
                 }
             }
         }
-        // Server stdout closed → clean up
+        // Server stdout 已关闭 → 清理
         sessions.lock().unwrap().remove(&sid);
     });
 
-    // Send initialize and WAIT for the response before returning.
-    // Without this, didOpen and textDocument/completion can race ahead
-    // of the server's initialization (especially slow ones like tsserver).
-    // Uses mpsc (not tokio oneshot) to stay Send-safe for Tauri commands.
+    // 发送 initialize 并等待响应后才返回。
+    // 否则 didOpen 和 textDocument/completion 可能在
+    // 服务器初始化完成之前执行（尤其是 tsserver 等慢服务器）。
+    // 使用 mpsc（而非 tokio oneshot）以保持 Tauri 命令的 Send 安全。
     let (tx, rx) = mpsc::channel();
     {
         let init_id = req_id.fetch_add(1, Ordering::Relaxed);
-        // Route the response through the mpsc sender — reader thread picks it up
+        // 通过 mpsc sender 路由响应 — 读取线程会拾取它
         let pending = pending.clone();
         let tx = tx.clone();
         let init = serde_json::json!({
@@ -175,23 +175,23 @@ pub async fn lsp_start(
         let mut lock = stdin.lock().unwrap();
         writeln!(lock, "{}", serde_json::to_string(&init).unwrap()).ok();
         lock.flush().ok();
-        // Register a oneshot that forwards to mpsc
+        // 注册一个转发到 mpsc 的 oneshot
         let (otx, orx) = oneshot::channel();
         pending.lock().unwrap().insert(init_id, otx);
-        // Bridge: tokio oneshot → std mpsc (the reader thread resolves tokio oneshots)
+        // 桥接：tokio oneshot → std mpsc（读取线程解析 tokio oneshot）
         std::thread::spawn(move || {
             let _ = tx.send(orx.blocking_recv());
         });
     }
 
-    // Wait for initialize response (30s timeout so broken servers don't hang forever)
+    // 等待 initialize 响应（30s 超时，避免坏服务器永久挂起）
     match rx.recv_timeout(Duration::from_secs(30)) {
-        Ok(Ok(val)) => { let _ = val; /* initialize succeeded */ }
+        Ok(Ok(val)) => { let _ = val; /* initialize 成功 */ }
         Ok(Err(_)) => { return Err(format!("LSP 初始化失败 ({})", cmd)); }
         Err(_) => { return Err(format!("LSP 初始化超时 ({})", cmd)); }
     }
 
-    // Send initialized notification
+    // 发送 initialized 通知
     {
         let notif = serde_json::json!({
             "jsonrpc": "2.0", "method": "initialized", "params": {}
@@ -204,7 +204,7 @@ pub async fn lsp_start(
     let server = LspServer {
         child,
         stdin: stdin.clone(),
-        request_id: AtomicU32::new(2), // 1 was used for initialize
+        request_id: AtomicU32::new(2), // 1 已用于 initialize
         pending,
     };
 
@@ -213,10 +213,10 @@ pub async fn lsp_start(
     Ok(id)
 }
 
-/// Send a request/notification to an LSP server.
-/// For requests (completion, hover, definition, etc.) this waits for the
-/// JSON-RPC response and returns the `result` field.
-/// For notifications (textDocument/did*) this returns immediately.
+    /// 向 LSP 服务器发送请求/通知。
+    /// 对于请求（completion、hover、definition 等），等待
+    /// JSON-RPC 响应并返回 `result` 字段。
+    /// 对于通知（textDocument/did*），立即返回。
 #[tauri::command]
 pub async fn lsp_request(
     session_id: u32,
@@ -225,7 +225,7 @@ pub async fn lsp_request(
 ) -> Result<Value, String> {
     let is_notification = method.starts_with("textDocument/did");
 
-    // --- Prepare and send the message (under SERVERS lock) ---
+    // --- 准备并发送消息（在 SERVERS 锁内）---
     let (rx, request_id) = {
         let map = SERVERS.lock().unwrap();
         let server = map.get(&session_id)
@@ -251,19 +251,19 @@ pub async fn lsp_request(
         if is_notification {
             (None, 0u32)
         } else {
-            // Create oneshot BEFORE dropping the map lock so the reader
-            // thread can find it even if the response is very fast
+            // 在释放 map 锁之前创建 oneshot，使读取
+            // 线程即使响应很快也能找到它
             let (tx, rx) = oneshot::channel();
             server.pending.lock().unwrap().insert(id, tx);
             (Some(rx), id)
         }
-    }; // SERVERS lock dropped here
+    }; // SERVERS 锁在此释放
 
-    // --- Wait for response (outside lock — no deadlock risk) ---
+    // --- 等待响应（锁外 — 无死锁风险）---
     if let Some(rx) = rx {
         match tokio::time::timeout(Duration::from_secs(10), rx).await {
             Ok(Ok(json_rpc_response)) => {
-                // Extract result or error from JSON-RPC envelope
+                // 从 JSON-RPC 信封中提取 result 或 error
                 if let Some(err) = json_rpc_response.get("error") {
                     let msg = err.get("message").and_then(|v| v.as_str()).unwrap_or("LSP 错误");
                     return Err(format!("LSP 错误: {msg}"));
@@ -273,7 +273,7 @@ pub async fn lsp_request(
                 Ok(result)
             }
             Ok(Err(_recv_err)) => {
-                // Sender dropped (server crashed?) — clean up stale pending entry
+                // Sender 已丢弃（服务器崩溃？）— 清理过期的 pending 条目
                 let map = SERVERS.lock().unwrap();
                 if let Some(server) = map.get(&session_id) {
                     server.pending.lock().unwrap().remove(&request_id);
@@ -281,7 +281,7 @@ pub async fn lsp_request(
                 Err("LSP 连接已断开".to_string())
             }
             Err(_timeout) => {
-                // Timeout — clean up stale pending entry
+                // 超时 — 清理过期的 pending 条目
                 let map = SERVERS.lock().unwrap();
                 if let Some(server) = map.get(&session_id) {
                     server.pending.lock().unwrap().remove(&request_id);
@@ -290,12 +290,12 @@ pub async fn lsp_request(
             }
         }
     } else {
-        // Notification — return immediately
+        // 通知 — 立即返回
         Ok(serde_json::json!({ "sent": true }))
     }
 }
 
-/// Stop an LSP server.
+/// 停止一个 LSP 服务器。
 #[tauri::command]
 pub async fn lsp_stop(session_id: u32) -> Result<(), String> {
     let mut map = SERVERS.lock().unwrap();
@@ -305,7 +305,7 @@ pub async fn lsp_stop(session_id: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Stop all LSP servers — called by ResourceLedger during shutdown.
+/// 停止所有 LSP 服务器 — 在关闭时由 ResourceLedger 调用。
 pub fn stop_all() {
     let mut map = SERVERS.lock().unwrap();
     for (_, mut server) in map.drain() {

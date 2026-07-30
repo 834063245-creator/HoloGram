@@ -1,15 +1,15 @@
-// State Injection — project state hooks for the agent loop.
+// 状态注入 — Agent 循环的项目状态钩子。
 //
-// Pattern: async refresh, sync read. Data is gathered asynchronously
-// (fire-and-forget from workspace lifecycle callbacks) and cached in memory.
-// Hooks read the cache synchronously — no async in the hot path.
+// 模式：异步刷新，同步读取。数据通过异步方式收集
+// （从 workspace 生命周期回调中 fire-and-forget）并缓存在内存中。
+// 钩子同步读取缓存 — 热路径中无异步操作。
 //
-// Injection points:
-//   TurnStart  — onSessionPersisted → refresh caches → next turn sees fresh data
-//   PreRead    — read_file_content hook → sync read from diag + blame caches
-//   PostEdit   — write-tool hook → sync read from check cache
+// 注入点：
+//   TurnStart  — onSessionPersisted → 刷新缓存 → 下一轮看到新数据
+//   PreRead    — read_file_content 钩子 → 同步读取 diag + blame 缓存
+//   PostEdit   — write-tool 钩子 → 同步读取 check 缓存
 //
-// All calls degrade gracefully — if data is unavailable, nothing is injected.
+// 所有调用都能优雅降级 — 数据不可用时不注入任何内容。
 
 import { rpc } from '../bridge';
 import {
@@ -44,14 +44,14 @@ export interface LspDiagnostic {
   code?: string | number;
 }
 
-/** Diagnostics source — injected by the workspace (UI owns the LSP client). */
+/** 诊断数据源 — 由 workspace 注入（UI 拥有 LSP 客户端）。 */
 export type DiagnosticsSource = (filePath: string) => LspDiagnostic[];
 
-// ── Git status cache ──
+// ── Git 状态缓存 ──
 
 const GIT_CACHE_MS = 5000;
 
-/** Fire-and-forget refresh. Call from onSessionPersisted or turn-start. */
+/** Fire-and-forget 刷新。从 onSessionPersisted 或 turn-start 调用。 */
 export async function refreshGitStatus(projectPath: string): Promise<void> {
   const now = Date.now();
   const cached = getGitCache();
@@ -74,14 +74,14 @@ export async function refreshGitStatus(projectPath: string): Promise<void> {
   }
 }
 
-/** Sync read for hooks. */
+/** 钩子同步读取。 */
 export function getGitStatusCached() {
   return getGitCache();
 }
 
-// ── Git blame cache ──
+// ── Git blame 缓存 ──
 
-/** Fire-and-forget refresh for a specific file. Call before agent reads it. */
+/** 对特定文件进行 fire-and-forget 刷新。在 agent 读取文件前调用。 */
 export async function refreshGitBlame(projectPath: string, filePath: string): Promise<void> {
   if (hasBlameEntry(filePath)) return;
   if (!filePath.match(/\.(ts|tsx|js|jsx|rs|py|go|java|rb|cs|kt|swift|php|lua|css|html)$/)) return;
@@ -113,44 +113,44 @@ export async function refreshGitBlame(projectPath: string, filePath: string): Pr
   }
 }
 
-/** Sync read for hooks. */
+/** 钩子同步读取。 */
 export function getGitBlameCached(filePath: string): string | null {
   return getBlameCache()[filePath] ?? null;
 }
 
-// ── Check status cache ──
+// ── Check 状态缓存 ──
 
-/** Called by CheckPanel.update() when a new check result arrives. */
+/** 由 CheckPanel.update() 在新检查结果到达时调用。 */
 export function cacheCheckResult(result: ReturnType<typeof getCheckCache> & {}): void {
   setCheckCache(result as CheckStatusSummary);
 }
 
-/** Sync read for hooks. */
+/** 钩子同步读取。 */
 export function getCheckStatusCached() {
   return getCheckCache();
 }
 
-// ── Build/test result cache ──
+// ── 构建/测试结果缓存 ──
 
-/** Called by run_shell hook when a test/build command finishes. */
+/** 由 run_shell 钩子在测试/构建命令完成时调用。 */
 export function cacheBuildResult(result: ReturnType<typeof getBuildResultCache> & {}): void {
   setBuildResultCache(result as BuildResult);
 }
 
-/** Format cached build/test result for turn-start. Consumed on read. */
+/** 格式化缓存的构建/测试结果用于 turn-start。读取时消费。 */
 export function formatBuildResult(): string | null {
   const r = getBuildResultCache();
   if (!r) return null;
-  setBuildResultCache(null); // consume — only inject once
+  setBuildResultCache(null); // 消费 — 只注入一次
   const icon = r.outcome === 'pass' ? '✅' : '❌';
   return `[构建] ${icon} ${r.command}: ${r.summary}`;
 }
 
-// ── Timeline cache ──
+// ── 时间轴缓存 ──
 
 const TIMELINE_CACHE_MS = 10000;
 
-/** Fire-and-forget refresh. */
+/** Fire-and-forget 刷新。 */
 export async function refreshTimeline(projectPath: string): Promise<void> {
   const now = Date.now();
   const cached = getTimelineCache();
@@ -167,7 +167,7 @@ export async function refreshTimeline(projectPath: string): Promise<void> {
   }
 }
 
-/** Format recent timeline events for turn-start. Only show user-facing events. */
+/** 格式化最近的时间轴事件用于 turn-start。仅显示面向用户的事件。 */
 export function formatTimeline(): string | null {
   const cached = getTimelineCache();
   if (cached.length === 0) return null;
@@ -205,9 +205,9 @@ function eventLabel(type: string): string {
   }
 }
 
-// ── Formatters — build injectable strings from cached data ──
+// ── 格式化器 — 从缓存数据构建可注入字符串 ──
 
-/** Format git status for turn-start injection. */
+/** 格式化 git 状态用于 turn-start 注入。 */
 export function formatGitStatus(): string | null {
   const git = getGitCache();
   if (!git || git.dirtyCount === 0) return null;
@@ -217,7 +217,7 @@ export function formatGitStatus(): string | null {
   return `[Git] ${git.branch}${git.ahead > 0 ? ` ↑${git.ahead}` : ''}${git.behind > 0 ? ` ↓${git.behind}` : ''} | ${git.dirtyCount} 脏: ${fileList}`;
 }
 
-/** Format check status for turn-start injection. */
+/** 格式化 check 状态用于 turn-start 注入。 */
 export function formatCheckStatus(): string | null {
   const r = getCheckCache();
   if (!r) return null;
@@ -233,7 +233,7 @@ export function formatCheckStatus(): string | null {
   return `[简报] ${parts.join(' | ')}`;
 }
 
-/** Format diagnostics for pre-read injection. */
+/** 格式化诊断信息用于 pre-read 注入。 */
 export function formatDiagnostics(filePath: string, getDiags: DiagnosticsSource): string | null {
   const diags = getDiags(filePath);
   if (diags.length === 0) return null;
@@ -251,7 +251,7 @@ export function formatDiagnostics(filePath: string, getDiags: DiagnosticsSource)
   return `[LSP] ${fname}: ${parts.join(', ')}${top3 ? ' — ' + top3 : ''}`;
 }
 
-/** Format git blame for pre-read injection. */
+/** 格式化 git blame 用于 pre-read 注入。 */
 export function formatBlame(filePath: string): string | null {
   const blame = getGitBlameCached(filePath);
   if (!blame) return null;
@@ -259,9 +259,9 @@ export function formatBlame(filePath: string): string | null {
   return `[Git] ${fname}: ${blame}`;
 }
 
-// ── Turn-start snapshot — full state block for system-reminder injection ──
+// ── Turn-start 快照 — 用于 system-reminder 注入的完整状态块 ──
 
-/** Build the full turn-start injection block from all cached sources. */
+/** 从所有缓存数据源构建完整的 turn-start 注入块。 */
 export function buildTurnStartBlock(): string {
   const lines: string[] = [];
   const git = formatGitStatus();
@@ -275,7 +275,7 @@ export function buildTurnStartBlock(): string {
   return lines.length > 0 ? lines.join('\n') : '';
 }
 
-/** Build pre-read injection block for a specific file. */
+/** 为指定文件构建 pre-read 注入块。 */
 export function buildPreReadBlock(filePath: string, getDiags: DiagnosticsSource): string {
   const lines: string[] = [];
   const diag = formatDiagnostics(filePath, getDiags);
@@ -285,7 +285,7 @@ export function buildPreReadBlock(filePath: string, getDiags: DiagnosticsSource)
   return lines.join('\n');
 }
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
 function timeAgo(ts: number): string {
   const sec = Math.floor((Date.now() - ts) / 1000);

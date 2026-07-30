@@ -1,16 +1,16 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// ChatHint — React empty-state hint shown when no messages and no agent configured.
-// Auto-subscribes to panel store and active session messages store.
-// Disappears automatically when messages arrive or agent is configured.
+// ChatHint — 无消息且未配置 Agent 时显示的空状态提示。
+// 自动订阅面板 store 和活动会话消息 store。
+// 消息到达或 Agent 配置完成后自动消失。
 
 import { useMemo } from 'react';
 import { useStore } from 'zustand';
 import { getChatStore, msgStoreFor } from '../chat-store';
 
-// ponytail: stable reference so the selector below never returns a fresh []
-// which would trigger an infinite loop via useSyncExternalStore.
+// ponytail: 稳定引用，使下方 selector 不会返回新的 []
+// 否则会通过 useSyncExternalStore 触发无限循环。
 const EMPTY_MSGS: never[] = [];
 
 export function ChatHint({ panelId }: { panelId: string }) {
@@ -18,16 +18,16 @@ export function ChatHint({ panelId }: { panelId: string }) {
   const sessStore = getChatStore(panelId).sess;
   const lastAgentDiag = useStore(panelStore, (s) => s.lastAgentDiag);
 
-  // Subscribe to session store — re-renders when sessions change (new/load/switch/close).
+  // 订阅会话 store — 会话变化时（新建/加载/切换/关闭）重新渲染。
   const activeSid = useStore(sessStore, (s) => s.sessions[s.activeIdx]?.id ?? null);
 
   const msgStore = useMemo(() => (activeSid != null ? msgStoreFor(panelId, activeSid) : null), [panelId, activeSid]);
   const messages = useStore(msgStore ?? panelStore, (s) => ('messages' in s ? (s as any).messages : EMPTY_MSGS));
 
-  // Only show when messages list is empty
+  // 仅在消息列表为空时显示
   if (!Array.isArray(messages) || messages.length > 0) return null;
 
-  // Agent status: check if diag starts with successful agent init pattern
+  // Agent 状态：检查 diag 是否以成功的 Agent 初始化模式开头
   const agentReady = typeof lastAgentDiag === 'string' && lastAgentDiag.startsWith('[Agent] provider=');
   const text = agentReady
     ? '向我提问代码库的问题，或直接聊天'

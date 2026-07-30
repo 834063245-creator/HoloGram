@@ -18,7 +18,7 @@ import type { GraphFold } from './graph-fold';
 import type { GraphTooltip } from './graph-tooltip';
 import type { EdgeData, GraphNode } from './graph-types';
 
-// ── InteractionHost ──
+// ── 交互宿主 ──
 
 export interface InteractionHost {
   container: HTMLElement;
@@ -56,7 +56,7 @@ export class GraphInteractionController {
 
   constructor(private host: InteractionHost) {}
 
-  // ── Hover ──
+  // ── 悬停 ──
 
   setupHover(): void {
     this.reticleEl = document.createElement('div');
@@ -109,13 +109,13 @@ export class GraphInteractionController {
     });
   }
 
-  /** Screen-space picking: project all nodes, find nearest within radius. */
+  /** 屏幕空间拾取：投影所有节点，找半径内最近的。 */
   _pickNode(): number {
     if (this.host._nodeCount === 0) return -1;
     if (!Number.isFinite(this.host.mouse.x) || this.host.mouse.x <= -100) return -1;
 
     const rect = this.host.container.getBoundingClientRect();
-    // Mouse position in pixels
+    // 鼠标像素位置
     const mxPx = (this.host.mouse.x * 0.5 + 0.5) * rect.width;
     const myPx = (-this.host.mouse.y * 0.5 + 0.5) * rect.height;
 
@@ -132,7 +132,7 @@ export class GraphInteractionController {
       if (dead.has(i)) continue;
       v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
       v.project(cam);
-      if (v.z > 1 || v.z < -1) continue; // behind camera or clipped
+      if (v.z > 1 || v.z < -1) continue; // 在相机后方或被裁剪
       const sx = (v.x * 0.5 + 0.5) * rect.width;
       const sy = (-v.y * 0.5 + 0.5) * rect.height;
       const dx = sx - mxPx;
@@ -146,7 +146,7 @@ export class GraphInteractionController {
     return bestIdx;
   }
 
-  /** Update reticle position to follow hovered node's screen position. */
+  /** 更新准星位置以跟随悬停节点的屏幕位置。 */
   private _updateReticle(): void {
     if (!this.reticleEl) return;
     if (this.host.hoveredIdx < 0 || this.host.hoveredIdx >= this.host._nodeCount) {
@@ -173,7 +173,7 @@ export class GraphInteractionController {
     if (this.host._nodeCount === 0) return;
     if (!Number.isFinite(this.host.mouse.x) || !Number.isFinite(this.host.mouse.y)) return;
 
-    // Cloud hover: fold mode with visible galaxy clouds
+    // 云图悬停：折叠模式下可见的星系云图
     const cloudViewActive = this.host._fold.foldMode && this.host._fold.galaxyGlows.length > 0;
     if (cloudViewActive) {
       if (this.host.hoveredIdx >= 0) {
@@ -217,11 +217,11 @@ export class GraphInteractionController {
       return;
     }
 
-    // Standard view: screen-space picking
+    // 标准视图：屏幕空间拾取
     const newIdx = this._pickNode();
     if (newIdx !== this.host.hoveredIdx) {
-      // ponytail: hover is now GPU-native (uHoveredIdx uniform in shader).
-      // No more CPU-side _overrideFlags / _glowRgba manipulation needed.
+      // ponytail: hover 现在是 GPU 原生的（shader 中的 uHoveredIdx uniform）。
+      // 不再需要 CPU 侧的 _overrideFlags / _glowRgba 操作。
       this.host.hoveredIdx = newIdx;
       this.host.targetHoverScale = newIdx >= 0 ? 1 : 0;
       this.host._edges.rebuildHighlightEdges(newIdx);
@@ -236,7 +236,7 @@ export class GraphInteractionController {
     const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     this.host.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.host.camera);
 
-    // Helper: intersect galaxy core sprites and return the community id
+    // 辅助函数：与星系核心 sprite 求交并返回社区 id
     const hitCloudId = (): string | null => {
       const coreSprites = this.host._fold.galaxyGlows.filter((_, i) => i % 2 === 1);
       const hits = this.host.raycaster.intersectObjects(coreSprites);
@@ -246,7 +246,7 @@ export class GraphInteractionController {
       return null;
     };
 
-    // In universe view: click galaxy cloud → enterGalaxy
+    // 星系视图中：点击星系云图 → enterGalaxy
     if (this.host._fold.foldMode && !this.host._fold.enteredGalaxyId) {
       const cid = hitCloudId();
       if (cid) {
@@ -255,7 +255,7 @@ export class GraphInteractionController {
       return;
     }
 
-    // Inside a galaxy or sub-community
+    // 在星系或子社区内部
     if (this.host._fold.foldMode && this.host._fold.enteredGalaxyId) {
       const activeParentId =
         this.host._fold._drillStack.length > 0
@@ -271,7 +271,7 @@ export class GraphInteractionController {
       }
     }
 
-    // Use screen-space picking for click too (consistent with hover)
+    // 点击也使用屏幕空间拾取（与悬停一致）
     const savedMx = this.host.mouse.x;
     const savedMy = this.host.mouse.y;
     this.host.mouse.x = mx;

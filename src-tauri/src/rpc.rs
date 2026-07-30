@@ -1,17 +1,17 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 //
-// RPC — Single IPC entry point replacing 103 individual #[tauri::command] functions.
-// All commands route through invoke("rpc", {method, params}) instead of
-// individual invoke("git_status", ...) calls.
+// RPC — 替代 103 个独立 #[tauri::command] 函数的单一 IPC 入口。
+// 所有命令通过 invoke("rpc", {method, params}) 路由，而非
+// 独立的 invoke("git_status", ...) 调用。
 //
-// ponytail: one Tauri command, one match, one maintenance surface.
-// Adding a new command = one match arm here + same invoke("rpc",...) on frontend.
-// No more dual-side signature alignment.
+// ponytail: 一个 Tauri 命令，一个 match，一个维护面。
+// 添加新命令 = 此处一个 match 分支 + 前端相同的 invoke("rpc",...)。
+// 不再需要双端签名对齐。
 
 use serde_json::Value;
 
-// ── Param helpers ──
+// ── 参数辅助函数 ──
 
 fn req_str(params: &Value, name: &str, method: &str) -> Result<String, String> {
     params.get(name)
@@ -48,7 +48,7 @@ fn req_u16(params: &Value, name: &str, method: &str) -> Result<u16, String> {
         .ok_or_else(|| format!("{method}: missing '{name}'"))
 }
 
-// ── Result helpers (convert typed Ok to JSON string) ──
+// ── 结果辅助函数（将类型化的 Ok 转换为 JSON 字符串）──
 
 fn ok_json<T: serde::Serialize>(r: Result<T, String>) -> Result<String, String> {
     r.and_then(|v| serde_json::to_string(&v).map_err(|e| format!("rpc: serialize: {e}")))
@@ -57,7 +57,7 @@ fn ok_unit(r: Result<(), String>) -> Result<String, String> {
     r.map(|_| "null".into())
 }
 
-// ── The single RPC command ──
+// ── 单一 RPC 命令 ──
 
 #[tauri::command]
 pub(crate) async fn rpc(
@@ -70,7 +70,7 @@ pub(crate) async fn rpc(
 
     match method.as_str() {
         // ═══════════════════════════════════════════════════════
-        // Engine Dispatch (tools.rs re-exports)
+        // Engine 调度（tools.rs 重新导出）
         // ═══════════════════════════════════════════════════════
         "hologram_call" => {
             let tool = req_str(&params, "tool", "hologram_call")?;
@@ -80,7 +80,7 @@ pub(crate) async fn rpc(
         "hologram_tools_list" => commands::engine_dispatch::hologram_tools_list(),
 
         // ═══════════════════════════════════════════════════════
-        // Graph (9 commands)
+        // Graph（9 个命令）
         // ═══════════════════════════════════════════════════════
         "load_graph_json" => {
             let path = opt_str(&params, "path");
@@ -121,7 +121,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Git (23 commands)
+        // Git（23 个命令）
         // ═══════════════════════════════════════════════════════
         "git_tree_status" => {
             let path = req_str(&params, "path", "git_tree_status")?;
@@ -271,7 +271,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Filesystem (13 commands)
+        // 文件系统（13 个命令）
         // ═══════════════════════════════════════════════════════
         "list_directory" => {
             let path = req_str(&params, "path", "list_directory")?;
@@ -355,7 +355,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Search (3 commands)
+        // 搜索（3 个命令）
         // ═══════════════════════════════════════════════════════
         "search_code" => {
             let directory = req_str(&params, "directory", "search_code")?;
@@ -406,7 +406,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Web (2 commands)
+        // Web（2 个命令）
         // ═══════════════════════════════════════════════════════
         "web_search" => {
             let query = req_str(&params, "query", "web_search")?;
@@ -420,7 +420,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Shell (3 commands)
+        // Shell（3 个命令）
         // ═══════════════════════════════════════════════════════
         "exec_command" => {
             let command = req_str(&params, "command", "exec_command")?;
@@ -453,7 +453,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Editor (1 command)
+        // 编辑器（1 个命令）
         // ═══════════════════════════════════════════════════════
         "edit_file" => {
             let file_path = req_str(&params, "file_path", "edit_file")?;
@@ -466,7 +466,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Identity (5 commands)
+        // 身份认证（5 个命令）
         // ═══════════════════════════════════════════════════════
         "permission_ask_response" => {
             let request_id = req_str(&params, "request_id", "permission_ask_response")?;
@@ -474,7 +474,7 @@ pub(crate) async fn rpc(
                 Some(v) => v.as_bool().ok_or_else(|| format!("参数 'allow' 必须是布尔值，收到: {}", v))?,
                 None => return Err("参数 'allow' 缺失 — 必须明确指定允许或拒绝".to_string()),
             };
-            // Validate optional params — error on wrong type, not silent swallow
+            // 验证可选参数 — 类型错误时报错，不静默吞掉
             let remember = match params.get("remember") {
                 None => None,
                 Some(Value::Bool(b)) => Some(*b),
@@ -489,7 +489,7 @@ pub(crate) async fn rpc(
             let rule_behavior = match params.get("rule_behavior") {
                 None => None,
                 Some(Value::String(s)) => {
-                    // Validate against known behaviors
+                    // 验证已知行为值
                     let valid = ["allow", "deny", "ask"];
                     if !valid.contains(&s.as_str()) {
                         return Err(format!("参数 'rule_behavior' 无效: '{}' (允许: {})", s, valid.join(", ")));
@@ -517,7 +517,7 @@ pub(crate) async fn rpc(
         "credential_clear" => ok_unit(commands::identity::credential_clear()),
 
         // ═══════════════════════════════════════════════════════
-        // Agent Isolation (7 commands)
+        // Agent 隔离（7 个命令）
         // ═══════════════════════════════════════════════════════
         "agent_isolation_create" => {
             let agent_id = req_str(&params, "agent_id", "agent_isolation_create")?;
@@ -547,7 +547,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // External services (6 commands)
+        // 外部服务（6 个命令）
         // ═══════════════════════════════════════════════════════
         "start_mcp_server" => {
             let project_root = req_str(&params, "project_root", "start_mcp_server")?;
@@ -560,7 +560,7 @@ pub(crate) async fn rpc(
         "sandbox_status" => commands::external::sandbox_status(),
 
         // ═══════════════════════════════════════════════════════
-        // Hologram (legacy commands not yet in engine ToolRegistry)
+        // Hologram（尚未迁入 engine ToolRegistry 的遗留命令）
         // ═══════════════════════════════════════════════════════
         "hologram_run_check" => {
             let path = opt_str(&params, "path");
@@ -575,9 +575,9 @@ pub(crate) async fn rpc(
             let event_type = req_str(&params, "event_type", "hologram_record_event")?;
             let file = opt_str(&params, "file");
             let summary = req_str(&params, "summary", "hologram_record_event")?;
-            // E3: unify return wrapping — map "ok" to "null" for consistency
-            // with other unit-returning commands (ok_unit pattern).
-            // Frontend calls this fire-and-forget, so the return value is not checked.
+            // E3: 统一返回包装 — 将 "ok" 映射为 "null" 以保持
+            // 与其他返回单元的命令一致（ok_unit 模式）。
+            // 前端以 fire-and-forget 方式调用，不检查返回值。
             commands::hologram::hologram_record_event(event_type, file, summary, state)
                 .await
                 .map(|_| "null".into())
@@ -590,7 +590,7 @@ pub(crate) async fn rpc(
         "get_full_graph" => commands::hologram::get_full_graph(state).await,
 
         // ═══════════════════════════════════════════════════════
-        // Workspace (3 commands)
+        // 工作区（3 个命令）
         // ═══════════════════════════════════════════════════════
         "workspace_activate" => {
             let path = req_str(&params, "path", "workspace_activate")?;
@@ -604,7 +604,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Session persistence (2 commands)
+        // 会话持久化（2 个命令）
         // ═══════════════════════════════════════════════════════
         "session_append" => {
             let path = req_str(&params, "path", "session_append")?;
@@ -636,14 +636,14 @@ pub(crate) async fn rpc(
             ok_unit(Ok(()))
         }
         "session_flush" => {
-            // Lightweight no-op — session_append already flushes on every write.
-            // This endpoint exists so beforeunload can fire-and-forget a final flush
-            // without blocking, and as a future extension point for batched writes.
+            // 轻量空操作 — session_append 每次写入都已刷新。
+            // 此端点存在是为了让 beforeunload 可以 fire-and-forget 最终刷新
+            // 而不阻塞，并作为批量写入的未来扩展点。
             ok_unit(Ok(()))
         }
 
         // ═══════════════════════════════════════════════════════
-        // Constraints (2 commands)
+        // 约束（2 个命令）
         // ═══════════════════════════════════════════════════════
         "read_constraints" => {
             let project_path = req_str(&params, "project_path", "read_constraints")?;
@@ -656,7 +656,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Dataflow (3 commands)
+        // 数据流（3 个命令）
         // ═══════════════════════════════════════════════════════
         "dataflow_save" => {
             let query = req_str(&params, "query", "dataflow_save")?;
@@ -676,7 +676,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // Aura Memory (7 commands)
+        // Aura 记忆（7 个命令）
         // ═══════════════════════════════════════════════════════
         "aura_init" => {
             let brain_path = req_str(&params, "brain_path", "aura_init")?;
@@ -704,7 +704,7 @@ pub(crate) async fn rpc(
         "aura_shutdown" => ok_unit(crate::aura_memory::aura_shutdown()),
 
         // ═══════════════════════════════════════════════════════
-        // PTY (4 commands)
+        // PTY（4 个命令）
         // ═══════════════════════════════════════════════════════
         "pty_spawn" => {
             let cwd = req_str(&params, "cwd", "pty_spawn")?;
@@ -734,7 +734,7 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // LSP (3 commands)
+        // LSP（3 个命令）
         // ═══════════════════════════════════════════════════════
         "lsp_start" => {
             let language = req_str(&params, "language", "lsp_start")?;

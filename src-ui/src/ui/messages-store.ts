@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Messages store — chat messages array + streaming state.
-// Split from chat-store.ts (god store → domain stores).
+// 消息存储 — 聊天消息数组 + 流式状态。
+// 从 chat-store.ts 拆分（god store → 领域存储）。
 
 import { create } from 'zustand';
 import type { AssistantMessage, ChatMessage, MessageId } from './message-model';
@@ -16,12 +16,11 @@ interface MessagesStore {
 
   setMessages: (msgs: ChatMessage[]) => void;
   bump: () => void;
-  /** Commit an in-place mutation of one message: swaps its array slot for a
-   *  shallow copy and bumps version. See SINGLE WRITE PATH RULE below. */
+  /** 提交对某条消息的原地变更：将其数组槽替换为浅拷贝并递增版本。
+   *  见下方 SINGLE WRITE PATH RULE。 */
   touchMessage: (id: MessageId) => void;
-  /** Same as touchMessage, but locates the message by a part object it
-   *  contains (identity match). Survives session rebuilds that re-attach the
-   *  same part object to a new message. */
+  /** 同 touchMessage，但通过消息包含的 part 对象定位（引用匹配）。
+   *  可在会话重建后将同一 part 对象重新挂载到新消息时生效。 */
   touchMessageContaining: (part: object) => void;
   setStreamingAssistantId: (id: MessageId | null) => void;
   setUserScrolledUp: (v: boolean) => void;
@@ -30,21 +29,19 @@ interface MessagesStore {
   clearExpandedReasoning: () => void;
 }
 
-// ── SINGLE WRITE PATH RULE ────────────────────────────────
-// The chat data model mutates message/part objects in place (streaming text
-// does `part.text += chunk` — copying per token is too expensive). React,
-// however, observes changes by REFERENCE. Bridging that gap is the store's
-// job, not the caller's:
+// ── 单一写入路径规则 ────────────────────────────────
+// 聊天数据模型就地变更消息/part 对象（流式文本执行 `part.text += chunk` —
+// 逐 token 拷贝太昂贵）。但 React 通过引用观察变化。弥合这一差距
+// 是 store 的职责，而非调用方的：
 //
-//   ⚠️ After ANY in-place mutation of an existing message or one of its
-//   parts, you MUST commit through touchMessage / touchMessageContaining.
-//   NEVER follow a mutation with a bare `bump()` or a manual
-//   `setState({ messages: [...] })` — the array spread does not change
-//   message references, and memoized bubbles silently skip the update
-//   (this was the recurring "card stuck / last frame lost" bug class).
+//   ⚠️ 对已有消息或其 part 进行任何原地变更后，必须通过
+//   touchMessage / touchMessageContaining 提交。
+//   切勿在变更后使用裸 `bump()` 或手动 `setState({ messages: [...] })` —
+//   数组展开不改变消息引用，记忆化的气泡会静默跳过更新
+//   （这是反复出现的"卡片卡住 / 丢失最后一帧"类 bug）。
 //
-// Adding a new mutation path (new event kind, new lifecycle hook)? Mutate,
-// then touch. That is the whole rule.
+// 新增变更路径（新事件类型、新生命周期钩子）？变更，然后 touch。
+// 这就是全部规则。
 
 export type MessagesStoreApi = ReturnType<typeof createMessagesStoreImpl>;
 
@@ -88,12 +85,12 @@ function createMessagesStoreImpl() {
   }));
 }
 
-// ── Per-panel registry ──
-// ⚠️ INVARIANT: Every panel must have its OWN store instance via this Map.
-// NEVER add module-level `let`/`const` state outside this Map — that state
-// would be shared across panels and cause cross-panel message leaks.
-// BROKE BEFORE: 6+ commits (1f7fc04 → c927dd2) fixing cross-panel streaming leaks
-// caused by agents adding global state instead of per-panel state.
+// ── 每面板注册表 ──
+// ⚠️ 不变量：每个面板必须通过此 Map 拥有自己的 store 实例。
+// 切勿在此 Map 外添加模块级 `let`/`const` 状态 — 该状态会跨面板
+// 共享并导致跨面板消息泄露。
+// 曾因此出问题：6+ 次提交（1f7fc04 → c927dd2）修复 agent 添加
+// 全局状态而非每面板状态导致的跨面板流式泄露。
 
 const STORES_KEY = '__hologram_msg_stores__';
 const DEFAULT_ID = '__default__';
@@ -119,8 +116,8 @@ export function getMessagesStore(storeId?: string): MessagesStoreApi {
   return s;
 }
 
-/** Remove all stores whose key starts with the given prefix (e.g. a panelId).
- *  Also removes per-session stores (panelId:sessionId). */
+/** 移除所有 key 以给定前缀（如 panelId）开头的 store。
+ *  也移除每会话 store（panelId:sessionId）。 */
 export function disposeMessagesStores(storeId: string): void {
   const stores = _storesMap();
   for (const key of Array.from(stores.keys())) {
@@ -132,7 +129,7 @@ export function disposeMessagesStores(storeId: string): void {
 
 export const useMessagesStore = getMessagesStore();
 
-// ── Non-reactive accessors ──
+// ── 非响应式访问器 ──
 
 function _store(storeId?: string) {
   return getMessagesStore(storeId).getState();

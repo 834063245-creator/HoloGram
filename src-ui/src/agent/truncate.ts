@@ -1,56 +1,56 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Tool output truncation — caps tool results sent to the LLM.
+// 工具输出截断 — 限制发送给 LLM 的工具结果大小。
 //
-// Dual limit: 50KB or 2000 lines, whichever is hit first.
-// - truncateHead: keep the beginning (file reads, search results)
-// - truncateTail: keep the end (shell output — errors are at the bottom)
+// 双重限制：50KB 或 2000 行，先到先截。
+// - truncateHead: 保留开头（文件读取、搜索结果）
+// - truncateTail: 保留末尾（shell 输出 — 错误通常在底部）
 //
-// Runtime-agnostic: uses manual UTF-8 byte counting, no Node Buffer dependency.
-// Adapted from pi's harness/utils/truncate.ts (agent package version).
+// 不依赖运行时环境：使用手动 UTF-8 字节计数，无 Node Buffer 依赖。
+// 改编自 pi 的 harness/utils/truncate.ts（agent 包版本）。
 
 export const DEFAULT_MAX_LINES = 2000;
 export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 
 export interface TruncationResult {
-  /** The truncated content */
+  /** 截断后的内容 */
   content: string;
-  /** Whether truncation occurred */
+  /** 是否发生了截断 */
   truncated: boolean;
-  /** Which limit was hit: "lines", "bytes", or null if not truncated */
+  /** 命中的限制类型："lines"、"bytes"，未截断则为 null */
   truncatedBy: 'lines' | 'bytes' | null;
-  /** Total number of lines in the original content */
+  /** 原始内容的总行数 */
   totalLines: number;
-  /** Total number of bytes in the original content */
+  /** 原始内容的总字节数 */
   totalBytes: number;
-  /** Number of complete lines in the truncated output */
+  /** 截断输出中的完整行数 */
   outputLines: number;
-  /** Number of bytes in the truncated output */
+  /** 截断输出的字节数 */
   outputBytes: number;
-  /** Whether the last line was partially truncated (tail truncation edge case) */
+  /** 最后一行是否被部分截断（尾部截断的边界情况） */
   lastLinePartial: boolean;
-  /** Whether the first line exceeded the byte limit (head truncation edge case) */
+  /** 第一行是否超出字节限制（头部截断的边界情况） */
   firstLineExceedsLimit: boolean;
-  /** The max lines limit that was applied */
+  /** 应用的最大行数限制 */
   maxLines: number;
-  /** The max bytes limit that was applied */
+  /** 应用的最大字节数限制 */
   maxBytes: number;
 }
 
 export interface TruncationOptions {
-  /** Maximum number of lines (default: 2000) */
+  /** 最大行数（默认: 2000） */
   maxLines?: number;
-  /** Maximum number of bytes (default: 50KB) */
+  /** 最大字节数（默认: 50KB） */
   maxBytes?: number;
 }
 
-// ── UTF-8 byte length without Node Buffer ──
+// ── 不使用 Node Buffer 的 UTF-8 字节长度计算 ──
 
 const nonAsciiPattern = /[^\x00-\x7f]/;
 
 function utf8ByteLength(content: string): number {
-  // Browser/WebView: no Buffer.byteLength — compute manually
+  // Browser/WebView: 无 Buffer.byteLength — 手动计算
   const firstNonAscii = content.search(nonAsciiPattern);
   if (firstNonAscii === -1) return content.length;
 
@@ -99,7 +99,7 @@ function replaceUnpairedSurrogates(content: string): string {
   return output;
 }
 
-// ── formatSize ──
+// ── formatSize ── 格式化字节大小
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) {
@@ -111,7 +111,7 @@ export function formatSize(bytes: number): string {
   }
 }
 
-// ── truncateHead — keep beginning (for file reads, search results) ──
+// ── truncateHead — 保留开头（用于文件读取、搜索结果） ──
 
 export function truncateHead(content: string, options: TruncationOptions = {}): TruncationResult {
   const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
@@ -137,7 +137,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
     };
   }
 
-  // First line alone exceeds byte limit
+  // 第一行单独就超出字节限制
   const firstLineBytes = utf8ByteLength(lines[0]);
   if (firstLineBytes > maxBytes) {
     return {
@@ -194,7 +194,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   };
 }
 
-// ── truncateTail — keep end (for shell output, where errors are) ──
+// ── truncateTail — 保留末尾（用于 shell 输出，错误通常在底部） ──
 
 export function truncateTail(content: string, options: TruncationOptions = {}): TruncationResult {
   const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
@@ -232,7 +232,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 
     if (outputBytesCount + lineBytes > maxBytes) {
       truncatedBy = 'bytes';
-      // Edge case: single line exceeds maxBytes — take the end (partial)
+      // 边界情况：单行超出 maxBytes — 取末尾（部分截断）
       if (outputLinesArr.length === 0) {
         const truncatedLine = truncateStringToBytesFromEnd(line, maxBytes);
         outputLinesArr.unshift(truncatedLine);
@@ -268,7 +268,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
   };
 }
 
-// ── truncateStringToBytesFromEnd ──
+// ── truncateStringToBytesFromEnd 从末尾截断字符串到指定字节数 ──
 
 function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
   if (maxBytes <= 0) return '';
@@ -310,15 +310,15 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
   return needsReplacement ? replaceUnpairedSurrogates(output) : output;
 }
 
-// ── Tool-specific truncation ──
+// ── 工具专用截断 ──
 
-/** Tools whose output should be truncated from the tail (keep end).
- *  Shell commands produce errors/results at the end. */
+/** 输出应从尾部截断（保留末尾）的工具。
+ *  Shell 命令的错误/结果在末尾产生。 */
 const TAIL_TOOLS = new Set(['run_shell', 'bash_output', 'bash_wait']);
 
-/** Truncate tool output, choosing head or tail based on the tool name.
- *  Returns the (possibly truncated) content and whether truncation occurred.
- *  When truncated, a notice line is appended explaining what was cut. */
+/** 截断工具输出，根据工具名选择头部或尾部截断。
+ *  返回（可能已截断的）内容及是否发生了截断。
+ *  截断时追加一行提示说明被裁剪的内容。 */
 export function truncateToolOutput(
   toolName: string,
   content: string,
@@ -331,7 +331,7 @@ export function truncateToolOutput(
     return { content, truncated: false };
   }
 
-  // Build truncation notice
+  // 构建截断提示
   const direction = useTail ? 'last' : 'first';
   let notice: string;
 

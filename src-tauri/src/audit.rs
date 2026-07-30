@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
-/// One audit record.
+/// 一条审计记录。
 #[derive(Debug, Clone)]
 pub struct AuditEntry {
     pub timestamp: String,
@@ -16,7 +16,7 @@ pub struct AuditEntry {
     pub reason: String,
 }
 
-/// Append-only JSONL audit logger.
+/// 仅追加的 JSONL 审计日志记录器。
 pub struct AuditLogger {
     log_path: PathBuf,
 }
@@ -30,7 +30,7 @@ impl AuditLogger {
         }
     }
 
-    /// Append an audit entry.
+    /// 追加一条审计记录。
     pub fn log(&self, entry: &AuditEntry) {
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&self.log_path) {
             let line = serde_json::json!({
@@ -46,7 +46,7 @@ impl AuditLogger {
 
 }
 
-/// Helper to build a timestamp string.
+/// 构建时间戳字符串的辅助函数。
 pub fn now_iso() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }

@@ -15,27 +15,27 @@ pub(crate) fn detect_laravel_routes(file: &str, source: &str) -> Vec<DetectedRou
     let http_methods: HashSet<&str> = ["get", "post", "put", "delete", "patch", "any", "match"]
         .iter().cloned().collect();
 
-    // String-based scan — PHP tree-sitter has complex call expression nodes
-    // so we use line-by-line regex-like matching
+    // 基于字符串的扫描——PHP tree-sitter 的 call expression 节点较为复杂，
+    // 因此使用逐行的类正则匹配
     for (line_idx, line) in source.lines().enumerate() {
         let trimmed = line.trim();
         if !trimmed.starts_with("Route::") { continue; }
-        // Route::get('/path', [Controller::class, 'method'])  or  Route::get('/path', 'Controller@method')
+        // Route::get('/path', [Controller::class, 'method'])  或  Route::get('/path', 'Controller@method')
         if let Some(rest) = trimmed.strip_prefix("Route::") {
             let paren_pos = rest.find('(');
             let method_part = paren_pos.map(|p| &rest[..p]).unwrap_or(rest);
             let method_lower = method_part.trim().to_lowercase();
             if !http_methods.contains(method_lower.as_str()) { continue; }
 
-            // Extract path (first string argument between two single quotes)
+            // 提取路径（两个单引号之间的第一个字符串参数）
             let path = extract_php_first_string(rest);
 
-            // Extract handler: [X::class, 'method'] or 'X@method'
+            // 提取处理函数：[X::class, 'method'] 或 'X@method'
             let handler = if let Some(at_idx) = rest.rfind('@') {
-                // 'X@method' style
+                // 'X@method' 风格
                 rest[at_idx+1..].split('\'').next().unwrap_or("").to_string()
             } else if rest.contains("::class") {
-                // [X::class, 'method'] style — find last quoted string
+                // [X::class, 'method'] 风格——查找最后一个引号字符串
                 extract_php_last_string(rest)
             } else { continue };
 

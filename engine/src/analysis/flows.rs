@@ -1,19 +1,18 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Execution flow detection and criticality scoring.
+//! 执行流检测与关键性评分。
 //!
-//! Detects entry points from framework routes (pipeline stage 4), naming
-//! conventions, and zero-indegree non-test functions. Traces execution paths
-//! via forward BFS through CALLS edges, scores each flow for criticality,
-//! and persists flow metadata as node properties.
+//! 从框架路由（pipeline 阶段 4）、命名约定和零入度非测试函数中检测入口点。
+//! 通过沿 CALLS 边的前向 BFS 追踪执行路径，对每个 Flow 进行关键性评分，
+//! 并将 Flow 元数据持久化为节点属性。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::graph::{EdgeKind, NodeKind};
 use crate::pipeline::runner::PipelineResult;
 
-/// Security-sensitive keywords for criticality scoring.
+/// 用于关键性评分的安全敏感关键词。
 const SECURITY_KEYWORDS: &[&str] = &[
     "auth", "login", "token", "password", "secret", "credential",
     "permission", "role", "access", "validate", "sanitize", "encrypt",
@@ -21,8 +20,8 @@ const SECURITY_KEYWORDS: &[&str] = &[
     "oauth", "jwt", "api_key", "rate_limit", "throttle",
 ];
 
-/// Strip the trailing `:line_number` suffix from a location string.
-/// Handles Windows drive-letter paths (e.g. `C:\foo\bar.rs:42` → `C:\foo\bar.rs`).
+/// 去除位置字符串末尾的 `:line_number` 后缀。
+/// 处理 Windows 驱动器号路径（如 `C:\foo\bar.rs:42` → `C:\foo\bar.rs`）。
 fn strip_line_suffix(loc: &str) -> &str {
     if let Some(pos) = loc.rfind(':') {
         let maybe_line = &loc[pos + 1..];
@@ -33,9 +32,8 @@ fn strip_line_suffix(loc: &str) -> &str {
     loc
 }
 
-/// Build an adjacency index: source_node_id → list of (target_node_id, edge_id)
-/// for CALLS edges only. Built once, used by both entry-point detection and
-/// flow tracing to avoid O(V×E) scans.
+/// 构建 CALLS 边的邻接索引：source_node_id → (target_node_id, edge_id) 列表。
+/// 仅构建一次，供入口点检测和 Flow 追踪共用，避免 O(V×E) 扫描。
 fn build_calls_adjacency(graph: &crate::graph::Graph) -> HashMap<String, Vec<(String, String)>> {
     let mut adj: HashMap<String, Vec<(String, String)>> = HashMap::new();
     for edge in graph.edges.values() {
@@ -49,7 +47,7 @@ fn build_calls_adjacency(graph: &crate::graph::Graph) -> HashMap<String, Vec<(St
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Entry point detection
+// 入口点检测
 // ═══════════════════════════════════════════════════════════════
 
 fn is_entry_point_name(name: &str) -> bool {
@@ -65,19 +63,19 @@ fn is_entry_point_name(name: &str) -> bool {
         )
 }
 
-/// Detect entry points from three layers (priority order):
-/// 1. Framework routes (pipeline stage 4) — most precise
-/// 2. Naming conventions — covers non-framework projects
-/// 3. Zero CALLS-indegree non-test functions — fallback
+/// 从三个层次检测入口点（按优先级排序）：
+/// 1. 框架路由（pipeline 阶段 4）— 最精确
+/// 2. 命名约定 — 覆盖非框架项目
+/// 3. 零 CALLS 入度非测试函数 — 回退方案
 fn detect_entry_points(
     graph: &crate::graph::Graph,
     calls_adj: &HashMap<String, Vec<(String, String)>>,
 ) -> Vec<(String, String, Option<String>)> {
-    // (node_id, entry_kind, framework_or_none)
+    // 返回 (node_id, entry_kind, framework_or_none) 元组
     let mut entries: Vec<(String, String, Option<String>)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    // ── Layer 1: Framework routes ──
+    // ── 第 1 层：框架路由 ──
     for (nid, node) in &graph.nodes {
         let props = match node.properties.as_object() {
             Some(p) => p,
@@ -90,7 +88,7 @@ fn detect_entry_points(
             .get("framework")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        // Follow outgoing CALLS edge to find the actual handler node
+        // 沿出边 CALLS 边查找实际的 handler 节点
         if let Some(outgoing) = calls_adj.get(nid) {
             for (target, _) in outgoing {
                 if !seen.contains(target) {
@@ -101,7 +99,7 @@ fn detect_entry_points(
         }
     }
 
-    // ── Layer 2+3: Naming + zero-indegree ──
+    // ── 第 2+3 层：命名约定 + 零入度 ──
     for (nid, node) in &graph.nodes {
         if seen.contains(nid) {
             continue;
@@ -109,12 +107,12 @@ fn detect_entry_points(
         if node.kind != NodeKind::Function && node.kind != NodeKind::Class {
             continue;
         }
-        // Skip test functions
+        // 跳过测试函数
         let name = &node.name;
         if name.starts_with("test_") || name.ends_with("_test") || name.ends_with("Test") {
             continue;
         }
-        // Count incoming CALLS edges using the reverse lookup
+        // 使用反向查找计算入边 CALLS 边数量
         let call_incoming = graph
             .edges
             .values()
@@ -136,11 +134,11 @@ fn detect_entry_points(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Flow tracing
+// Flow 追踪
 // ═══════════════════════════════════════════════════════════════
 
-/// BFS forward through CALLS edges from an entry point, collecting the full
-/// call chain up to `max_depth` hops. Returns (node_ids, edge_ids, depth).
+/// 从入口点沿 CALLS 边前向 BFS，收集完整的
+/// 调用链（最多 `max_depth` 跳）。返回 (node_ids, edge_ids, depth)。
 fn trace_flow(
     calls_adj: &HashMap<String, Vec<(String, String)>>,
     entry_node_id: &str,
@@ -162,7 +160,7 @@ fn trace_flow(
         }
 
         if let Some(outgoing) = calls_adj.get(&current) {
-            // Only update max_reached when we actually find callees
+            // 仅在确实找到被调用者时更新 max_reached
             max_reached = max_reached.max(depth + 1);
 
             for (target, edge_id) in outgoing {
@@ -180,7 +178,7 @@ fn trace_flow(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Criticality scoring
+// 关键性评分
 // ═══════════════════════════════════════════════════════════════
 
 fn compute_criticality(
@@ -189,14 +187,14 @@ fn compute_criticality(
     edge_ids: &[String],
     depth: u32,
 ) -> (f64, u32, u32) {
-    // Count L4 (temporal) edges
+    // 统计 L4（时序）边数量
     let l4_count = edge_ids
         .iter()
         .filter_map(|eid| graph.edges.get(eid))
         .filter(|e| e.coupling_depth >= 4)
         .count() as u32;
 
-    // Count cross-community edges
+    // 统计跨社区边数量
     let cross_comm = edge_ids
         .iter()
         .filter_map(|eid| graph.edges.get(eid))
@@ -207,7 +205,7 @@ fn compute_criticality(
         })
         .count() as u32;
 
-    // Security keyword hits
+    // 安全关键词命中
     let security_score = node_ids
         .iter()
         .filter_map(|nid| graph.nodes.get(nid))
@@ -222,7 +220,7 @@ fn compute_criticality(
         .sum::<f64>()
         .min(0.3);
 
-    // Weighted score
+    // 加权评分
     let n = node_ids.len() as f64;
     let depth_norm = (depth as f64 / 10.0).min(1.0);
     let size_norm = (n / 100.0).min(1.0);
@@ -236,19 +234,19 @@ fn compute_criticality(
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Main entry point
+// 主入口点
 // ═══════════════════════════════════════════════════════════════
 
-/// Detect all execution flows in the graph, trace their call chains,
-/// score criticality, and persist metadata on entry point nodes.
+/// 检测 Graph 中所有执行流，追踪其调用链，
+/// 进行关键性评分，并将元数据持久化到入口点节点上。
 ///
-/// Returns the count of meaningful flows (entry points with ≥1 callee).
-/// Full flow metadata is persisted on each entry-point node's `properties["flow"]`.
+/// 返回有意义的 Flow 数量（含 ≥1 个被调用者的入口点）。
+/// 完整的 Flow 元数据持久化在每个入口点节点的 `properties["flow"]` 中。
 pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
     let calls_adj = build_calls_adjacency(&result.graph);
     let entries = detect_entry_points(&result.graph, &calls_adj);
 
-    // ponytail: cap at 5000 flows — beyond that it's noise, not signal.
+    // 上限 5000 条 Flow — 超过即为噪声，非信号。
     let entry_limit = entries.len().min(5000);
     let mut flow_count = 0usize;
 
@@ -256,7 +254,7 @@ pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
         let (node_ids, edge_ids, depth) = trace_flow(&calls_adj, &entry_id, 20);
 
         if node_ids.len() <= 1 {
-            continue; // Entry point with no callees — not a meaningful flow
+            continue; // 入口点无被调用者 — 不是有意义的 Flow
         }
 
         let file_count = node_ids
@@ -270,9 +268,9 @@ pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
         let (criticality, l4_count, cross_comm) =
             compute_criticality(&result.graph, &node_ids, &edge_ids, depth);
 
-        // Persist flow metadata on the entry point node.
-        // node_ids is stored here because handlers (get_flow, get_affected_flows)
-        // need the full path — there's no separate flow store in MemoryIndex.
+        // 将 Flow 元数据持久化到入口点节点。
+        // node_ids 存储在此处，因为 handler（get_flow, get_affected_flows）
+        // 需要完整路径 — MemoryIndex 中没有独立的 Flow 存储区。
         if let Some(node) = result.graph.nodes.get_mut(&entry_id) {
             node.properties["flow"] = serde_json::json!({
                 "id": idx,
@@ -294,7 +292,7 @@ pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Tests
+// 测试
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -331,10 +329,10 @@ mod tests {
     fn test_strip_line_suffix() {
         assert_eq!(strip_line_suffix("src/main.rs:42"), "src/main.rs");
         assert_eq!(strip_line_suffix("src/main.rs"), "src/main.rs");
-        // Windows drive-letter path — must NOT strip the drive colon
+        // Windows 驱动器号路径 — 不应去除驱动器冒号
         assert_eq!(strip_line_suffix("C:\\Users\\foo\\bar.rs:10"), "C:\\Users\\foo\\bar.rs");
         assert_eq!(strip_line_suffix("C:\\Users\\foo\\bar.rs"), "C:\\Users\\foo\\bar.rs");
-        // No line number after colon → keep as-is
+        // 冒号后无行号 → 保持原样
         assert_eq!(strip_line_suffix("http://example.com"), "http://example.com");
     }
 
@@ -356,7 +354,7 @@ mod tests {
     fn test_detect_flows_basic() {
         let mut graph = Graph::new();
 
-        // main → helper → validate
+        // main → helper → validate 调用链
         graph.add_node(make_node("main", "main", NodeKind::Function));
         graph.add_node(make_node("helper", "helper", NodeKind::Function));
         graph.add_node(make_node("validate", "validate", NodeKind::Function));
@@ -378,7 +376,7 @@ mod tests {
     fn test_detect_flows_entry_kind_persisted() {
         let mut graph = Graph::new();
 
-        // Framework route → handler → service
+        // 框架路由 → handler → service
         let mut route = make_node("route1", "/api/users", NodeKind::Function);
         route.properties = serde_json::json!({"kind": "route", "framework": "fastapi"});
         graph.add_node(route);
@@ -407,7 +405,7 @@ mod tests {
     fn test_detect_flows_orphan_entry() {
         let mut graph = Graph::new();
 
-        // orphan_fn has 0 incoming CALLS, but doesn't match naming patterns
+        // orphan_fn 有 0 条入边 CALLS，但不匹配命名模式
         graph.add_node(make_node("orphan_fn", "computeHash", NodeKind::Function));
         graph.add_node(make_node("callee", "hashAlg", NodeKind::Function));
         make_calls_edge(&mut graph, "orphan_fn", "callee");
@@ -474,7 +472,7 @@ mod tests {
         graph.add_node(make_node("c", "c", NodeKind::Function));
         make_calls_edge(&mut graph, "a", "b");
         make_calls_edge(&mut graph, "a", "c");
-        // Non-CALLS edge should be excluded
+        // 非 CALLS 边应被排除
         graph.add_edge(Edge::new("a::b::imports", "a", "b", EdgeKind::Imports));
 
         let adj = build_calls_adjacency(&graph);

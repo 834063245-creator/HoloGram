@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Engine tool dispatch — hologram_call + hologram_tools_list.
+// 引擎工具分发 — hologram_call + hologram_tools_list。
 
 use serde_json;
 use hologram_engine::tools::ToolRegistry;
@@ -22,11 +22,11 @@ pub(crate) fn hologram_call(tool: String, mut args: serde_json::Value, state: ta
     }
     let dummy_id = serde_json::json!(null);
     let result = ToolRegistry::dispatch(&tool, &args, &dummy_id);
-    // Unwrap MCP JSON-RPC envelope → return raw tool output text.
-    // After ToolResponse migration, dispatch() wraps everything in
-    // {"jsonrpc":"2.0","id":...,"result":{"content":[{"type":"text","text":"..."}]}}.
-    // All Tauri callers (timeline, check, dataflow, graph-partitioner, Agent)
-    // expect the raw tool JSON, not the envelope.
+    // 解包 MCP JSON-RPC 信封 → 返回原始工具输出文本。
+    // ToolResponse 迁移后，dispatch() 将所有内容包装在
+    // {"jsonrpc":"2.0","id":...,"result":{"content":[{"type":"text","text":"..."}]}} 中。
+    // 所有 Tauri 调用者（timeline、check、dataflow、graph-partitioner、Agent）
+    // 期望原始工具 JSON，而非信封。
     let text = result
         .get("result")
         .and_then(|r| r.get("content"))
@@ -36,7 +36,7 @@ pub(crate) fn hologram_call(tool: String, mut args: serde_json::Value, state: ta
         .and_then(|t| t.as_str())
         .unwrap_or("");
     if text.is_empty() {
-        // Fallback: it might be a Degraded response or error
+        // 回退：可能是 Degraded 响应或错误
         if let Some(err) = result.get("error") {
             return Err(format!("Engine error: {:?}", err));
         }
@@ -78,7 +78,7 @@ mod tests {
         for tool in &tools {
             let name = tool["name"].as_str().unwrap();
             let result = ToolRegistry::dispatch(name, &serde_json::json!({}), &dummy_id);
-            // After ToolResponse migration, unknown tools return Degraded (success with _isDegraded)
+            // ToolResponse 迁移后，未知工具返回 Degraded（带 _isDegraded 的成功响应）
             if let Some(err) = result.get("error").and_then(|e| e.as_str()) {
                 if err.starts_with("Tool not found") {
                     panic!(

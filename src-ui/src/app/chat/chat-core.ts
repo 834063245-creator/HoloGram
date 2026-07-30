@@ -49,23 +49,23 @@ export interface MessagesApi {
 }
 
 export class ChatCore {
-  /** Unique panel instance ID. Auto-generated for store isolation + event prefixing. */
+  /** 面板唯一实例 ID。自动生成，用于 store 隔离 + 事件前缀。 */
   readonly panelId: string;
 
-  /** Per-panel event bus — prefixed to prevent cross-panel event leaks. */
+  /** 面板级事件总线 — 加前缀以防止跨面板事件泄漏。 */
   private _bus: typeof bus;
 
-  /** Execution state — per-panel instance. */
+  /** 执行状态 — 面板级实例。 */
   private _exec: ExecStateInstance;
-  /** Public accessor for workspace wiring. */
+  /** workspace 接线的公开访问器。 */
   get execState(): ExecStateInstance { return this._exec; }
 
   private starGraph: StarGraph | null = null;
 
-  /** rAF handle for batching streaming updates. */
+  /** rAF 句柄，用于批量合并流式更新。 */
   private _syncRafId: number | null = null;
 
-  /** Streaming target session ID — replaces _pendingStreamingSessions global Map. */
+  /** 流式目标会话 ID — 替代 _pendingStreamingSessions 全局 Map。 */
   private _streamingTargetSid: number | null = null;
 
   private onOpenSettings: (() => void) | null = null;
@@ -135,7 +135,7 @@ export class ChatCore {
           .then(data.callback);
       },
     );
-    // ── Track user focus — file viewer / graph selection ──
+    // ── 追踪用户焦点 — 文件查看器 / 图谱选择 ──
     bus.on('highlight:file', (filePath: string) => {
       getChatStore(this.panelId).panel.setState({ userFocusFile: filePath, userFocusNode: null });
     });
@@ -151,7 +151,7 @@ export class ChatCore {
         });
       },
     );
-    // Feed visible node names to @ autocomplete after every full render
+    // 每次完整渲染后将可见节点名喂给 @ 自动补全
     bus.on('graph:rendered', () => {
       if (this.starGraph) this._atAutocomplete?.setNodeNames(this.starGraph.getNodeNames());
     });
@@ -170,7 +170,7 @@ export class ChatCore {
         this._updateStatusBar('thinking', '分析中…');
       } else {
         this._updateStatusBar('idle');
-        this._promptShelf?.dismiss(); // ⚡ dismiss ask/permission on stop
+        this._promptShelf?.dismiss(); // ⚡ 停止时关闭 ask/permission 弹层
         this._composer?.focus();
       }
       for (const cb of this._execListeners) cb();
@@ -182,14 +182,14 @@ export class ChatCore {
       }
       const exec = this._activeExec();
       _execUnsub = exec.onChange(() => _onExecChange(exec));
-      _onExecChange(exec); // initial sync
+      _onExecChange(exec); // 初始同步
     };
     _bindExecState();
-    // Re-bind when user switches active session
+    // 用户切换活动会话时重新绑定
     getChatStore(this.panelId).sess.subscribe(() => _bindExecState());
 
-    // ── Agent events are delivered directly via eventSink → renderEvent ──
-    // (4.2: eliminated bus round-trip — Agent → ChatCore is 1:1, no bus needed)
+    // ── Agent 事件通过 eventSink 直接投递 → renderEvent ──
+    // (4.2: 取消总线中转 — Agent → ChatCore 是 1:1，无需总线)
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -246,11 +246,11 @@ export class ChatCore {
     this._onTrailToggle?.();
   }
 
-  /** Panel-scoped event sink for agent events — direct call, no bus round-trip. */
+  /** 面板级事件接收器 — 直接调用，无总线中转。 */
   get eventSink(): (ev: AgentEvent) => void {
     return (ev: AgentEvent) => this.renderEvent(ev);
   }
-  /** Panel-scoped event sink for agent progress. */
+  /** 面板级 Agent 进度事件接收器。 */
   get progressSink(): (data: { step: number; toolName: string }) => void {
     return (data: { step: number; toolName: string }) => this._updateStatusBar('thinking', `${data.toolName}…`);
   }
@@ -262,7 +262,7 @@ export class ChatCore {
     return Session.getActiveAgent(this.panelId);
   }
 
-  /** Active session's execution state (per-session isolation). */
+  /** 活动会话的执行状态（按会话隔离）。 */
   private _activeExec(): ExecStateInstance {
     const s = getChatStore(this.panelId).sess.getState();
     const sid = s.sessions[s.activeIdx]?.id;
@@ -271,7 +271,7 @@ export class ChatCore {
 
   setAgent(agent: ChatAgentHandle | null): void {
     if (!agent) return;
-    // Replace all sessions — setAgent is boot/setup, not session management.
+    // 替换所有会话 — setAgent 是启动/设置阶段，非会话管理。
     Session.resetSessionState(this.panelId, agent);
     getChatStore(this.panelId).panel.getState().setTotalTokensUsed(0);
     Session.syncActiveSessionTokens(this.panelId, 0);
@@ -290,7 +290,7 @@ export class ChatCore {
     this.starGraph = g;
   }
   setProjectPath(p: string): void {
-    // Clear user focus when project changes — stale refs would misdirect the agent.
+    // 项目变更时清除用户焦点 — 过期的引用会误导 Agent。
     if (p && p !== getChatStore(this.panelId).panel.getState().projectPath) {
       getChatStore(this.panelId).panel.setState({ userFocusFile: null, userFocusNode: null });
     }
@@ -351,17 +351,17 @@ export class ChatCore {
     setTimeout(() => this._composer?.focus(), 60);
   }
 
-  /** Programmatically ask the agent a question. Summons panel and sends. */
+  /** 以编程方式向 Agent 提问。唤起面板并发送。 */
   ask(question: string): void {
     const mode = getChatStore(this.panelId).panel.getState().panelMode;
     const alreadyOpen = mode === 'panel' || mode === 'hud';
     if (!alreadyOpen) this.summonPanel();
     getChatStore(this.panelId).input.getState().setInputText(question);
-    // Small delay to let panel appear before sending
+    // 延迟片刻，等面板出现后再发送
     setTimeout(() => this.sendMessage(), alreadyOpen ? 0 : 200);
   }
 
-  /** Render a permission request via PromptShelf (above input, not inline). */
+  /** 通过 PromptShelf 渲染权限请求（位于输入框上方，非内联）。 */
   showPermissionCard(
     toolName: string,
     reason: string,
@@ -395,16 +395,16 @@ export class ChatCore {
     p.setLastAgentDetail(detail ?? null);
   }
 
-  // ── Tool usage tracking ──
+  // ── 工具使用追踪 ──
 
   private _recordToolUsage(toolName: string, args: string): void {
     getChatStore(this.panelId).panel.getState().addToolUsage(toolName, args);
   }
 
-  /** Categorize a tool name for visual grouping. */
+  /** 对工具名称进行分类，用于可视化分组。 */
   private static _holoTools?: Set<string>;
   static isHoloTool(name: string): boolean {
-    if (name.startsWith('hologram_')) return true; // memory / legacy tools
+    if (name.startsWith('hologram_')) return true; // 记忆 / 遗留工具
     if (!ChatCore._holoTools) {
       ChatCore._holoTools = new Set([
         'explore_deps',
@@ -542,7 +542,7 @@ export class ChatCore {
       // React 视图没有 DOM 气泡 — 入场动画由组件 CSS 负责
       animateBubbleIn: () => undefined as never,
       setRunning: (_r: boolean) => {
-        /* migrated to execState */
+        /* 已迁移到 execState */
       },
       abort: () => this.abort(),
       _updateStatusBar: (s, d) => this._updateStatusBar(s, d),
@@ -558,13 +558,13 @@ export class ChatCore {
       getAbortCtrl: () =>
         this._activeExec().abortSignal ? ({ signal: this._activeExec().abortSignal } as AbortController) : null,
       setAbortCtrl: (_c: unknown) => {
-        /* managed by execState */
+        /* 由 execState 管理 */
       },
       getExpandedReasoning: () => getExpandedReasoningSet(storeId),
     };
   }
 
-  // ── Session management (delegated to chat-session.ts) ──
+  // ── 会话管理（委托给 chat-session.ts）──
 
   switchSession(idx: number): void {
     Session.switchSession(this._sessionCtx(), idx);
@@ -576,7 +576,7 @@ export class ChatCore {
     return Session.createNewSession(this._sessionCtx());
   }
 
-  // ── Session persistence (delegated to chat-session.ts) ──
+  // ── 会话持久化（委托给 chat-session.ts）──
 
   async saveActiveSession(projectPath: string): Promise<void> {
     return Session.saveActiveSession(this._sessionCtx(), projectPath);
@@ -584,7 +584,7 @@ export class ChatCore {
   scheduleAutoSave(projectPath: string): void {
     Session.scheduleAutoSave(this._sessionCtx(), projectPath);
   }
-  /** Incrementally persist the last message to backend NDJSON (fire-and-forget). */
+  /** 增量持久化最后一条消息到后端 NDJSON（即发即忘）。 */
   appendLastMessage(projectPath: string): void {
     Session.appendLastMessage(this._sessionCtx(), projectPath);
   }
@@ -603,7 +603,7 @@ export class ChatCore {
     return Session.deleteSessionFile(this._sessionCtx(), projectPath, sessionId);
   }
 
-  // ── Turn retraction (delegated to chat-session.ts) ──
+  // ── 轮次撤回（委托给 chat-session.ts）──
 
   private retractTurn(idx: number): string | null {
     return Session.retractTurn(this._sessionCtx(), idx);
@@ -626,7 +626,7 @@ export class ChatCore {
     getChatStore(this.panelId).panel.getState().setHistoryOpen(false);
   }
 
-  // ── Send ──
+  // ── 发送 ──
 
   private async sendAgentText(text: string, displayLabel?: string): Promise<void> {
     const agent = this.agent;
@@ -638,7 +638,7 @@ export class ChatCore {
     });
   }
 
-  /** Resume a previously paused goal. */
+  /** 恢复先前暂停的目标。 */
   async runGoalResume(): Promise<void> {
     const agent = this.agent;
     if (!agent) return;
@@ -701,7 +701,7 @@ export class ChatCore {
     this.addNotice(`🚫 已取消目标: ${active.text.slice(0, 50)}`, 'info');
   }
 
-  /** Shared scaffolding for agent turns. */
+  /** Agent 轮次的共享脚手架。 */
   private async _runAgentTurn(opts: {
     userText?: string;
     bubbleLabel?: string;
@@ -715,7 +715,7 @@ export class ChatCore {
     }
     const signal = this._activeExec().start();
 
-    // Reset auto-scroll for this new turn
+    // 为新轮次重置自动滚动
     getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
 
     if (opts.userText) {
@@ -730,7 +730,7 @@ export class ChatCore {
       this.appendUserBubble(opts.bubbleLabel);
     }
 
-    // 3.6: Set UI session ID on agent so sub-agent notifications bump the correct session
+    // 3.6: 在 Agent 上设置 UI 会话 ID，使子 Agent 通知能正确路由到对应会话
     {
       const sessStore = getChatStore(this.panelId).sess.getState();
       const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
@@ -791,7 +791,7 @@ export class ChatCore {
   }
 
   async sendMessage(): Promise<void> {
-    // Reset auto-scroll for this new turn
+    // 为新轮次重置自动滚动
     getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
 
     const text = getChatStore(this.panelId).input.getState().inputText.trim();
@@ -805,7 +805,7 @@ export class ChatCore {
       return;
     }
 
-    // ── Registry-driven slash commands ──
+    // ── 注册表驱动的斜杠命令 ──
     if (text.startsWith('/')) {
       if (text.startsWith('/remember ')) {
         const fact = text.slice('/remember '.length).trim();
@@ -844,7 +844,7 @@ export class ChatCore {
         this._executeCommand(cmd);
         return;
       }
-      // Unknown slash command — route to Skill tool
+      // 未知斜杠命令 — 路由到 Skill 工具
       if (!text.includes(' ')) {
         const skillName = text.slice(1);
         getChatStore(this.panelId).input.getState().setInputText('');
@@ -853,7 +853,7 @@ export class ChatCore {
       }
     }
 
-    // ── Insert path: Agent is running, inject message into session ──
+    // ── 插入路径：Agent 运行中，将消息注入会话 ──
     if (this._activeExec().isRunning) {
       const sessIdx = this.agent.nextInsertIndex;
       this.agent.insertMessage(text);
@@ -870,13 +870,13 @@ export class ChatCore {
       this.appendUserBubble(text);
       return;
     }
-    // ⚡ Block new runs if ANY background session still has an agent running.
+    // ⚡ 若有任何后台会话仍有 Agent 在运行，则阻止新轮次。
     if (Session.hasRunningBackgroundSession(this.panelId)) {
       this.addNotice('有后台会话正在运行中，请等待完成', 'info');
       return;
     }
 
-    // Auto-label session on first user message
+    // 首条用户消息时自动标记会话
     if (Session.getActiveIdx(this.panelId) >= 0) {
       const session = Session.getSessions(this.panelId)[Session.getActiveIdx(this.panelId)];
       if (session && (session.label.startsWith('会话 ') || session.label === '已恢复的会话')) {
@@ -888,19 +888,19 @@ export class ChatCore {
       }
     }
 
-    // If we're in the floating input bar, summon the full panel before sending
+    // 若当前在浮动输入栏中，发送前先唤起完整面板
     if (getChatStore(this.panelId).panel.getState().panelMode === 'input') {
       this.summonPanel();
     }
 
-    // Push input history
+    // 推入输入历史
     getChatStore(this.panelId).input.getState().pushInputHistory(text);
     getChatStore(this.panelId).input.setState({ draftText: '' });
     getChatStore(this.panelId).input.getState().setInputText('');
 
     const signal = this._activeExec().start();
 
-    // Turn pair for retry — sessionIndex is where user msg will land
+    // 重试用轮次对 — sessionIndex 是用户消息将要落地的位置
     const sessIdx = this.agent.getSession().length;
     Session.getTurnPairs(this.panelId).push({
       userText: text,
@@ -909,13 +909,13 @@ export class ChatCore {
       sessionIndex: sessIdx,
     });
 
-    // User bubble (original text, focus context is for Agent eyes only)
+    // 用户气泡（原始文本，焦点上下文仅供 Agent 读取）
     const files = getChatStore(this.panelId).input.getState().attachedFiles;
     const filesSnapshot = [...files];
     this.appendUserBubble(text, filesSnapshot);
 
-        // Build focus context prefix — tells Agent what the user is looking at.
-    // Consumed once per send, then cleared so stale focus doesn't leak into later turns.
+        // 构建焦点上下文前缀 — 告诉 Agent 用户正在查看什么。
+    // 每次发送消费一次后清除，防止过期焦点泄漏到后续轮次。
     let focusPrefix = '';
     const focusNode = getChatStore(this.panelId).panel.getState().userFocusNode;
     const focusFile = getChatStore(this.panelId).panel.getState().userFocusFile;
@@ -931,7 +931,7 @@ export class ChatCore {
       getChatStore(this.panelId).panel.setState({ userFocusFile: null });
     }
 
-    // Attached files — expose paths so Agent can read them
+    // 附加文件 — 暴露路径以便 Agent 读取
     if (files.length > 0) {
       focusPrefix += '用户附加了以下文件：\n';
       for (const f of files) {
@@ -947,7 +947,7 @@ export class ChatCore {
       getChatStore(this.panelId).input.getState().clearAttachedFiles();
     }
 
-    // Track which session started this run — streaming routes correctly on tab switch
+    // 追踪启动本次运行的会话 — 切换标签页时流式仍能正确路由
     {
       const sessStore = getChatStore(this.panelId).sess.getState();
       const activeSid = sessStore.sessions[sessStore.activeIdx]?.id;
@@ -957,7 +957,7 @@ export class ChatCore {
       }
     }
 
-    // Run agent
+    // 运行 Agent
     try {
       await this.agent.run(signal, focusPrefix + text);
     } catch (err: unknown) {
@@ -974,7 +974,7 @@ export class ChatCore {
       this._activeExec().done();
       this.finishTurn();
     }
-    // Signal main.ts to persist sessions
+    // 通知 main.ts 持久化会话
     bus.emit('chat:turn-done');
   }
 
@@ -1006,7 +1006,7 @@ export class ChatCore {
   }
 
   // ═══════════════════════════════════════════════════════
-  // Data-driven message model — delegated to chat-stream.ts
+  // ── 数据驱动的消息模型 — 委托给 chat-stream.ts ──
   // ═══════════════════════════════════════════════════════
 
   private addNotice(text: string, level: 'info' | 'warn' | 'error'): void {
@@ -1023,7 +1023,7 @@ export class ChatCore {
     this._footerController?.refresh();
   }
 
-  // ── File attachments ──
+  // ── 文件附件 ──
 
   async openFilePicker(): Promise<void> {
     const input = getChatStore(this.panelId).input.getState();
@@ -1037,7 +1037,7 @@ export class ChatCore {
         if (!input.attachedFiles.some((f) => f.path === p)) input.addAttachedFile({ path: p, name, size: 0 });
       }
     } catch {
-      // Fallback for browser dev mode
+      // 浏览器开发模式下的回退方案
       const el = document.createElement('input');
       el.type = 'file';
       el.multiple = true;
@@ -1071,7 +1071,7 @@ export class ChatCore {
     getChatStore(this.panelId).input.getState().removeAttachedFile(idx);
   }
 
-  // ── Helpers ──
+  // ── 辅助函数 ──
 
   private appendUserBubble(
     text: string,
@@ -1207,7 +1207,7 @@ export class ChatCore {
     this._slashController?.hide();
   }
 
-  /** Wire local handlers for commands that need instance context (new/compact/trail/export). */
+  /** 为需要实例上下文的命令（new/compact/trail/export）挂载本地处理器。 */
   private _wireCommandHandlers(): void {
     const override = (id: string, handler: () => void) => {
       const idx = DEFAULT_COMMANDS.findIndex((c) => c.id === id);
@@ -1222,7 +1222,7 @@ export class ChatCore {
     override('compact', () => {
       getChatStore(this.panelId).input.getState().setInputText('');
       if (!this.agent) return;
-      // Guard: compaction rewrites the session — racing a running turn corrupts it.
+      // 守卫：压缩会重写会话 — 与运行中的轮次竞争会损坏数据。
       if (this._activeExec().isRunning) {
         this.addNotice('Agent 正在运行，请先停止或等待完成后再压缩。', 'warn');
         return;
@@ -1254,7 +1254,7 @@ export class ChatCore {
     });
   }
 
-  /** Execute a command from the registry（SlashPanel onCommit 委托）. */
+  /** 从注册表执行命令（SlashPanel onCommit 委托）。 */
   executeCommand(cmd: CommandDef): void {
     this._executeCommand(cmd);
   }
@@ -1284,7 +1284,7 @@ export class ChatCore {
   }
 
   handleSlashInput(textBefore: string): void {
-    // Show on / at line start or after space
+    // 行首或空格后的 / 时显示面板
     const showPanel = /(?:^|\s)\/$/.test(textBefore);
     if (showPanel) {
       const slashIdx = textBefore.lastIndexOf('/');
@@ -1303,7 +1303,7 @@ export class ChatCore {
     }
   }
 
-  // ── Pill badge → panel-store.pillEventCount ──
+  // ── Pill 徽章 → panel-store.pillEventCount ──
 
   private _bumpPillBadge(): void {
     if (getChatStore(this.panelId).panel.getState().panelMode !== 'pill') return;

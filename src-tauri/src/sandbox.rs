@@ -6,16 +6,16 @@
 // 不再独立裁决。
 use std::path::{Path, PathBuf};
 
-/// Result of a sandbox path resolution check.
+/// 沙箱路径解析检查的结果。
 #[derive(Debug)]
 pub enum SandboxResult {
-    Allowed(PathBuf), // canonicalized, verified path
-    Denied(String),   // reason for denial
+    Allowed(PathBuf), // 已规范化、已验证的路径
+    Denied(String),   // 拒绝原因
 }
 
-/// Path verification — canonicalize, check symlinks, verify prefix.
+/// 路径验证 — 规范化、检查符号链接、验证前缀。
 pub struct Sandbox {
-    project_root: PathBuf, // canonicalized
+    project_root: PathBuf, // 已规范化
 }
 
 impl Sandbox {
@@ -27,10 +27,10 @@ impl Sandbox {
         }
     }
 
-    /// Validate a read operation against `path`.
-    /// Global memory paths bypass the project sandbox (same as writes).
+    /// 验证对 `path` 的读取操作。
+    /// 全局记忆路径绕过项目沙箱（与写入相同）。
     pub fn resolve_read(&self, path: &Path) -> SandboxResult {
-        // Global memory bypass
+        // 全局记忆绕过
         if Self::is_global_memory_path(path) {
             let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
             if is_symlink_or_junction(path) {
@@ -53,12 +53,12 @@ impl Sandbox {
             }
         };
 
-        // Reject symlinks / junctions
+        // 拒绝符号链接 / junction
         if is_symlink_or_junction(path) {
             return SandboxResult::Denied("symlinks and junctions are not allowed".into());
         }
 
-        // Check project root prefix
+        // 检查项目根目录前缀
         if real.starts_with(&self.project_root) {
             return SandboxResult::Allowed(real);
         }
@@ -69,15 +69,15 @@ impl Sandbox {
         ))
     }
 
-    /// Check if this path is under the global memory directory.
-    /// Agent-managed memories live outside the project sandbox by design.
+    /// 检查此路径是否在全局记忆目录下。
+    /// Agent 管理的记忆设计上位于项目沙箱之外。
     fn is_global_memory_path(path: &Path) -> bool {
         let home = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
             .unwrap_or_default();
         if home.is_empty() { return false; }
         let gm = PathBuf::from(&home).join(".hologram").join("global_memory");
-        // Check both the raw path and canonicalized versions
+        // 检查原始路径和规范化版本
         path.starts_with(&gm) || {
             std::fs::canonicalize(path)
                 .map(|p| p.starts_with(&gm))
@@ -85,14 +85,14 @@ impl Sandbox {
         }
     }
 
-    /// Validate a write operation. Dead-locked to project directory,
-    /// with an exception for the global memory directory (agent-managed).
+    /// 验证写入操作。锁定到项目目录，
+    /// 全局记忆目录除外（agent 管理）。
     pub fn resolve_write(&self, path: &Path) -> SandboxResult {
-        // Global memory bypass: agent writes to ~/.hologram/global_memory/
-        // are always allowed regardless of project sandbox boundary.
+        // 全局记忆绕过：agent 写入 ~/.hologram/global_memory/
+        // 无论项目沙箱边界如何都始终允许。
         if Self::is_global_memory_path(path) {
             let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-            // Safety check still applies — don't allow symlinks in memory paths
+            // 安全检查仍然适用 — 记忆路径不允许符号链接
             if is_symlink_or_junction(path) {
                 return SandboxResult::Denied("global memory symlinks are not allowed".into());
             }
@@ -132,7 +132,7 @@ impl Sandbox {
             }
         };
 
-        // Verify within project_root
+        // 验证在 project_root 内
         if !real.starts_with(&self.project_root) {
             return SandboxResult::Denied(format!(
                 "write to {:?} denied: outside project root {:?}",
@@ -140,7 +140,7 @@ impl Sandbox {
             ));
         }
 
-        // Reject symlinks / junctions
+        // 拒绝符号链接 / junction
         if is_symlink_or_junction(path) {
             return SandboxResult::Denied("symlinks and junctions are not allowed".into());
         }
@@ -150,10 +150,10 @@ impl Sandbox {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Helpers: path traversal
+// 辅助函数：路径穿越
 // ═══════════════════════════════════════════════════════════════
 
-/// Walk up the directory tree to find the nearest existing ancestor.
+/// 向上遍历目录树，查找最近的已存在祖先。
 fn find_existing_ancestor(path: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut current = path.to_path_buf();
     while let Some(parent) = current.parent() {
@@ -170,7 +170,7 @@ fn find_existing_ancestor(path: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-/// Detect NTFS symlinks and junctions on Windows.
+/// 检测 Windows 上的 NTFS 符号链接和 junction。
 #[cfg(windows)]
 fn is_symlink_or_junction(path: &Path) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -188,8 +188,8 @@ fn is_symlink_or_junction(path: &Path) -> bool {
     path.is_symlink()
 }
 
-/// Expand ~ to the user's home directory.
-/// Used by permissions/bash.rs for path extraction from shell commands.
+/// 将 ~ 展开为用户 home 目录。
+/// 被 permissions/bash.rs 用于从 shell 命令中提取路径。
 pub fn expand_home(raw: &str) -> PathBuf {
     if raw.starts_with("~/") {
         #[cfg(windows)]

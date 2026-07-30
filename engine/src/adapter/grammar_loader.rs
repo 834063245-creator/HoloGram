@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// GrammarLoader — dynamic tree-sitter grammar loading via .dll/.so.
-// Static grammars (core languages) are pre-registered via register_static().
-// Dynamic grammars are loaded lazily from <engine_dir>/grammars/ on first use.
+// GrammarLoader — 通过 .dll/.so 动态加载 tree-sitter 语法。
+// 静态语法（核心语言）通过 register_static() 预注册。
+// 动态语法在首次使用时从 <engine_dir>/grammars/ 惰性加载。
 //
-// ponytail: convention over configuration. DLL naming is tree-sitter-{name}.dll,
-// symbol is tree_sitter_{name}. Extension mapping uses a small built-in table.
+// ponytail: 约定优于配置。DLL 命名为 tree-sitter-{name}.dll，
+// 符号为 tree_sitter_{name}。扩展名映射使用内置的小型映射表。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,26 +14,26 @@ use std::sync::{Arc, RwLock};
 use tree_sitter::Language;
 use tree_sitter_language::LanguageFn;
 
-/// A loaded grammar: owns the Library handle so Language stays valid.
-/// `None` for statically-linked grammars (data lives in .text, nothing to unload).
+/// 已加载的语法：持有 Library 句柄以保持 Language 有效。
+/// 静态链接语法为 `None`（数据位于 .text 段，无需卸载）。
 struct LoadedGrammar {
     _lib: Option<libloading::Library>,
     language: Language,
 
 }
 
-/// Process-wide grammar loader. Initialized once as a LazyLock.
-/// Thread-safe: RwLock allows concurrent reads (hot path) and serialized writes (cold path).
+/// 进程级语法加载器。作为 LazyLock 初始化一次。
+/// 线程安全：RwLock 允许并发读取（热路径）和串行写入（冷路径）。
 pub struct GrammarLoader {
     loaded: RwLock<HashMap<String, Arc<LoadedGrammar>>>,
     grammar_dir: PathBuf,
-    /// Extension → (dll_name, symbol_name, extensions) for grammars discoverable on disk.
-    /// Populated by scan_dir() at construction.
+    /// 扩展名 → (dll_name, symbol_name, extensions)，用于可在磁盘上发现的语法。
+    /// 在构造时由 scan_dir() 填充。
     available: HashMap<String, (String, String, Vec<String>)>,
 }
 
-/// Built-in extension-to-grammar-name mapping for grammars where the extension
-/// doesn't match the grammar name (e.g. cpp → ["cpp","hpp","cc","hh","cxx","hxx"]).
+/// 内置扩展名到语法名的映射，用于扩展名
+/// 与语法名不匹配的情况（例如 cpp → ["cpp","hpp","cc","hh","cxx","hxx"]）。
 fn known_extensions() -> Vec<(&'static str, &'static str, &'static [&'static str])> {
     vec![
         ("c", "c", &["c", "h"]),
@@ -52,7 +52,7 @@ fn known_extensions() -> Vec<(&'static str, &'static str, &'static [&'static str
         ("bash", "bash", &["sh", "bash"]),
         ("r", "r", &["r", "R"]),
         ("ocaml", "ocaml", &["ml"]),
-        // ocaml_interface handled separately for .mli
+        // ocaml_interface 单独处理 .mli
         ("kotlin", "kotlin", &["kt", "kts"]),
         ("markdown", "markdown", &["md", "markdown"]),
         ("toml", "toml", &["toml"]),
@@ -69,12 +69,12 @@ impl GrammarLoader {
         }
     }
 
-    /// Pre-register a statically-linked grammar (from Cargo dependency).
-    /// Multiple extensions share the same Language.
+    /// 预注册静态链接语法（来自 Cargo 依赖）。
+    /// 多个扩展名共享同一个 Language。
     pub fn register_static(&self, lang: Language, _lang_key: &str, extensions: &[&str]) {
         let grammar = Arc::new(LoadedGrammar {
-            // ponytail: static grammars don't need a Library handle — data is in .text.
-            // A zeroed Library would dlclose(0)/FreeLibrary(NULL) on drop, which aborts on glibc.
+            // ponytail: 静态语法不需要 Library 句柄 — 数据在 .text 段中。
+            // 零值 Library 在 drop 时会调用 dlclose(0)/FreeLibrary(NULL)，在 glibc 上会导致中止。
             _lib: None,
             language: lang,
         });
@@ -84,9 +84,9 @@ impl GrammarLoader {
         }
     }
 
-    /// Get a Language for a file extension. Returns None if unsupported.
+    /// 根据文件扩展名获取 Language。如果不支持则返回 None。
     pub fn get(&self, ext: &str) -> Option<Language> {
-        // Fast path: already loaded (static or previously lazy-loaded)
+        // 快速路径：已加载（静态或之前惰性加载的）
         {
             let loaded = self.loaded.read().unwrap();
             if let Some(g) = loaded.get(ext) {
@@ -94,12 +94,12 @@ impl GrammarLoader {
             }
         }
 
-        // Slow path: try to load from DLL
+        // 慢速路径：尝试从 DLL 加载
         let (dll_name, symbol_name, extensions) = self.available.get(ext)?;
         let dll_path = self.grammar_dir.join(dll_name);
 
-        // SAFETY: loading a trusted grammar DLL from our own grammars/ directory.
-        // The symbol name is derived from the known convention, not user input.
+        // 安全性：从我们自己的 grammars/ 目录加载受信任的语法 DLL。
+        // 符号名来自已知约定，而非用户输入。
         unsafe {
             let lib = match libloading::Library::new(&dll_path) {
                 Ok(lib) => lib,
@@ -136,11 +136,11 @@ impl GrammarLoader {
         }
     }
 
-    /// All supported extensions (static + discovered).
+    /// 所有支持的扩展名（静态 + 已发现的）。
     pub fn supported_extensions(&self) -> Vec<String> {
         let loaded = self.loaded.read().unwrap();
         let mut exts: Vec<String> = loaded.keys().cloned().collect();
-        // Also include not-yet-loaded but available
+        // 也包括尚未加载但可用的
         for ext in self.available.keys() {
             if !exts.contains(ext) {
                 exts.push(ext.clone());
@@ -149,8 +149,8 @@ impl GrammarLoader {
         exts
     }
 
-    /// Scan grammars/ directory for tree-sitter-*.dll files.
-    /// Returns extension → (dll_name, symbol_name, extensions) mappings.
+    /// 扫描 grammars/ 目录中的 tree-sitter-*.dll 文件。
+    /// 返回 扩展名 → (dll_name, symbol_name, extensions) 映射。
     fn scan_dir(dir: &Path) -> HashMap<String, (String, String, Vec<String>)> {
         let mut map = HashMap::new();
 
@@ -164,7 +164,7 @@ impl GrammarLoader {
                 continue;
             };
 
-            // Match: tree-sitter-{name}.dll or tree-sitter-{name}.so
+            // 匹配：tree-sitter-{name}.dll 或 tree-sitter-{name}.so
             let stem = if cfg!(windows) {
                 name.strip_suffix(".dll")
             } else {
@@ -178,7 +178,7 @@ impl GrammarLoader {
             let dll_name = name.to_string();
             let symbol_name = format!("tree_sitter_{}", grammar_name.replace('-', "_"));
 
-            // Resolve extensions
+            // 解析扩展名
             let exts = Self::resolve_extensions(grammar_name);
 
             for ext in &exts {
@@ -192,23 +192,23 @@ impl GrammarLoader {
         map
     }
 
-    /// Map a grammar name to its file extensions using the built-in table.
-    /// Falls back to using the grammar name itself as the extension.
+    /// 使用内置映射表将语法名映射到其文件扩展名。
+    /// 回退为使用语法名本身作为扩展名。
     fn resolve_extensions(grammar_name: &str) -> Vec<String> {
         for (key, _grammar_fn, exts) in known_extensions() {
             if key == grammar_name {
                 return exts.iter().map(|s| s.to_string()).collect();
             }
         }
-        // Default: grammar name IS the extension (covers go, rs, java, json, css, zig, etc.)
+        // 默认：语法名即为扩展名（覆盖 go、rs、java、json、css、zig 等）
         vec![grammar_name.to_string()]
     }
 }
 
-/// Find the grammar directory. Checks:
-/// 1. HOLOGRAM_GRAMMAR_DIR env var
+/// 查找语法目录。检查顺序：
+/// 1. HOLOGRAM_GRAMMAR_DIR 环境变量
 /// 2. <exe_dir>/grammars/
-/// 3. ./grammars/ (fallback)
+/// 3. ./grammars/（回退）
 pub fn find_grammar_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("HOLOGRAM_GRAMMAR_DIR") {
         let p = PathBuf::from(dir);
@@ -238,7 +238,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&tmp);
         let loader = GrammarLoader::new(&tmp);
 
-        // Use a known static grammar to test registration
+        // 使用已知的静态语法测试注册
         let lang: Language = tree_sitter_json::LANGUAGE.into();
         loader.register_static(lang, "json", &["json"]);
 
@@ -287,11 +287,11 @@ mod tests {
 
     #[test]
     fn test_find_grammar_dir_env() {
-        // Use a path that definitely doesn't exist on any platform
+        // 使用一个在任何平台上都不存在的路径
         let fake = if cfg!(windows) { "Z:\\nonexistent_tool_12345" } else { "/nonexistent/hologram_12345" };
         std::env::set_var("HOLOGRAM_GRAMMAR_DIR", fake);
         let dir = find_grammar_dir();
-        // Should fall back because the env path doesn't exist — current_exe dir or ./grammars/
+        // 应该回退，因为环境变量路径不存在 — 使用 current_exe 目录或 ./grammars/
         assert!(!dir.to_string_lossy().contains("nonexistent"));
         std::env::remove_var("HOLOGRAM_GRAMMAR_DIR");
     }
@@ -310,8 +310,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // Create dummy grammar files (just empty files for scan test);
-        // scan_dir matches .dll on Windows, .so elsewhere
+        // 创建虚拟语法文件（仅为扫描测试创建空文件）；
+        // scan_dir 在 Windows 上匹配 .dll，在其他平台匹配 .so
         let ext = if cfg!(windows) { "dll" } else { "so" };
         std::fs::File::create(tmp.join(format!("tree-sitter-php.{ext}"))).unwrap();
         std::fs::File::create(tmp.join(format!("tree-sitter-kotlin.{ext}"))).unwrap();
@@ -319,7 +319,7 @@ mod tests {
 
         let loader = GrammarLoader::new(&tmp);
         assert!(loader.available.contains_key("php"));
-        assert!(loader.available.contains_key("kt")); // kotlin has known exts
+        assert!(loader.available.contains_key("kt")); // kotlin 有已知的扩展名
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

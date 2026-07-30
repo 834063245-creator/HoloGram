@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Session store — session lifecycle.
-// Messages live in per-session stores: getMessagesStore(`${storeId}:${sessionId}`)
+// 会话存储 — 会话生命周期。
+// 消息存于每会话 store：getMessagesStore(`${storeId}:${sessionId}`)
 
 import { create } from 'zustand';
 
@@ -49,10 +49,10 @@ function createSessionStoreImpl() {
   }));
 }
 
-// ── Per-panel registry ──
+// ── 每面板注册表 ──
 
-// ponytail: store Map on window so Vite HMR doesn't wipe it (module-level
-// variables are re-initialized on hot reload, breaking React subscriptions).
+// ponytail: 将 store Map 存在 window 上，这样 Vite HMR 不会清除它
+// （模块级变量在热重载时重新初始化，会破坏 React 订阅）。
 const SESSION_STORES_KEY = '__hologram_session_stores__';
 const DEFAULT_ID = '__default__';
 
@@ -77,12 +77,12 @@ export function getSessionStore(storeId?: string): SessionStoreApi {
   return s;
 }
 
-/** Remove a panel's session store from the registry. */
+/** 从注册表中移除面板的会话 store。 */
 export function disposeSessionStore(storeId: string): void {
   _storesMap().delete(storeId);
 }
 
-// ── Non-reactive accessors ──
+// ── 非响应式访问器 ──
 
 function _store(storeId?: string) {
   return getSessionStore(storeId).getState();

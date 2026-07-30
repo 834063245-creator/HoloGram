@@ -1,11 +1,10 @@
-// ── Message model — data-driven chat rendering
-// Replaces the old "one currentBubble + appendChild" pattern with
-// a flat message array. Each message is an immutable-like record;
-// streaming updates replace the array entry, the renderer diffs.
+// ── 消息模型 — 数据驱动的聊天渲染
+// 用扁平消息数组替代旧的"单个 currentBubble + appendChild"模式。
+// 每条消息是不可变记录；流式更新替换数组条目，渲染器做 diff。
 //
-// Inspired by Claude Code (messages/*.tsx) and Hermes (@assistant-ui).
+// 受 Claude Code（messages/*.tsx）和 Hermes（@assistant-ui）启发。
 
-// ── Types ────────────────────────────────────────────────
+// ── 类型 ────────────────────────────────────────────────
 
 export type MessageId = string;
 
@@ -19,16 +18,15 @@ export function nextMsgId(storeId?: string): MessageId {
   return `m${id}`;
 }
 
-/** Resets the message id counter for a given store.
- *  NOTE: This is now a no-op to prevent cross-session ID collisions.
- *  The counter monotonically increases, ensuring globally unique IDs.
- *  Previously, resetting caused new sessions to restart from m1,
- *  colliding with existing sessions and misrouting streaming events. */
+/** 重置给定 store 的消息 ID 计数器。
+ *  注意：现在是空操作，以防止跨会话 ID 冲突。
+ *  计数器单调递增，确保全局唯一 ID。
+ *  以前重置会导致新会话从 m1 重新开始，与已有会话冲突并错误路由流式事件。 */
 export function resetMsgIdCounter(_storeId?: string): void {
-  // Intentionally empty — see note above.
+  // 有意为空 — 见上方说明。
 }
 
-// ── Attachments ──────────────────────────────────────────
+// ── 附件 ──────────────────────────────────────────
 
 export interface FileAttachment {
   path: string;
@@ -36,7 +34,7 @@ export interface FileAttachment {
   size: number;
 }
 
-// ── Message parts (assistant) ────────────────────────────
+// ── 消息部分（助手）────────────
 
 export type ToolStatus = 'pending' | 'running' | 'done' | 'error';
 
@@ -48,7 +46,7 @@ export interface ReasonPart {
 export interface TextPart {
   type: 'text';
   text: string;
-  /** When true, this text has been finalised (no more streaming append). */
+  /** 为 true 时，此文本已最终化（不再流式追加）。 */
   finalised: boolean;
 }
 
@@ -57,31 +55,31 @@ export interface ToolCallPart {
   toolId: string;
   name: string;
   args: string;
-  /** User-facing label, e.g. "Read file" or "Search code". */
+  /** 面向用户的标签，如"读取文件"或"搜索代码"。 */
   label: string;
   readOnly: boolean;
   status: ToolStatus;
-  /** Accumulated output while the tool is running. */
+  /** 工具运行期间累积的输出。 */
   output?: string;
-  /** Error message when tool fails. */
+  /** 工具失败时的错误信息。 */
   err?: string;
-  /** True when the backend truncated the output. */
+  /** 后端截断输出时为 true。 */
   truncated?: boolean;
 }
 
-/** Sub-agent nested block — rendered as a collapsible group inside an assistant message. */
+/** 子 agent 嵌套块 — 在助手消息内渲染为可折叠分组。 */
 export interface SubAgentPart {
   type: 'subagent';
   agentId: string;
   description: string;
   status: 'running' | 'done' | 'error';
-  /** Ordered parts produced by this sub-agent. */
+  /** 此子 agent 产出的有序部分。 */
   parts: AssistantPart[];
-  /** Incremented on every mutation so React can subscribe without a global bump. */
+  /** 每次变更递增，使 React 可订阅而无需全局 bump。 */
   version: number;
 }
 
-/** Plan review card — rendered as a full-width card with markdown content + approve/revise/reject buttons. */
+/** 计划审查卡片 — 渲染为全宽卡片，含 markdown 内容 + 批准/修改/拒绝按钮。 */
 export interface PlanPart {
   type: 'plan';
   planId: string;
@@ -89,11 +87,11 @@ export interface PlanPart {
   content: string;
   options?: { label: string; description: string }[];
   status: 'pending' | 'approved' | 'revise' | 'rejected';
-  /** Selected option label when user picks from multiple approaches. */
+  /** 用户从多种方案中选择时的选项标签。 */
   selectedLabel?: string;
-  /** Feedback text when user requests revision. */
+  /** 用户请求修改时的反馈文本。 */
   feedback?: string;
-  /** Callback to resolve the approval — stored at creation, invoked when user clicks a button. */
+  /** 解决审批的回调 — 创建时存储，用户点击按钮时调用。 */
   _callback?: (
     response:
       | { decision: 'approved'; selectedLabel?: string }
@@ -104,29 +102,29 @@ export interface PlanPart {
 
 export type AssistantPart = ReasonPart | TextPart | ToolCallPart | SubAgentPart | PlanPart;
 
-// ── Messages ─────────────────────────────────────────────
+// ── 消息 ─────────────────────────────────────────────
 
 export interface UserMessage {
   role: 'user';
   _id: MessageId;
   text: string;
   files?: FileAttachment[];
-  /** Index into the agent session array at send time (for retract). */
+  /** 发送时在 agent 会话数组中的索引（用于撤回）。 */
   sessionIndex: number;
 }
 
 export interface AssistantMessage {
   role: 'assistant';
   _id: MessageId;
-  /** Ordered parts — tool calls are interleaved between reasoning/text. */
+  /** 有序部分 — 工具调用穿插在推理/文本之间。 */
   parts: AssistantPart[];
-  /** Overall status of this assistant turn. */
+  /** 此助手回合的整体状态。 */
   status: 'streaming' | 'done' | 'error';
-  /** The user turn this assistant is responding to. */
+  /** 此助手回复的用户回合。 */
   respondingTo: MessageId;
-  /** Total tokens consumed this turn (accumulated across steps). */
+  /** 本回合消耗的总 token 数（跨步骤累积）。 */
   tokensUsed?: number;
-  /** Error message when status is 'error'. */
+  /** 状态为 'error' 时的错误信息。 */
   errorMessage?: string;
 }
 
@@ -139,9 +137,9 @@ export interface NoticeMessage {
 
 export type ChatMessage = UserMessage | AssistantMessage | NoticeMessage;
 
-// ── Helpers ──────────────────────────────────────────────
+// ── 辅助函数 ──────────────────────────────────────────────
 
-/** Create a new user message. */
+/** 创建新用户消息。 */
 export function createUserMessage(text: string, files?: FileAttachment[], sessionIndex?: number): UserMessage {
   return {
     role: 'user',
@@ -152,7 +150,7 @@ export function createUserMessage(text: string, files?: FileAttachment[], sessio
   };
 }
 
-/** Create a new streaming assistant message. */
+/** 创建新的流式助手消息。 */
 export function createAssistantMessage(respondingTo: MessageId): AssistantMessage {
   return {
     role: 'assistant',
@@ -163,12 +161,12 @@ export function createAssistantMessage(respondingTo: MessageId): AssistantMessag
   };
 }
 
-/** Create a notice message (info/warn/error banners). */
+/** 创建通知消息（info/warn/error 横幅）。 */
 export function createNoticeMessage(text: string, level: NoticeMessage['level'] = 'info'): NoticeMessage {
   return { role: 'notice', _id: nextMsgId(), text, level };
 }
 
-/** Get the last text part (if any) for streaming append. */
+/** 获取最后一个文本部分（如有），用于流式追加。 */
 export function lastTextPart(parts: AssistantPart[]): TextPart | undefined {
   for (let i = parts.length - 1; i >= 0; i--) {
     if (parts[i].type === 'text') return parts[i] as TextPart;
@@ -176,7 +174,7 @@ export function lastTextPart(parts: AssistantPart[]): TextPart | undefined {
   return undefined;
 }
 
-/** Find the last reasoning part in a parts array. */
+/** 在部分数组中查找最后一个推理部分。 */
 export function lastReasoningPart(parts: AssistantPart[]): ReasonPart | undefined {
   for (let i = parts.length - 1; i >= 0; i--) {
     if (parts[i].type === 'reasoning') return parts[i] as ReasonPart;
@@ -184,7 +182,7 @@ export function lastReasoningPart(parts: AssistantPart[]): ReasonPart | undefine
   return undefined;
 }
 
-/** Find a tool part by toolId. */
+/** 按 toolId 查找工具部分。 */
 export function findToolPart(parts: AssistantPart[], toolId: string): ToolCallPart | undefined {
   return parts.find((p): p is ToolCallPart => p.type === 'tool' && p.toolId === toolId);
 }

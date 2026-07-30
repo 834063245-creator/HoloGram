@@ -3,24 +3,24 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Edge kind — classifies the nature of the dependency.
+/// Edge 类型 — 对依赖的性质进行分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EdgeKind {
-    /// Structural: imports, calls, inheritance
+    /// 结构性：imports、calls、inheritance
     Imports,
     Calls,
     Inherits,
     Defines,
-    /// Data flow: reads, writes, shares
+    /// 数据流：reads、writes、shares
     Reads,
     Writes,
     Shares,
-    /// Temporal: triggers, awaits, sequences
+    /// 时序性：triggers、awaits、sequences
     Triggers,
     Awaits,
     Sequences,
-    /// Graph edges: usage references, exception throws
+    /// Graph 边：usage 引用、exception throws
     Usage,
     Throws,
 }
@@ -61,7 +61,7 @@ impl EdgeKind {
         }
     }
 
-    /// CSR storage: pack EdgeKind into u8 (0–11).
+    /// CSR 存储：将 EdgeKind 打包为 u8（0–11）。
     pub fn to_u8(self) -> u8 {
         match self {
             EdgeKind::Imports => 0,
@@ -79,7 +79,7 @@ impl EdgeKind {
         }
     }
 
-    /// CSR storage: unpack u8 back to EdgeKind.
+    /// CSR 存储：将 u8 解包回 EdgeKind。
     pub fn from_u8(v: u8) -> EdgeKind {
         match v {
             0 => EdgeKind::Imports,
@@ -94,12 +94,12 @@ impl EdgeKind {
             9 => EdgeKind::Sequences,
             10 => EdgeKind::Usage,
             11 => EdgeKind::Throws,
-            _ => EdgeKind::Calls, // ponytail: default to Calls for forward compat
+            _ => EdgeKind::Calls, // ponytail: 默认为 Calls 以保持前向兼容
         }
     }
 }
 
-/// An edge in the dependency graph.
+/// 依赖图中的边。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
     pub id: String,
@@ -107,18 +107,18 @@ pub struct Edge {
     pub target: String,
     #[serde(rename = "type")]
     pub kind: EdgeKind,
-    /// L1-L4 coupling depth
+    /// L1-L4 耦合深度
     #[serde(default)]
     pub coupling_depth: u8,
-    /// Cross-file edge?
+    /// 是否为跨文件边？
     #[serde(default)]
     pub cross_file: bool,
 
-    /// Temporal delay in seconds (for temporal edges)
+    /// 时序延迟（秒）（用于时序边）
     #[serde(default)]
     pub temporal_delay_sec: Option<f64>,
 
-    /// Resolved via LSP type analysis (vs. same-name heuristic)
+    /// 通过 LSP 类型分析解析（对比同名启发式）
     #[serde(default)]
     pub lsp_resolved: bool,
 
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_all_edge_kinds_covered() {
-        // All 12 edge kinds should have distinct string representations
+        // 所有 12 种 EdgeKind 应具有不同的字符串表示
         let all = [
             EdgeKind::Imports, EdgeKind::Calls, EdgeKind::Inherits,
             EdgeKind::Defines, EdgeKind::Reads, EdgeKind::Writes,
@@ -207,7 +207,7 @@ mod tests {
             EdgeKind::Sequences, EdgeKind::Usage, EdgeKind::Throws,
         ];
         let strs: Vec<&str> = all.iter().map(|k| k.as_str()).collect();
-        // All unique
+        // 全部唯一
         let mut sorted = strs.clone();
         sorted.sort();
         sorted.dedup();

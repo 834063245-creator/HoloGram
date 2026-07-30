@@ -6,31 +6,31 @@ use std::collections::{HashMap, HashSet};
 
 use super::{Edge, EdgeKind, Graph, Node};
 
-/// Persistent graph merger with incremental index.
+/// 持久化 Graph 合并器，带增量索引。
 ///
-/// v3 Python bug: `Graph.merge()` rebuilt the full loc_key index
-/// from the ENTIRE growing graph on every per-file merge call.
-/// 2500 files × O(V) index rebuild = O(V²) cumulative.
+/// v3 Python 性能问题：`Graph.merge()` 在每次单文件合并时
+/// 从整个不断增长的 Graph 重建完整的 loc_key 索引。
+/// 2500 个文件 × O(V) 索引重建 = O(V²) 累积复杂度。
 ///
-/// Fix: keep the index alive across merges, update it incrementally.
-/// Each merge is O(|incoming|) instead of O(|existing| + |incoming|).
+/// 修复：保持索引跨合并存活，增量更新。
+/// 每次合并复杂度为 O(|incoming|) 而非 O(|existing| + |incoming|)。
 ///
-/// v4 edge dedup: `edge_index` mirrors `loc_index` — a persistent
-/// (source, target, kind) dedup set that prevents redundant call-site
-/// edges from flooding the edge HashMap. Without this, every
-/// call_expression in a TS/JS file generates an edge (14K+/file),
-/// causing repeated HashMap rehash storms at millions of entries.
+/// v4 边去重：`edge_index` 镜像 `loc_index` — 一个持久的
+/// (source, target, kind) 去重集合，防止冗余的调用点
+/// 边淹没 edge HashMap。否则每个 TS/JS 文件中的
+/// 每个 call_expression 都会生成一条边（14K+/文件），
+/// 在百万级条目时引发反复的 HashMap rehash 风暴。
 pub struct GraphMerger {
     graph: Graph,
     /// "location::name::kind" → node ID
     loc_index: HashMap<String, String>,
-    /// "(source, target, edge_kind_discriminant)" — global edge dedup.
-    /// ponytail: persists across merge calls, mirrors loc_index pattern.
-    /// One edge per unique (source, target, kind) across the entire project.
+    /// "(source, target, edge_kind_discriminant)" — 全局边去重。
+    /// ponytail: 跨合并调用持久化，镜像 loc_index 模式。
+    /// 整个项目中每个唯一的 (source, target, kind) 只保留一条边。
     edge_index: HashSet<(String, String, u8)>,
 }
 
-// ponytail: encode EdgeKind as u8 discriminant for cheap Hash+Eq in the index.
+// ponytail: 将 EdgeKind 编码为 u8 判别值，用于索引中高效的 Hash+Eq。
 fn edge_kind_id(k: &EdgeKind) -> u8 {
     match k {
         EdgeKind::Imports => 0,
@@ -68,8 +68,8 @@ impl GraphMerger {
         }
     }
 
-    /// Insert an edge only if (source, target, kind) hasn't been seen before.
-    /// Returns true if the edge was actually added.
+    /// 仅在 (source, target, kind) 之前未出现过时插入边。
+    /// 返回 true 表示边确实被添加了。
     fn add_edge_deduped(&mut self, edge: Edge) -> bool {
         let key = (
             edge.source.clone(),
@@ -77,9 +77,9 @@ impl GraphMerger {
             edge_kind_id(&edge.kind),
         );
         if self.edge_index.insert(key) {
-            // Merge intentionally allows edges with unresolved bare-name targets
-            // (e.g. "db" from `from db import ...`). The cross-file resolver
-            // later resolves these to actual node IDs.
+            // 合并时有意允许目标为未解析裸名的边
+            // （例如 `from db import ...` 中的 "db"）。跨文件解析器
+            // 稍后会将这些解析为实际的 node ID。
             self.graph.add_edge_unchecked(edge);
             true
         } else {
@@ -87,7 +87,7 @@ impl GraphMerger {
         }
     }
 
-    /// Merge another graph into the accumulator. O(|other.nodes| + |other.edges|).
+    /// 将另一个 Graph 合并到累加器中。O(|other.nodes| + |other.edges|)。
     pub fn merge(&mut self, other: Graph) -> usize {
         let mut added = 0usize;
         let mut seen: HashMap<String, ()> = HashMap::new();
@@ -113,8 +113,8 @@ impl GraphMerger {
         added
     }
 
-    /// Merge directly from slices — avoids intermediate Graph allocation.
-    /// ponytail: skips build_file_graph() → saves per-file HashMap alloc/drop.
+    /// 直接从切片合并 — 避免中间 Graph 分配。
+    /// ponytail: 跳过 build_file_graph() → 节省每文件 HashMap 分配/释放开销。
     pub fn merge_slices(&mut self, nodes: &[Node], edges: &[Edge]) -> usize {
         let mut added = 0usize;
         let mut seen: HashMap<String, ()> = HashMap::with_capacity(nodes.len());
@@ -134,29 +134,29 @@ impl GraphMerger {
                 }
             }
         }
-        // ponytail: two-level edge dedup.
-        // Level 1 (fast): intra-file dedup with borrowed &str, zero clones.
-        //    A React component calling console.log 100× → 99 hits skip here.
-        // Level 2 (slow): global persistent index, clones source+target.
-        //    Only the 1 unique (src,tgt,kind) per file reaches this level.
+        // ponytail: 两级边去重。
+        // 第一级（快速）：文件内去重，使用借用的 &str，零克隆。
+        //    一个 React 组件调用 console.log 100 次 → 99 次在此跳过。
+        // 第二级（慢速）：全局持久索引，克隆 source+target。
+        //    每文件仅 1 个唯一的 (src,tgt,kind) 到达此级别。
         let cap = edges.len().min(5000);
         let mut local_dedup: HashSet<(&str, &str, u8)> = HashSet::with_capacity(cap);
         for edge in edges {
             let ek = edge_kind_id(&edge.kind);
             if !local_dedup.insert((&edge.source, &edge.target, ek)) {
-                continue; // intra-file duplicate — skip without cloning
+                continue; // 文件内重复 — 跳过且不克隆
             }
             self.add_edge_deduped(edge.clone());
         }
         added
     }
 
-    /// Consume the merger and return the accumulated graph.
+    /// 消费合并器并返回累积的 Graph。
     pub fn into_graph(self) -> Graph {
         self.graph
     }
 
-    /// Get a reference to the accumulated graph.
+    /// 获取累积 Graph 的引用。
     pub fn graph(&self) -> &Graph {
         &self.graph
     }
@@ -166,11 +166,11 @@ impl GraphMerger {
     }
 }
 
-/// Build dedup key: "location::name::kind"
+/// 构建去重键："location::name::kind"
 fn node_key(node: &Node) -> String {
     if let Some(loc) = &node.location {
-        // ponytail: String::with_capacity avoids format!() realloc churn.
-        // Format overhead per-node adds up at 300K+ nodes.
+        // ponytail: String::with_capacity 避免 format!() 的重新分配开销。
+        // 逐节点的 format 开销在 300K+ 节点时会累积。
         let cap = loc.len() + node.name.len() + node.kind.as_str().len() + 6;
         let mut key = String::with_capacity(cap);
         key.push_str(loc);
@@ -180,7 +180,7 @@ fn node_key(node: &Node) -> String {
         key.push_str(node.kind.as_str());
         key
     } else {
-        // No location — use node id (unique per file)
+        // 无 location — 使用 node id（每文件唯一）
         let cap = node.id.len() + node.name.len() + node.kind.as_str().len() + 6;
         let mut key = String::with_capacity(cap);
         key.push_str(&node.id);
@@ -298,7 +298,7 @@ mod tests {
     fn test_merge_intra_graph_dedup() {
         let mut merger = GraphMerger::new();
         let mut g = Graph::new();
-        // Same loc_key twice within one graph
+        // 同一 graph 内出现两次相同 loc_key
         g.add_node(make_node("n1", "fn", "src/x.rs", NodeKind::Symbol));
         g.add_node(make_node("n2", "fn", "src/x.rs", NodeKind::Symbol));
 
@@ -327,11 +327,11 @@ mod tests {
 
     #[test]
     fn test_merge_slices_edge_dedup() {
-        // ponytail: verify intra-file (source, target, kind) dedup.
-        // Same function calling the same target 3 times → 1 edge, not 3.
+        // ponytail: 验证文件内 (source, target, kind) 去重。
+        // 同一函数调用同一目标 3 次 → 1 条边，而非 3 条。
         let mut merger = GraphMerger::new();
 
-        // Add source and target nodes so add_edge can update degrees
+        // 添加 source 和 target 节点，以便 add_edge 能更新度数
         let src = Node::new("a.foo", "foo", NodeKind::Function);
         let tgt = Node::new("b.helper", "helper", NodeKind::Function);
         let other = Node::new("c.other", "other", NodeKind::Function);
@@ -342,9 +342,9 @@ mod tests {
         let nodes: Vec<Node> = vec![];
         let edges: Vec<Edge> = vec![
             Edge::new("call_1", "a.foo", "b.helper", EdgeKind::Calls),
-            Edge::new("call_2", "a.foo", "b.helper", EdgeKind::Calls),  // dup: same (src, tgt, kind)
-            Edge::new("call_3", "a.foo", "b.helper", EdgeKind::Calls),  // dup
-            Edge::new("call_4", "a.foo", "c.other", EdgeKind::Calls),   // different target
+            Edge::new("call_2", "a.foo", "b.helper", EdgeKind::Calls),  // 重复：相同 (src, tgt, kind)
+            Edge::new("call_3", "a.foo", "b.helper", EdgeKind::Calls),  // 重复
+            Edge::new("call_4", "a.foo", "c.other", EdgeKind::Calls),   // 不同 target
         ];
 
         merger.merge_slices(&nodes, &edges);
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_merge_slices_edge_dedup_different_source() {
-        // Different source → different edge, no dedup
+        // 不同 source → 不同边，不去重
         let mut merger = GraphMerger::new();
 
         merger.graph.add_node(Node::new("a.foo", "foo", NodeKind::Function));
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_merge_slices_edge_dedup_different_kind() {
-        // Same (source, target) but different kind → no dedup
+        // 相同 (source, target) 但 kind 不同 → 不去重
         let mut merger = GraphMerger::new();
 
         merger.graph.add_node(Node::new("mod", "mod", NodeKind::File));
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_merge_slices_edge_dedup_cross_call() {
-        // Global dedup: same (source, target, kind) across TWO merge_slices calls → 1 edge
+        // 全局去重：两次 merge_slices 调用中相同 (source, target, kind) → 1 条边
         let mut merger = GraphMerger::new();
 
         merger.graph.add_node(Node::new("a.foo", "foo", NodeKind::Function));
@@ -403,7 +403,7 @@ mod tests {
         merger.merge_slices(&nodes1, &edges1);
         assert_eq!(merger.graph().edge_count(), 1);
 
-        // Second file (different edge IDs, same semantic edge)
+        // 第二个文件（不同的 edge ID，相同的语义边）
         let nodes2: Vec<Node> = vec![];
         let edges2: Vec<Edge> = vec![
             Edge::new("call_file2_1", "a.foo", "b.helper", EdgeKind::Calls),
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_merge_slices_edge_dedup_cross_call_different_scope() {
-        // Different scope (source) → NOT deduped across calls
+        // 不同 scope（source）→ 跨调用不去重
         let mut merger = GraphMerger::new();
 
         merger.graph.add_node(Node::new("a.foo", "foo", NodeKind::Function));

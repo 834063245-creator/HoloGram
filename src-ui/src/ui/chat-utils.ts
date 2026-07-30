@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Chat Utilities — pure static helper functions extracted from chat.ts
-// No dependency on ChatPanel state. Safe to import from anywhere.
+// Chat 工具函数 — 从 chat.ts 提取的纯静态辅助函数
+// 不依赖 ChatPanel 状态。可从任何位置安全导入。
 
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -20,9 +20,9 @@ function escapeHtml(s: string): string {
 // formatDiffResult
 // ═══════════════════════════════════════════════════════════════════
 
-/** Simple line-based diff for edit_file results (item 7). */
+/** edit_file 结果的简单行级 diff（第 7 项）。 */
 export function formatDiffResult(body: string, argsJson?: string): string {
-  // Extract file path from args if available
+  // 若可用，从参数中提取文件路径
   let filePath = '';
   if (argsJson) {
     try {
@@ -31,13 +31,13 @@ export function formatDiffResult(body: string, argsJson?: string): string {
     } catch {}
   }
 
-  // Try to extract old/new from args for real diff
+  // 尝试从参数中提取 old/new 进行真实 diff
   let oldStr = '';
   let newStr = '';
   if (argsJson) {
     try {
       const args = JSON.parse(argsJson);
-      // Agent sends camelCase (tool.ts), but also handle snake_case from any legacy paths
+      // Agent 发送 camelCase（tool.ts），但也处理来自旧路径的 snake_case
       oldStr = args.oldString || args.old_string || args.old_text || args.oldText || '';
       newStr = args.newString || args.new_string || args.new_text || args.newText || args.content || '';
     } catch {}
@@ -47,7 +47,7 @@ export function formatDiffResult(body: string, argsJson?: string): string {
   const MAX_LINES = 40;
 
   if (oldStr && newStr) {
-    // Real diff: compare old vs new
+    // 真实 diff：比较 old vs new
     const oldLines = oldStr.split('\n');
     const newLines = newStr.split('\n');
     const diffLines = computeSimpleDiff(oldLines, newLines);
@@ -67,7 +67,7 @@ export function formatDiffResult(body: string, argsJson?: string): string {
     return html;
   }
 
-  // Fallback: show full body with + / - line detection
+  // 兜底：显示完整 body，检测 + / - 行
   const lines = body.split('\n');
   if (lines.length > MAX_LINES) {
     const visible = lines
@@ -91,12 +91,12 @@ export function formatDiffResult(body: string, argsJson?: string): string {
 // computeSimpleDiff
 // ═══════════════════════════════════════════════════════════════════
 
-/** Compute simple line-by-line diff — marks added/removed lines. ponytail: O(n*m), fine for <100 lines. */
+/** 计算简单的逐行 diff — 标记新增/删除行。ponytail: O(n*m)，适用于 <100 行。 */
 export function computeSimpleDiff(
   oldLines: string[],
   newLines: string[],
 ): Array<{ kind: string; prefix: string; text: string }> {
-  // LCS-based diff
+  // 基于 LCS 的 diff
   const m = oldLines.length;
   const n = newLines.length;
   const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
@@ -109,7 +109,7 @@ export function computeSimpleDiff(
       }
     }
   }
-  // Backtrack
+  // 回溯
   const result: Array<{ kind: string; prefix: string; text: string }> = [];
   let i = m,
     j = n;
@@ -130,7 +130,7 @@ export function computeSimpleDiff(
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Dataflow inline card interfaces
+// 数据流内联卡片接口
 // ═══════════════════════════════════════════════════════════════════
 
 interface DfScope {
@@ -185,7 +185,7 @@ function formatDataflowCard(text: string): string | null {
       html += '<div class="df-scope">';
       html += `<div class="df-scope-name">${ico('code', 14)} ${escapeHtml(s.name)}</div>`;
 
-      // Two-column layout: reads (in) | writes (out)
+      // 双列布局：读取（入）| 写入（出）
       const hasReads = s.reads && s.reads.length > 0;
       const hasWrites = s.writes && s.writes.length > 0;
       if (hasReads || hasWrites) {
@@ -213,7 +213,7 @@ function formatDataflowCard(text: string): string | null {
         html += '</div>';
       }
 
-      // Call chain
+      // 调用链
       if (s.sequence_calls && s.sequence_calls.length > 0) {
         html += '<div class="df-flow">';
         html += `<span class="df-label">${ico('arrow-right', 11)} 调用链</span>`;
@@ -224,7 +224,7 @@ function formatDataflowCard(text: string): string | null {
         html += '</div>';
       }
 
-      // Triggers & awaits
+      // 触发与等待
       const hasTriggers = s.triggers && s.triggers.length > 0;
       const hasAwaits = s.awaits_callbacks && s.awaits_callbacks.length > 0;
       if (hasTriggers || hasAwaits) {
@@ -255,7 +255,7 @@ function formatDataflowCard(text: string): string | null {
       html += '</div>'; // .df-scope
     }
 
-    // Shared state — mini table
+    // 共享状态 — 迷你表格
     const shared = fr.shared || [];
     if (shared.length > 0) {
       html += '<div class="df-shared">';
@@ -286,29 +286,29 @@ function formatDataflowCard(text: string): string | null {
 // formatToolResult
 // ═══════════════════════════════════════════════════════════════════
 
-/** Format tool output for display — JSON gets pretty-printed, code gets highlighted. */
+/** 格式化工具输出用于显示 — JSON 美化打印，代码高亮。 */
 export function formatToolResult(toolName: string, text: string, truncated: boolean, args?: string): string {
   let body = text;
   if (truncated) body += '\n…[截断]…';
 
-  // ── trace_dataflow — inline flow card ──
+  // ── trace_dataflow — 内联流程卡片 ──
   if (toolName === 'trace_dataflow') {
     const card = formatDataflowCard(text);
     if (card) return card;
   }
 
-  // ── JSON: pretty-print in code block ──
+  // ── JSON：美化打印到代码块 ──
   try {
     const parsed = JSON.parse(body);
     const formatted = JSON.stringify(parsed, null, 2);
     return `<pre><code class="language-json">${escapeHtml(formatted)}</code></pre>`;
   } catch {}
 
-  // ── Empty / very short ──
+  // ── 空或极短 ──
   if (!body.trim()) return escapeHtml('(无输出)');
   if (body.length < 60 && !body.includes('\n')) return escapeHtml(body);
 
-  // ── Diff view for edit_file / write_file / read_file_content (item 7) ──
+  // ── edit_file / write_file / read_file_content 的 diff 视图（第 7 项）──
   if (
     toolName === 'edit_file' ||
     toolName === 'write_file' ||
@@ -318,7 +318,7 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
     return formatDiffResult(body, args);
   }
 
-    // ── Code: run_shell, bash_output, bash_wait → code block ──
+    // ── 代码：run_shell、bash_output、bash_wait → 代码块 ──
   if (toolName === 'run_shell' || toolName === 'bash_output' || toolName === 'bash_wait') {
     return `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`;
   }
@@ -326,7 +326,7 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
     return `<pre><code>${escapeHtml(body)}</code></pre>`;
   }
 
-  // ── Glob / list_directory — compact list ──
+  // ── Glob / list_directory — 紧凑列表 ──
   if (toolName === 'glob') {
     try {
       const data = JSON.parse(text);
@@ -343,8 +343,8 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
     }
   }
 
-  // ── Hologram tools: try parsing as JSON (already handled above), fall through ──
-  // ── Default: render as markdown (supports tables, lists, etc.) ──
+  // ── Hologram 工具：尝试解析为 JSON（已在上方处理），穿透 ──
+  // ── 默认：渲染为 markdown（支持表格、列表等）──
   try {
     const html = DOMPurify.sanitize(marked.parse(body) as string);
     if (html && html !== body) return html;

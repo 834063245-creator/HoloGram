@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Model catalog — static model data from Pi's provider registry, adapted for HoloGram.
-// Provides data-driven model discovery so users don't need to manually type model names.
+// 模型目录 — 来自 Pi 的 provider 注册表的静态模型数据，已适配 HoloGram。
+// 提供数据驱动的模型发现，用户无需手动输入模型名称。
 
 import anthropicJson from './catalog/anthropic.json';
 import deepseekJson from './catalog/deepseek.json';
@@ -12,7 +12,7 @@ import openaiJson from './catalog/openai.json';
 import qwenJson from './catalog/qwen.json';
 import type { ModelDescriptor } from './types';
 
-/** Catalog JSON file shape: { [modelId]: ModelDescriptor } */
+/** 目录 JSON 文件结构：{ [modelId]: ModelDescriptor } */
 type CatalogFile = Record<string, ModelDescriptor>;
 
 const CATALOG_FILES: Record<string, CatalogFile> = {
@@ -31,19 +31,19 @@ interface CatalogData {
 
 let _catalog: CatalogData | undefined;
 
-// ── Dynamic models (fetched from provider APIs at runtime) ──
-// Static catalog takes priority for same model ID (richer metadata: cost, contextWindow, etc.)
+// ── 动态模型（运行时从 provider API 获取）──
+// 同一模型 ID 以静态目录优先（元数据更丰富：cost、contextWindow 等）
 const _dynamicModels = new Map<string, ModelDescriptor[]>();
 
-/** Merge dynamically-fetched models into the catalog. Invalidates the cache.
- *  Models with IDs already in the static catalog are skipped (static has richer metadata). */
+/** 将动态获取的模型合并到目录中。会使缓存失效。
+ *  已在静态目录中的模型 ID 会被跳过（静态目录元数据更丰富）。 */
 export function mergeDynamicModels(providerName: string, models: ModelDescriptor[]): void {
   if (models.length === 0) return;
   _dynamicModels.set(providerName, models);
-  _catalog = undefined; // invalidate cache
+  _catalog = undefined; // 使缓存失效
 }
 
-/** Get the count of dynamically discovered models for a provider. */
+/** 获取某个 provider 动态发现的模型数量。 */
 export function getDynamicModelCount(providerName: string): number {
   return _dynamicModels.get(providerName)?.length ?? 0;
 }
@@ -53,7 +53,7 @@ function loadCatalog(): CatalogData {
   const all: ModelDescriptor[] = [];
   const seenIds = new Set<string>();
 
-  // Static catalog first (rich metadata — cost, contextWindow, reasoning, etc.)
+  // 静态目录优先（元数据丰富 — cost、contextWindow、reasoning 等）
   for (const file of Object.values(CATALOG_FILES)) {
     for (const model of Object.values(file)) {
       all.push(model);
@@ -61,7 +61,7 @@ function loadCatalog(): CatalogData {
     }
   }
 
-  // Merge dynamic models (skip if already in static — static has richer metadata)
+  // 合并动态模型（已在静态目录中的跳过 — 静态目录元数据更丰富）
   for (const [, models] of _dynamicModels) {
     for (const model of models) {
       if (!seenIds.has(model.id)) {
@@ -75,31 +75,31 @@ function loadCatalog(): CatalogData {
   return _catalog;
 }
 
-/** Get all models in the catalog. */
+/** 获取目录中的所有模型。 */
 export function getAllModels(): ModelDescriptor[] {
   return loadCatalog().allModels;
 }
 
-/** Find models belonging to a specific provider. */
+/** 查找属于特定 provider 的模型。 */
 export function findModels(providerName: string): ModelDescriptor[] {
   return loadCatalog().allModels.filter((m) => m.provider === providerName);
 }
 
-/** Look up a model by its id. */
+/** 根据 id 查找模型。 */
 export function getModel(modelId: string): ModelDescriptor | undefined {
   return loadCatalog().modelMap.get(modelId);
 }
 
-/** Clamp a requested max_tokens to the model's catalog output cap.
- *  An out-of-range max_tokens makes strict providers reject every request with
- *  400 before any token is generated (DeepSeek: valid range [1, 393216]).
- *  Unknown models (no catalog entry) pass through unclamped. */
+/** 将请求的 max_tokens 限制在模型目录的输出上限内。
+ *  超出范围的 max_tokens 会导致严格的 provider 在生成任何 token 之前
+ *  就以 400 拒绝每次请求（DeepSeek：有效范围 [1, 393216]）。
+ *  未知模型（无目录条目）不做限制直接通过。 */
 export function clampMaxTokens(modelId: string, requested: number): number {
   const cap = getModel(modelId)?.maxTokens;
   return cap && cap > 0 ? Math.min(requested, cap) : requested;
 }
 
-/** Fuzzy search models by id or display name (case-insensitive substring match). */
+/** 按 id 或显示名称模糊搜索模型（不区分大小写的子串匹配）。 */
 export function searchModels(query: string): ModelDescriptor[] {
   const { allModels } = loadCatalog();
   const q = query.toLowerCase().trim();
@@ -109,15 +109,15 @@ export function searchModels(query: string): ModelDescriptor[] {
   );
 }
 
-/** Get the recommended default model for a provider. */
+/** 获取某个 provider 推荐的默认模型。 */
 export function getDefaultModel(providerName: string): ModelDescriptor | undefined {
   const models = findModels(providerName);
   if (models.length === 0) return undefined;
-  // Prefer the first model in the catalog (already ordered by relevance in Pi's data)
+  // 优先选择目录中的第一个模型（Pi 的数据已按相关性排序）
   return models[0];
 }
 
-/** List all provider names that have models in the catalog. */
+/** 列出目录中有模型的所有 provider 名称。 */
 export function getCatalogProviders(): string[] {
   return [...new Set(loadCatalog().allModels.map((m) => m.provider))];
 }

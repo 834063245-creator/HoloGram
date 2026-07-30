@@ -9,16 +9,16 @@ pub(crate) fn is_aspnet_candidate(file: &str) -> bool {
     lower.ends_with(".cs") && (lower.contains("controller") || lower.contains("api"))
 }
 
-/// Extract the method name from a C# method signature line.
-/// e.g. "public async Task<IActionResult> GetUser(int id)" → "GetUser"
-/// e.g. "public IActionResult Delete(int id)" → "Delete"
+/// 从 C# 方法签名行中提取方法名。
+/// 例如 "public async Task<IActionResult> GetUser(int id)" → "GetUser"
+/// 例如 "public IActionResult Delete(int id)" → "Delete"
 fn extract_method_name(line: &str) -> String {
-    // Find the opening paren — method name is the token just before it
+    // 查找左括号——方法名是紧邻其前的 token
     if let Some(paren_idx) = line.find('(') {
         let before_paren = &line[..paren_idx];
-        // Split by whitespace and take the last token (the method name)
+        // 按空白分割并取最后一个 token（方法名）
         if let Some(name) = before_paren.split_whitespace().next_back() {
-            // Strip generics like "GetUser<T>" → "GetUser"
+            // 去除泛型，如 "GetUser<T>" → "GetUser"
             let name = name.split('<').next().unwrap_or(name);
             if !name.is_empty() && name != "IActionResult" && name != "ActionResult" {
                 return name.to_string();
@@ -50,8 +50,8 @@ pub(crate) fn detect_aspnet_routes(file: &str, source: &str) -> Vec<DetectedRout
         }
         if t.contains("IActionResult") || t.contains("ActionResult") {
             if let Some((m, p)) = pending.take() {
-                // Parse method signature: "public async Task<IActionResult> GetUser(int id)"
-                // Extract the method name — it's the identifier before the opening paren
+                // 解析方法签名："public async Task<IActionResult> GetUser(int id)"
+                // 提取方法名——它是左括号前的标识符
                 let handler = extract_method_name(t);
                 if !handler.is_empty() {
                     result.push((m, format!("/{}", p.trim_matches('/')), handler, file.to_string(), li + 1));

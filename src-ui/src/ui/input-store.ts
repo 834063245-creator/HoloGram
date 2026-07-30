@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Input store — text input, file attachments, input history.
-// Split from chat-store.ts (god store → domain stores).
+// 输入存储 — 文本输入、文件附件、输入历史。
+// 从 chat-store.ts 拆分（god store → 领域存储）。
 
 import { create } from 'zustand';
 
@@ -51,10 +51,10 @@ function createInputStoreImpl() {
   }));
 }
 
-// ── Per-panel registry ──
+// ── 每面板注册表 ──
 
-// ponytail: store Map on window so Vite HMR doesn't wipe it (module-level
-// variables are re-initialized on hot reload, breaking React subscriptions).
+// ponytail: 将 store Map 存在 window 上，这样 Vite HMR 不会清除它
+// （模块级变量在热重载时重新初始化，会破坏 React 订阅）。
 const INPUT_STORES_KEY = '__hologram_input_stores__';
 const DEFAULT_ID = '__default__';
 
@@ -79,12 +79,12 @@ export function getInputStore(storeId?: string): InputStoreApi {
   return s;
 }
 
-/** Remove a panel's input store from the registry. */
+/** 从注册表中移除面板的输入存储。 */
 export function disposeInputStore(storeId: string): void {
   _storesMap().delete(storeId);
 }
 
-// ── Non-reactive accessors ──
+// ── 非响应式访问器 ──
 
 function _store(storeId?: string) {
   return getInputStore(storeId).getState();

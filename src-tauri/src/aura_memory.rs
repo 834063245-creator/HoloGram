@@ -1,23 +1,23 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 //
-// AuraSDK memory bridge — SDR + MinHash semantic recall for the agent.
-// Calls into aura.dll (https://github.com/teolex2020/AuraSDK, MIT) via FFI.
+// AuraSDK 记忆桥接 — SDR + MinHash 语义召回 for agent。
+// 通过 FFI 调用 aura.dll (https://github.com/teolex2020/AuraSDK, MIT)。
 //
-// ponytail: libloading, same pattern as credential.rs. No pyo3, no Python.
+// ponytail: libloading，与 credential.rs 相同模式。无 pyo3，无 Python。
 
 use std::ffi::{c_char, CStr, CString};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-// ── FFI type aliases ──
+// ── FFI 类型别名 ──
 
-/// Opaque Aura handle — a raw pointer from C. Not Send by default;
-/// we assert it via unsafe wrapper below since aura.dll is single-thread-safe.
+/// 不透明的 Aura 句柄 — 来自 C 的原始指针。默认不实现 Send；
+/// 我们通过下方的 unsafe 包装器断言它，因为 aura.dll 是单线程安全的。
 #[repr(transparent)]
 struct AuraHandle(*mut std::ffi::c_void);
-// SAFETY: aura.dll's internal state is behind a Mutex, and we hold our own
-// Mutex around all accesses. Single-handle, single-thread-at-a-time.
+// SAFETY: aura.dll 的内部状态由 Mutex 保护，我们持有自己的
+// Mutex 来同步所有访问。单句柄，单线程串行访问。
 unsafe impl Send for AuraHandle {}
 unsafe impl Sync for AuraHandle {}
 
@@ -56,7 +56,7 @@ type AuraRecallStructuredFn = unsafe extern "C" fn(
 type AuraCountFn = unsafe extern "C" fn(handle: *mut std::ffi::c_void) -> i64;
 type AuraMaintenanceFn = unsafe extern "C" fn(handle: *mut std::ffi::c_void, out_error: *mut *mut c_char) -> i32;
 
-// ── Loaded function pointers ──
+// ── 已加载的函数指针 ──
 struct AuraFns {
     open: AuraOpenFn,
     close: AuraCloseFn,
@@ -69,16 +69,16 @@ struct AuraFns {
     maintenance: AuraMaintenanceFn,
 }
 
-/// Load all function pointers from the DLL. Returns (fns, leaked_lib).
-/// The library is intentionally leaked so function pointers remain valid for
-/// the process lifetime. AuraSDK is loaded once at startup and never unloaded.
+/// 从 DLL 加载所有函数指针。返回 (fns, leaked_lib)。
+/// 库被有意泄漏，使函数指针在进程生命周期内保持有效。
+/// AuraSDK 在启动时加载一次，永不卸载。
 unsafe fn load_aura_fns(dll_path: &PathBuf) -> Result<AuraFns, String> {
-    // SAFETY: trusted DLL built from known Rust source
+    // SAFETY: 受信任的 DLL，由已知 Rust 源码构建
     let lib = unsafe { libloading::Library::new(dll_path) }
         .map_err(|e| format!("cannot load {}: {}", dll_path.display(), e))?;
 
-    // Leak the library so symbols stay valid for 'static.
-    // The ~6MB stays in process memory until exit — acceptable for a core component.
+    // 泄漏库以使符号保持 'static 有效。
+    // ~6MB 保留在进程内存中直到退出 — 对核心组件而言可接受。
     let lib = Box::leak(Box::new(lib));
 
     Ok(AuraFns {
@@ -103,10 +103,10 @@ unsafe fn load_aura_fns(dll_path: &PathBuf) -> Result<AuraFns, String> {
     })
 }
 
-// ── Global singleton ──
+// ── 全局单例 ──
 static AURA: Mutex<Option<(AuraHandle, AuraFns)>> = Mutex::new(None);
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
 fn to_cstring(s: &str) -> CString {
     CString::new(s).unwrap_or_else(|_| CString::new("").unwrap())
@@ -120,8 +120,8 @@ fn from_cstr(ptr: *mut c_char) -> String {
     }
 }
 
-/// Resolve aura library path. Checks bundled resource first, then dev paths.
-/// Platform-aware: .dll on Windows, .so on Linux, .dylib on macOS.
+/// 解析 aura 库路径。优先检查打包资源，然后检查开发路径。
+/// 平台感知：Windows 上为 .dll，Linux 上为 .so，macOS 上为 .dylib。
 fn aura_dll_path() -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("AURA_DLL") {
         let path = PathBuf::from(&p);
@@ -138,7 +138,7 @@ fn aura_dll_path() -> Result<PathBuf, String> {
         "libaura.so"
     };
 
-    // Production: bundled next to exe
+    // 生产环境：打包在 exe 旁边
     let exe_dir = std::env::current_exe()
         .map_err(|e| format!("no exe dir: {e}"))?
         .parent()
@@ -150,11 +150,11 @@ fn aura_dll_path() -> Result<PathBuf, String> {
         return Ok(bundled);
     }
 
-    // Dev paths
+    // 开发路径
     let candidates = [
         PathBuf::from(format!("../grammars/{ext}")),
         PathBuf::from(format!("grammars/{ext}")),
-        // Fallback: try all extensions in grammars/ (handles mismatched naming)
+        // Fallback: 尝试 grammars/ 下的所有扩展名（处理命名不匹配的情况）
         PathBuf::from("../grammars/aura.so"),
         PathBuf::from("grammars/aura.so"),
         PathBuf::from("../grammars/aura.dll"),
@@ -168,10 +168,10 @@ fn aura_dll_path() -> Result<PathBuf, String> {
     Err(format!("aura library not found. Searched: {candidates:?}"))
 }
 
-// ── Public Tauri commands ──
+// ── 公共 Tauri 命令 ──
 
-/// Initialize the Aura brain at the given directory path.
-/// Must be called once before any recall/store operations.
+/// 在指定目录路径初始化 Aura 大脑。
+/// 在任何 recall/store 操作之前必须调用一次。
 #[tauri::command]
 pub fn aura_init(brain_path: String) -> Result<String, String> {
     let dll_path = aura_dll_path()?;
@@ -181,7 +181,7 @@ pub fn aura_init(brain_path: String) -> Result<String, String> {
         return Err("Aura already initialized".into());
     }
 
-    // SAFETY: aura.dll is a trusted native library built from known Rust source
+    // SAFETY: aura.dll 是受信任的原生库，由已知 Rust 源码构建
     let fns = unsafe { load_aura_fns(&dll_path) }?;
 
     let cpath = to_cstring(&brain_path);
@@ -206,9 +206,9 @@ pub fn aura_init(brain_path: String) -> Result<String, String> {
     .to_string())
 }
 
-/// Recall memories relevant to a query.
-/// Returns JSON array: [{"id","content","score","level","tags",...}, ...]
-/// top_k: 0 = default (20).
+/// 召回与查询相关的记忆。
+/// 返回 JSON 数组：[{"id","content","score","level","tags",...}, ...]
+/// top_k: 0 = 默认值 (20)。
 #[tauri::command]
 pub fn aura_recall(query: String, top_k: i32) -> Result<String, String> {
     let guard = AURA.lock().map_err(|e| format!("lock: {}", e))?;
@@ -229,8 +229,8 @@ pub fn aura_recall(query: String, top_k: i32) -> Result<String, String> {
     Ok(json_str)
 }
 
-/// Recall memories as a formatted text block (for LLM prompt injection).
-/// token_budget: 0 = default (2048).
+/// 以格式化文本块形式召回记忆（用于 LLM prompt 注入）。
+/// token_budget: 0 = 默认值 (2048)。
 #[tauri::command]
 pub fn aura_recall_text(query: String, token_budget: i32) -> Result<String, String> {
     let guard = AURA.lock().map_err(|e| format!("lock: {}", e))?;
@@ -251,10 +251,10 @@ pub fn aura_recall_text(query: String, token_budget: i32) -> Result<String, Stri
     Ok(text)
 }
 
-/// Store a memory into the Aura brain.
-/// level: 1=Working, 2=Decisions, 3=Domain, 4=Identity. 0=default.
-/// tags: JSON array string, e.g. '["tag1","tag2"]'. Empty string = no tags.
-/// namespace: namespace string. Empty string = "default".
+/// 将记忆存入 Aura 大脑。
+/// level: 1=工作记忆, 2=决策, 3=领域, 4=身份。0=默认。
+/// tags: JSON 数组字符串，如 '["tag1","tag2"]'。空字符串 = 无标签。
+/// namespace: 命名空间字符串。空字符串 = "default"。
 #[tauri::command]
 pub fn aura_store(
     content: String,
@@ -288,7 +288,7 @@ pub fn aura_store(
     Ok(id)
 }
 
-/// Get the total number of records.
+/// 获取记录总数。
 #[tauri::command]
 pub fn aura_count() -> Result<i64, String> {
     let guard = AURA.lock().map_err(|e| format!("lock: {}", e))?;
@@ -296,7 +296,7 @@ pub fn aura_count() -> Result<i64, String> {
     Ok(unsafe { (fns.count)(handle.0) })
 }
 
-/// Run a maintenance cycle (decay, consolidation).
+/// 运行维护周期（衰减、整合）。
 #[tauri::command]
 pub fn aura_maintenance() -> Result<(), String> {
     let guard = AURA.lock().map_err(|e| format!("lock: {}", e))?;
@@ -311,7 +311,7 @@ pub fn aura_maintenance() -> Result<(), String> {
     Ok(())
 }
 
-/// Shut down and free the Aura brain. Call on app exit.
+/// 关闭并释放 Aura 大脑。在应用退出时调用。
 #[tauri::command]
 pub fn aura_shutdown() -> Result<(), String> {
     let mut guard = AURA.lock().map_err(|e| format!("lock: {}", e))?;
@@ -320,7 +320,7 @@ pub fn aura_shutdown() -> Result<(), String> {
         unsafe { (fns.close)(handle.0, &mut err) };
         unsafe { (fns.free_string)(err) };
         unsafe { (fns.free_handle)(handle.0) };
-        // Library intentionally leaked — process exit reclaims it
+        // 库有意泄漏 — 进程退出时回收
     }
     Ok(())
 }

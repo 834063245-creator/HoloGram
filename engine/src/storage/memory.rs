@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// MemoryIndex — in-memory adjacency-based graph index with string interning.
-// All graph traversals hit this, never SQLite.
-// O(degree) queries, not O(E) scans.
+// MemoryIndex — 基于邻接表和字符串驻留的内存图索引。
+// 所有图遍历都命中此结构，不碰 SQLite。
+// O(degree) 查询，而非 O(E) 扫描。
 //
-// ponytail: CSR flat arrays (offsets + targets + kinds + coupling + delays)
-// instead of HashMap<u32, Vec<(u32,EdgeKind,u8,Option<f64>)>>.
-// ~1.54M per-node Vec allocations → 6 total (3 in + 3 out).
-// Industry precedent: rustc Symbol, Sourcegraph string dedup, Kythe graph store.
+// ponytail：CSR 扁平数组（offsets + targets + kinds + coupling + delays）
+// 替代 HashMap<u32, Vec<(u32,EdgeKind,u8,Option<f64>)>>。
+// ~1.54M 每节点 Vec 分配 → 共 6 个（3 入 + 3 出）。
+// 行业先例：rustc Symbol、Sourcegraph 字符串去重、Kythe graph store。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -18,7 +18,7 @@ use crate::graph::{EdgeKind, Node};
 use crate::storage::sqlite::SqliteDb;
 use crate::storage::string_arena::StringArena;
 
-/// Progress info for engine_status MCP tool.
+/// engine_status MCP 工具的进度信息。
 #[derive(Debug, Clone, Serialize)]
 pub struct LoadProgress {
     pub phase: String,
@@ -29,67 +29,67 @@ pub struct LoadProgress {
     pub elapsed_ms: u64,
 }
 
-// ── delay pack/unpack (f64::NAN = None) ──
+// ── delay 打包/解包（f64::NAN = None）──
 
 fn pack_delay(d: Option<f64>) -> f64 { d.unwrap_or(f64::NAN) }
 fn unpack_delay(d: f64) -> Option<f64> { if d.is_nan() { None } else { Some(d) } }
 
-/// In-memory graph index. All queries hit this structure — SQLite is for persistence + FTS only.
+/// 内存图索引。所有查询都命中此结构 —— SQLite 仅用于持久化 + FTS。
 ///
-/// CSR layout (Compressed Sparse Row):
-///   out_offsets[N+1]  — start position in out_* arrays for each dense node index
-///   out_targets[E]    — target node handles (u32)
-///   out_kinds[E]      — EdgeKind as u8 (0–9)
-///   out_coupling[E]   — coupling_depth (u8)
-///   out_delays[E]     — temporal_delay_sec (f64::NAN = None)
+/// CSR 布局（Compressed Sparse Row）：
+///   out_offsets[N+1]  — 每个稠密节点索引在 out_* 数组中的起始位置
+///   out_targets[E]    — 目标节点句柄（u32）
+///   out_kinds[E]      — EdgeKind 的 u8 表示（0–9）
+///   out_coupling[E]   — coupling_depth（u8）
+///   out_delays[E]     — temporal_delay_sec（f64::NAN = None）
 ///
-/// Mutations (upsert_edge/remove_edge/remove_node) buffer into pending_adds/
-/// pending_removes. On next read, rebuild_csr() flushes and rebuilds the arrays.
-/// ponytail: O(N+E) rebuild on mutation, mutations are rare (incremental diff only).
+/// 变更（upsert_edge/remove_edge/remove_node）缓冲到 pending_adds/
+/// pending_removes 中。下次读取时，rebuild_csr() 刷入并重建数组。
+/// ponytail：变更时 O(N+E) 重建，变更很少（仅增量 diff）。
 pub struct MemoryIndex {
-    /// String interner — all node/edge identifiers stored once
+    /// 字符串驻留器 —— 所有节点/边标识符只存储一次
     arena: StringArena,
-    /// u32 handle → Node (node.id and node.name are String — Node struct unchanged)
+    /// u32 句柄 → Node（node.id 和 node.name 是 String —— Node 结构不变）
     nodes: HashMap<u32, Node>,
 
-    // ── dense node index ──
-    /// Sorted node handles; index = dense idx (0..N-1)
+    // ── 稠密节点索引 ──
+    /// 排序后的节点句柄；索引 = 稠密索引（0..N-1）
     node_by_idx: Vec<u32>,
-    /// Reverse: node handle → dense idx
+    /// 反向：节点句柄 → 稠密索引
     handle_to_idx: HashMap<u32, u32>,
 
-    // ── CSR outgoing edges ──
+    // ── CSR 出边 ──
     out_offsets: Vec<u32>,
     out_targets: Vec<u32>,
     out_kinds: Vec<u8>,
     out_coupling: Vec<u8>,
     out_delays: Vec<f64>,
 
-    // ── CSR incoming edges ──
+    // ── CSR 入边 ──
     in_offsets: Vec<u32>,
     in_targets: Vec<u32>,
     in_kinds: Vec<u8>,
     in_coupling: Vec<u8>,
     in_delays: Vec<f64>,
 
-    // ── mutation buffer ──
+    // ── 变更缓冲区 ──
     pending_adds: Vec<(u32, u32, EdgeKind, u8, Option<f64>)>,
     pending_removes: HashSet<(u32, u32, EdgeKind)>,
 
-    /// symbol name → node u32 handles (name strings are small, O(nodes) not O(edges))
+    /// 符号名称 → 节点 u32 句柄（名称字符串很小，O(nodes) 而非 O(edges)）
     name_index: HashMap<String, Vec<u32>>,
-    /// file path → node u32 handles
+    /// 文件路径 → 节点 u32 句柄
     file_index: HashMap<String, Vec<u32>>,
-    /// total edge count (cached; edges are stored in adjacency lists)
+    /// 总边数（缓存；边存储在邻接表中）
     edge_count: usize,
-        /// whether name_index and file_index are built (may be skipped on OOM)
+        /// name_index 和 file_index 是否已构建（OOM 时可能跳过）
     has_aux_indexes: bool,
     /// 合成边索引: (source_handle, target_handle) — 结构工具遍历时跳过
     synthesized_edges: HashSet<(u32, u32)>,
 }
 
-/// Extract file path from a location string like "C:/file.py:10" or "C:\file.py:10".
-/// Normalises backslashes and drive letter so all index lookups match.
+/// 从位置字符串（如 "C:/file.py:10" 或 "C:\file.py:10"）中提取文件路径。
+/// 归一化反斜杠和驱动器号，使所有索引查找都能匹配。
 fn extract_file_path(loc: &str) -> String {
     let parts: Vec<&str> = loc.rsplitn(2, ':').collect();
     let raw = if parts.len() == 2 { parts[1] } else { parts[0] };
@@ -97,7 +97,7 @@ fn extract_file_path(loc: &str) -> String {
 }
 
 impl MemoryIndex {
-    // ── helpers: dense index ──
+    // ── 辅助方法：稠密索引 ──
 
     fn rebuild_dense_index(&mut self) {
         self.handle_to_idx.clear();
@@ -115,9 +115,9 @@ impl MemoryIndex {
         self.handle_to_idx.get(&handle).copied()
     }
 
-    // ── helpers: edge iteration ──
+    // ── 辅助方法：边迭代 ──
 
-    /// Iterate outgoing edges for a dense node index. Returns slice indices.
+    /// 迭代稠密节点索引的出边。返回切片索引范围。
     #[inline]
     fn out_range(&self, idx: u32) -> (usize, usize) {
         let start = self.out_offsets[idx as usize] as usize;
@@ -125,7 +125,7 @@ impl MemoryIndex {
         (start, end)
     }
 
-    /// Iterate incoming edges for a dense node index.
+    /// 迭代稠密节点索引的入边。
     #[inline]
     fn in_range(&self, idx: u32) -> (usize, usize) {
         let start = self.in_offsets[idx as usize] as usize;
@@ -133,10 +133,10 @@ impl MemoryIndex {
         (start, end)
     }
 
-    // ── helpers: rebuild CSR from per-node buckets ──
+    // ── 辅助方法：从逐节点桶重建 CSR ──
 
-    /// Collect outgoing edges for a node from CSR + pending buffers.
-    /// Returns deduplicated (target_handle, kind_u8, coupling, delay_f64).
+    /// 从 CSR + 待处理缓冲区收集节点的出边。
+    /// 返回去重后的 (target_handle, kind_u8, coupling, delay_f64)。
     fn collect_outgoing(&self, src_handle: u32) -> Vec<(u32, u8, u8, f64)> {
         let mut edges: Vec<(u32, u8, u8, f64)> = Vec::new();
         let mut seen: HashSet<(u32, u8, u8)> = HashSet::new();
@@ -169,7 +169,7 @@ impl MemoryIndex {
         edges
     }
 
-    /// Collect incoming edges for a node from CSR + pending buffers.
+    /// 从 CSR + 待处理缓冲区收集节点的入边。
     fn collect_incoming(&self, tgt_handle: u32) -> Vec<(u32, u8, u8, f64)> {
         let mut edges: Vec<(u32, u8, u8, f64)> = Vec::new();
         let mut seen: HashSet<(u32, u8, u8)> = HashSet::new();
@@ -202,7 +202,7 @@ impl MemoryIndex {
         edges
     }
 
-    /// Check whether a pending-remove edge exists in CSR. Used by remove_edge.
+    /// 检查待删除边是否存在于 CSR 中。remove_edge 使用。
     fn edge_exists_in_csr(&self, src_handle: u32, tgt_handle: u32, kind_u8: u8) -> bool {
         let Some(idx) = self.node_idx(src_handle) else { return false; };
         let (start, end) = self.out_range(idx);
@@ -214,8 +214,8 @@ impl MemoryIndex {
         false
     }
 
-    /// Flush pending mutations by rebuilding CSR arrays.
-    /// Called at the end of incremental update batches.
+    /// 通过重建 CSR 数组刷入待处理变更。
+    /// 在增量更新批次结束时调用。
     pub fn flush_pending(&mut self) {
         if self.pending_adds.is_empty() && self.pending_removes.is_empty() {
             return;
@@ -223,9 +223,8 @@ impl MemoryIndex {
         self.rebuild_csr();
     }
 
-    /// Flatten per-node edge buckets into CSR arrays. Consumes the buckets.
-    /// This is called during fresh build (from_existing_graph, from_sqlite)
-    /// and on mutation flush.
+    /// 将逐节点边桶扁平化为 CSR 数组。消费桶数据。
+    /// 在全新构建（from_existing_graph、from_sqlite）和变更刷入时调用。
     fn flatten_buckets(
         &mut self,
         out_buckets: &[Vec<(u32, u8, u8, f64)>],
@@ -233,7 +232,7 @@ impl MemoryIndex {
     ) {
         let n = self.node_by_idx.len();
 
-        // Prefix-sum out-degrees → out_offsets
+        // 前缀和出度 → out_offsets
         self.out_offsets = Vec::with_capacity(n + 1);
         self.out_offsets.push(0);
         for bucket in out_buckets {
@@ -241,7 +240,7 @@ impl MemoryIndex {
             self.out_offsets.push(prev + bucket.len() as u32);
         }
 
-        // Flatten out arrays
+        // 扁平化 out 数组
         let total_out = self.out_offsets[n] as usize;
         self.out_targets = Vec::with_capacity(total_out);
         self.out_kinds = Vec::with_capacity(total_out);
@@ -256,7 +255,7 @@ impl MemoryIndex {
             }
         }
 
-        // Prefix-sum in-degrees → in_offsets
+        // 前缀和入度 → in_offsets
         self.in_offsets = Vec::with_capacity(n + 1);
         self.in_offsets.push(0);
         for bucket in in_buckets {
@@ -264,7 +263,7 @@ impl MemoryIndex {
             self.in_offsets.push(prev + bucket.len() as u32);
         }
 
-        // Flatten in arrays
+        // 扁平化 in 数组
         let total_in = self.in_offsets[n] as usize;
         self.in_targets = Vec::with_capacity(total_in);
         self.in_kinds = Vec::with_capacity(total_in);
@@ -282,17 +281,17 @@ impl MemoryIndex {
         self.edge_count = total_out;
     }
 
-    /// Rebuild CSR from pending mutations + existing CSR edges.
-    /// Uses temporary per-node Vecs for sort+dedup (freed after flatten).
+    /// 从待处理变更 + 现有 CSR 边重建 CSR。
+    /// 使用临时逐节点 Vec 进行排序+去重（flatten 后释放）。
     fn rebuild_csr(&mut self) {
         self.rebuild_dense_index();
         let n = self.node_by_idx.len();
 
-        // temp per-node buckets: Vec<(other_handle, kind_u8, coupling, delay_f64)>
+        // 临时逐节点桶：Vec<(other_handle, kind_u8, coupling, delay_f64)>
         let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
         let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
 
-        // Copy edges from current CSR (skip removed)
+        // 从当前 CSR 复制边（跳过已删除的）
         let old_has_data = !self.out_offsets.is_empty() && self.out_offsets.len() > n;
         if old_has_data {
             for src_idx in 0..n {
@@ -313,7 +312,7 @@ impl MemoryIndex {
             }
         }
 
-        // Add pending edges
+        // 添加待处理边
         for &(src, tgt, kind, coupling, delay) in &self.pending_adds {
             if self.pending_removes.contains(&(src, tgt, kind)) {
                 continue;
@@ -328,7 +327,7 @@ impl MemoryIndex {
             }
         }
 
-        // Sort + dedup each bucket
+        // 对每个桶排序 + 去重
         for bucket in out_buckets.iter_mut().chain(in_buckets.iter_mut()) {
             bucket.sort_unstable_by_key(|e| (e.0, e.1, e.2));
             bucket.dedup_by_key(|e| (e.0, e.1, e.2));
@@ -340,7 +339,7 @@ impl MemoryIndex {
         self.edge_count = self.out_offsets.last().copied().unwrap_or(0) as usize;
     }
 
-    // ── constructors ──
+    // ── 构造函数 ──
 
     pub fn new() -> Self {
         Self {
@@ -368,40 +367,40 @@ impl MemoryIndex {
         }
     }
 
-    /// Intern a string and return its u32 handle.
+    /// 驻留字符串并返回其 u32 句柄。
     fn intern(&mut self, s: &str) -> u32 {
         self.arena.intern(s)
     }
 
-    /// Look up a string from a u32 handle.
+    /// 从 u32 句柄查找字符串。
     fn get_str(&self, handle: u32) -> &str {
         self.arena.get(handle)
     }
 
-    /// Get handle for an already-interned string (no mutation).
+    /// 获取已驻留字符串的句柄（不修改状态）。
     fn handle_of(&self, s: &str) -> Option<u32> {
         self.arena.get_handle(s)
     }
 
-    /// Check whether an edge is synthesized (by string IDs).
+    /// 检查边是否为合成边（通过字符串 ID）。
     pub fn is_edge_synthesized(&self, source: &str, target: &str) -> bool {
         let src = match self.handle_of(source) { Some(h) => h, None => return false };
         let tgt = match self.handle_of(target) { Some(h) => h, None => return false };
         self.synthesized_edges.contains(&(src, tgt))
     }
 
-    /// Check whether an edge is synthesized (by u32 handles — internal fast path).
+    /// 检查边是否为合成边（通过 u32 句柄 —— 内部快速路径）。
     #[inline]
     fn is_edge_synthesized_by_handle(&self, src: u32, tgt: u32) -> bool {
         self.synthesized_edges.contains(&(src, tgt))
     }
 
-    /// Recompute in_degree/out_degree for each node from the deduped bucket lengths.
-    /// Node degrees loaded from SQLite can be stale (old analysis wrote wrong values);
-    /// rederive from actual adjacency so find_unused (in_degree==0) is correct.
-    /// ponytail: post-dedup count = unique (src,kind,depth) edges; differs from
-    /// add_edge's per-edge count when duplicates exist, but for ==0 + ranking it's
-    /// the honest number. to_sqlite dumps these back so subsequent cold starts are correct.
+    /// 从去重后的桶长度重新计算 in_degree/out_degree。
+    /// 从 SQLite 加载的节点度数可能过时（旧分析写入了错误值）；
+    /// 从实际邻接重新推导，使 find_unused（in_degree==0）正确。
+    /// ponytail：去重后的计数 = 唯一 (src,kind,depth) 边数；与
+    /// add_edge 的逐边计数在有重复时不同，但对 ==0 + 排序来说
+    /// 这是诚实数值。to_sqlite 会回写这些值，使后续冷启动正确。
     fn recompute_degrees(&mut self, out_buckets: &[Vec<(u32, u8, u8, f64)>], in_buckets: &[Vec<(u32, u8, u8, f64)>]) {
         for i in 0..self.node_by_idx.len() {
             if let Some(node) = self.nodes.get_mut(&self.node_by_idx[i]) {
@@ -411,16 +410,16 @@ impl MemoryIndex {
         }
     }
 
-    /// Build MemoryIndex from raw node/edge HashMaps.
-    /// Takes ownership — edges are consumed one-by-one during adjacency construction,
-    /// so peak memory is ~half of the old clone-everything approach.
-    /// 6.1M edges → into_iter() frees each Edge as it's processed.
+    /// 从原始 node/edge HashMap 构建 MemoryIndex。
+    /// 获取所有权 —— 边在邻接构建期间逐条消费，
+    /// 因此峰值内存约为旧的全量克隆方案的一半。
+    /// 6.1M 边 → into_iter() 在处理时逐条释放 Edge。
     pub fn from_existing_graph(
         nodes: HashMap<String, Node>,
         edges: HashMap<String, crate::graph::Edge>,
     ) -> Self {
         let mut idx = Self::new();
-        // Pre-intern all node IDs
+        // 预驻留所有节点 ID
         for id in nodes.keys() {
             idx.intern(id);
         }
@@ -428,7 +427,7 @@ impl MemoryIndex {
             idx.intern(&edge.source);
             idx.intern(&edge.target);
         }
-        // Insert nodes
+        // 插入节点
         for (id, node) in nodes {
             let handle = idx.intern(&id);
             idx.index_node_name(handle, &node);
@@ -436,7 +435,7 @@ impl MemoryIndex {
             idx.nodes.insert(handle, node);
         }
 
-        // Build per-node buckets (temp — consumed by flatten_buckets)
+        // 构建逐节点桶（临时 —— 被 flatten_buckets 消费）
         idx.rebuild_dense_index();
         let n = idx.node_by_idx.len();
         let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
@@ -448,7 +447,7 @@ impl MemoryIndex {
             if !idx.nodes.contains_key(&src) || !idx.nodes.contains_key(&tgt) {
                 continue;
             }
-            // Track synthesized edges for structural tool filtering
+            // 跟踪合成边以供结构工具过滤
             if edge.is_synthesized {
                 idx.synthesized_edges.insert((src, tgt));
             }
@@ -460,7 +459,7 @@ impl MemoryIndex {
             }
         }
 
-        // Sort + dedup each bucket
+        // 对每个桶排序 + 去重
         for bucket in out_buckets.iter_mut().chain(in_buckets.iter_mut()) {
             bucket.sort_unstable_by_key(|e| (e.0, e.1, e.2));
             bucket.dedup_by_key(|e| (e.0, e.1, e.2));
@@ -471,12 +470,12 @@ impl MemoryIndex {
         idx
     }
 
-    /// Load from SQLite (cold start).
+    /// 从 SQLite 加载（冷启动）。
     pub fn from_sqlite(db: &SqliteDb) -> Result<Self, String> {
         let mut idx = Self::new();
         let db_nodes = db.load_all_nodes()?;
         let db_edges = db.load_all_edges()?;
-        // Pre-intern everything
+        // 预驻留所有内容
         for node in &db_nodes {
             idx.intern(&node.id);
         }
@@ -491,7 +490,7 @@ impl MemoryIndex {
             idx.nodes.insert(handle, node);
         }
 
-        // Build CSR via temp buckets
+        // 通过临时桶构建 CSR
         idx.rebuild_dense_index();
         let n = idx.node_by_idx.len();
         let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
@@ -518,8 +517,8 @@ impl MemoryIndex {
         Ok(idx)
     }
 
-    /// Build with OOM guard: if building aux indexes would exceed memory budget,
-    /// skip them and set has_aux_indexes = false. Fallback: FTS5 for all searches.
+    /// 带 OOM 守卫构建：如果构建辅助索引会超出内存预算，
+    /// 则跳过并设置 has_aux_indexes = false。回退：所有搜索使用 FTS5。
     pub fn from_sqlite_degraded(db: &SqliteDb) -> Result<Self, String> {
         let mut idx = Self::new();
         let db_nodes = db.load_all_nodes()?;
@@ -536,7 +535,7 @@ impl MemoryIndex {
             idx.nodes.insert(handle, node);
         }
 
-        // Build CSR via temp buckets (no aux indexes yet)
+        // 通过临时桶构建 CSR（暂不构建辅助索引）
         idx.rebuild_dense_index();
         let n = idx.node_by_idx.len();
         let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
@@ -564,10 +563,10 @@ impl MemoryIndex {
         Ok(idx)
     }
 
-    /// Persist to SQLite (full dump, used after full analysis).
+    /// 持久化到 SQLite（全量转储，全量分析后使用）。
     pub fn to_sqlite(&self, db: &SqliteDb) -> Result<(), String> {
         let nodes: Vec<&Node> = self.nodes.values().collect();
-        // Collect all edges via helpers (CSR + pending - removed)
+        // 通过辅助方法收集所有边（CSR + pending - removed）
         let mut edges: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = Vec::new();
         let mut seen: HashSet<(String, String, EdgeKind)> = HashSet::new();
         for &src_handle in &self.node_by_idx {
@@ -585,7 +584,7 @@ impl MemoryIndex {
         db.bulk_replace_all(&nodes, &edges)
     }
 
-    // ── helpers ──
+    // ── 辅助方法 ──
 
     fn index_node_name(&mut self, handle: u32, node: &Node) {
         if self.has_aux_indexes {
@@ -608,7 +607,7 @@ impl MemoryIndex {
         }
     }
 
-    /// Build aux indexes after the fact (e.g., from_sqlite_degraded then later recovered).
+    /// 事后构建辅助索引（如 from_sqlite_degraded 后恢复）。
     pub fn ensure_aux_indexes(&mut self) {
         if self.has_aux_indexes {
             return;
@@ -631,7 +630,7 @@ impl MemoryIndex {
         self.has_aux_indexes = true;
     }
 
-    // ── point queries ──
+    // ── 点查询 ──
 
     pub fn get_node(&self, id: &str) -> Option<&Node> {
         let handle = self.handle_of(id)?;
@@ -665,9 +664,9 @@ impl MemoryIndex {
         self.has_aux_indexes
     }
 
-    // ── compatibility: reconstruct Edge objects from adjacency ──
+    // ── 兼容性：从邻接表重建 Edge 对象 ──
 
-    /// Reconstruct outgoing Edge objects. Missing fields get defaults.
+    /// 重建出边 Edge 对象。缺失字段使用默认值。
     pub fn get_outgoing_edges(&self, node_id: &str) -> Vec<crate::graph::Edge> {
         let mut edges = Vec::new();
         let Some(handle) = self.handle_of(node_id) else {
@@ -686,7 +685,7 @@ impl MemoryIndex {
         edges
     }
 
-    /// Reconstruct incoming Edge objects.
+    /// 重建入边 Edge 对象。
     pub fn get_incoming_edges(&self, node_id: &str) -> Vec<crate::graph::Edge> {
         let mut edges = Vec::new();
         let Some(handle) = self.handle_of(node_id) else {
@@ -705,9 +704,9 @@ impl MemoryIndex {
         edges
     }
 
-    // ── adjacency ──
+    // ── 邻接 ──
 
-    /// Outgoing edges from a node. Returns owned tuples (resolved from u32 handles).
+    /// 节点的出边。返回拥有的元组（从 u32 句柄解析）。
     pub fn outgoing(
         &self,
         node_id: &str,
@@ -730,7 +729,7 @@ impl MemoryIndex {
         results
     }
 
-    /// Incoming edges to a node.
+    /// 节点的入边。
     pub fn incoming(
         &self,
         node_id: &str,
@@ -753,9 +752,9 @@ impl MemoryIndex {
         results
     }
 
-    // ── graph traversal ──
+    // ── 图遍历 ──
 
-    /// BFS neighbors up to `depth` hops. Returns (from, to, coupling_depth).
+    /// BFS 邻居，最多 `depth` 跳。返回 (from, to, coupling_depth)。
     pub fn neighbors(
         &self,
         node_id: &str,
@@ -779,7 +778,7 @@ impl MemoryIndex {
                 continue;
             }
             let cur_str = self.get_str(cur_handle).to_string();
-            // outgoing (CSR — only if node is in dense index)
+            // 出边（CSR —— 仅当节点在稠密索引中时）
             if let Some(cur_idx) = self.node_idx(cur_handle) {
                 let (s, e) = self.out_range(cur_idx);
                 for i in s..e {
@@ -797,7 +796,7 @@ impl MemoryIndex {
                         queue.push_back((other, cur_depth + 1));
                     }
                 }
-                // incoming (CSR)
+                // 入边（CSR）
                 let (s, e) = self.in_range(cur_idx);
                 for i in s..e {
                     let kind = EdgeKind::from_u8(self.in_kinds[i]);
@@ -815,7 +814,7 @@ impl MemoryIndex {
                     }
                 }
             }
-            // pending edges (always check, even for nodes not yet in CSR)
+            // 待处理边（始终检查，即使节点尚未在 CSR 中）
             if has_pending {
                 for &(src, tgt, kind, coupling, delay) in &self.pending_adds {
                     if src == cur_handle && !self.pending_removes.contains(&(src, tgt, kind)) {
@@ -846,7 +845,7 @@ impl MemoryIndex {
         result
     }
 
-    /// BFS impact (blast radius). Returns layers: Vec<(depth_level, node_ids)>.
+    /// BFS 影响范围（爆炸半径）。返回层: Vec<(depth_level, node_ids)>。
     pub fn impact(&self, node_id: &str, max_depth: usize) -> Vec<(usize, Vec<String>)> {
         let mut layers: Vec<(usize, Vec<String>)> = Vec::new();
         let mut visited = HashSet::new();
@@ -869,7 +868,7 @@ impl MemoryIndex {
             }
             layers[depth].1.push(self.get_str(cur_handle).to_string());
 
-            // CSR edges — skip synthesized edges
+            // CSR 边 —— 跳过合成边
             if let Some(cur_idx) = self.node_idx(cur_handle) {
                 let (s, e) = self.out_range(cur_idx);
                 for i in s..e {
@@ -896,7 +895,7 @@ impl MemoryIndex {
                     }
                 }
             }
-            // Pending edges (always check)
+            // 待处理边（始终检查）
             if has_pending {
                 for &(src, tgt, kind, _, _) in &self.pending_adds {
                     if src == cur_handle && !self.pending_removes.contains(&(src, tgt, kind))
@@ -909,12 +908,12 @@ impl MemoryIndex {
         layers
     }
 
-    /// BFS shortest path between two nodes (backward-compatible wrapper with default limits).
+    /// BFS 最短路径，两个节点之间（向后兼容封装，使用默认限制）。
     pub fn shortest_path(&self, from: &str, to: &str) -> Option<Vec<String>> {
         self.shortest_path_with_limits(from, to, 20, 5000)
     }
 
-    /// BFS shortest path between two nodes with explicit depth/explore limits.
+    /// BFS 最短路径，两个节点之间，带显式深度/探索限制。
     pub fn shortest_path_with_limits(
         &self,
         from: &str,
@@ -943,7 +942,7 @@ impl MemoryIndex {
             if depth >= max_depth {
                 continue;
             }
-            // CSR edges
+            // CSR 边
             if let Some(cur_idx) = self.node_idx(cur) {
                 let (s, e) = self.out_range(cur_idx);
                 for i in s..e {
@@ -974,7 +973,7 @@ impl MemoryIndex {
                     }
                 }
             }
-            // Pending edges
+            // 待处理边
             if has_pending {
                 for &(src, tgt, kind, _, _) in &self.pending_adds {
                     if explore_count >= max_explore { break; }
@@ -1003,7 +1002,7 @@ impl MemoryIndex {
         Some(path)
     }
 
-    // ── full-text search (delegates to SQLite FTS5) ──
+    // ── 全文搜索（委托给 SQLite FTS5）──
 
     pub fn fts_search(&self, db: &SqliteDb, query: &str, limit: usize) -> Result<Vec<Node>, String> {
         let ids = db.fts_search(query, limit)?;
@@ -1018,14 +1017,14 @@ impl MemoryIndex {
         Ok(results)
     }
 
-    // ── iteration ──
+    // ── 迭代 ──
 
     pub fn nodes_iter(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
     }
 
-    /// Iterate over all edges as (source_str, vec_of_target_tuples).
-    /// Returns owned values — caller owns the result.
+    /// 迭代所有边，返回 (source_str, target_tuples_vec)。
+    /// 返回拥有的值 —— 调用方拥有结果。
     pub fn edges_iter(&self) -> Vec<(String, Vec<(String, EdgeKind, u8, Option<f64>)>)> {
         let mut results = Vec::with_capacity(self.node_by_idx.len());
         let mut seen: HashSet<u32> = HashSet::new();
@@ -1045,8 +1044,8 @@ impl MemoryIndex {
             }
             results.push((src_str, targets));
         }
-        // ponytail: unflushed nodes (inserted but not yet in dense index) — edges
-        // are in pending_adds. Walk them so callers see edges before flush_pending().
+        // ponytail：未刷入的节点（已插入但尚未在稠密索引中）——
+        // 边在 pending_adds 中。遍历它们，使调用方在 flush_pending() 之前也能看到边。
         for &(src, _, _, _, _) in &self.pending_adds {
             if !seen.insert(src) { continue; }
             let raw = self.collect_outgoing(src);
@@ -1066,13 +1065,12 @@ impl MemoryIndex {
         results
     }
 
-    /// Build a full Graph from this MemoryIndex.
-    /// Used by the incremental-update path to run synthesis stages (community
-    /// detection, coupling analysis) that operate on Graph, not MemoryIndex.
-    /// Edge IDs are derived from (source, target, kind) since CSR arrays don't
-    /// store edge IDs.
-    // ponytail: O(N+E) conversion. MemoryIndex keeps the canonical data;
-    // Graph is a transient format for synthesis passes.
+    /// 从此 MemoryIndex 构建完整的 Graph。
+    /// 增量更新路径使用，用于运行在 Graph（而非 MemoryIndex）上操作的合成阶段
+    ///（社区检测、耦合分析）。
+    /// 边 ID 从 (source, target, kind) 派生，因为 CSR 数组不存储边 ID。
+    // ponytail：O(N+E) 转换。MemoryIndex 保存规范数据；
+    // Graph 是合成阶段的临时格式。
     pub fn to_graph(&self) -> crate::graph::Graph {
         use crate::graph::{Edge, Graph};
 
@@ -1094,19 +1092,19 @@ impl MemoryIndex {
         graph
     }
 
-    // ── mutators (for incremental update) ──
+    // ── 变更方法（用于增量更新）──
 
     pub fn insert_node(&mut self, node: Node) {
         let handle = self.intern(&node.id);
         self.index_node_name(handle, &node);
         self.index_node_file(handle, &node);
         self.nodes.insert(handle, node);
-        // ponytail: dense index rebuilt on next flush_pending, not here
+        // ponytail：稠密索引在下次 flush_pending 时重建，不在此处
     }
 
     pub fn remove_node(&mut self, id: &str) -> Option<Node> {
         let handle = self.handle_of(id)?;
-        // Remove from aux indexes
+        // 从辅助索引中移除
         if let Some(node) = self.nodes.get(&handle) {
             if self.has_aux_indexes {
                 if let Some(handles) = self.name_index.get_mut(&node.name) {
@@ -1120,7 +1118,7 @@ impl MemoryIndex {
                 }
             }
         }
-        // Mark all edges involving this node as removed
+        // 将涉及此节点的所有边标记为已删除
         let mut removed = 0usize;
         if let Some(idx) = self.node_idx(handle) {
             let (s, e) = self.out_range(idx);
@@ -1135,10 +1133,10 @@ impl MemoryIndex {
                 let src = self.in_targets[i];
                 let kind = EdgeKind::from_u8(self.in_kinds[i]);
                 self.pending_removes.insert((src, handle, kind));
-                // ponytail: incoming edges were already counted in edge_count
+                // ponytail：入边已在 edge_count 中计数
             }
         }
-        // Also remove any pending edges for this node
+        // 同时移除此节点的待处理边
         let pending_before = self.pending_adds.len();
         self.pending_adds.retain(|&(s, t, _, _, _)| s != handle && t != handle);
         removed += pending_before - self.pending_adds.len();
@@ -1146,7 +1144,7 @@ impl MemoryIndex {
         self.nodes.remove(&handle)
     }
 
-    /// Insert or update an edge. Stores full adjacency tuple including temporal_delay_sec.
+    /// 插入或更新边。存储完整的邻接元组，包括 temporal_delay_sec。
     pub fn upsert_edge(
         &mut self,
         source: &str,
@@ -1158,9 +1156,9 @@ impl MemoryIndex {
         let src = self.intern(source);
         let tgt = self.intern(target);
         let kind_u8 = kind.to_u8();
-        // Check if edge already exists in CSR
+        // 检查边是否已存在于 CSR
         if self.edge_exists_in_csr(src, tgt, kind_u8) {
-            // Check coupling + delay match
+            // 检查 coupling + delay 是否匹配
             if let Some(idx) = self.node_idx(src) {
                 let (s, e) = self.out_range(idx);
                 for i in s..e {
@@ -1169,12 +1167,12 @@ impl MemoryIndex {
                         && self.out_coupling[i] == coupling_depth
                         && unpack_delay(self.out_delays[i]) == temporal_delay_sec
                     {
-                        return; // exact duplicate in CSR
+                        return; // CSR 中的完全重复
                     }
                 }
             }
         }
-        // Check pending adds for duplicate
+        // 检查 pending adds 中是否有重复
         if self.pending_adds.iter().any(|&(s, t, k, d, del)| {
             s == src && t == tgt && k == kind && d == coupling_depth && del == temporal_delay_sec
         }) {
@@ -1185,7 +1183,7 @@ impl MemoryIndex {
         self.edge_count += 1;
     }
 
-    /// Remove a specific edge.
+    /// 移除特定边。
     pub fn remove_edge(&mut self, source: &str, target: &str, kind: EdgeKind) -> bool {
         let src = match self.handle_of(source) {
             Some(h) => h,
@@ -1195,13 +1193,13 @@ impl MemoryIndex {
             Some(h) => h,
             None => return false,
         };
-        // Check if edge exists in CSR or pending
+        // 检查边是否存在于 CSR 或 pending 中
         let in_csr = self.edge_exists_in_csr(src, tgt, kind.to_u8());
         let in_pending = self.pending_adds.iter().any(|&(s, t, k, _, _)| s == src && t == tgt && k == kind);
         if !in_csr && !in_pending {
             return false;
         }
-        // Remove from pending adds (if was just added)
+        // 从 pending adds 中移除（如果刚添加）
         self.pending_adds.retain(|&(s, t, k, _, _)| !(s == src && t == tgt && k == kind));
         if in_csr {
             self.pending_removes.insert((src, tgt, kind));
@@ -1210,7 +1208,7 @@ impl MemoryIndex {
         true
     }
 
-    /// Compute total edge count by scanning adjacency (for validation).
+    /// 通过扫描邻接表计算总边数（用于验证）。
     pub fn recompute_edge_count(&self) -> usize {
         let mut count = 0usize;
         for &src_handle in &self.node_by_idx {
@@ -1219,7 +1217,7 @@ impl MemoryIndex {
         count
     }
 
-    /// Rename a node (name only — ID stays unchanged, preserving edges).
+    /// 重命名节点（仅名称 —— ID 不变，保留边）。
     pub fn rename_node_name(&mut self, id: &str, new_name: &str) -> bool {
         let handle = match self.handle_of(id) {
             Some(h) => h,
@@ -1254,7 +1252,7 @@ impl Default for MemoryIndex {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Tests
+// 测试
 // ═══════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -1319,17 +1317,17 @@ mod tests {
         assert!(out.iter().any(|(_, _, d, _)| *d == 3), "depth=3 entry present");
     }
 
-    /// Regression: MemoryIndex loaders (from_existing_graph/from_sqlite/_degraded)
-    /// used to trust the in_degree/out_degree baked into each Node (stale in SQLite),
-    /// so find_unused (in_degree==0) returned wrong results. recompute_degrees
-    /// must rederive from actual adjacency, overwriting stale stored values.
+    /// 回归测试：MemoryIndex 加载器（from_existing_graph/from_sqlite/_degraded）
+    /// 曾信任每个 Node 中固化的 in_degree/out_degree（SQLite 中已过时），
+    /// 导致 find_unused（in_degree==0）返回错误结果。recompute_degrees
+    /// 必须从实际邻接重新推导，覆盖过时的存储值。
     #[test]
     fn from_existing_graph_recomputes_degrees_from_adjacency() {
         let mut nodes = HashMap::new();
         nodes.insert("a".into(), test_node("a", "A", None));
         nodes.insert("b".into(), test_node("b", "B", None));
         nodes.insert("c".into(), test_node("c", "C", None));
-        // Force stale nonzero on b to prove recompute overwrites (not just stays 0)
+        // 强制 b 的值为非零过时值，以证明 recompute 会覆盖（而非保持 0）
         {
             let nb = nodes.get_mut("b").unwrap();
             nb.in_degree = 99;
@@ -1447,9 +1445,9 @@ mod tests {
         assert_eq!(calls[0].1, EdgeKind::Calls);
     }
 
-    /// ponytail: clone_index_for_update() never called rebuild_dense_index(),
-    /// so node_by_idx stayed empty → to_sqlite() collected 0 edges → all edges
-    /// lost on SQLite write-back. This test ensures flush_pending() fixes it.
+    /// ponytail：clone_index_for_update() 从不调用 rebuild_dense_index()，
+    /// 导致 node_by_idx 保持为空 → to_sqlite() 收集了 0 条边 → SQLite 回写
+    /// 后所有边丢失。此测试确保 flush_pending() 修复此问题。
     #[test]
     fn test_clone_and_flush_preserves_edges() {
         let mut idx = MemoryIndex::new();
@@ -1458,11 +1456,11 @@ mod tests {
         idx.insert_node(test_node("c", "C", Some("src/c.rs")));
         idx.upsert_edge("a", "b", EdgeKind::Calls, 1, Some(0.1));
         idx.upsert_edge("b", "c", EdgeKind::Calls, 2, None);
-        idx.flush_pending(); // upsert → pending, flush → CSR so edges_iter() sees them
+        idx.flush_pending(); // upsert → pending，flush → CSR 使 edges_iter() 能看到边
 
-        // Simulate clone_index_for_update: rebuild from existing data
-        // (we can't call clone_index_for_update directly since it's in incremental.rs,
-        // but we can test the pattern by rebuilding from the graph)
+        // 模拟 clone_index_for_update：从现有数据重建
+        //（无法直接调用 clone_index_for_update，因为它在 incremental.rs 中，
+        // 但可以通过从 graph 重建来测试该模式）
         let mut g = Graph::new();
         for node in idx.nodes_iter() {
             g.add_node(node.clone());
@@ -1477,12 +1475,11 @@ mod tests {
         }
         let mut cloned = MemoryIndex::from_existing_graph(g.nodes, g.edges);
 
-        // Before flush: pending_adds has edges, node_by_idx is populated by
-        // from_existing_graph, so this should pass. But we call flush to ensure
-        // it doesn't break anything.
+        // flush 前：pending_adds 有边，node_by_idx 由 from_existing_graph 填充，
+        // 所以应该通过。但调用 flush 确保不会破坏任何东西。
         cloned.flush_pending();
 
-        // Verify edges survived
+        // 验证边已保留
         assert_eq!(cloned.edge_count(), 2, "both edges should survive clone+flush");
         let out = cloned.outgoing("a", None);
         assert_eq!(out.len(), 1);
@@ -1494,8 +1491,8 @@ mod tests {
         assert_eq!(out2[0].2, 2); // coupling_depth
     }
 
-    /// ponytail: ensure flush_pending correctly rebuilds internal data structures
-    /// so that to_sqlite() can iterate node_by_idx to collect edges for persistence.
+    /// ponytail：确保 flush_pending 正确重建内部数据结构，
+    /// 使 to_sqlite() 能遍历 node_by_idx 收集边用于持久化。
     #[test]
     fn test_edges_queryable_after_flush_pending() {
         let mut idx = MemoryIndex::new();
@@ -1503,17 +1500,17 @@ mod tests {
         idx.insert_node(test_node("b", "B", None));
         idx.upsert_edge("a", "b", EdgeKind::Calls, 0, None);
 
-        // upsert_edge puts edges in pending_adds; flush_pending rebuilds CSR from them.
-        // Before flush, outgoing() reads from pending_adds (works).
-        // After flush, outgoing() reads from rebuilt CSR arrays (must also work).
+        // upsert_edge 将边放入 pending_adds；flush_pending 从中重建 CSR。
+        // flush 前，outgoing() 从 pending_adds 读取（可行）。
+        // flush 后，outgoing() 从重建的 CSR 数组读取（也必须可行）。
         idx.flush_pending();
 
-        // Verify edges are queryable via outgoing after flush
+        // 验证 flush 后边可通过 outgoing 查询
         let out = idx.outgoing("a", None);
         assert_eq!(out.len(), 1, "edge should survive flush_pending");
         assert_eq!(out[0].0, "b");
 
-        // Verify edge count is correct (reads from CSR after flush)
+        // 验证边数正确（flush 后从 CSR 读取）
         assert_eq!(idx.edge_count(), 1, "edge_count should be correct after flush");
     }
 
@@ -1543,7 +1540,7 @@ mod tests {
         assert!(idx.outgoing("a", None).is_empty());
     }
 
-    /// F2 regression: temporal_delay_sec must survive a SQLite round-trip.
+    /// F2 回归测试：temporal_delay_sec 必须在 SQLite 往返后保留。
     #[test]
     fn test_temporal_delay_survives_sqlite_roundtrip() {
         let tmp = std::env::temp_dir().join("hologram_test_f2_delay");
@@ -1559,7 +1556,7 @@ mod tests {
         idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
         idx.upsert_edge("a", "c", EdgeKind::Triggers, 1, Some(2.5));
         idx.upsert_edge("b", "c", EdgeKind::Awaits, 2, Some(0.75));
-        idx.flush_pending(); // upsert → pending, flush → CSR so to_sqlite() sees edges
+        idx.flush_pending(); // upsert → pending，flush → CSR 使 to_sqlite() 能看到边
 
         idx.to_sqlite(&db).unwrap();
 

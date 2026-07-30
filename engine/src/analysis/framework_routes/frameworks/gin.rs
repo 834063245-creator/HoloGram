@@ -36,7 +36,7 @@ pub(crate) fn detect_gin_routes(file: &str, source: &str) -> Vec<DetectedRoute> 
     let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
 
     while let Some(node) = stack.pop() {
-        // Gin routes are selector_expression calls: r.GET("/path", handler)
+        // Gin 路由是 selector_expression 调用：r.GET("/path", handler)
         if node.kind() == "call_expression" {
             if let Some(func) = node.child_by_field_name("function") {
                 if func.kind() == "selector_expression" {

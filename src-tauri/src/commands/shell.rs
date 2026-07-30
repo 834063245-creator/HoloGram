@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Shell execution: exec_command, bash_output, bash_wait, bash_kill.
+// Shell 执行：exec_command、bash_output、bash_wait、bash_kill。
 
 use std::thread;
 use std::time::Duration;
@@ -41,7 +41,7 @@ pub(crate) async fn exec_command(
     let mut child = crate::os_sandbox::spawn_shell(&command, &physical_dir_str)
         .map_err(|e| format!("无法执行命令: {e}"))?;
 
-    // ── Streaming path: emit chunks via Tauri events ──
+    // ── 流式路径：通过 Tauri 事件发送数据块 ──
     if let Some(stream_id) = stream_tool_id.clone() {
         let stdout_reader = child.take_stdout();
         let stderr_reader = child.take_stderr();
@@ -49,7 +49,7 @@ pub(crate) async fn exec_command(
         let sid_stdout = stream_id.clone();
         let app_stderr = app.clone();
 
-        // Drain stdout in background thread, emitting chunks
+        // 在后台线程中排空 stdout，发送数据块
         let stdout_thread = stdout_reader.map(|mut reader| {
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
@@ -70,7 +70,7 @@ pub(crate) async fn exec_command(
             })
         });
 
-        // Drain stderr in background thread
+        // 在后台线程中排空 stderr
         let stream_id_stderr = stream_id.clone();
         let stderr_thread = stderr_reader.map(|mut reader| {
             std::thread::spawn(move || {
@@ -92,7 +92,7 @@ pub(crate) async fn exec_command(
             })
         });
 
-        // Wait for child in background, emit done event
+        // 在后台等待子进程，发送完成事件
         let app_done = app.clone();
         let sid_done = stream_id.clone();
         let timeout_ms_val = timeout_ms.unwrap_or(300_000);
@@ -102,7 +102,7 @@ pub(crate) async fn exec_command(
             loop {
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        // Wait for drainer threads to finish
+                        // 等待排空线程完成
                         if let Some(t) = stdout_thread { let _ = t.join(); }
                         if let Some(t) = stderr_thread { let _ = t.join(); }
                         let _ = app_done.emit("shell:done", serde_json::json!({
@@ -113,7 +113,7 @@ pub(crate) async fn exec_command(
                     }
                     Ok(None) => {
                         if start.elapsed() >= Duration::from_millis(timeout_ms_val) {
-                            // Convert to background task instead of killing
+                            // 转为后台任务而非终止
                             let label: String = cmd_for_bg.chars().take(80).collect();
                             match crate::utils::spawn_bg_from_child(child, &label) {
                                 Ok(job_id) => {
@@ -158,7 +158,7 @@ pub(crate) async fn exec_command(
         }).to_string());
     }
 
-    // ── Non-streaming path (original blocking behavior) ──
+    // ── 非流式路径（原始阻塞行为） ──
     let stdout_drainer = child.take_stdout().map(|mut reader| {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -209,7 +209,7 @@ pub(crate) async fn exec_command(
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    // Convert to background task instead of killing
+                    // 转为后台任务而非终止
                     let label: String = command.chars().take(80).collect();
                     let job_id = crate::utils::spawn_bg_from_child(child, &label)?;
                     let msg = format!(

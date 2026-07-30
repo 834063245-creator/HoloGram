@@ -1,25 +1,25 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// LSP Client — bridges Monaco editor to language servers via Tauri IPC.
-// Phase A: Python (pyright), Rust (rust-analyzer), Go (gopls), TS/JS (tsserver).
+// LSP 客户端 — 通过 Tauri IPC 将 Monaco 编辑器桥接到语言服务器。
+// 阶段 A：Python（pyright）、Rust（rust-analyzer）、Go（gopls）、TS/JS（tsserver）。
 //
-// Response flow:
-//   lsp_request (non-notification) → Rust waits for JSON-RPC response →
-//     extracts `result` field → returns to caller.
-//   Notifications (didOpen/didChange) → fire-and-forget.
-//   Server-push notifications (publishDiagnostics) → lsp-message event.
+// 响应流程：
+//   lsp_request（非通知）→ Rust 等待 JSON-RPC 响应 →
+//     提取 `result` 字段 → 返回给调用方。
+//   通知（didOpen/didChange）→ 发后即忘。
+//   服务端推送通知（publishDiagnostics）→ lsp-message 事件。
 
 import type { editor, IDisposable, IRange, languages } from 'monaco-editor';
 import { listen, rpc } from '../bridge';
 
-const lspSessions = new Map<string, number>(); // language -> session_id
+const lspSessions = new Map<string, number>(); // 语言 → session_id
 let completionProviders: IDisposable[] = [];
 let hoverProviders: IDisposable[] = [];
 let definitionProviders: IDisposable[] = [];
 let referenceProviders: IDisposable[] = [];
 
-// ── Diagnostics cache — populated by LSP push, queried by agent state hooks ──
+// ── 诊断缓存 — 由 LSP 推送填充，供 agent 状态钩子查询 ──
 
 export interface LspDiagnostic {
   severity: 'error' | 'warning' | 'info' | 'hint';
@@ -34,9 +34,9 @@ export interface LspDiagnostic {
 
 const diagnosticsCache = new Map<string, LspDiagnostic[]>();
 
-/** Get cached LSP diagnostics for a file (URI or file path). */
+/** 获取文件的缓存 LSP 诊断（URI 或文件路径）。 */
 export function getDiagnosticsForFile(fileUriOrPath: string): LspDiagnostic[] {
-  // Try exact match first, then normalize
+  // 先尝试精确匹配，再归一化
   if (diagnosticsCache.has(fileUriOrPath)) {
     return diagnosticsCache.get(fileUriOrPath)!;
   }
@@ -50,8 +50,8 @@ export function getDiagnosticsForFile(fileUriOrPath: string): LspDiagnostic[] {
   return [];
 }
 
-// ── LSP → Monaco CompletionItemKind mapping ──
-// LSP enum values differ from Monaco/VS Code numbering.
+// ── LSP → Monaco CompletionItemKind 映射 ──
+// LSP 枚举值与 Monaco/VS Code 编号不同。
 const LSP_TO_MONACO_KIND: Record<number, number> = {
   1: 18, // Text
   2: 0, // Method
@@ -84,7 +84,7 @@ function mapCompletionItem(item: any, monaco: typeof import('monaco-editor')): l
   const kind: languages.CompletionItemKind | undefined =
     item.kind != null ? (LSP_TO_MONACO_KIND[item.kind] ?? item.kind) : undefined;
 
-  // Convert LSP textEdit to Monaco insertText + range
+  // 将 LSP textEdit 转换为 Monaco insertText + range
   let insertText: string | undefined;
   let range: IRange | { insert: IRange; replace: IRange } | undefined;
   if (item.textEdit) {
@@ -96,7 +96,7 @@ function mapCompletionItem(item: any, monaco: typeof import('monaco-editor')): l
     }
   }
 
-  // Convert LSP documentation to Monaco markdown
+  // 将 LSP documentation 转换为 Monaco markdown
   let documentation: string | undefined;
   if (typeof item.documentation === 'string') {
     documentation = item.documentation;
@@ -133,7 +133,7 @@ export async function startLsp(language: string, rootUri: string): Promise<numbe
   }
 }
 
-/** Notify LSP that a document is open. Call when opening a file in Monaco. */
+/** 通知 LSP 文档已打开。在 Monaco 中打开文件时调用。 */
 export function didOpen(sessionId: number, uri: string, language: string, text: string): void {
   rpc('lsp_request', {
     sessionId,
@@ -144,7 +144,7 @@ export function didOpen(sessionId: number, uri: string, language: string, text: 
   }).catch(() => {});
 }
 
-/** Notify LSP that a document changed. Call from model.onDidChangeContent. */
+/** 通知 LSP 文档已变更。从 model.onDidChangeContent 调用。 */
 export function didChange(sessionId: number, uri: string, text: string): void {
   rpc('lsp_request', {
     sessionId,
@@ -156,7 +156,7 @@ export function didChange(sessionId: number, uri: string, text: string): void {
   }).catch(() => {});
 }
 
-/** Notify LSP that a document is closed. Call when tab is closed. */
+/** 通知 LSP 文档已关闭。关闭标签页时调用。 */
 export function didClose(sessionId: number, uri: string): void {
   rpc('lsp_request', {
     sessionId,
@@ -165,7 +165,7 @@ export function didClose(sessionId: number, uri: string): void {
   }).catch(() => {});
 }
 
-/** Stop all LSP sessions and dispose providers. Call on workspace switch. */
+/** 停止所有 LSP 会话并释放 provider。切换工作区时调用。 */
 export async function stopAllLsp(): Promise<void> {
   for (const p of completionProviders) p.dispose();
   for (const p of hoverProviders) p.dispose();
@@ -181,7 +181,7 @@ export async function stopAllLsp(): Promise<void> {
   lspSessions.clear();
 }
 
-/** Register Monaco completion provider backed by LSP (synchronous response). */
+/** 注册由 LSP 支持的 Monaco 补全 provider（同步响应）。 */
 export function registerCompletionProvider(
   lang: string,
   sessionId: number,
@@ -199,7 +199,7 @@ export function registerCompletionProvider(
             position: { line: position.lineNumber - 1, character: position.column - 1 },
           },
         });
-        // result is the JSON-RPC `result` field — either CompletionItem[] or CompletionList
+        // result 是 JSON-RPC 的 `result` 字段 — CompletionItem[] 或 CompletionList
         if (!result) return { suggestions: [] };
 
         const items: any[] = Array.isArray(result) ? result : result.items || [];
@@ -218,7 +218,7 @@ export function registerCompletionProvider(
   completionProviders.push(provider);
 }
 
-/** Register Monaco hover provider backed by LSP. */
+/** 注册由 LSP 支持的 Monaco hover provider。 */
 export function registerHoverProvider(lang: string, sessionId: number, monaco: typeof import('monaco-editor')): void {
   const provider = monaco.languages.registerHoverProvider(lang, {
     provideHover: async (model, position) => {
@@ -231,7 +231,7 @@ export function registerHoverProvider(lang: string, sessionId: number, monaco: t
             position: { line: position.lineNumber - 1, character: position.column - 1 },
           },
         });
-        // result is the LSP Hover result: { contents: ..., range: ... }
+        // result 是 LSP Hover 结果：{ contents: ..., range: ... }
         if (result?.contents) {
           let value: string;
           if (typeof result.contents === 'string') {
@@ -263,7 +263,7 @@ export function registerHoverProvider(lang: string, sessionId: number, monaco: t
   hoverProviders.push(provider);
 }
 
-/** Register Monaco definition provider backed by LSP. */
+/** 注册由 LSP 支持的 Monaco 定义跳转 provider。 */
 export function registerDefinitionProvider(
   lang: string,
   sessionId: number,
@@ -280,7 +280,7 @@ export function registerDefinitionProvider(
             position: { line: position.lineNumber - 1, character: position.column - 1 },
           },
         });
-        // LSP definition result: Location | Location[] | null
+        // LSP 定义结果：Location | Location[] | null
         if (!result) return null;
 
         const locations: any[] = Array.isArray(result) ? result : [result];
@@ -310,7 +310,7 @@ export function registerDefinitionProvider(
   definitionProviders.push(provider);
 }
 
-/** Register Monaco references provider backed by LSP. */
+/** 注册由 LSP 支持的 Monaco 引用查找 provider。 */
 export function registerReferencesProvider(
   lang: string,
   sessionId: number,
@@ -356,7 +356,7 @@ export function registerReferencesProvider(
   referenceProviders.push(provider);
 }
 
-/** Listen for LSP diagnostics and apply markers to the editor. */
+/** 监听 LSP 诊断并应用到编辑器标记。 */
 export function listenForDiagnostics(
   _monacoEditor: editor.IStandaloneCodeEditor,
   monaco: typeof import('monaco-editor'),
@@ -383,7 +383,7 @@ export function listenForDiagnostics(
       endColumn: (d.range.end.character || 0) + 1,
     }));
 
-    // Populate diagnostics cache for agent state hooks (fire-and-forget)
+    // 填充诊断缓存供 agent 状态钩子使用（发后即忘）
     diagnosticsCache.set(
       params.uri,
       params.diagnostics.map((d: any) => ({
@@ -412,7 +412,7 @@ export function listenForDiagnostics(
   }).catch(() => {});
 }
 
-/** Dispose all registered providers. */
+/** 释放所有已注册的 provider。 */
 export function disposeProviders(): void {
   for (const p of completionProviders) p.dispose();
   completionProviders = [];

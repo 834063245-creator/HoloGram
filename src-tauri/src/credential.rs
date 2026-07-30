@@ -1,19 +1,19 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Credential storage — per-platform encrypted secret storage.
+// 凭证存储 — 跨平台加密密钥存储。
 //
-// Windows: DPAPI via direct FFI (user-scoped encryption, file-based).
-// macOS:   Keychain via `security` CLI (built-in, zero deps).
-// Linux:   Secret Service via `secret-tool` CLI (gnome-keyring/kwallet).
+// Windows: DPAPI via direct FFI (用户级加密, 基于文件)。
+// macOS:   Keychain via `security` CLI (内置, 零依赖)。
+// Linux:   Secret Service via `secret-tool` CLI (gnome-keyring/kwallet)。
 //
-// All platforms share the same public API:
+// 所有平台共享相同的公共 API：
 //   store_api_key(provider, key) / get_api_key(provider) / delete_api_key / clear_credentials
 //
-// When the OS secret store is unavailable (no keyring daemon, no secret-tool),
-// operations return Err — the frontend falls back to localStorage plaintext.
+// 当 OS 密钥存储不可用时（无 keyring 守护进程、无 secret-tool），
+// 操作返回 Err — 前端回退到 localStorage 明文存储。
 
-#![allow(non_snake_case)] // Win32 FFI naming conventions
+#![allow(non_snake_case)] // Win32 FFI 命名规范
 
 #[cfg(windows)]
 use std::ffi::c_void;
@@ -21,10 +21,10 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 
 // ═══════════════════════════════════════════════════════════════
-// Public API — same on all platforms
+// 公共 API — 所有平台相同
 // ═══════════════════════════════════════════════════════════════
 
-/// Store an API key for a provider.
+/// 为 provider 存储 API key。
 pub fn store_api_key(provider: &str, key: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -40,7 +40,7 @@ pub fn store_api_key(provider: &str, key: &str) -> Result<(), String> {
     }
 }
 
-/// Retrieve an API key for a provider. Returns None if not stored.
+/// 获取 provider 的 API key。未存储时返回 None。
 pub fn get_api_key(provider: &str) -> Result<Option<String>, String> {
     #[cfg(windows)]
     {
@@ -56,7 +56,7 @@ pub fn get_api_key(provider: &str) -> Result<Option<String>, String> {
     }
 }
 
-/// Delete a single provider's API key. Not an error if key doesn't exist.
+/// 删除单个 provider 的 API key。key 不存在不算错误。
 pub fn delete_api_key(provider: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -72,7 +72,7 @@ pub fn delete_api_key(provider: &str) -> Result<(), String> {
     }
 }
 
-/// Delete all stored credentials.
+/// 删除所有已存储的凭证。
 pub fn clear_credentials() -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -81,7 +81,7 @@ pub fn clear_credentials() -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        // Dump keychain, find all Hologram entries, extract provider names.
+        // 导出 keychain，查找所有 Hologram 条目，提取 provider 名称。
         let output = std::process::Command::new("security")
             .args(["dump-keychain"])
             .output()
@@ -89,7 +89,7 @@ pub fn clear_credentials() -> Result<(), String> {
         let dump = String::from_utf8_lossy(&output.stdout);
         let providers = parse_keychain_dump_providers(&dump);
 
-        // If parsing didn't find any providers, fall back to known defaults.
+        // 如果解析未找到任何 provider，回退到已知默认值。
         let targets: Vec<&str> = if providers.is_empty() {
             vec!["deepseek", "anthropic", "openai"]
         } else {
@@ -105,7 +105,7 @@ pub fn clear_credentials() -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        // secret-tool clear with just the service attribute
+        // secret-tool clear 只需 service 属性
         let _ = std::process::Command::new("secret-tool")
             .args(["clear", "service", "hologram"])
             .output();
@@ -114,19 +114,19 @@ pub fn clear_credentials() -> Result<(), String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// macOS Keychain dump parser — extracts provider names from
-// `security dump-keychain` output.
+// macOS Keychain dump 解析器 — 从
+// `security dump-keychain` 输出中提取 provider 名称。
 // ═══════════════════════════════════════════════════════════════
 
-/// Parse `security dump-keychain` output to find all Hologram-stored
-/// provider names (account names). Splits entries by blank lines, finds
-/// those with `"svce"<blob>="hologram"`, and extracts all `"acct"<blob>`
-/// values from within those entry blocks.
+/// 解析 `security dump-keychain` 输出，查找所有 Hologram 存储的
+/// provider 名称（账户名）。按空行分割条目，查找
+/// 包含 `"svce"<blob>="hologram"` 的条目，并提取其中所有 `"acct"<blob>`
+/// 值。
 #[cfg(target_os = "macos")]
 fn parse_keychain_dump_providers(dump: &str) -> Vec<String> {
     let mut providers: Vec<String> = Vec::new();
 
-    // Split into blocks — each keychain entry is separated by blank lines
+    // 按块分割 — 每个 keychain 条目由空行分隔
     for block in dump.split("\n\n") {
         if !block.contains("\"svce\"<blob>=\"hologram\"") {
             continue;
@@ -145,7 +145,7 @@ fn parse_keychain_dump_providers(dump: &str) -> Vec<String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Windows — DPAPI (existing implementation, unchanged)
+// Windows — DPAPI (现有实现，未变更)
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(windows)]
@@ -319,12 +319,12 @@ mod windows_impl {
     }
 }
 
-// Re-export Windows functions at module level
+// 在模块级别重新导出 Windows 函数
 #[cfg(windows)]
 use windows_impl::*;
 
 // ═══════════════════════════════════════════════════════════════
-// macOS — Keychain via `security` CLI (built-in, zero deps)
+// macOS — Keychain via `security` CLI (内置, 零依赖)
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(target_os = "macos")]
@@ -343,7 +343,7 @@ mod macos_impl {
                 provider,
                 "-w",
                 key,
-                "-U", // update if exists
+                "-U", // 如已存在则更新
             ])
             .output()
             .map_err(|e| format!("security CLI not available: {e}"))?;
@@ -362,7 +362,7 @@ mod macos_impl {
             .output()
             .map_err(|e| format!("security CLI not available: {e}"))?;
         if output.status.success() {
-            // Password is printed to stdout, trailing newline
+            // 密码输出到 stdout，带尾部换行
             let key = String::from_utf8_lossy(&output.stdout);
             let key = key.trim_end_matches('\n');
             if key.is_empty() {
@@ -371,7 +371,7 @@ mod macos_impl {
                 Ok(Some(key.to_string()))
             }
         } else {
-            // Exit code 44 = item not found
+            // 退出码 44 = 未找到条目
             Ok(None)
         }
     }
@@ -395,7 +395,7 @@ use macos_impl::*;
 mod linux_impl {
     const SERVICE: &str = "hologram";
 
-    /// Check if secret-tool is available (gnome-keyring/kwallet installed).
+    /// 检查 secret-tool 是否可用（已安装 gnome-keyring/kwallet）。
     fn secret_tool_available() -> bool {
         std::process::Command::new("which")
             .arg("secret-tool")
@@ -461,7 +461,7 @@ mod linux_impl {
                 Ok(Some(key.to_string()))
             }
         } else {
-            Ok(None) // key not found
+            Ok(None) // 未找到 key
         }
     }
 
@@ -481,14 +481,14 @@ mod linux_impl {
 use linux_impl::*;
 
 // ═══════════════════════════════════════════════════════════════
-// Fallback for other platforms
+// 其他平台的回退
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 compile_error!("credential.rs: unsupported platform");
 
 // ═══════════════════════════════════════════════════════════════
-// Tests
+// 测试
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -496,12 +496,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::parse_keychain_dump_providers;
 
-    // ── JSON map format tests (platform-independent) ──
+    // ── JSON map 格式测试（平台无关）──
 
     #[test]
     fn test_json_map_roundtrip() {
-        // Verify the JSON Object map format used by Windows credential storage
-        // survives a full serialize → deserialize cycle without data loss.
+        // 验证 Windows 凭证存储使用的 JSON Object map 格式
+        // 经过完整的序列化 → 反序列化周期后无数据丢失。
         let mut map = serde_json::Map::new();
         map.insert(
             "deepseek".to_string(),
@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_json_map_special_characters() {
-        // Keys may contain special JSON characters — ensure they survive.
+        // Key 可能包含特殊 JSON 字符 — 确保它们能正确处理。
         let mut map = serde_json::Map::new();
         map.insert(
             "openai".to_string(),
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_json_map_overwrite() {
-        // Simulate storing a key twice: latest value must win.
+        // 模拟存储两次 key：最新值必须胜出。
         let mut map = serde_json::Map::new();
         map.insert(
             "deepseek".to_string(),
@@ -577,7 +577,7 @@ mod tests {
         );
     }
 
-    // ── Keychain dump parser tests ──
+    // ── Keychain dump 解析器测试 ──
 
     #[test]
     #[cfg(target_os = "macos")]
@@ -633,7 +633,7 @@ attributes:
     #[test]
     #[cfg(target_os = "macos")]
     fn test_parse_keychain_dump_duplicate_accounts() {
-        // Same account appearing in multiple entries — only returned once.
+        // 同一账户出现在多个条目中 — 只返回一次。
         let dump = "\
 keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
 class: \"genp\"
@@ -656,7 +656,7 @@ attributes:
     #[test]
     #[cfg(target_os = "macos")]
     fn test_parse_keychain_dump_acct_before_svce() {
-        // Order of attributes is not guaranteed — acct may appear before svce.
+        // 属性顺序不保证 — acct 可能出现在 svce 之前。
         let dump = "\
 keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
 class: \"genp\"

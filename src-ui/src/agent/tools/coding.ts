@@ -27,7 +27,7 @@ export interface CodingToolsUI {
 
 export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?: CodingToolsUI): Tool[] {
   return [
-    // ── User Interaction ──
+    // ── 用户交互 ──
     {
       name: () => 'ask_user',
       description: () =>
@@ -95,7 +95,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
       },
     },
 
-    // ── File Operations ──
+    // ── 文件操作 ──
     {
       name: () => 'read_file_content',
       description: () =>
@@ -224,7 +224,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
       execute: (args, onProgress) => exec('read_constraints', args, onProgress),
     },
 
-    // ── Code Search ──
+    // ── 代码搜索 ──
     {
       name: () => 'search_content',
       description: () =>
@@ -289,7 +289,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
       execute: (args, onProgress) => exec('search_content', args, onProgress),
     },
 
-    // ── Glob ──
+    // ── Glob 文件匹配 ──
     {
       name: () => 'glob',
       description: () =>
@@ -346,7 +346,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
       execute: (args, onProgress) => exec('exec_command', args, onProgress),
     },
 
-    // ── Shell: Background job management ──
+    // ── Shell: 后台任务管理 ──
     {
       name: () => 'bash_output',
       description: () =>
@@ -500,7 +500,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         if (files === '.' || files === 'all') {
           return exec('git_stage_all', { path: args.path }, onProgress);
         }
-        // Stage individual files
+        // 暂存单个文件
         const fileList = files.split(',').map((f) => f.trim());
         const results: string[] = [];
         for (const f of fileList) {
@@ -574,7 +574,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
     // 保留代码骨架，待有可用后端时恢复。
     // 启用步骤: 1) 取消注释 2) Rust 端接 Brave/Tavily/SearXNG API
 
-    // ── Web Fetch ──
+    // ── Web 抓取 ──
     {
       name: () => 'web_fetch',
       description: () =>
@@ -593,7 +593,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
       execute: (args, onProgress) => exec('web_fetch', args, onProgress),
     },
 
-    // ── Phase 2a: File Operations (Tauri commands already exist) ──
+    // ── Phase 2a: 文件操作（Tauri 命令已存在） ──
     {
       name: () => 'delete_file',
       description: () =>
@@ -667,7 +667,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
       execute: (args, onProgress) => exec('rename_file_or_dir', { filePath: args.path, newName: args.new_name }, onProgress),
     },
 
-    // ── Phase 2b: Git Operations (Tauri commands already exist) ──
+    // ── Phase 2b: Git 操作（Tauri 命令已存在） ──
     {
       name: () => 'git_init',
       description: () => 'Initialize a new git repository in the given directory.',
@@ -764,7 +764,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
       execute: (args, onProgress) => exec('git_stash_pop', args, onProgress),
     },
 
-    // ── Phase 2c: Agent Worktree Isolation (Tauri commands already exist) ──
+    // ── Phase 2c: Agent Worktree 隔离（Tauri 命令已存在） ──
     {
       name: () => 'agent_isolation_create',
       description: () =>

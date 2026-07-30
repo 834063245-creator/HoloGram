@@ -3,20 +3,20 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Node kind — mirrors Python NodeType enum.
-/// O(1) degree tracking (fixes the O(V×E) bug in v3 community detection).
+/// Node 类型 — 对应 Python 的 NodeType 枚举。
+/// O(1) 度数追踪（修复了 v3 社区检测中的 O(V×E) 性能问题）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeKind {
-    Symbol,    // generic / uncategorized
-    Function,  // function / method / constructor
-    Class,     // class / struct / enum
-    Module,    // namespace / package
-    File,      // source file module
-    Interface, // interface / trait / type alias
-    Variable,  // variable / constant / field
-    Medium,    // storage / IO
-    Temporal,  // async / timer
+    Symbol,    // 通用 / 未分类
+    Function,  // 函数 / 方法 / 构造函数
+    Class,     // 类 / 结构体 / 枚举
+    Module,    // 命名空间 / 包
+    File,      // 源文件模块
+    Interface, // 接口 / trait / 类型别名
+    Variable,  // 变量 / 常量 / 字段
+    Medium,    // 存储 / IO
+    Temporal,  // 异步 / 定时器
 }
 
 impl NodeKind {
@@ -35,29 +35,29 @@ impl NodeKind {
     }
 }
 
-/// A node in the dependency graph.
+/// 依赖图中的节点。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub kind: NodeKind,
-    /// Source file location: "src/main.py" or "src/main.rs:42"
+    /// 源文件位置："src/main.py" 或 "src/main.rs:42"
     pub location: Option<String>,
-    /// Source code text for this node (function body, class definition, etc.)
-    /// Populated during parsing; used by the vector index for semantic search.
+    /// 该节点的源码文本（函数体、类定义等）
+    /// 在解析时填充；供向量索引用于语义搜索。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
-    /// Arbitrary metadata
+    /// 任意元数据
     pub properties: serde_json::Value,
-    /// Pre-computed degree (fixes O(V×E) community label bug)
+    /// 预计算的度数（修复 O(V×E) 社区标签性能问题）
     #[serde(default)]
     pub out_degree: u32,
     #[serde(default)]
     pub in_degree: u32,
-    /// Pre-computed 3D position (optional, for Unity)
+    /// 预计算的 3D 位置（可选，用于 Unity）
     pub position: Option<[f32; 3]>,
-    /// Community ID (assigned by community detection)
+    /// 社区 ID（由社区检测分配）
     pub community_id: Option<usize>,
 }
 
@@ -77,7 +77,7 @@ impl Node {
         }
     }
 
-    /// Stable key for deduplication: "location::name::kind"
+    /// 去重用的稳定键："location::name::kind"
     pub fn loc_key(&self) -> String {
         format!(
             "{}::{}::{}",
@@ -126,9 +126,9 @@ mod tests {
 
     #[test]
     fn test_node_kind_as_str_roundtrip() {
-        // ponytail: verify all 8 NodeKind variants survive string round-trip.
-        // The SQLite layer stores kind as TEXT via as_str(); this test ensures
-        // every variant maps back to the correct enum value.
+        // ponytail: 验证所有 8 种 NodeKind 变体能通过字符串往返。
+        // SQLite 层通过 as_str() 将 kind 存储为 TEXT；此测试确保
+        // 每个变体都能正确映射回对应的枚举值。
         let kinds = vec![
             NodeKind::Symbol,
             NodeKind::Function,

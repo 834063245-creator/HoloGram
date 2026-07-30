@@ -9,28 +9,28 @@ pub(crate) fn is_axum_candidate(file: &str) -> bool {
     lower.ends_with(".rs")
 }
 
-/// Content gate for Axum detection. All .rs files are candidates (Actix and
-/// Rocket share the extension), so the dispatcher confirms Axum-specific
-/// markers before claiming the file.
+/// Axum 检测的内容门控。所有 .rs 文件都是候选（Actix 和
+/// Rocket 共享该扩展名），因此调度器在认领文件之前需确认
+/// Axum 特有的标记。
 pub(crate) fn has_axum_content(source: &str) -> bool {
     source.contains("axum::") || source.contains("Router::new")
 }
 
-/// Axum method routers: `axum::routing::{get, post, ...}` fns and the chained
-/// `MethodRouter` methods (`get(a).post(b)`). `any` is deliberately excluded —
-/// it is not a specific HTTP method.
+/// Axum 方法路由器：`axum::routing::{get, post, ...}` 函数及链式
+/// `MethodRouter` 方法（`get(a).post(b)`）。`any` 被有意排除——
+/// 它不是特定的 HTTP 方法。
 const METHOD_ROUTERS: [&str; 8] = [
     "get", "post", "put", "delete", "patch", "head", "options", "trace",
 ];
 
-/// Detect Axum routes. Axum registers routes via chained builder calls:
+/// 检测 Axum 路由。Axum 通过链式构建器调用注册路由：
 ///   Router::new().route("/path", get(handler).post(other))
-///   .route_with_tsr("/path", get(handler)) — same shape as .route()
-///   .nest("/api", Router::new().route(...)) — single-level prefix propagation:
-///       routes in the INLINE router argument get the nest prefix.
-/// Limits: `.nest("/api", sub_router)` with a bare identifier arg is not
-/// statically resolvable → no emission; `.merge(...)` emits nothing; a nest
-/// inside a nest gives inner routes only the outermost prefix.
+///   .route_with_tsr("/path", get(handler)) —— 与 .route() 形式相同
+///   .nest("/api", Router::new().route(...)) —— 单层前缀传播：
+///       内联路由器参数中的路由获取 nest 前缀。
+/// 限制：`.nest("/api", sub_router)` 使用裸标识符参数时无法
+/// 静态解析 → 不输出；`.merge(...)` 不输出任何内容；
+/// nest 中的 nest 仅将最外层前缀赋予内部路由。
 pub(crate) fn detect_axum_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
     let mut parser = tree_sitter::Parser::new();
@@ -66,7 +66,7 @@ pub(crate) fn detect_axum_routes(file: &str, source: &str) -> Vec<DetectedRoute>
     result
 }
 
-/// The method name of a chained call, e.g. `route` for `<expr>.route(...)`.
+/// 链式调用的方法名，例如 `route` 对应 `<expr>.route(...)`。
 fn call_field_name(node: &tree_sitter::Node, source: &str) -> Option<String> {
     let func = node.child_by_field_name("function")?;
     if func.kind() != "field_expression" {
@@ -76,11 +76,11 @@ fn call_field_name(node: &tree_sitter::Node, source: &str) -> Option<String> {
     Some(field.utf8_text(source.as_bytes()).unwrap_or("").to_string())
 }
 
-/// True when `node` sits inside the ARGUMENTS of a `.nest(...)` call — those
-/// routes are emitted (with prefix) by the nest handler, so the main walk
-/// skips them. Receiver-chain ancestors (`Router::new().route(..).nest(..)`)
-/// don't count: the path from the node up to the nest call must cross the
-/// nest call's `arguments` node.
+/// 当 `node` 位于 `.nest(...)` 调用的参数内时返回 true——这些
+/// 路由由 nest 处理器发出（带前缀），因此主遍历跳过它们。
+/// 接收者链祖先（`Router::new().route(..).nest(..)`）
+/// 不计入：从节点到 nest 调用的路径必须穿过 nest 调用的
+/// `arguments` 节点。
 fn inside_nest_arg(node: &tree_sitter::Node, source: &str) -> bool {
     let mut cur = *node;
     while let Some(parent) = cur.parent() {
@@ -98,8 +98,8 @@ fn inside_nest_arg(node: &tree_sitter::Node, source: &str) -> bool {
     false
 }
 
-/// `.route("/path", <method router>)` → one route per HTTP method found in
-/// the method-router chain.
+/// `.route("/path", <method router>)` → 方法路由器链中找到的每个
+/// HTTP 方法对应一条路由。
 fn handle_route_call(
     node: &tree_sitter::Node,
     prefix: &str,
@@ -119,9 +119,9 @@ fn handle_route_call(
     }
 }
 
-/// `.nest("/prefix", inline_router)` → routes in the inline router argument
-/// get the nest prefix (single level). A bare identifier arg
-/// (`.nest("/api", sub_router)`) is not statically resolvable → no emission.
+/// `.nest("/prefix", inline_router)` → 内联路由器参数中的路由
+/// 获取 nest 前缀（单层）。裸标识符参数
+/// （`.nest("/api", sub_router)`）无法静态解析 → 不输出。
 fn handle_nest_call(
     node: &tree_sitter::Node,
     file: &str,
@@ -152,8 +152,8 @@ fn handle_nest_call(
     }
 }
 
-/// Split `.route("/path", router)` / `.nest("/prefix", router)` args into
-/// (first string literal, first non-punctuation arg after it).
+/// 将 `.route("/path", router)` / `.nest("/prefix", router)` 的参数分割为
+/// （第一个字符串字面量，其后第一个非标点参数）。
 fn split_path_and_router<'a>(
     node: &tree_sitter::Node<'a>,
     source: &str,
@@ -189,8 +189,8 @@ fn split_path_and_router<'a>(
     }
 }
 
-/// Unroll a method-router chain (`get(a).post(b)`, `routing::get(a)`) into
-/// (METHOD, handler) pairs in source order.
+/// 展开方法路由器链（`get(a).post(b)`、`routing::get(a)`）为
+/// 按源码顺序的 (METHOD, handler) 对。
 fn extract_method_routers(
     node: &tree_sitter::Node,
     source: &str,
@@ -205,7 +205,7 @@ fn extract_method_routers(
         None => return,
     };
     match func.kind() {
-        // get(handler) or routing::get(handler)
+        // get(handler) 或 routing::get(handler)
         "identifier" | "scoped_identifier" => {
             let name = if func.kind() == "scoped_identifier" {
                 match func.child_by_field_name("name") {
@@ -219,8 +219,7 @@ fn extract_method_routers(
                 out.push((name.to_uppercase(), first_handler_arg(node, source, line)));
             }
         }
-        // get(a).post(b) — recurse into the receiver first so pairs come out
-        // in source order.
+        // get(a).post(b) —— 先递归接收者，以便按源码顺序输出。
         "field_expression" => {
             if let Some(value) = func.child_by_field_name("value") {
                 extract_method_routers(&value, source, line, out);
@@ -236,8 +235,8 @@ fn extract_method_routers(
     }
 }
 
-/// Handler = first argument text of the method-router call. Empty args or a
-/// closure can't be named statically → `<inline@LINE>` (express.rs convention).
+/// 处理函数 = 方法路由器调用的第一个参数文本。空参数或闭包无法
+/// 静态命名 → `<inline@LINE>`（express.rs 约定）。
 fn first_handler_arg(call: &tree_sitter::Node, source: &str, line: usize) -> String {
     if let Some(args) = call.child_by_field_name("arguments") {
         let mut c = args.walk();

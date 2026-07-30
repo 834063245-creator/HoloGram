@@ -7,7 +7,7 @@ import type { Tool, ToolExecutor } from '../tool';
 import { agentInvoke } from '../tool';
 
 // ═══════════════════════════════════════════════════════════════
-// Sub-Agent Tool — spawn a child Agent for parallel / delegated work
+// Sub-Agent 工具 — 派发子 Agent 执行并行/委派任务
 //
 // 同步语义：agent_spawn 阻塞至子Agent完成，子Agent的最终报告就是工具结果。
 // 并行方式：同一轮发多个 agent_spawn 调用（StreamingToolExecutor 并发执行）。
@@ -87,13 +87,13 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       const mode = subagentType === 'fresh' ? 'fresh' : 'fork';
       const callId = (args._callId as string) || undefined;
       const timeoutMs = timeoutMinutes && timeoutMinutes > 0 ? Math.min(timeoutMinutes, 60) * 60 * 1000 : undefined;
-      // Generate agent ID before pool.spawn so async mode can return it to the LLM.
-      // This ID is used consistently across board, bus, and UI — the pool's internal
-      // spawned.id is NOT exposed to the LLM.
+      // 在 pool.spawn 之前生成 agent ID，以便异步模式能将其返回给 LLM。
+      // 此 ID 在 board、bus 和 UI 中一致使用 — pool 内部的
+      // spawned.id 不会暴露给 LLM。
       const agentId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      // Pool registers the agent (concurrency cap + timeout + stop propagation),
-      // then we BLOCK on its completion — the report becomes this tool's result.
+      // Pool 注册 agent（并发上限 + 超时 + 停止传播），
+      // 然后阻塞等待其完成 — 报告即为此工具的结果。
       const spawned = pool.spawn(
         description,
         (signal) => spawner(description, prompt, onProgress, mode, toolAllowlist ?? null, signal, asyncMode, agentId),
@@ -104,7 +104,7 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
         return `无法启动子Agent：池已满且队列已满（最多 ${pool.runningCount} 个运行中 + 20 个排队）。请稍后重试。`;
       }
 
-      // Register alias so agent_kill can find this agent by the model-visible id
+      // 注册别名，使 agent_kill 能通过模型可见 id 找到此 agent
       pool.registerAlias(agentId, spawned.id);
 
       // 异步模式：立即返回 agentId，子 Agent 在后台运行
@@ -127,9 +127,9 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
   };
 }
 
-/** agent_kill — stop a running sub-agent by ID.
- *  Idempotent: returns current status if already finished or not found.
- *  Only the parent agent can kill its own sub-agents (the pool is per-agent). */
+/** agent_kill — 按 ID 停止运行中的子 Agent。
+ *  幂等：若已结束或未找到，返回当前状态。
+ *  只有父 Agent 能停止自己的子 Agent（pool 是 per-agent 的）。 */
 export function createAgentKillTool(pool: SubAgentPool, isolationExec?: ToolExecutor): Tool {
   return {
     name: () => 'agent_kill',
@@ -162,22 +162,22 @@ export function createAgentKillTool(pool: SubAgentPool, isolationExec?: ToolExec
       const reason = args.reason as string | undefined;
       const worktree = (args.worktree as string) ?? 'keep';
 
-      // Try to stop the running agent
+      // 尝试停止运行中的 agent
       const stopped = pool.stop(agentId);
 
       if (stopped) {
         let msg = `子Agent ${agentId} 已停止`;
         if (reason) msg += ` (原因: ${reason})`;
-        // Worktree cleanup is handled by the abort path in agent.ts, which
-        // calls agent_isolation_discard with the correct isolationId (agent-...).
-        // The worktree param is informational — discard is automatic on stop.
+        // worktree 清理由 agent.ts 中的中断路径处理，
+        // 该路径会用正确的 isolationId (agent-...) 调用 agent_isolation_discard。
+        // worktree 参数仅供 informational — 停止时自动 discard。
         if (worktree === 'discard') {
           msg += '，worktree 将由中断路径自动清理';
         }
         return msg;
       }
 
-      // Not running — check completed history for idempotent response
+      // 未在运行 — 查询已完成历史以返回幂等响应
       const handle = pool.getHandle(agentId);
       if (handle) {
         return `子Agent ${agentId} 当前状态: ${handle.status}（无需停止）`;

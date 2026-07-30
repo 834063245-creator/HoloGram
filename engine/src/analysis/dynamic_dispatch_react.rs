@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! React dynamic dispatch synthesis — JSX, setState, Redux, RTK Query.
-//! These patterns fill edges that static analysis cannot resolve because
-//! React uses runtime reconciliation, not static call expressions.
+//! React 动态分派合成 — JSX、setState、Redux、RTK Query。
+//! 这些模式填充静态分析无法解析的边，因为
+//! React 使用运行时协调，而非静态调用表达式。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -12,7 +12,7 @@ use crate::graph::{Edge, EdgeKind, Graph, NodeKind};
 
 type ParseCache = HashMap<String, (String, Option<tree_sitter::Tree>)>;
 
-/// Synthesize React-specific edges. Returns the number of edges added.
+/// 合成 React 特有的边。返回新增边的数量。
 pub fn synthesize_react_edges(
     graph: &mut Graph,
     project_root: &Path,
@@ -54,11 +54,11 @@ pub fn synthesize_react_edges(
         if source.contains("useGet") && source.contains("Query(") {
             added += synthesize_rtk_query(graph, file, &source);
         }
-        // Channel E: Next.js data-fetch methods
+        // Channel E：Next.js 数据获取方法
         if source.contains("getServerSideProps") || source.contains("getStaticProps") || source.contains("getStaticPaths") {
             added += synthesize_nextjs_data_fetch(graph, file, &source);
         }
-        // Channel F: Zustand store creation — only if create( + zustand|set( on same line
+        // Channel F：Zustand store 创建 — 仅当 create( + zustand|set( 在同一行时
         if source.contains("create(") && (source.to_lowercase().contains("zustand") || source.contains("set(")) {
             added += synthesize_zustand_store(graph, file, &source);
         }
@@ -67,7 +67,7 @@ pub fn synthesize_react_edges(
     added
 }
 
-/// Channel A: JSX `<PascalCase ...>` → component function/class.
+/// Channel A：JSX `<PascalCase ...>` → 组件函数/类。
 fn synthesize_jsx_children(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r"<\s*([A-Z][\w.]*)\b").unwrap();
@@ -102,7 +102,7 @@ fn synthesize_jsx_children(graph: &mut Graph, file: &str, source: &str) -> usize
     added
 }
 
-/// Channel B: setState / useState setter → component render.
+/// Channel B：setState / useState setter → 组件 render。
 fn synthesize_setstate_render(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
 
@@ -129,11 +129,11 @@ fn synthesize_setstate_render(graph: &mut Graph, file: &str, source: &str) -> us
         }
     }
 
-    let _ = source; // used for analysis context
+    let _ = source; // 用于分析上下文
     added
 }
 
-/// Channel C: Redux thunk dispatch.
+/// Channel C：Redux thunk dispatch。
 fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r"dispatch\s*\(\s*(\w+)\s*\(").unwrap();
@@ -167,7 +167,7 @@ fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize 
     added
 }
 
-/// Channel D: RTK Query hook → endpoint builder.
+/// Channel D：RTK Query hook → endpoint builder。
 fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r"\buse(?:Get|Post|Put|Delete|Patch)(\w+)(?:Query|Mutation)\b").unwrap();
@@ -201,8 +201,8 @@ fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
     added
 }
 
-/// Channel E: Next.js data-fetch methods (`getServerSideProps`, `getStaticProps`,
-/// `getStaticPaths`). Creates Calls edges from the page File node to each function.
+/// Channel E：Next.js 数据获取方法（`getServerSideProps`、`getStaticProps`、
+/// `getStaticPaths`）。从页面 File 节点到每个函数创建 Calls 边。
 fn synthesize_nextjs_data_fetch(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r"\b(getServerSideProps|getStaticProps|getStaticPaths)\b").unwrap();
@@ -241,8 +241,8 @@ fn synthesize_nextjs_data_fetch(graph: &mut Graph, file: &str, source: &str) -> 
     added
 }
 
-/// Channel F: Zustand store creation (`create(` calls). Disambiguates from
-/// `createSlice` / `Object.create` by requiring `zustand` or `set(` on the same line.
+/// Channel F：Zustand store 创建（`create(` 调用）。通过要求同一行包含
+/// `zustand` 或 `set(` 来与 `createSlice` / `Object.create` 消歧。
 fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r"\bcreate\s*\(").unwrap();
@@ -261,7 +261,7 @@ fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usiz
         let line_end = source[matched.end()..].find('\n').map_or(source.len(), |i| matched.end() + i);
         let line = &source[line_start..line_end];
 
-        // Disambiguation: must mention zustand or call set( on the same line
+        // 消歧：同一行必须包含 zustand 或调用 set(
         if !line.to_lowercase().contains("zustand") && !line.contains("set(") {
             continue;
         }
@@ -285,9 +285,9 @@ fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usiz
     added
 }
 
-// ── helpers ──
+// ── 辅助函数 ──
 
-/// Find the File node for the given file path.
+/// 查找给定文件路径对应的 File 节点。
 fn find_file_node(graph: &Graph, file: &str) -> Option<String> {
     for node in graph.nodes.values() {
         if node.kind == NodeKind::File {

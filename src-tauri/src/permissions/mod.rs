@@ -28,7 +28,7 @@ use crate::sandbox::{Sandbox, SandboxResult};
 pub trait Tool: Sync {
     fn name(&self) -> &'static str;
     fn get_path(&self) -> Option<PathBuf>;
-    #[allow(dead_code)] // ponytail: used in later phases for mode-based decisions
+    #[allow(dead_code)] // ponytail: 在后续阶段用于基于模式的决策
     fn is_read_only(&self) -> bool;
     #[allow(dead_code)]
     fn is_destructive(&self) -> bool;
@@ -36,8 +36,8 @@ pub trait Tool: Sync {
     fn requires_user_interaction(&self) -> bool {
         false
     }
-    /// Agent attribution for permission-ask display (60s sub-agent timeout etc.).
-    /// Passed explicitly per-call — no shared/thread-local state (parallel-safe).
+    /// Agent 归属信息，用于权限请求弹窗显示（60s 子 Agent 超时等）。
+    /// 每次调用显式传递 — 无共享/线程局部状态（并行安全）。
     fn agent_id(&self) -> Option<&str> {
         None
     }
@@ -81,16 +81,16 @@ pub struct PermissionUpdate {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// PermissionContext — RwLock-wrapped rules + sandbox + audit
+// PermissionContext — RwLock 保护的规则 + sandbox + 审计
 // ═══════════════════════════════════════════════════════════════
 
 pub struct PermissionContext {
-    #[allow(dead_code)] // ponytail: available for external path queries
+    #[allow(dead_code)] // ponytail: 保留供外部路径查询使用
     pub project_root: PathBuf,
     pub sandbox: Sandbox,
     rules: RwLock<rule::PermissionRules>,
     audit_logger: AuditLogger,
-    /// Agent isolation state — keyed by agent_id for multi-agent parallel isolation.
+    /// Agent 隔离状态 — 以 agent_id 为键，用于多 agent 并行隔离。
     isolation: RwLock<HashMap<String, AgentIsolation>>,
 }
 
@@ -98,10 +98,10 @@ impl PermissionContext {
     pub fn new(project_root: &Path) -> Self {
         let mut rules = rule::PermissionRules::new();
 
-        // Load system rules (always active)
+        // 加载系统规则（始终生效）
         rules.add_rules(rule::load_system_rules());
 
-        // Load project rules from .hologram/permissions.json
+        // 从 .hologram/permissions.json 加载项目规则
         rules.add_rules(rule::load_project_rules(project_root));
 
         let sandbox = Sandbox::new(project_root);
@@ -117,7 +117,7 @@ impl PermissionContext {
         }
     }
 
-    /// Add a session rule (from "always allow" dialog choice).
+    /// 添加会话规则（来自"始终允许"对话框选择）。
     pub fn add_session_rule(&self, rule_str: &str, behavior: &str) {
         let behavior = match behavior {
             "allow" => rule::Behavior::Allow,
@@ -135,7 +135,7 @@ impl PermissionContext {
         }
     }
 
-    /// Resolve a read path through the sandbox (canonicalization + boundary check).
+    /// 通过 sandbox 解析读路径（规范化 + 边界检查）。
     pub fn resolve_read(&self, path: &str) -> Result<PathBuf, String> {
         match self.sandbox.resolve_read(Path::new(path)) {
             SandboxResult::Allowed(p) => Ok(p),
@@ -143,7 +143,7 @@ impl PermissionContext {
         }
     }
 
-    /// Resolve a write path through the sandbox (canonicalization + boundary check).
+    /// 通过 sandbox 解析写路径（规范化 + 边界检查）。
     pub fn resolve_write(&self, path: &str) -> Result<PathBuf, String> {
         match self.sandbox.resolve_write(Path::new(path)) {
             SandboxResult::Allowed(p) => Ok(p),
@@ -151,31 +151,31 @@ impl PermissionContext {
         }
     }
 
-    /// Get a read lock on the rules for tool self-checks.
+    /// 获取规则的读锁以供工具自检。
     pub fn read_rules(&self) -> std::sync::RwLockReadGuard<'_, rule::PermissionRules> {
         self.rules.read().unwrap()
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Agent isolation — worktree lifecycle + path mapping (spec §5)
+    // Agent 隔离 — worktree 生命周期 + 路径映射 (spec §5)
     // ═══════════════════════════════════════════════════════════════
 
-    /// Set the active agent isolation (e.g. when an agent starts in worktree mode).
+    /// 设置活跃 Agent 隔离（例如 Agent 在 worktree 模式下启动时）。
     pub fn set_isolation(&self, agent_id: &str, isolation: AgentIsolation) {
         if let Ok(mut iso) = self.isolation.write() {
             iso.insert(agent_id.to_string(), isolation);
         }
     }
 
-    /// Clear isolation for a specific agent (agent finished, worktree removed).
+    /// 清除特定 Agent 的隔离（Agent 结束，worktree 已移除）。
     pub fn clear_isolation(&self, agent_id: &str) {
         if let Ok(mut iso) = self.isolation.write() {
             iso.remove(agent_id);
         }
     }
 
-    /// Get the isolation kind for a specific agent.
-    #[allow(dead_code)] // ponytail: public API for future mode checks
+    /// 获取特定 Agent 的隔离类型。
+    #[allow(dead_code)] // ponytail: 公共 API 供未来模式检查使用
     pub fn isolation_kind(&self, agent_id: Option<&str>) -> crate::agent_isolation::IsolationKind {
         agent_id
             .and_then(|id| {
@@ -187,7 +187,7 @@ impl PermissionContext {
             .unwrap_or(crate::agent_isolation::IsolationKind::None)
     }
 
-    /// Get a clone of the isolation state for a specific agent.
+    /// 获取特定 Agent 隔离状态的克隆。
     pub fn get_isolation(&self, agent_id: Option<&str>) -> Option<AgentIsolation> {
         agent_id
             .and_then(|id| {
@@ -198,7 +198,7 @@ impl PermissionContext {
             })
     }
 
-    /// Get all active isolation entries (for status listing).
+    /// 获取所有活跃的隔离条目（用于状态列表）。
     pub fn list_isolations(&self) -> Vec<(String, AgentIsolation)> {
         self.isolation
             .read()
@@ -206,8 +206,8 @@ impl PermissionContext {
             .unwrap_or_default()
     }
 
-    /// Reverse-map a path for permission checking: worktree physical path → main repo logical path.
-    /// Uses the specified agent's isolation. Returns path unchanged if no isolation for that agent.
+    /// 反向映射路径以进行权限检查: worktree 物理路径 → 主仓库逻辑路径。
+    /// 使用指定 Agent 的隔离。如果该 Agent 无隔离则返回原路径。
     pub fn reverse_map_path(&self, path: &Path, agent_id: Option<&str>) -> PathBuf {
         if let Some(id) = agent_id {
             if let Ok(iso) = self.isolation.read() {
@@ -219,8 +219,8 @@ impl PermissionContext {
         path.to_path_buf()
     }
 
-    /// Forward-map a path for execution: main repo logical path → worktree physical path.
-    /// Uses the specified agent's isolation. Returns path unchanged if no isolation for that agent.
+    /// 正向映射路径以执行: 主仓库逻辑路径 → worktree 物理路径。
+    /// 使用指定 Agent 的隔离。如果该 Agent 无隔离则返回原路径。
     pub fn forward_map_path(&self, path: &Path, agent_id: Option<&str>) -> PathBuf {
         if let Some(id) = agent_id {
             if let Ok(iso) = self.isolation.read() {
@@ -232,7 +232,7 @@ impl PermissionContext {
         path.to_path_buf()
     }
 
-    /// Log an audit entry for a deny decision.
+    /// 记录拒绝决策的审计日志。
     pub fn audit_deny(&self, tool_name: &str, target: &str, reason: &str) {
         self.audit_logger.log(&crate::audit::AuditEntry {
             timestamp: crate::audit::now_iso(),
@@ -243,7 +243,7 @@ impl PermissionContext {
         });
     }
 
-    /// Log an audit entry for an allow decision.
+    /// 记录允许决策的审计日志。
     pub fn audit_allow(&self, tool_name: &str, target: &str) {
         self.audit_logger.log(&crate::audit::AuditEntry {
             timestamp: crate::audit::now_iso(),
@@ -259,16 +259,16 @@ impl PermissionContext {
 // has_permission_to_use_tool — 中央入口 (spec §4.6)
 // ═══════════════════════════════════════════════════════════════
 
-/// Central permission check — orchestrates tool-level rules → tool self-check → safety → mode.
-/// Lock scoping: tool-level checks release the rules lock before calling tool.check_permissions(),
-/// which internally acquires its own read lock. This avoids recursive-read deadlock on non-Windows.
+/// 中央权限检查 — 编排工具级规则 → 工具自检 → 安全检查 → 模式。
+/// 锁作用域: 工具级检查在调用 tool.check_permissions() 前释放规则锁，
+/// 后者内部会获取自己的读锁。这避免了非 Windows 平台上的递归读锁死锁。
 pub fn has_permission_to_use_tool(
     tool: &dyn Tool,
     ctx: &PermissionContext,
 ) -> PermissionDecision {
     let tool_name = tool.name();
 
-    // ① Tool-level Deny — highest priority, immediate reject
+    // ① 工具级 Deny — 最高优先级，立即拒绝
     {
         let rules = ctx.rules.read().unwrap();
         if let Some(rule) = rules.find_deny(tool_name, None) {
@@ -277,13 +277,13 @@ pub fn has_permission_to_use_tool(
                 .get_path()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
-            drop(rules); // release lock before audit (audit doesn't need rules)
+            drop(rules); // 在审计前释放锁（审计不需要规则）
             ctx.audit_deny(tool_name, &target, &reason);
             return PermissionDecision::Deny { reason };
         }
-    } // rules lock dropped
+    } // 规则锁已释放
 
-    // ② Tool-level Ask — force dialog
+    // ② 工具级 Ask — 强制弹窗
     {
         let rules = ctx.rules.read().unwrap();
         if let Some(rule) = rules.find_ask(tool_name, None) {
@@ -301,9 +301,9 @@ pub fn has_permission_to_use_tool(
                 danger: rule.danger.clone(),
             };
         }
-    } // rules lock dropped
+    } // 规则锁已释放
 
-    // ③ Tool self-check — acquires its own rules lock internally
+    // ③ 工具自检 — 内部获取自己的规则锁
     let tool_result = tool.check_permissions(ctx);
     match tool_result {
         PermissionResult::Deny { reason } => {
@@ -327,22 +327,22 @@ pub fn has_permission_to_use_tool(
             };
         }
         PermissionResult::Allow => {
-            // Tool self-determined this is safe (e.g. project-internal read
-            // after all deny/safety/ask checks passed). Allow immediately
-            // — don't fall through to default Ask.
+            // 工具自检确定此操作安全（例如项目内只读，
+            // 且所有 deny/safety/ask 检查已通过）。立即允许
+            // — 不落入默认 Ask。
             let target = tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             ctx.audit_allow(tool_name, &target);
             return PermissionDecision::Allow;
         }
         PermissionResult::Passthrough => {
-            // Continue to mode/allow checks
+            // 继续到模式/允许检查
         }
     }
 
-    // ④ Mode decision (simplified: default mode — reads auto-allowed in project)
-    // Ponytail: full mode switching (bypass/acceptEdits) is Phase 3+
+    // ④ 模式决策（简化: 默认模式 — 项目内读取自动允许）
+    // Ponytail: 完整模式切换 (bypass/acceptEdits) 是 Phase 3+
 
-    // ⑤ Tool-level Allow — bare "Read" / "Bash" / etc without content
+    // ⑤ 工具级 Allow — 不带内容的裸 "Read" / "Bash" 等
     {
         let rules = ctx.rules.read().unwrap();
         if rules.find_allow(tool_name, None).is_some() {
@@ -352,15 +352,15 @@ pub fn has_permission_to_use_tool(
         }
     }
 
-    // ⑥ No rule matched, tool has no opinion (Passthrough) → Allow
-    // ponytail: Passthrough means "I checked, it's fine." Don't ask.
+    // ⑥ 无规则匹配，工具无意见 (Passthrough) → Allow
+    // ponytail: Passthrough 意为"我检查过了，没问题"。不弹窗。
     let target = tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
     ctx.audit_allow(tool_name, &target);
     PermissionDecision::Allow
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Ask request management — tokio oneshot channels for frontend dialog
+// Ask 请求管理 — 用于前端对话框的 tokio oneshot 通道
 // ═══════════════════════════════════════════════════════════════
 
 static ASK_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -373,8 +373,8 @@ fn gen_ask_id() -> String {
 static PENDING_ASKS: LazyLock<RwLock<std::collections::HashMap<String, oneshot::Sender<bool>>>> =
     LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
 
-/// Register a pending Ask request and return a receiver.
-/// The Tauri command awaits this receiver; permission_ask_response sends the answer.
+/// 注册一个待处理的 Ask 请求并返回 receiver。
+/// Tauri command 等待此 receiver；permission_ask_response 发送答案。
 pub fn register_ask(request_id: String) -> oneshot::Receiver<bool> {
     let (tx, rx) = oneshot::channel();
     if let Ok(mut pending) = PENDING_ASKS.write() {
@@ -383,7 +383,7 @@ pub fn register_ask(request_id: String) -> oneshot::Receiver<bool> {
     rx
 }
 
-/// Resolve a pending Ask request — called by permission_ask_response Tauri command.
+/// 解决一个待处理的 Ask 请求 — 由 permission_ask_response Tauri command 调用。
 pub fn resolve_ask(request_id: &str, allow: bool) {
     if let Ok(mut pending) = PENDING_ASKS.write() {
         if let Some(tx) = pending.remove(request_id) {
@@ -547,19 +547,19 @@ mod smoke {
         );
     }
 
-    /// s9: session rule added with correct behavior via add_session_rule
+    /// s9: 通过 add_session_rule 添加的会话规则使用正确的行为
     #[test]
     fn s9_session_rule_uses_given_behavior() {
         let root = tmp_project();
         let ctx = PermissionContext::new(&root);
-        // Simulate what happens when user clicks "本次会话允许"
+        // 模拟用户点击"本次会话允许"时的行为
         ctx.add_session_rule("Bash(npm test:*)", "allow");
         let rules = ctx.read_rules();
         assert!(
             rules.find_allow("Bash", Some("npm test --filter=foo")).is_some(),
             "session allow rule must be findable by content match"
         );
-        // Verify it's not in the deny list
+        // 验证它不在 deny 列表中
         assert!(
             rules.find_deny("Bash", Some("npm test --filter=foo")).is_none(),
             "session rule with behavior allow must not appear in deny list"
@@ -738,14 +738,14 @@ mod regression {
         }
     }
 
-    /// Gap 3 — sync denial error must include suggestion rule
-    /// When Ask would fire but sync mode can't show dialog, the error message
-    /// must tell the user exactly what rule to add to permissions.json.
+    /// Gap 3 — 同步拒绝错误必须包含建议规则
+    /// 当 Ask 会触发但同步模式无法显示对话框时，错误消息
+    /// 必须明确告诉用户应在 permissions.json 中添加什么规则。
     #[test]
     fn r9_sync_deny_error_includes_suggestion() {
         let root = tmp_project();
         let ctx = PermissionContext::new(&root);
-        // BashTool with a dangerous (but not critical) command triggers Ask
+        // BashTool 使用危险（但非 Critical）命令触发 Ask
         let tool = crate::tools::BashTool {
             command: "sudo make install".into(),
         };
@@ -771,7 +771,7 @@ mod regression {
             subcommand: "commit".into(),
         };
 
-        // First call: should Ask (system Git(commit) rule)
+        // 第一次调用: 应 Ask（系统 Git(commit) 规则）
         let suggestions = match has_permission_to_use_tool(&tool, &ctx) {
             PermissionDecision::Ask { suggestions, .. } => {
                 assert!(!suggestions.is_empty(), "must include suggestion rule");
@@ -780,14 +780,14 @@ mod regression {
             other => panic!("expected Ask for Git(commit), got: {:?}", other),
         };
 
-        // Simulate user clicking "本次会话允许"
+        // 模拟用户点击"本次会话允许"
         let rule_str = &suggestions[0].rule;
         let behavior = &suggestions[0].behavior;
         ctx.add_session_rule(rule_str, behavior);
 
-        // Second call: should Allow (session rule overrides system Ask)
+        // 第二次调用: 应 Allow（会话规则覆盖系统 Ask）
         match has_permission_to_use_tool(&tool, &ctx) {
-            PermissionDecision::Allow => {} // expected
+            PermissionDecision::Allow => {} // 预期结果
             other => panic!(
                 "session Allow rule must override system Ask — expected Allow, got: {:?}",
                 other

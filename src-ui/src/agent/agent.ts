@@ -7,7 +7,7 @@ import { rpc } from '../bridge';
 import type { Message, Provider, ToolCall, Usage } from '../provider/types';
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import type { AgentRecord, AgentStore } from './agent-store';
-// Shared types — also used internally by this file
+// 共享类型 — 本文件内部也使用
 import {
   type AgentEvent,
   type AgentUINotifier,
@@ -34,9 +34,9 @@ import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
 
-/** Wrap a Tool with a custom execute function, returning a NEW Tool object.
- *  The original Tool is never mutated — critical because the parent Agent
- *  shares Tool references with its children. */
+/** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
+ *  原始 Tool 永远不会被修改 — 这点至关重要，因为父 Agent
+ *  与其子 Agent 共享 Tool 引用。 */
 function wrapTool(original: Tool, execute: Tool['execute']): Tool {
   return {
     name: () => original.name(),
@@ -57,36 +57,36 @@ import { removeSubAgentActivity, wrapSubAgentSink } from './subagent-activity';
 
 export { type AgentEvent, computeCost, EventKind, type EventSink, type Pricing, type ToolEvent };
 
-// ---- Agent Options ----
+// ---- Agent 选项 ----
 
 export interface AgentOptions {
   temperature?: number;
   pricing?: Pricing;
-  /** Context window size in tokens. 0 = no compaction. */
+  /** 上下文窗口大小（token 数）。0 = 不压缩。 */
   contextWindow?: number;
-  /** Fraction of contextWindow that triggers compaction (default: 0.7) */
+  /** 触发压缩的 contextWindow 比例（默认: 0.7） */
   compactRatio?: number;
-  /** Minimum recent messages kept verbatim */
+  /** 原文保留的最少近期消息数 */
   recentKeep?: number;
-  /** Max output tokens per turn (0 = provider default 32000) */
+  /** 每轮最大输出 token 数（0 = provider 默认 32000） */
   maxTokens?: number;
-  /** Session ID for persistence. Generated if not provided. */
+  /** 用于持久化的会话 ID。未提供则自动生成。 */
   sessionId?: string;
-  /** Called after each session save (fire-and-forget, never blocks the loop). */
+  /** 每次会话保存后调用（fire-and-forget，不阻塞循环）。 */
   onSessionPersisted?: (sessionId: string, messages: Message[]) => void;
-  /** Sub-agent nesting depth (0 = root, 1 = first fork). Auto-incremented. */
+  /** 子 Agent 嵌套深度（0 = 根，1 = 第一次 fork）。自动递增。 */
   subagentDepth?: number;
-  /** Unique agent identifier. Auto-generated if not provided. */
+  /** 唯一 Agent 标识符。未提供则自动生成。 */
   agentId?: string;
-  /** ID of the agent that spawned this one. null for main agent. */
+  /** 派生此 Agent 的父 Agent ID。主 Agent 为 null。 */
   parentId?: string | null;
-  /** Custom event sink. When set, Agent emits here instead of a no-op default.
-   *  Used by sub-agents to capture output into SubAgentPart. */
+  /** 自定义事件 sink。设置后，Agent 事件发送到此处而非默认空操作。
+   *  子 Agent 用它将输出捕获到 SubAgentPart。 */
   eventSink?: (ev: AgentEvent) => void;
-  /** Execution state instance. Falls back to global execState if not provided. */
+  /** 执行状态实例。未提供则回退到全局 execState。 */
   execState?: ExecStateInstance;
-  /** UI notification port — progress / tool-done / sub-agent lifecycle.
-   *  Injected by the workspace; headless agents get none. */
+  /** UI 通知端口 — 进度 / 工具完成 / 子 Agent 生命周期。
+   *  由 workspace 注入；headless Agent 无。 */
   ui?: AgentUINotifier;
   /** 通信总线（可选 — 无则为 headless 无通信能力） */
   messageBus?: MessageBus;
@@ -94,7 +94,7 @@ export interface AgentOptions {
   taskBoard?: TaskBoard;
   /** DiscoveryBoard — 共享发现区，Agent 间交换探索结果 */
   discoveryBoard?: DiscoveryBoard;
-  // gate removed — permissions handled by Rust backend has_permission_to_use_tool()
+  // gate 已移除 — 权限由 Rust 后端 has_permission_to_use_tool() 处理
 }
 
 const STORM_BREAK_THRESHOLD = 3;
@@ -110,111 +110,110 @@ export class Agent {
   private maxTokens: number;
   private _agentOpts: AgentOptions;
 
-  // Context management
+  // 上下文管理
   private contextWindow: number;
   private compactRatio: number;
   private recentKeep: number;
   private compactStuck = false;
 
-  // Sub-agent depth tracking: 0 = root, 1 = first fork, 2 = grandchild, etc.
+  // 子 Agent 深度追踪: 0 = 根，1 = 第一次 fork，2 = 孙 Agent，以此类推
   private _subagentDepth = 0;
   private static readonly MAX_SUBAGENT_DEPTH = 3;
 
-  // Agent identity — persisted for lifecycle tracking, session recovery, lineage
+  // Agent 身份 — 持久化用于生命周期追踪、会话恢复、谱系
   readonly id: string;
   readonly parentId: string | null;
   private agentStore: AgentStore | null = null;
   private goalManager: GoalManager | null = null;
 
-  // Isolation ID for sub-agents — injected into tool args so Rust backend
-  // can resolve worktree paths via forward_map_path.
+  // 子 Agent 的隔离 ID — 注入到工具参数中，使 Rust 后端
+  // 能通过 forward_map_path 解析 worktree 路径。
   _isolationId?: string;
 
-  // Goal loop safety: hard ceiling before forced termination (shouldn't trigger normally)
+  // Goal 循环安全: 强制终止前的硬上限（正常不应触发）
   private static readonly MAX_GOAL_ITERATIONS = 100;
-  // Stall detection: consecutive rounds with no tool calls → agent stuck in analysis paralysis
+  // 停滞检测: 连续无工具调用的轮次 → Agent 陷入分析瘫痪
   private static readonly MAX_STALL_ROUNDS = 3;
 
-  // PreToolUse hooks — enrich tool results with graph context
+  // PreToolUse hooks — 用图上下文增强工具结果
   private hooks: HookRegistry | null = null;
 
-  // Preflight hooks — warn before destructive writes (edit_file / write_file)
+  // Preflight hooks — 破坏性写入前告警（edit_file / write_file）
   private preflightHooks: PreflightHookRegistry | null = null;
 
-  // Pre-run hook — called before each user message is pushed to session.
-  // Returns optional context text to inject as <system-reminder> before the message.
-  // Set by workspace for per-turn AuraSDK semantic recall.
+  // Pre-run hook — 在每条用户消息推入会话前调用。
+  // 返回可选的上下文文本，作为 <system-reminder> 注入到消息前。
+  // 由 workspace 设置，用于每轮 AuraSDK 语义记忆检索。
   private _preRunHook: ((input: string) => Promise<string | null>) | null = null;
 
-  // Storm breaker — detect repetitive failing tool calls
+  // Storm breaker — 检测重复失败的工具调用
   private stormSig = '';
   private stormCount = 0;
 
-  // Cache accumulation
+  // 缓存累积
   private cacheHitTotal = 0;
   private cacheMissTotal = 0;
 
-  // Event sink — parent agents use the global bus; sub-agents get a custom one
+  // 事件 sink — 父 Agent 使用全局总线；子 Agent 使用自定义 sink
   private _sink: (ev: AgentEvent) => void;
-  // UI notification port (workspace-injected; no-op when headless)
+  // UI 通知端口（workspace 注入；headless 时为空操作）
   private _ui: AgentUINotifier;
 
-  /** UI session ID — set by ChatCore before running so sub-agent notifications
-   *  bump the correct session store (not just the active one). */
+  /** UI 会话 ID — 由 ChatCore 在运行前设置，使子 Agent 通知
+   *  能更新正确的会话存储（而非仅活跃的）。 */
   private _uiSessionId: number = 0;
 
-  // Last usage for status display
+  // 最近一次用量（用于状态显示）
   private lastUsage: Usage | undefined;
 
-  // Execution state — per-Agent instance (phase 1 of multi-window)
+  // 执行状态 — 每个 Agent 实例独立（多窗口阶段 1）
   private _execState: ExecStateInstance;
 
-  // Pending user message inserts (queued during tool execution, applied at safe boundary)
+  // 待插入的用户消息（工具执行期间排队，在安全边界应用）
   private _pendingInserts: string[] = [];
 
-  // Pending memory updates (queued from memory:saved event, applied at safe boundary)
+  // 待处理的记忆更新（从 memory:saved 事件排队，在安全边界应用）
   private _pendingMemoryUpdates: string[] = [];
 
-  // Track inbox messages already injected this runLoop cycle — prevents infinite
-  // wakeup loop when LLM doesn't ack/reply (messages stay in inbox, finally
-  // block would re-trigger _onMessageDelivered endlessly).
+  // 追踪本轮 runLoop 已注入的 inbox 消息 — 防止 LLM 不 ack/reply 时
+  // 无限唤醒循环（消息留在 inbox，finally 块会不断重新触发 _onMessageDelivered）。
   private _injectedMsgIds = new Set<string>();
 
-  // Signal of the currently active runLoop — sub-agents spawned from tool calls
-  // merge it into their own abort signal so user-stop cascades to children.
+  // 当前活跃 runLoop 的 signal — 从工具调用派生的子 Agent
+  // 将其合并到自己的 abort signal 中，使用户停止能级联到子 Agent。
   private _currentRunSignal: AbortSignal | null = null;
 
-  // Whether runLoop is currently active — used by bus wakeup to avoid re-entry
+  // runLoop 是否正在运行 — 用于 bus 唤醒时避免重入
   private _isRunning = false;
 
-  /** Whether the runLoop is currently active */
+  /** runLoop 是否正在运行 */
   get isRunning(): boolean {
     return this._isRunning;
   }
 
-  // TaskBoard — shared state for async sub-agent tracking
+  // TaskBoard — 异步子 Agent 追踪的共享状态区
   private _taskBoard: TaskBoard | null = null;
 
-  // DiscoveryBoard — shared discovery area for inter-agent knowledge sharing
+  // DiscoveryBoard — Agent 间知识共享的共享发现区
   private _discoveryBoard: DiscoveryBoard | null = null;
 
-  // Track discovery IDs already injected — prevents duplicate injection within the same runLoop
+  // 追踪已注入的 discovery ID — 防止同一 runLoop 内重复注入
   private _injectedDiscoveryIds = new Set<string>();
 
-  // Transient reminders — per-turn <system-reminder> injections that are sent
-  // to the LLM but NOT persisted in this.session. Cleared at the top of each
-  // runLoop step. Keeps session history clean for stable cache prefixes.
+  // 临时提醒 — 每轮 <system-reminder> 注入，发送给 LLM
+  // 但不持久化到 this.session。每个 runLoop 步骤开始时清除。
+  // 保持会话历史干净以获得稳定的缓存前缀。
   private _transientReminders: string[] = [];
 
-  // File ownership — runtime write-protection for parallel sub-agents.
-  // Only fresh sub-agents (no worktree isolation) are subject to claims.
+  // 文件所有权 — 并行子 Agent 的运行时写保护。
+  // 仅 fresh 子 Agent（无 worktree 隔离）受声明约束。
   private _fileOwnership: FileOwnership | null = null;
 
-  // Session persistence
+  // 会话持久化
   sessionId: string;
   private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
 
-  // Compaction cost model tracker
+  // 压缩成本模型追踪器
   private compactionTracker = new CompactionTracker();
   private _compactionConfigPath: string | null = null;
   private _compactionTrackerPath: string | null = null;
@@ -228,10 +227,10 @@ export class Agent {
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
     this.maxTokens = opts.maxTokens ?? 0;
-    this.contextWindow = opts.contextWindow || 1000000; // 1M tokens default; || catches zero (settings default) so compaction is never silently disabled
-    // ponytail: 0.55 puts threshold at 550K tokens (1M window).
-    // 0.7 was too high — largest real sessions (450-630K) never triggered.
-    // Tune based on compaction-model.ts data when enough samples accumulate.
+    this.contextWindow = opts.contextWindow || 1000000; // 1M tokens 默认值; || 捕获零值（设置默认值），使压缩永不被静默禁用
+    // ponytail: 0.55 将阈值设在 550K token（1M 窗口）。
+    // 0.7 太高 — 最大的真实会话（450-630K）从未触发。
+    // 积累足够样本后根据 compaction-model.ts 数据调优。
     this.compactRatio = opts.compactRatio ?? 0.55;
     this.recentKeep = opts.recentKeep ?? 4;
     this._subagentDepth = opts.subagentDepth ?? 0;
@@ -251,8 +250,8 @@ export class Agent {
     }
   }
 
-  /** Called by the workspace when a memory is saved mid-session — queued and
-   *  injected as a system-reminder at the next safe boundary. */
+  /** 由 workspace 在会话中途保存记忆时调用 — 排队并在
+   *  下一个安全边界作为 system-reminder 注入。 */
   notifyMemorySaved(text: string): void {
     this._pendingMemoryUpdates.push(text);
   }
@@ -288,14 +287,14 @@ export class Agent {
     this._uiSessionId = sid;
   }
 
-  /** Set a hook that fires before each user message enters the session.
-   *  Returns optional context injected as <system-reminder> before the message.
-   *  Used for per-turn AuraSDK semantic memory recall. */
+  /** 设置在每条用户消息进入会话前触发的 hook。
+   *  返回可选的上下文，作为 <system-reminder> 注入到消息前。
+   *  用于每轮 AuraSDK 语义记忆检索。 */
   setPreRunHook(hook: (input: string) => Promise<string | null>): void {
     this._preRunHook = hook;
   }
 
-  // ---- Public API ----
+  // ---- 公共 API ----
 
   getSession(): Message[] {
     return this.session;
@@ -315,12 +314,12 @@ export class Agent {
     return { hit: this.cacheHitTotal, miss: this.cacheMissTotal };
   }
 
-  /** Get compaction cost model stats for the current session. */
+  /** 获取当前会话的压缩成本模型统计。 */
   getCompactionStats(): CompactionSessionStats {
     return this.compactionTracker.getStats(this.pricing);
   }
 
-  /** Public accessors for the compaction stats tool. */
+  /** 压缩统计工具的公共访问器。 */
   getCompactionTracker(): CompactionTracker {
     return this.compactionTracker;
   }
@@ -337,17 +336,17 @@ export class Agent {
     return this.contextWindow;
   }
 
-  /** Set the path for persisting auto-tuned compaction config. */
+  /** 设置自动调优压缩配置的持久化路径。 */
   setCompactionConfigPath(projectPath: string): void {
     const base = projectPath.replace(/\\/g, '/');
     this._compactionConfigPath = base + '/.hologram/compaction-config.json';
-    // E5: tracker state (events + filesRead) persisted separately so
-    // compaction tuning doesn't restart from zero after restart.
+    // E5: tracker 状态（事件 + filesRead）单独持久化，使
+    // 压缩调优在重启后不从零开始。
     this._compactionTrackerPath = base + '/.hologram/compaction-tracker.json';
   }
 
-  /** E5: Load persisted tracker state (events + filesRead) from disk.
-   *  Called on startup so compaction tuning has historical data. */
+  /** E5: 从磁盘加载持久化的 tracker 状态（事件 + filesRead）。
+   *  启动时调用，使压缩调优有历史数据。 */
   async loadCompactionTracker(): Promise<void> {
     if (!this._compactionTrackerPath) return;
     try {
@@ -362,11 +361,11 @@ export class Agent {
         });
       }
     } catch {
-      /* file doesn't exist yet — start fresh */
+      /* 文件尚不存在 — 从零开始 */
     }
   }
 
-  /** E5: Save tracker state to disk. Best-effort, never throws. */
+  /** E5: 将 tracker 状态保存到磁盘。Best-effort，不抛异常。 */
   private async saveCompactionTracker(): Promise<void> {
     if (!this._compactionTrackerPath) return;
     try {
@@ -375,16 +374,16 @@ export class Agent {
         content: this.compactionTracker.serializeState(),
       });
     } catch {
-      /* best-effort */
+      /* 尽力而为 */
     }
   }
 
-  /** Try to load persisted compaction config. Returns null if none saved. */
+  /** 尝试加载持久化的压缩配置。无保存则返回 null。 */
   async loadCompactionConfig(): Promise<CompactionConfig | null> {
     if (!this._compactionConfigPath) return null;
     try {
       const raw = await rpc<string>('read_file_content', { filePath: this._compactionConfigPath });
-      // Strip cat -n line numbers
+      // 去除 cat -n 行号
       const stripped = raw.replace(/^\s*\d+\t/gm, '');
       return JSON.parse(stripped);
     } catch {
@@ -392,16 +391,16 @@ export class Agent {
     }
   }
 
-  /** Apply auto-tuned compaction params. Returns the config if applied. */
+  /** 应用自动调优的压缩参数。返回应用的配置。 */
   async applyAutoTuneConfig(): Promise<CompactionConfig | null> {
-    // E5: load tracker state first so tuning has historical data
+    // E5: 先加载 tracker 状态，使调优有历史数据
     await this.loadCompactionTracker();
     const config = await this.loadCompactionConfig();
     if (!config) return null;
-    // NOTE: do NOT touch contextWindow here — it is derived from the active
-    // model at agent creation. compactRatio/recentKeep are dimensionless and
-    // apply to whatever window the model has. (The old `contextWindow = 1M`
-    // hardcode silently overrode the per-model cap on every new agent.)
+    // 注意: 不要在这里修改 contextWindow — 它在 Agent 创建时
+    // 从活跃模型派生。compactRatio/recentKeep 是无量纲的，
+    // 适用于模型拥有的任何窗口。（旧的 `contextWindow = 1M` 硬编码
+    // 在每个新 Agent 上静默覆盖了按模型的限制。）
     this.compactRatio = config.compactRatio;
     this.recentKeep = config.recentKeep;
     log.info('agent', 'auto-tune applied', {
@@ -413,8 +412,8 @@ export class Agent {
     return config;
   }
 
-  /** Check if we have enough data, and if so, compute & persist optimal params.
-   *  Called after each compaction. Never throws — best-effort background tuning. */
+  /** 检查是否有足够数据，若有则计算并持久化最优参数。
+   *  每次压缩后调用。不抛异常 — best-effort 后台调优。 */
   private async tryAutoTune(): Promise<void> {
     const result = maybeTune(this.compactionTracker, this.compactRatio, this.recentKeep, this.pricing);
     if (!result?.changed) return;
@@ -433,7 +432,7 @@ export class Agent {
       text: `[自动调优] ${config.reasoning}。参数已保存，下次会话生效。`,
     });
 
-    // Persist for next session
+    // 持久化供下次会话使用
     if (this._compactionConfigPath) {
       try {
         await rpc('write_file_content', {
@@ -441,13 +440,13 @@ export class Agent {
           content: JSON.stringify(config, null, 2),
         });
       } catch {
-        // best-effort
+        // 尽力而为
       }
     }
   }
 
-  /** Retract one turn: remove user message + following assistant + tool messages
-   *  starting at sessionIndex. Notifies UI via SessionChanged event. */
+  /** 撤回一轮: 从 sessionIndex 开始移除用户消息 + 后续的 assistant + tool 消息。
+   *  通过 SessionChanged 事件通知 UI。 */
   retractTurnAt(sessionIndex: number): void {
     let end = sessionIndex + 1;
     while (end < this.session.length && this.session[end].role !== 'user') {
@@ -459,13 +458,13 @@ export class Agent {
     this._ui.sessionReplaced?.(this.session);
   }
 
-  /** Predicted session index of the next insert. Call before insertMessage to get index. */
+  /** 预测下一次插入的会话索引。在 insertMessage 前调用获取索引。 */
   get nextInsertIndex(): number {
     return this.session.length + this._pendingInserts.length;
   }
 
-  /** Insert a message into the session queue. Queued safely; agent sees it next loop iteration.
-   *  Notice is opt-in — system callers (onSessionPersisted) should pass silent=true. */
+  /** 将消息插入会话队列。安全排队；Agent 在下次循环迭代时看到。
+   *  通知是可选的 — 系统调用方（onSessionPersisted）应传 silent=true。 */
   insertMessage(text: string, opts?: { silent?: boolean }): void {
     this._pendingInserts.push(text);
     if (!opts?.silent) {
@@ -473,21 +472,20 @@ export class Agent {
     }
   }
 
-  // ── Sub-agent lifecycle ──
+  // ── 子 Agent 生命周期 ──
 
-  /** Reference to the sub-agent pool. Set by workspace after construction. */
+  /** 子 Agent 池的引用。由 workspace 在构造后设置。 */
   private _subAgentPool: import('./coordinator').SubAgentPool | null = null;
 
-  /** Message bus for inter-agent communication. Set by runtime/spawnSubAgent. */
+  /** Agent 间通信的消息总线。由 runtime/spawnSubAgent 设置。 */
   private _bus: MessageBus | null = null;
 
   setSubAgentPool(pool: import('./coordinator').SubAgentPool): void {
     this._subAgentPool = pool;
   }
 
-  /** Wire message bus for inter-agent communication.
-   *  Registers the agent address + a wake callback that triggers runLoop
-   *  when messages arrive while the agent is idle. */
+  /** 接线 Agent 间通信的消息总线。
+   *  注册 Agent 地址 + 唤醒回调，当 Agent 空闲时消息到达会触发 runLoop。 */
   setBus(bus: MessageBus): void {
     this._bus = bus;
     bus.register(
@@ -496,13 +494,13 @@ export class Agent {
     );
   }
 
-  /** Wire discovery board for inter-agent knowledge sharing.
-   *  Called by the runtime to inject the shared board into each agent. */
+  /** 接线 discovery board 用于 Agent 间知识共享。
+   *  由 runtime 调用，将共享 board 注入每个 Agent。 */
   setDiscoveryBoard(board: DiscoveryBoard): void {
     this._discoveryBoard = board;
   }
 
-  /** Cascade abort: stop all sub-agents when the parent is interrupted. */
+  /** 级联中止: 父 Agent 被中断时停止所有子 Agent。 */
   cascadeAbort(): void {
     const pool = this._subAgentPool;
     if (pool) {
@@ -513,15 +511,15 @@ export class Agent {
     }
   }
 
-  /** Wire file ownership registry for parallel sub-agent write protection.
-   *  Only fresh sub-agents (no worktree) are subject to claims. */
+  /** 接线文件所有权注册表，用于并行子 Agent 写保护。
+   *  仅 fresh 子 Agent（无 worktree）受声明约束。 */
   setFileOwnership(fo: FileOwnership): void {
     this._fileOwnership = fo;
   }
 
-  /** Bus wake callback — called when a message is delivered to this agent's inbox.
-   *  If the agent is idle (not running), starts a new runLoop to process the message.
-   *  If already running, _injectInbox will pick up the message on the next iteration. */
+  /** Bus 唤醒回调 — 当消息投递到此 Agent 的 inbox 时调用。
+   *  若 Agent 空闲（未运行），启动新的 runLoop 处理消息。
+   *  若正在运行，_injectInbox 会在下次迭代时拾取消息。 */
   private async _onMessageDelivered(): Promise<void> {
     if (this._isRunning) return;
     if (this._bus?.unreadCount(this.id) === 0) return;
@@ -535,20 +533,20 @@ export class Agent {
     }
   }
 
-  /** Batch stop all running sub-agents. Returns the IDs of stopped agents. */
+  /** 批量停止所有运行中的子 Agent。返回已停止的 Agent ID 列表。 */
   stopAllSubAgents(): string[] {
     return this._subAgentPool?.stopAll() ?? [];
   }
 
-  /** Current count of running sub-agents. */
+  /** 当前运行中的子 Agent 数量。 */
   runningSubAgentCount(): number {
     return this._subAgentPool?.runningCount ?? 0;
   }
 
-  // ── Agent identity & persistence ──
+  // ── Agent 身份与持久化 ──
 
-  /** Wire persistence store. Main agent gets this from Workspace;
-   *  sub-agents inherit the same store from their parent. */
+  /** 接线持久化存储。主 Agent 从 Workspace 获取；
+   *  子 Agent 从父 Agent 继承同一存储。 */
   setAgentStore(store: AgentStore): void {
     this.agentStore = store;
   }
@@ -557,7 +555,7 @@ export class Agent {
     this.goalManager = mgr;
   }
 
-  /** Persist current state + session to disk. Best-effort — never throws. */
+  /** 将当前状态 + 会话持久化到磁盘。Best-effort — 不抛异常。 */
   async saveState(status: AgentRecord['status'] = 'running'): Promise<void> {
     if (!this.agentStore) return;
     try {
@@ -574,24 +572,24 @@ export class Agent {
         this.session,
       );
     } catch {
-      /* persistence is best-effort — never block the agent loop */
+      /* 持久化是尽力而为 — 绝不阻塞 agent 循环 */
     }
   }
 
-  /** Apply queued inserts at a safe boundary (top of loop, after tool results committed). */
+  /** 在安全边界应用排队的插入（循环顶部，工具结果提交后）。 */
   private _applyPendingInserts(): void {
     if (this._pendingInserts.length === 0) return;
     for (const text of this._pendingInserts) {
       this.session.push({ role: 'user', content: text });
     }
     this._pendingInserts = [];
-    // Signal chat.ts to finalize current turn before new response starts
+    // 通知 chat.ts 在新响应开始前完成当前轮次
     this._sink({ kind: EventKind.TurnStarted });
   }
 
-  /** Apply queued memory updates at a safe boundary.
-   *  Injected as transient system-reminder so Agent sees updated memories mid-session.
-   *  Not persisted in session — Aura system stores memories independently. */
+  /** 在安全边界应用排队的记忆更新。
+   *  作为临时 system-reminder 注入，使 Agent 在会话中途看到更新的记忆。
+   *  不持久化到会话 — Aura 系统独立存储记忆。 */
   private _applyPendingMemoryUpdates(): void {
     if (!this._pendingMemoryUpdates?.length) return;
     const text = this._pendingMemoryUpdates.join('\n');
@@ -599,34 +597,34 @@ export class Agent {
     this._pendingMemoryUpdates = [];
   }
 
-  /** Inject unread inbox messages as a system-reminder. Non-destructive —
-   *  messages stay in inbox until explicitly acked or replied to.
-   *  Tracks injected message IDs to prevent re-injection within the same
-   *  result/reply are consumed (removed from inbox on inject) — they don't need a reply.
-   *  request gets full content injected but stays in inbox (agent_reply needs it there).
-   *  Free-type messages get a lightweight notification; content stays in inbox
-   *  for agent_inbox lookup. Expired free messages are purged before injection. */
+  /** 将未读 inbox 消息注入为 system-reminder。非破坏性 —
+   *  消息留在 inbox 直到被显式 ack 或回复。
+   *  追踪已注入的消息 ID 以防止同一轮内重复注入
+   *  result/reply 在注入时消费（从 inbox 移除）— 不需要回复。
+   *  request 注入完整内容但留在 inbox（agent_reply 需要它在）。
+   *  free 类型消息获得轻量通知；内容留在 inbox
+   *  供 agent_inbox 查找。过期的 free 消息在注入前清除。 */
   private _injectInbox(): void {
     if (!this._bus) return;
 
-    // 1. Purge expired free-type messages
+    // 1. 清除过期的 free 类型消息
     this._bus.purgeExpired(this.id);
 
-    // 2. Consume result/reply: inject full content + remove from inbox
+    // 2. 消费 result/reply: 注入完整内容 + 从 inbox 移除
     const CONSUME_TYPES = ['result', 'reply'];
     const { consumed, remaining } = this._bus.consumeByType(this.id, CONSUME_TYPES);
 
-    // 3. Non-consumed messages: inject full content for 'request', lightweight for others.
-    //    'request' stays in inbox so agent_reply can find and ack it.
+    // 3. 未消费的消息: 'request' 注入完整内容，其他注入轻量通知。
+    //    'request' 留在 inbox 以便 agent_reply 找到并 ack。
     const newRemaining = remaining.filter((m) => !this._injectedMsgIds.has(m.id));
     for (const m of newRemaining) this._injectedMsgIds.add(m.id);
 
     const newRequests = newRemaining.filter((m) => m.type === 'request');
     const newFreeMsgs = newRemaining.filter((m) => m.type !== 'request');
 
-    // 4. Strong-type messages (result/reply/request) persist in session — they
-    //    are consumed from inbox or require explicit ack, so they must survive
-    //    as durable context for the agent to act on.
+    // 4. 强类型消息（result/reply/request）持久化到会话 — 它们
+    //    从 inbox 消费或需要显式 ack，因此必须作为持久上下文
+    //    保留供 Agent 处理。
     const durableParts: string[] = [];
     if (consumed.length > 0) {
       const formatted = consumed
@@ -653,7 +651,7 @@ export class Agent {
       });
     }
 
-    // 5. Free-type messages are transient (content stays in inbox for agent_inbox lookup)
+    // 5. free 类型消息是临时的（内容留在 inbox 供 agent_inbox 查找）
     if (newFreeMsgs.length > 0) {
       const summary = newFreeMsgs
         .map((m) => `- from:${m.from} type:${m.type} (msg_id:${m.id})`)
@@ -663,22 +661,22 @@ export class Agent {
       );
     }
 
-    // 6. Sync _injectedMsgIds with actual inbox — remove IDs for messages
-    //    that were acked, expired, or consumed since last injection.
+    // 6. 将 _injectedMsgIds 与实际 inbox 同步 — 移除自上次注入以来
+    //    已 ack、过期或消费的消息 ID。
     const remainingIds = new Set(remaining.map((m) => m.id));
     for (const id of this._injectedMsgIds) {
       if (!remainingIds.has(id)) this._injectedMsgIds.delete(id);
     }
   }
 
-  /** Inject new discoveries from other agents as a system-reminder.
-   *  Only inject entries not yet seen this cycle + posted by other agents +
-   *  within the last 5 minutes. Uses _injectedDiscoveryIds to prevent re-injection. */
+  /** 将其他 Agent 的新发现注入为 system-reminder。
+   *  仅注入本轮尚未见过 + 由其他 Agent 发布 + 5 分钟内的条目。
+   *  使用 _injectedDiscoveryIds 防止重复注入。 */
   private _injectDiscoveries(): void {
     if (!this._discoveryBoard) return;
     const entries = this._discoveryBoard.query();
     if (entries.length === 0) return;
-    // Only inject discoveries from other agents, not yet seen, within last 5 min
+    // 仅注入来自其他 Agent、尚未见过、5 分钟内的 discoveries
     const recent = entries.filter(
       (e) =>
         e.agentId !== this.id &&
@@ -693,13 +691,13 @@ export class Agent {
           `[${e.category}] ${e.key}: ${e.value} (by ${e.agentId})`,
       )
       .join('\n');
-    // Transient — discoveries can be re-queried via agent_lookup
+    // 临时 — discoveries 可通过 agent_lookup 重新查询
     this._transientReminders.push(
       `<system-reminder>\n🔬 共享发现 (${recent.length} 条):\n${formatted}\n\n用 agent_discover 发布你的发现，agent_lookup 查询全部。\n</system-reminder>`,
     );
   }
 
-  /** Start a fresh conversation — keep system prompt, clear everything else. */
+  /** 开启全新对话 — 保留 system prompt，清除其他所有内容。 */
   newSession(): void {
     const sys = this.session.length > 0 && this.session[0].role === 'system' ? this.session[0] : null;
     this.session = sys ? [sys] : [];
@@ -715,12 +713,12 @@ export class Agent {
     this._sink({ kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
   }
 
-  /** Extract recent tool results from the parent session as context for a fork.
-   *  Strips system prompt, assistant tool_calls, and truncates to the last N
-   *  messages. Each message truncated to 1000 chars to keep fork system prompt small. */
+  /** 从父会话提取最近的工具结果作为 fork 的上下文。
+   *  去除 system prompt、assistant tool_calls，截取最近 N 条消息。
+   *  每条消息截断到 1000 字符以保持 fork system prompt 精简。 */
   extractRecentContext(maxMessages: number): string {
     const recent = this.session
-      .filter((m) => m.role !== 'system') // don't leak parent system prompt
+      .filter((m) => m.role !== 'system') // 不泄漏父 Agent 的 system prompt
       .slice(-maxMessages);
     if (recent.length === 0) return '(无父Agent上下文)';
     return recent
@@ -735,9 +733,9 @@ export class Agent {
       .join('\n\n');
   }
 
-  /** Run one turn: append user input, drive the tool loop.
-   *  Empty input (bus wakeup) skips preRunHook and user message — runLoop
-   *  starts from _injectInbox(), treating inbox messages as the sole input. */
+  /** 运行一轮: 追加用户输入，驱动工具循环。
+   *  空输入（bus 唤醒）跳过 preRunHook 和用户消息 — runLoop
+   *  从 _injectInbox() 开始，将 inbox 消息作为唯一输入。 */
   async run(signal: AbortSignal, input: string): Promise<void> {
     this._isRunning = true;
     this._ui.onStatusChange?.(true);
@@ -748,7 +746,7 @@ export class Agent {
           this._transientReminders.push(`<system-reminder>\n${recallCtx}\n</system-reminder>`);
         }
       } catch {
-        /* pre-run hook failure is non-fatal */
+        /* pre-run hook 失败非致命 */
       }
     }
     if (input) {
@@ -757,27 +755,27 @@ export class Agent {
       this._planInjector?.resetOnUserInput();
     }
     await this.runLoop(signal);
-    // Fire onSessionPersisted callback (memory bundle ingest, git refresh, turn-start block)
+    // 触发 onSessionPersisted 回调（记忆 bundle 摄取、git 刷新、turn-start 块）
     if (this._onSessionPersisted) {
       try {
         this._onSessionPersisted(this.sessionId, this.session);
       } catch {
-        /* best-effort */
+        /* 尽力而为 */
       }
     }
-    // Persist agent state after each completed turn
+    // 每轮完成后持久化 Agent 状态
     this.saveState('running').catch(() => {});
   }
 
   // ══════════════════════════════════════════════════════
-  // Goal Loop — autonomous multi-turn execution
+  // Goal 循环 — 自主多轮执行
   // ══════════════════════════════════════════════════════
 
-  /** Run a goal autonomously: plan → act → verify → repeat until goal_report.
-   *  Always starts a NEW goal — single-slot semantics cancel any live one
-   *  (resume is a separate path: resumeGoal). State lives in GoalManager
-   *  (.hologram/goals/{id}/), fully isolated from the chat session slot —
-   *  casual chat can no longer clobber the goal checkpoint. */
+  /** 自主运行目标: 规划 → 执行 → 验证 → 循环直到 goal_report。
+   *  始终开启新目标 — 单槽语义会取消任何活跃目标
+   *  （恢复是独立路径: resumeGoal）。状态存储在 GoalManager
+   *  （.hologram/goals/{id}/），与聊天会话槽完全隔离 —
+   *  日常聊天不再能覆盖目标检查点。 */
   async runGoal(
     signal: AbortSignal,
     goal: string,
@@ -795,7 +793,7 @@ export class Agent {
     }
   }
 
-  /** Resume the live goal (paused, or a crash-orphaned active record). Same return shape as runGoal. */
+  /** 恢复活跃目标（暂停的，或崩溃遗留的活跃记录）。返回类型与 runGoal 相同。 */
   async resumeGoal(
     signal: AbortSignal,
     id?: string,
@@ -807,8 +805,8 @@ export class Agent {
     if (!record || (record.status !== 'paused' && record.status !== 'active')) {
       return { status: 'failed', summary: '没有可恢复的目标。使用 /goal 创建新目标。' };
     }
-    // ponytail: an 'active' record reaching here is a crash leftover (a live loop is
-    // blocked by the UI's isRunning guard) — adopt it like a paused one.
+    // ponytail: 到达这里的 'active' 记录是崩溃残留（活跃循环被
+    // UI 的 isRunning 守卫阻塞）— 像暂停的一样接管它。
     const snapshot = await this.goalManager.loadSession(record.id);
     if (snapshot && snapshot.length > 0) {
       this.session = snapshot;
@@ -823,7 +821,7 @@ export class Agent {
     }
   }
 
-  /** Register goal_report for the duration of one goal loop. Caller unregisters in finally.
+  /** 为一个 goal 循环注册 goal_report。调用方在 finally 中注销。
    *  完成判定的主通道：模型显式上报，不再只靠正文正则。普通对话拿不到这个工具。 */
   private _registerGoalReportTool(): { called: boolean; status: 'completed' | 'failed'; summary: string } {
     const report = { called: false, status: 'completed' as 'completed' | 'failed', summary: '' };
@@ -852,9 +850,9 @@ export class Agent {
     return report;
   }
 
-  /** The shared goal loop — fresh runs and resumes converge here.
-   *  ponytail: serial by design. Parallel is an optimization, not a correctness
-   *  requirement — serial sub-agent spawns guarantee no file conflicts. */
+  /** 共享的 goal 循环 — 新建和恢复都汇聚到这里。
+   *  ponytail: 串行设计。并行是优化而非正确性要求 —
+   *  串行子 Agent 派生保证无文件冲突。 */
   private async _goalLoop(
     signal: AbortSignal,
     record: GoalRecord,
@@ -876,7 +874,7 @@ export class Agent {
       this._ui.progress?.(iter + 1, 'goal-loop');
 
       // ── 检查点:记录 + 对话现场快照进 goal 专属槽 ──
-      // ponytail: sessionBefore lets us strip partial turn messages on abort.
+      // ponytail: sessionBefore 使我们能在中止时裁剪未完成的轮次消息。
       const sessionBefore = this.session.length;
       await mgr.update(record.id, { iteration: iter, stallRounds, status: 'active' });
       await mgr.saveSession(record.id, this.session);
@@ -893,8 +891,8 @@ export class Agent {
           this._execState.bumpVersion();
           await mgr.update(record.id, { status: 'paused', iteration: iter, stallRounds });
           await mgr.saveSession(record.id, this.session);
-          // Clear goal context from in-memory session so normal chat doesn't auto-continue.
-          // Full context lives in the goal slot; /goal resume restores it from there.
+          // 从内存会话中清除目标上下文，使普通聊天不自动继续。
+          // 完整上下文存在 goal 槽中；/goal resume 从那里恢复。
           this.session = this.session.length > 0 && this.session[0].role === 'system' ? [this.session[0]] : [];
           this._execState.bumpVersion();
           this._sink({
@@ -941,7 +939,7 @@ export class Agent {
         return { status: 'failed', summary: last };
       }
 
-      // ── Stall detection: consecutive rounds with no tool calls → stuck ──
+      // ── 停滞检测: 连续无工具调用的轮次 → 卡住 ──
       const hasToolCalls = this._lastAssistantHasToolCalls();
       if (!hasToolCalls) {
         stallRounds++;
@@ -959,7 +957,7 @@ export class Agent {
         stallRounds = 0;
       }
 
-      // Goal in progress — auto-continue
+      // 目标进行中 — 自动继续
       const stallHint =
         stallRounds > 0
           ? `\n⚠️ 已连续 ${stallRounds}/${Agent.MAX_STALL_ROUNDS} 轮无实际行动。必须调用工具或委派子Agent，禁止只输出文字分析。`
@@ -978,7 +976,7 @@ export class Agent {
       });
       this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 第 ${iter + 1} 轮完成，继续…` });
     }
-    // Max iterations reached — forced termination (hard ceiling, shouldn't trigger in normal use)
+    // 达到最大迭代数 — 强制终止（硬上限，正常使用不应触发）
     if (!signal.aborted) {
       const summary = `达到硬上限 ${Agent.MAX_GOAL_ITERATIONS} 轮。请拆分目标为更小单元。`;
       await mgr.update(record.id, { status: 'failed', summary });
@@ -993,8 +991,8 @@ export class Agent {
     return { status: 'aborted', summary: '目标被中断' };
   }
 
-  /** Full goal prompt — injected on BOTH fresh start and resume, so the model
-   *  never depends on the original prompt surviving inside the snapshot. */
+  /** 完整 goal prompt — 新建和恢复时都注入，使模型
+   *  不依赖原始 prompt 在快照中存活。 */
   private _goalPrompt(record: GoalRecord, isResume: boolean): string {
     const resumeNote = isResume
       ? `\n## 恢复执行\n这是恢复后的第 ${record.iteration + 1} 轮（此前已推进 ${record.iteration} 轮，对话现场已从快照恢复）。直接继续下一步，不要复盘已完成的工作。\n`
@@ -1033,7 +1031,7 @@ ${resumeNote}
     return '';
   }
 
-  /** Check whether the last assistant message had tool_calls (vs pure text). */
+  /** 检查最后一条 assistant 消息是否包含 tool_calls（而非纯文本）。 */
   private _lastAssistantHasToolCalls(): boolean {
     const session = this.getSession();
     for (let i = session.length - 1; i >= 0; i--) {
@@ -1044,22 +1042,22 @@ ${resumeNote}
     return false;
   }
 
-  /** Drive the tool loop without adding a user message. Used by fork children
-   *  whose session already ends with the fork directive. */
+  /** 驱动工具循环而不添加用户消息。用于 fork 子 Agent
+   *  其会话已以 fork 指令结尾的情况。 */
   private async runLoop(signal: AbortSignal): Promise<void> {
     const turnStart = performance.now();
     log.info('agent', 'turn started', { model: this.prov.name() });
 
     try {
     this._isRunning = true;
-    this._currentRunSignal = signal; // sub-agent spawns merge this for cascade-abort
+    this._currentRunSignal = signal; // 子 Agent 派生时合并此 signal 用于级联中止
     this._sink({ kind: EventKind.TurnStarted });
 
     for (let step = 0; ; step++) {
-      // Clear transient reminders from previous step — only current-step
-      // reminders should be visible to the LLM this turn.
-      // Step 0 skips the clear: run() may have already pushed the preRunHook
-      // (aura recall) result into _transientReminders before calling runLoop.
+      // 清除上一步的临时提醒 — 仅当前步骤的
+      // 提醒应对本轮 LLM 可见。
+      // Step 0 跳过清除: run() 可能已将 preRunHook
+      // （aura recall）结果推入 _transientReminders 后才调用 runLoop。
       if (step > 0) this._transientReminders = [];
 
       // Plan 模式提醒注入 — 去重逻辑在 PlanModeInjector 内部
@@ -1073,7 +1071,7 @@ ${resumeNote}
             });
             planContent = raw.replace(/^\s*\d+\t/gm, '');
           } catch {
-            /* plan file not written yet — normal */
+            /* plan 文件尚未写入 — 正常 */
           }
         }
         const reminder = this._planInjector.getReminder(
@@ -1086,36 +1084,36 @@ ${resumeNote}
         }
       }
 
-      // Abort check — signal covers user stop + session replacement (via this._execState.stop)
+      // 中止检查 — signal 覆盖用户停止 + 会话替换（通过 this._execState.stop）
       if (signal.aborted) throw new Error('aborted');
 
-      // Apply pending user inserts at the safe boundary (after tool results committed)
+      // 在安全边界应用待插入的用户消息（工具结果提交后）
       this._applyPendingInserts();
       this._applyPendingMemoryUpdates();
 
       this._ui.progress?.(step + 1, 'thinking');
 
-      // Drain background task notifications before each stream() call (transient —
-      // progress updates have no value after the turn ends)
+      // 在每次 stream() 调用前排空后台任务通知（临时 —
+      // 轮次结束后进度更新无价值）
       try {
         const notes = await rpc<string>('drain_bg_notifications');
         if (notes) {
           this._transientReminders.push(`<system-reminder>\n${notes}\n</system-reminder>`);
         }
       } catch {
-        // best-effort — don't block the loop if drain fails
+        // 尽力而为 — 排空失败不阻塞循环
       }
 
-      // Inject unread inbox messages (peek — does not consume)
+      // 注入未读 inbox 消息（窥探 — 不消费）
       this._injectInbox();
 
-      // Inject new discoveries from other agents
+      // 注入其他 Agent 的新发现
       this._injectDiscoveries();
 
-      // ── Pre-flight context window validation ──
-      // Check BEFORE sending to the API — catches the gap between end-of-last-turn
-      // (where maybeCompact() triggers at 0.55) and the danger zone (0.88).
-      // Without this, massive tool results + injections can 400 on the next turn.
+      // ── 预检上下文窗口 ──
+      // 在发送到 API 前检查 — 捕获上轮结束时（maybeCompact() 在 0.55 触发）
+      // 与危险区（0.88）之间的间隙。没有这个检查，大量工具结果 + 注入
+      // 会在下一轮导致 400 错误。
       if (this.contextWindow > 0) {
         const preFlight = this.tokenCountWithEstimation();
         const preFlightRatio = preFlight / this.contextWindow;
@@ -1156,15 +1154,15 @@ ${resumeNote}
                 });
               }
             } catch {
-              // compactNow already emitted its own error — continue and let the
-              // API error handler (reactive compact in stream()) catch it
+              // compactNow 已发出自身错误 — 继续让 API 错误处理器
+              // （stream 中的响应式压缩）捕获
               log.warn('agent', 'pre-flight compaction failed, falling through to API call');
             }
           }
         }
       }
 
-      // ---- Stream (with streaming tool executor + hooks) ----
+      // ---- Stream（带流式工具执行器 + hooks）----
       this.compactionTracker.recordTurn();
       const executor = new StreamingToolExecutor(
         this.tools,
@@ -1202,13 +1200,13 @@ ${resumeNote}
         });
       }
 
-      // Abnormal finish reason warning
+      // 异常完成原因告警
       const warnMsg = finishReasonMessage(usage);
       if (warnMsg) {
         this._sink({ kind: EventKind.Notice, level: 'warn', text: warnMsg });
       }
 
-      // Guard: DeepSeek rejects assistant messages with neither content nor tool_calls.
+      // 保护: DeepSeek 拒绝既无 content 也无 tool_calls 的 assistant 消息。
       if (!text && calls.length === 0) {
         if (this._pendingInserts.length > 0 || reasoning) {
           text = reasoning ? '(思考完成)' : '(等待中)';
@@ -1219,7 +1217,7 @@ ${resumeNote}
         }
       }
 
-      // Store assistant turn (reasoning kept for display, not re-uploaded)
+      // 存储 assistant 轮次（reasoning 保留用于显示，不重新上传）
       this.session.push({
         role: 'assistant',
         content: text,
@@ -1232,19 +1230,19 @@ ${resumeNote}
         return;
       }
 
-      // ---- Collect tool results (streaming executor ran them during stream) ----
+      // ---- 收集工具结果（流式执行器在 stream 期间已执行）----
       log.info('agent', 'collect streaming results', {
         tools: calls.map((c) => c.name),
         count: calls.length,
       });
       const pendingResults = await executor.awaitRemaining();
-      // Build results in call order
+      // 按调用顺序构建结果
       const resultsByCallId = new Map(pendingResults.map((r) => [r.call.id, r]));
 
-      // ── Storm breaker + compaction instrumentation ──
-      // Both call sites were lost in 6e75046 (pre-StreamingToolExecutor cleanup);
-      // rewired here. Storm breaker nudges the model out of identical-failure
-      // loops; the tracker feeds compaction auto-tune with real loss data.
+      // ── Storm breaker + 压缩埋点 ──
+      // 两个调用点在 6e75046（StreamingToolExecutor 清理前）丢失；
+      // 在此重新接线。Storm breaker 将模型从相同失败的循环中推开；
+      // tracker 用真实损失数据喂给压缩自动调优。
       const stormNudge = this._stormNudge(calls, resultsByCallId);
       for (const call of calls) {
         this.compactionTracker.recordToolCall(call.name, call.arguments || '{}');
@@ -1265,7 +1263,7 @@ ${resumeNote}
           tool_call_id: call.id,
           name: call.name,
         });
-        // Notify panels for auto-refresh (workspace-injected port)
+        // 通知面板自动刷新（workspace 注入的端口）
         this._ui.toolDone?.(
           call.name,
           (() => {
@@ -1279,14 +1277,14 @@ ${resumeNote}
         );
       }
 
-      // Compact if needed before next turn
+      // 下一轮前按需压缩
       this.maybeCompact(usage);
     }
     } finally {
       this._isRunning = false;
       this._ui.onStatusChange?.(false);
-      // Re-check for NEW (not-yet-injected) messages — avoid infinite loop
-      // from unacked messages that were already injected this cycle.
+      // 重新检查新（尚未注入的）消息 — 避免本轮已注入但未 ack 的消息
+      // 导致无限循环。
       if (!signal.aborted && this._bus) {
         const hasNew = this._bus.peekInbox(this.id).some((m) => !this._injectedMsgIds.has(m.id));
         if (hasNew) {
@@ -1296,7 +1294,7 @@ ${resumeNote}
     }
   }
 
-  // ---- Private: stream (with retry) ----
+  // ---- 私有: stream（带重试）----
 
   private async stream(
     signal: AbortSignal,
@@ -1320,17 +1318,17 @@ ${resumeNote}
 
       const result = await this.streamOnce(signal, turn, executor);
 
-      // Success — no error, or error was already emitted as notice by streamOnce
+      // 成功 — 无错误，或错误已由 streamOnce 作为通知发出
       if (!result.err) return result;
 
       lastErr = result.err;
 
-      // Reactive compact: if the error is "prompt too long", compact and retry
-      // regardless of whether the error is normally retryable.
+      // 响应式压缩: 如果错误是 "prompt too long"，压缩并重试，
+      // 无论错误是否通常可重试。
       if (this.isContextLengthError(lastErr) && !this.compactStuck && !this.compactRunning) {
         log.info('agent', 'reactive compact triggered by context-length error');
-        // Auto-adjust contextWindow: the model can't actually handle the current
-        // window size, so lower it to the point where the error fired (with margin).
+        // 自动调整 contextWindow: 模型实际无法处理当前窗口大小，
+        // 所以降低到错误触发点（留余量）。
         const atTokens = this.tokenCountWithEstimation();
         if (atTokens > 0 && atTokens < this.contextWindow) {
           const adjusted = Math.max(atTokens - 10000, 50000); // 10K margin, floor 50K
@@ -1340,24 +1338,24 @@ ${resumeNote}
         this._sink({ kind: EventKind.Notice, level: 'warn', text: '上下文过长，自动压缩后重试…' });
         try {
           await this.compactNow(signal);
-          // compactNow replaced this.session — skip backoff, retry immediately
+          // compactNow 替换了 this.session — 跳过退避，立即重试
           continue;
         } catch {
-          // compactNow failed — fall through to normal retry/abort logic
+          // compactNow 失败 — 转入正常重试/中止逻辑
           this._sink({ kind: EventKind.Notice, level: 'warn', text: '自动压缩失败，尝试直接重试…' });
         }
       }
 
-      // Don't retry non-retryable errors
+      // 不可重试的错误不重试
       if (!isRetryable(lastErr)) return result;
 
-      // Last attempt — give up
+      // 最后一次尝试 — 放弃
       if (attempt >= MAX_RETRIES) break;
 
-      // Discard any tool calls from the failed attempt
+      // 丢弃失败尝试的所有工具调用
       executor?.discard();
 
-      // Backoff before retry
+      // 重试前退避
       const delay = backoffDelay(attempt);
       log.info('agent', `stream retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`, {
         error: String(lastErr.message || lastErr),
@@ -1374,7 +1372,7 @@ ${resumeNote}
       }
     }
 
-    // Retries exhausted
+    // 重试已耗尽
     this._sink({
       kind: EventKind.Notice,
       level: 'error',
@@ -1383,9 +1381,9 @@ ${resumeNote}
     return { text: '', reasoning: '', signature: '', calls: [], usage: undefined, err: lastErr };
   }
 
-  /** Single stream attempt — no retry logic.
-   *  When executor is provided, tool calls are added to it immediately
-   *  (execution starts during stream, not after). */
+  /** 单次流式尝试 — 无重试逻辑。
+   *  当提供 executor 时，工具调用立即添加到其中
+   *  （在流式过程中开始执行，而非之后）。 */
   private async streamOnce(
     signal: AbortSignal,
     _turn: number,
@@ -1398,8 +1396,8 @@ ${resumeNote}
     usage: Usage | undefined;
     err: Error | undefined;
   }> {
-    // Append transient reminders as user messages at the end — they are
-    // visible to the LLM this turn but not persisted in this.session.
+    // 将临时提醒作为 user 消息追加到末尾 — 它们
+    // 本轮对 LLM 可见但不持久化到 this.session。
     const transientMsgs: Message[] = this._transientReminders.map((content) => ({
       role: 'user' as const,
       content,
@@ -1468,7 +1466,7 @@ ${resumeNote}
           case ChunkType.ToolCall:
             if (chunk.tool_call) {
               calls.push(chunk.tool_call);
-              // Streaming execution: start tool immediately, don't wait for stream end
+              // 流式执行: 立即启动工具，不等流结束
               executor?.addTool(chunk.tool_call);
             }
             break;
@@ -1479,7 +1477,7 @@ ${resumeNote}
 
           case ChunkType.Error:
             err = chunk.err;
-            // fall through to Done to stop iteration
+            // 落入 Done 以停止迭代
             break;
 
           case ChunkType.Done:
@@ -1497,7 +1495,7 @@ ${resumeNote}
       return { text: '', reasoning: '', signature: '', calls: [], usage, err };
     }
 
-    // Close the text stream
+    // 关闭文本流
     if (text || reasoning) {
       this._sink({ kind: EventKind.Message, text, reasoning });
     }
@@ -1505,11 +1503,11 @@ ${resumeNote}
     return { text, reasoning, signature, calls, usage, err: undefined };
   }
 
-  // ---- Storm breaker — break repetitive tool-call loops ----
+  // ---- Storm breaker — 打断重复工具调用循环 ----
 
-  /** Detect repetitive identical tool-call failures. Returns a nudge string to
-   *  append to the first tool result, or null. The storm state (stormSig/stormCount)
-   *  is reset by compaction/newSession; any successful call in a batch also resets. */
+  /** 检测重复相同的工具调用失败。返回追加到第一个工具结果的提示字符串，
+   *  或 null。Storm 状态（stormSig/stormCount）在压缩/newSession 时重置；
+   *  一批调用中任何成功调用也会重置。 */
   private _stormNudge(
     calls: ToolCall[],
     resultsByCallId: Map<string, { output: string; err?: string }>,
@@ -1550,27 +1548,27 @@ ${resumeNote}
     return `\n\n[loop guard] ${subject} has now failed ${this.stormCount} times in a row with the same error. Re-sending it will not help. Change approach: if an argument is being truncated, write less in one call and split the work; otherwise fix the arguments, use a different tool, or explain the blocker in your final answer.`;
   }
 
-  // ---- Context window management ----
+  // ---- 上下文窗口管理 ----
 
   private compactRunning = false;
   // ⚡ sessionGen migrated to ExecutionState.sessionVersion
 
-  /** Accurately count tokens using cl100k_base tokenizer (gpt-tokenizer).
-   *  Replaces the old chars/2.5 heuristic which was off by 30-60%.
-   *  Cl100k_base matches GPT-4, DeepSeek, and most OpenAI-compatible models.
-   *  Anthropic's tokenizer differs slightly (< 8% error), safe for compaction. */
+  /** 使用 cl100k_base tokenizer 精确计算 token 数。
+   *  替代旧的 chars/2.5 启发式（误差 30-60%）。
+   *  Cl100k_base 匹配 GPT-4、DeepSeek 和大多数 OpenAI 兼容模型。
+   *  Anthropic 的 tokenizer 略有差异（< 8% 误差），对压缩安全。 */
   private tokenCountWithEstimation(): number {
     let total = countMessages(this.session);
-    // Count transient reminders — sent to LLM but not in session
+    // 计算临时提醒 token — 发送给 LLM 但不在会话中
     total += countTexts(this._transientReminders);
-    // Count tool schemas — sent with every request
+    // 计算工具 schema token — 每次请求都发送
     total += countToolSchemas(this.tools.schemas());
     return total;
   }
 
-  /** Diagnostic: breakdown token consumption by component.
-   *  Logged to .hologram/logs/ui.log after each turn as structured NDJSON.
-   *  Filter with: jq 'select(.module=="agent" and .message=="token breakdown") | .ctx' */
+  /** 诊断: 按组件分解 token 消耗。
+   *  每轮后以结构化 NDJSON 记录到 .hologram/logs/ui.log。
+   *  过滤: jq 'select(.module=="agent" and .message=="token breakdown") | .ctx' */
   private _diagTokenBreakdown(apiUsage: Usage | undefined): void {
     try {
       const T = this.tools.schemas();
@@ -1598,7 +1596,7 @@ ${resumeNote}
 
       const diag = {
         turn_session_msgs: this.session.length,
-        // ── cost centres ──
+        // ── 成本中心 ──
         system_prompt: { tokens: sysTokens, msgs: sysMsgCount },
         user_real:    { tokens: userTokens, msgs: userMsgCount },
         reminders:    { tokens: reminderTokens, msgs: reminderCount, inbox: inboxInjCount },
@@ -1606,22 +1604,22 @@ ${resumeNote}
         assistant:    { tokens: assistantTokens, msgs: assistantMsgCount },
         tool_results: { tokens: toolTokens, msgs: toolMsgCount },
         tool_schemas: { tokens: schemaTokens, count: T.length },
-        // ── totals ──
+        // ── 汇总 ──
         estimated_total: estimatedTotal,
         api_reported: apiUsage ? { prompt: apiUsage.prompt_tokens, completion: apiUsage.completion_tokens, total: apiUsage.total_tokens } : null,
         cache: apiUsage ? { hit: apiUsage.cache_hit_tokens, miss: apiUsage.cache_miss_tokens } : null,
       };
 
       log.info('agent', 'token breakdown', diag);
-    } catch { /* diagnostic must never throw */ }
+    } catch { /* 诊断绝不抛异常 */ }
   }
 
-  /** Check if an error looks like a context-length exceedance. */
+  /** 检查错误是否为上下文长度超限。 */
   private isContextLengthError(err: Error): boolean {
     const msg = (err.message || String(err)).toLowerCase();
-    // Completion-budget errors ("Invalid max_tokens value…") are request-parameter
-    // bugs, not prompt overflow — compacting the prompt can never fix them, and
-    // misclassifying them causes a compact→retry→400 loop on every input.
+    // 完成预算错误（"Invalid max_tokens value…"）是请求参数 bug，
+    // 不是 prompt 溢出 — 压缩 prompt 无法修复它们，
+    // 误分类会导致每次输入都陷入 compact→retry→400 循环。
     if (msg.includes('max_tokens') || msg.includes('max_output_tokens')) return false;
     return (
       msg.includes('prompt is too long') ||
@@ -1634,33 +1632,33 @@ ${resumeNote}
     );
   }
 
-  /** ponytail: record compaction + auto-tune if summary outcome.
-   *  Centralizes the pattern repeated across compactNow and triggerAutoCompact.
-   *  E5: also persists tracker state so it survives restarts. */
+  /** ponytail: 记录压缩事件 + 若为摘要结果则自动调优。
+   *  集中 compactNow 和 triggerAutoCompact 中重复的模式。
+   *  E5: 同时持久化 tracker 状态以在重启后存活。 */
   private recordCompactionEvent(event: CompactionEvent): void {
     this.compactionTracker.recordCompaction(event);
-    // E5: persist tracker state (events + filesRead) for cross-session survival
+    // E5: 持久化 tracker 状态（事件 + filesRead）以跨会话存活
     void this.saveCompactionTracker();
     if (event.outcome === 'summary') this.tryAutoTune();
   }
 
-  /** Manual compaction trigger (from /compact command). Returns summary text or error. */
+  /** 手动压缩触发器（来自 /compact 命令）。返回摘要文本或错误。 */
   async compactNow(signal: AbortSignal): Promise<string> {
     if (this.compactRunning) throw new Error('compaction already in progress');
     this.compactRunning = true;
     try {
       const msgs = this.session;
       const head = msgs.length > 0 && msgs[0].role === 'system' ? 1 : 0;
-      // Keep last N messages verbatim (tail), compact the middle.
-      // Guard on the UN-clamped region size — the old `Math.max(head + 4, …)`
-      // clamp made `start - head < 4` unreachable, so even a 2-message session
-      // got "compacted" (the user's own message was replaced by its summary).
+      // 原文保留最近 N 条消息（尾部），压缩中间部分。
+      // 对未钳制的区域大小做守卫 — 旧的 `Math.max(head + 4, …)`
+      // 钳制使 `start - head < 4` 不可达，导致即使 2 条消息的会话
+      // 也被"压缩"（用户自己的消息被替换为其摘要）。
       const tailCount = Math.max(4, this.recentKeep);
       const regionEnd = msgs.length - tailCount;
       if (regionEnd - head <= 0) {
-        // Nothing between head and tail — compaction can do nothing here.
-        // Mark stuck so the reactive path stops retrying compaction and the
-        // real error surfaces instead of looping.
+        // 头尾之间无内容 — 压缩在此无能为力。
+        // 标记为 stuck 以使响应式路径停止重试压缩，
+        // 让真实错误浮现而非循环。
         this.compactStuck = true;
         this.recordCompactionEvent({
           ts: Date.now(),
@@ -1681,9 +1679,9 @@ ${resumeNote}
         return 'stuck';
       }
       if (regionEnd - head < 4) {
-        // ponytail: not enough messages to summarize but context is too long → force-truncate
-        // Don't split a tool-call group: if the tail would begin with orphaned
-        // tool results, pull them into the dropped region.
+        // ponytail: 消息不足以摘要但上下文太长 → 强制截断
+        // 不拆分 tool-call 组: 如果尾部会以孤立的 tool 结果开始，
+        // 将它们拉入被丢弃的区域。
         let tailStart = Math.max(head, regionEnd);
         while (tailStart < msgs.length && msgs[tailStart].role === 'tool') tailStart++;
         const truncated: Message[] = [
@@ -1718,13 +1716,13 @@ ${resumeNote}
         });
         return 'truncated';
       }
-      // Don't split a tool-call group at the region boundary: if the tail would
-      // begin with orphaned tool results, pull them into the summarized region.
+      // 不在区域边界拆分 tool-call 组: 如果尾部会以孤立的
+      // tool 结果开始，将它们拉入被摘要的区域。
       let start = regionEnd;
       while (start < msgs.length && msgs[start].role === 'tool') start++;
       const region = msgs.slice(head, start);
-      // Accumulated compression: if a previous compaction left a summary,
-      // include it so the LLM merges rather than re-summarizes from scratch.
+      // 累积压缩: 如果上次压缩留有摘要，
+      // 包含它使 LLM 合并而非从头重新摘要。
       const priorSummary = extractCompactedContext(region);
       let summary: string | null = null;
       try {
@@ -1733,7 +1731,7 @@ ${resumeNote}
         log.warn('agent', `summarizeRegion failed (${e?.message || e}), falling back to truncation`);
       }
       if (!summary) {
-        // ponytail: summarization failed, force-truncate as fallback
+        // ponytail: 摘要失败，强制截断作为降级
         let tailStart = Math.max(head, regionEnd);
         while (tailStart < msgs.length && msgs[tailStart].role === 'tool') tailStart++;
         const truncated: Message[] = [
@@ -1787,14 +1785,14 @@ ${resumeNote}
       this.stormCount = 0;
       this.compactStuck = false;
 
-      // ── Compaction model instrumentation ──
+      // ── 压缩模型埋点 ──
       const preTokens = countMessages(msgs);
       const postTokens = countMessages(compacted);
       this.recordCompactionEvent({
         ts: Date.now(),
         regionMsgCount: region.length,
         regionTokensEst: countMessages(region),
-        summaryInputTokens: countMessages(region), // approximate
+        summaryInputTokens: countMessages(region), // 近似值
         summaryOutputTokens: countText(summary),
         tailMsgCount: msgs.length - start,
         preTokens,
@@ -1815,9 +1813,9 @@ ${resumeNote}
   private maybeCompact(usage: Usage | undefined): void {
     if (this.contextWindow <= 0) return;
 
-    // Use API-reported tokens when available, fall back to char-based estimation.
-    // Estimation allows compaction to trigger BEFORE the first API call returns,
-    // preventing 400 "prompt too long" on the very next request.
+    // 有 API 报告的 token 时优先使用，否则回退到基于字符的估算。
+    // 估算使压缩能在首次 API 调用返回前触发，
+    // 防止下一次请求出现 400 "prompt too long"。
     const estimated = usage && usage.total_tokens > 0 ? usage.total_tokens : this.tokenCountWithEstimation();
     const ratio = estimated / this.contextWindow;
 
@@ -1832,20 +1830,20 @@ ${resumeNote}
     }
     this.compactRunning = true;
 
-    // Auto-compact: trigger summarization in background after this turn
+    // 自动压缩: 本轮后在后台触发摘要
     this._sink({
       kind: EventKind.Notice,
       level: 'info',
       text: `上下文使用率 ${(ratio * 100).toFixed(0)}% — 自动压缩中…`,
     });
 
-    // Run compaction asynchronously (non-blocking for the turn)
+    // 异步运行压缩（不阻塞当前轮次）
     const msgs = this.session;
     const genAtStart = this._execState.bumpVersion();
     const head = msgs.length > 0 && msgs[0].role === 'system' ? 1 : 0;
     const tailCount = Math.max(4, this.recentKeep);
-    // Guard on the UN-clamped region size (see compactNow) — otherwise even a
-    // 2-message session would get "compacted" once the ratio trips.
+    // 对未钳制的区域大小做守卫（见 compactNow）— 否则即使
+    // 2 条消息的会话在比例触发时也会被"压缩"。
     const regionEnd = msgs.length - tailCount;
     if (regionEnd - head < 4) {
       this.compactStuck = true;
@@ -1869,11 +1867,11 @@ ${resumeNote}
       return;
     }
 
-    // Don't split a tool-call group at the region boundary (see compactNow).
+    // 不在区域边界拆分 tool-call 组（见 compactNow）。
     let start = regionEnd;
     while (start < msgs.length && msgs[start].role === 'tool') start++;
     const region = msgs.slice(head, start);
-    // Accumulated compression: merge previous summary if present
+    // 累积压缩: 合并前一次摘要（若存在）
     const priorSummary = extractCompactedContext(region);
     const abortCtrl = new AbortController();
     this.summarizeRegion(abortCtrl.signal, region, priorSummary)
@@ -1881,7 +1879,7 @@ ${resumeNote}
         if (genAtStart !== this._execState.sessionVersion) {
           this.compactRunning = false;
           return;
-        } // session replaced, discard
+        } // 会话已替换，丢弃
         if (!summary) {
           this.compactRunning = false;
           return;
@@ -1903,7 +1901,7 @@ ${resumeNote}
         this.stormSig = '';
         this.stormCount = 0;
 
-        // Check if compaction helped enough — if still above 95%, we're stuck
+        // 检查压缩是否足够 — 如果仍高于 95%，则已卡住
         const postEstimate = this.tokenCountWithEstimation();
         if (postEstimate / this.contextWindow > 0.95) {
           this.compactStuck = true;
@@ -1919,7 +1917,7 @@ ${resumeNote}
         this.compactStuck = false;
         this.compactRunning = false;
 
-        // ── Compaction model instrumentation ──
+        // ── 压缩模型埋点 ──
         const postTokens = countMessages(compacted);
         this.recordCompactionEvent({
           ts: Date.now(),
@@ -1942,7 +1940,7 @@ ${resumeNote}
         if (genAtStart !== this._execState.sessionVersion) {
           this.compactRunning = false;
           return;
-        } // session replaced, discard
+        } // 会话已替换，丢弃
         this.compactStuck = true;
         this.compactRunning = false;
         this._sink({
@@ -1953,13 +1951,12 @@ ${resumeNote}
       });
   }
 
-  /** Call the provider (no tools) to summarize a message region.
-   *  @param priorSummary content from a previous `<compacted-context>` block to
-   *    merge with the new region (accumulated compression), or null if this is the
-   *    first compaction. */
+  /** 调用 provider（无工具）对消息区域进行摘要。
+   *  @param priorSummary 来自上次 `<compacted-context>` 块的内容，用于
+   *    与新区域合并（累积压缩），若为首次压缩则为 null。 */
   private async summarizeRegion(signal: AbortSignal, msgs: Message[], priorSummary: string | null = null): Promise<string> {
-    // When merging, instruct the LLM to treat the prior summary as established
-    // background and only overwrite when new evidence contradicts it.
+    // 合并时，指示 LLM 将前一次摘要视为既有背景，
+    // 仅当新证据与之矛盾时才覆盖。
     const mergeInstruction = priorSummary
       ? `\n以下是在本次压缩之前生成的会话背景简报。新消息可能覆盖或补充其中的内容——合并时以新消息为准，未变的旧事实直接保留：\n\n<previous-summary>\n${priorSummary}\n</previous-summary>`
       : '';
@@ -1990,9 +1987,9 @@ ${resumeNote}
 
     const transcript = renderTranscript(msgs);
 
-    // ponytail: timeout guard — summarization calls the LLM API; without a timeout,
-    // a hung connection freezes the agent indefinitely during compaction. We use a
-    // separate AbortController with a 30s deadline, linked to the caller's signal.
+    // ponytail: 超时守卫 — 摘要调用 LLM API；没有超时，
+    // 挂起的连接会在压缩期间无限期冻结 Agent。我们使用
+    // 独立的 AbortController 设 30s 截止时间，并链接到调用方的 signal。
     const SUMMARIZE_TIMEOUT_MS = 30_000;
     const timeoutCtrl = new AbortController();
     const timeoutId = setTimeout(() => timeoutCtrl.abort(), SUMMARIZE_TIMEOUT_MS);
@@ -2005,8 +2002,8 @@ ${resumeNote}
           { role: 'system', content: summaryPrompt },
           { role: 'user', content: transcript },
         ],
-        tools: [], // no tools for summarization
-        temperature: 0.3, // low temp for factual summary
+        tools: [], // 摘要不需要工具
+        temperature: 0.3, // 低温用于事实性摘要
         max_tokens: 0,
       });
 
@@ -2034,14 +2031,14 @@ ${resumeNote}
   }
 
   // ══════════════════════════════════════════════════════
-  // Sub-agent spawn — for parallel / delegated work
+  // 子 Agent 派生 — 用于并行/委派工作
   // ══════════════════════════════════════════════════════
 
-  /** Spawn a sub-agent to handle a focused task. Blocks until the child finishes;
-   *  the child's final report (plus merge note) becomes the tool result.
-   *  `mode: 'fork'` (default) injects the parent's recent context and isolates
-   *  file edits in a git worktree; `mode: 'fresh'` is a clean-slate agent.
-   *  Abort sources are merged: user-stop (current run signal) + pool stop/timeout. */
+  /** 派生子 Agent 处理聚焦任务。阻塞直到子 Agent 完成；
+   *  子 Agent 的最终报告（加合并备注）成为工具结果。
+   *  `mode: 'fork'`（默认）注入父 Agent 的近期上下文并在
+   *  git worktree 中隔离文件编辑；`mode: 'fresh'` 是全新 Agent。
+   *  中止源合并: 用户停止（当前 run signal）+ pool 停止/超时。 */
   async spawnSubAgent(
     description: string,
     prompt: string,
@@ -2052,14 +2049,13 @@ ${resumeNote}
     asyncMode?: boolean,
     agentIdOverride?: string,
   ): Promise<{ text: string; err?: string }> {
-    // Depth-based recursion guard
+    // 基于深度的递归守卫
     if (mode === 'fork' && this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
       return { text: '', err: `Exceeded max subagent depth (${Agent.MAX_SUBAGENT_DEPTH})` };
     }
 
-    // Merge abort sources — the child dies when the user's run is stopped OR
-    // the pool stops/times-out this spawn. (The old wiring handed the pool
-    // signal over too late, so "stopped" agents kept running detached.)
+    // 合并中止源 — 子 Agent 在用户运行停止或 pool 停止/超时时终止。
+    // （旧接线太晚移交 pool signal，导致 "已停止" 的 Agent 继续脱离运行。）
     // async 模式下子 agent 生命周期独立于父单轮 run；
     // sync 模式下父 agent 在等，父被 stop 子 agent 也该 stop
     const abortSources: AbortSignal[] = [];
@@ -2068,9 +2064,9 @@ ${resumeNote}
     const signal =
       abortSources.length > 1 ? AbortSignal.any(abortSources) : (abortSources[0] ?? new AbortController().signal);
 
-    // Auto-isolation: create a git worktree for fork sub-agents so file mutations
-    // are sandboxed and can be reviewed (diff) before merge. Falls back to direct
-    // mode if isolation tool is unavailable or creation fails.
+    // 自动隔离: 为 fork 子 Agent 创建 git worktree，使文件修改
+    // 被沙箱化并可在合并前审阅（diff）。隔离工具不可用或创建失败时
+    // 降级为直接模式。
     let isolationId: string | null = null;
     if (mode === 'fork' && this.tools.get('agent_isolation_create')) {
       isolationId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2082,7 +2078,7 @@ ${resumeNote}
       }
     }
 
-    // Clone tools from parent — apply allowlist filter if specified
+    // 从父 Agent 克隆工具 — 如指定则应用允许列表过滤
     const subTools = new ToolRegistry();
     const allowed = toolAllowlist && toolAllowlist.length > 0 ? new Set(toolAllowlist) : null;
     for (const t of this.tools.all()) {
@@ -2090,16 +2086,16 @@ ${resumeNote}
         subTools.register(t);
       }
     }
-    // Sub-agents never get recursive-spawn tools (fork children execute directly).
+    // 子 Agent 永远不获得递归派生工具（fork 子 Agent 直接执行）。
     subTools.unregister('agent_spawn');
-    // Sub-agents cannot kill siblings — only the parent can kill sub-agents.
+    // 子 Agent 不能杀死兄弟 — 只有父 Agent 能杀死子 Agent。
     subTools.unregister('agent_kill');
-    // Pool observability is the parent's job too — sub-agents get no agent_status.
+    // Pool 可观测性也是父 Agent 的职责 — 子 Agent 不获得 agent_status。
     subTools.unregister('agent_status');
 
-    // Re-register discovery tools with the sub-agent's own id — the cloned
-    // tools' getAgentId closure captures the parent's id, which would cause
-    // archive() to never match (onFinish passes the sub-agent's model-visible id).
+    // 用子 Agent 自己的 id 重新注册 discovery 工具 — 克隆的
+    // 工具的 getAgentId 闭包捕获的是父 Agent 的 id，会导致
+    // archive() 永远匹配不上（onFinish 传的是子 Agent 的模型可见 id）。
     if (this._discoveryBoard) {
       const subDiscId = agentIdOverride ?? `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       for (const tool of createDiscoveryTools(this._discoveryBoard, () => subDiscId)) {
@@ -2108,11 +2104,11 @@ ${resumeNote}
       }
     }
 
-    // ── Hard-block build/test commands in sub-agents ──
-    // These commands contend on file locks (cargo target/, node_modules/,
-    // .git/index.lock) when run in parallel, causing deadlocks or timeouts.
-    // The sub-agent should finish file edits and report what it changed;
-    // the parent agent runs verification after all sub-agents finish.
+    // ── 硬性阻止子 Agent 执行构建/测试命令 ──
+    // 这些命令并行运行时会争抢文件锁（cargo target/、node_modules/、
+    // .git/index.lock），导致死锁或超时。
+    // 子 Agent 应完成文件修改并报告改了什么；
+    // 父 Agent 在所有子 Agent 完成后统一运行验证。
     const BUILD_TEST_RE = /\b(?:cargo|npm|npx|pnpm|yarn|make|docker|rustc|tsc|gradle|gradlew|mvn|mvnw|cmake|pytest|dotnet|xcodebuild|zig)\b|go\s+(?:build|test|vet|run)|python\s+-m\s+pytest/;
     const shellTool = subTools.get('run_shell');
     if (shellTool) {
@@ -2129,10 +2125,10 @@ ${resumeNote}
       }));
     }
 
-    // ── File ownership for fresh sub-agents (fork has worktree isolation) ──
-    // First writer claims a file; other sub-agents get rejected.
-    // Prevents silent last-write-wins when multiple fresh agents edit
-    // the same working tree concurrently.
+    // ── fresh 子 Agent 的文件所有权（fork 有 worktree 隔离） ──
+    // 先写者声明文件；其他子 Agent 被拒绝。
+    // 防止多个 fresh Agent 并发编辑同一工作区时
+    // 静默的"后写覆盖先写"。
     if (mode === 'fresh') {
       if (!this._fileOwnership) {
         this._fileOwnership = new FileOwnership();
@@ -2169,10 +2165,10 @@ ${resumeNote}
     let subSystem: string;
 
     if (mode === 'fork') {
-      // Fork mode: clean sub-agent with its OWN system prompt (never inherit the
-      // parent's session/system prompt — that made forks try to spawn their own
-      // sub-agents). The parent's recent tool outputs are injected as context so
-      // the fork knows what was already read/modified.
+      // Fork 模式: 干净的子 Agent，拥有自己的 system prompt（不继承
+      // 父 Agent 的会话/system prompt — 那会使 fork 尝试派生自己的
+      // 子 Agent）。父 Agent 的近期工具输出作为上下文注入，
+      // 使 fork 知道已读取/修改了什么。
       const recentContext = this.extractRecentContext(6);
 
       subSystem = `你是主Agent派出的工作进程（fork）。你不是主Agent。
@@ -2211,19 +2207,19 @@ ${subTools
   .join('\n')}`;
     }
 
-    // ── Hand the child's event stream to the UI (workspace-injected port builds
-    // the SubAgentPart and returns the sink; headless → no-op sink) ──
-    // Use agentIdOverride for both UI and Agent so the LLM-facing ID matches
-    // board/bus entries (async mode returns this ID to the LLM).
+    // ── 将子 Agent 的事件流交给 UI（workspace 注入的端口构建
+    // SubAgentPart 并返回 sink；headless → 空操作 sink） ──
+    // 对 UI 和 Agent 都使用 agentIdOverride，使 LLM 可见 ID 匹配
+    // board/bus 条目（async 模式返回此 ID 给 LLM）。
     const subAgentId = agentIdOverride ?? `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const rawSubSink =
       this._ui.subAgentSpawn?.({ agentId: subAgentId, description, sessionId: this._uiSessionId }, onProgress) ??
       (() => {});
-    // Tee the child's event stream into the activity tracker — agent_status reads
-    // it to report the current tool call + wait time (see subagent-activity.ts).
+    // 将子 Agent 的事件流分叉到 activity tracker — agent_status 读取它
+    // 以报告当前工具调用 + 等待时间（见 subagent-activity.ts）。
     const subSink = wrapSubAgentSink(subAgentId, rawSubSink);
 
-    // Shared provider, fresh session, no compact
+    // 共享 provider，全新会话，不压缩
     const subAgent = new Agent(this.prov, subTools, subSystem, {
       temperature: 0.3,
       subagentDepth: this._subagentDepth + 1,
@@ -2236,18 +2232,18 @@ ${subTools
     if (isolationId) {
       subAgent._isolationId = isolationId;
     }
-    // Inherit persistence store from parent
+    // 从父 Agent 继承持久化存储
     if (this.agentStore) {
       subAgent.setAgentStore(this.agentStore);
     }
 
-    // Inherit message bus from parent — setBus handles register(addr, onWake)
+    // 从父 Agent 继承消息总线 — setBus 处理 register(addr, onWake)
     if (this._bus) {
       subAgent.setBus(this._bus);
     }
 
-    // Register on TaskBoard + file tracking hook — async mode only.
-    // Sync mode doesn't need board tracking (result returned directly, merged immediately).
+    // 注册到 TaskBoard + 文件追踪 hook — 仅 async 模式。
+    // Sync 模式不需要 board 追踪（结果直接返回，立即合并）。
     if (this._taskBoard && asyncMode) {
       this._taskBoard.register({
         agentId: subAgent.id,
@@ -2263,12 +2259,12 @@ ${subTools
     let subAgentSucceeded = false;
     let result: { text: string; err?: string };
     try {
-      // Fork and fresh both use run() — fork has its own system prompt + stripped tools
+      // Fork 和 fresh 都使用 run() — fork 有自己的 system prompt + 裁剪后的工具
       await subAgent.run(signal, mode === 'fork' ? prompt : '开始执行。');
       subAgentSucceeded = true;
 
-      // ── Summary distillation — ensure sub-agent handoff is useful ──
-      // Single continuation turn for sub-300-char summaries (the "好的，完成了" cases).
+      // ── 摘要提纯 — 确保子 Agent 交接有用 ──
+      // 对低于 300 字符的摘要做单轮续写（"好的，完成了" 的情况）。
       const CONTEXT_LINE_LIMIT = 300;
       const session = subAgent.getSession();
       let lastAssistant = [...session].reverse().find((m) => m.role === 'assistant');
@@ -2286,7 +2282,7 @@ ${subTools
             summary = expanded.content;
           }
         } catch {
-          /* distillation failed — return original summary */
+          /* 摘要提纯失败 — 返回原始摘要 */
         }
       }
 
@@ -2306,19 +2302,19 @@ ${subTools
     } finally {
       this._ui.subAgentFinished?.(subAgentId, this._uiSessionId, subAgentSucceeded);
       removeSubAgentActivity(subAgentId);
-      // Release this sub-agent's file ownership claims
+      // 释放此子 Agent 的文件所有权声明
       this._fileOwnership?.release(subAgent.id);
     }
 
     if (asyncMode) {
-      // ── Async mode: save diff to board + notify via bus (no auto-merge) ──
+      // ── Async 模式: 保存 diff 到 board + 通过 bus 通知（不自动合并） ──
       let diffText = '';
       if (isolationId && subAgentSucceeded) {
         try {
           const diffT = this.tools.get('agent_isolation_diff');
           if (diffT) diffText = await diffT.execute({ agent_id: isolationId });
         } catch {
-          /* diff unavailable */
+          /* diff 不可用 */
         }
       }
 
@@ -2356,29 +2352,29 @@ ${subTools
             },
           });
         } catch {
-          /* bus send failure is non-fatal */
+          /* bus 发送失败非致命 */
         }
       }
     } else {
-      // ── Sync mode: finalize isolation worktree (serialized) ──
+      // ── Sync 模式: 完成隔离 worktree（串行化） ──
       if (isolationId) {
         const mergeNote = await enqueueIsolationOp(() => this._finalizeIsolation(isolationId, subAgentSucceeded));
         if (mergeNote) {
           result = { text: (result.text ? result.text + '\n\n' : '') + mergeNote, err: result.err };
         }
       }
-      // Sync mode: no board entry was created (async-only), nothing to clean up
+      // Sync 模式: 未创建 board 条目（仅 async 模式创建），无需清理
     }
 
-    // Unregister sub-agent from bus after all completion handling
+    // 所有完成处理后从 bus 注销子 Agent
     if (this._bus) {
       this._bus.unregister(subAgent.id);
     }
     return result;
   }
 
-  /** Merge (on success) or discard (on failure) an isolation worktree.
-   *  Returns a human/model-readable note to append to the sub-agent result. */
+  /** 合并（成功时）或丢弃（失败时）隔离 worktree。
+   *  返回可追加到子 Agent 结果的可读备注。 */
   private async _finalizeIsolation(agentId: string, success: boolean): Promise<string> {
     const diffT = this.tools.get('agent_isolation_diff');
     const mergeT = this.tools.get('agent_isolation_merge');
@@ -2392,13 +2388,13 @@ ${subTools
         } catch (mergeErr: any) {
           const errMsg = mergeErr?.message || String(mergeErr);
           log.warn('agent', `merge conflict for ${agentId}: ${errMsg}`);
-          // Capture the diff BEFORE discarding the worktree — otherwise the
-          // sub-agent's work is silently lost.
+          // 在丢弃 worktree 前捕获 diff — 否则
+          // 子 Agent 的工作会静默丢失。
           let diffText = '';
           try {
             if (diffT) diffText = await diffT.execute({ agent_id: agentId });
           } catch {
-            /* diff unavailable */
+            /* diff 不可用 */
           }
           await discardT?.execute({ agent_id: agentId }).catch(() => {});
           const clipped = diffText.length > 8000 ? diffText.slice(0, 8000) + '\n…[diff 过长已截断]' : diffText;
@@ -2409,19 +2405,19 @@ ${subTools
           );
         }
       }
-      // Sub-agent failed/aborted — discard the worktree, nothing to merge.
+      // 子 Agent 失败/中止 — 丢弃 worktree，无需合并。
       await discardT?.execute({ agent_id: agentId }).catch(() => {});
       return '';
     } catch {
-      return ''; // best effort — cleanup failures must not break the result flow
+      return ''; // 尽力而为 — 清理失败不得中断结果流
     }
   }
 }
 
-// Serialization of isolation merge/discard lives in isolation-queue.ts
-// (shared with merge.ts — concurrent git operations race on the index lock).
+// 隔离合并/丢弃的序列化在 isolation-queue.ts 中
+// （与 merge.ts 共享 — 并发 git 操作会争抢 index lock）。
 
-// ---- Helpers ----
+// ---- 辅助函数 ----
 
 interface ToolOutcome {
   output: string;
@@ -2441,8 +2437,8 @@ function batchStormSignature(calls: ToolCall[], outcomes: ToolOutcome[]): { sig:
   return { sig: parts.join('\x00'), ok: true };
 }
 
-/** Extract a file path from tool-call arguments (read_file_content / read_file).
- *  Tolerates both filePath and file_path keys; returns null on any failure. */
+/** 从工具调用参数中提取文件路径（read_file_content / read_file）。
+ *  同时容忍 filePath 和 file_path 键；任何失败返回 null。 */
 function parseFilePathArg(argsJson: string | undefined): string | null {
   try {
     const a = JSON.parse(argsJson || '{}');
@@ -2465,9 +2461,9 @@ function finishReasonMessage(u?: Usage): string | undefined {
   }
 }
 
-/** Scan the compaction region for a previous `<compacted-context>` summary.
- *  Returns its text content (without the XML wrapper) so the next compaction
- *  can merge it with new messages instead of re-summarizing from scratch. */
+/** 扫描压缩区域中上一次的 `<compacted-context>` 摘要。
+ *  返回其文本内容（不含 XML 包裹），使下一次压缩
+ *  能将其与新消息合并而非从头重新摘要。 */
 function extractCompactedContext(region: readonly Message[]): string | null {
   const startTag = '<compacted-context>';
   const endTag = '</compacted-context>';

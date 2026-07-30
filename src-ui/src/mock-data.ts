@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Mock data — realistic dependency graph for browser dev mode
-// Models a made-up "Nebula" web framework project with ~40 nodes
+// Mock 数据 — 浏览器开发模式下的真实依赖图
+// 模拟一个虚构的 "Nebula" Web 框架项目，约 40 个节点
 
-// ── Graph nodes ──
+// ── 图节点 ──
 const MOCK_NODES = [
-  // Core — SYMBOL (blue)
+  // Core — SYMBOL（蓝色）
   { id: 'router', name: 'Router', type: 'class', location: 'nebula/core/router.ts:12', properties: {} },
   { id: 'middleware', name: 'MiddlewareChain', type: 'class', location: 'nebula/core/middleware.ts:8', properties: {} },
   { id: 'request', name: 'Request', type: 'class', location: 'nebula/core/request.ts:5', properties: {} },
@@ -32,7 +32,7 @@ const MOCK_NODES = [
     properties: {},
   },
 
-  // Data layer — MEDIUM (amber)
+  // Data layer — MEDIUM（琥珀色）
   { id: 'database', name: 'DatabasePool', type: 'database', location: 'nebula/data/database.ts:30', properties: {} },
   { id: 'query_builder', name: 'QueryBuilder', type: 'class', location: 'nebula/data/query.ts:18', properties: {} },
   { id: 'model_base', name: 'Model', type: 'class', location: 'nebula/data/model.ts:12', properties: {} },
@@ -48,7 +48,7 @@ const MOCK_NODES = [
   { id: 'file_storage', name: 'FileStorage', type: 'medium', location: 'nebula/data/storage.ts:8', properties: {} },
   { id: 'queue_broker', name: 'QueueBroker', type: 'queue', location: 'nebula/data/queue.ts:22', properties: {} },
 
-  // Utils & helpers — SYMBOL (blue)
+  // Utils & helpers — SYMBOL（蓝色）
   { id: 'logger', name: 'Logger', type: 'class', location: 'nebula/utils/logger.ts:10', properties: {} },
   { id: 'validator', name: 'Validator', type: 'class', location: 'nebula/utils/validate.ts:16', properties: {} },
   { id: 'serializer', name: 'Serializer', type: 'class', location: 'nebula/utils/serialize.ts:8', properties: {} },
@@ -57,7 +57,7 @@ const MOCK_NODES = [
   { id: 'crypto_utils', name: 'crypto_utils', type: 'function', location: 'nebula/utils/crypto.ts:6', properties: {} },
   { id: 'email_sender', name: 'EmailSender', type: 'class', location: 'nebula/utils/email.ts:20', properties: {} },
 
-  // Temporal / Thread — TEMPORAL (purple)
+  // Temporal / Thread — TEMPORAL（紫色）
   {
     id: 'scheduler',
     name: 'TaskScheduler',
@@ -77,7 +77,7 @@ const MOCK_NODES = [
   { id: 'timer_pool', name: 'TimerPool', type: 'timer', location: 'nebula/temporal/timer.ts:28', properties: {} },
   { id: 'worker_pool', name: 'WorkerPool', type: 'thread', location: 'nebula/temporal/pool.ts:30', properties: {} },
 
-  // External adapters — MEDIUM (amber)
+  // External adapters — MEDIUM（琥珀色）
   {
     id: 'payment_gateway',
     name: 'PaymentGateway',
@@ -91,13 +91,13 @@ const MOCK_NODES = [
   { id: 'websocket_hub', name: 'WebSocketHub', type: 'class', location: 'nebula/adapters/ws.ts:25', properties: {} },
 ];
 
-// ── Edges ──
+// ── 边 ──
 function makeEdge(id: string, source: string, target: string, type: string, depth = 1): any {
   return { id, source, target, type, properties: { coupling_depth: depth } };
 }
 
 const MOCK_EDGES = [
-  // Core internal
+  // Core 内部
   makeEdge('e1', 'server', 'router', 'import', 1),
   makeEdge('e2', 'server', 'middleware', 'import', 1),
   makeEdge('e3', 'server', 'config_loader', 'import', 1),
@@ -115,7 +115,7 @@ const MOCK_EDGES = [
   makeEdge('e15', 'mime_resolver', 'response', 'import', 1),
   makeEdge('e16', 'config_loader', 'file_storage', 'import', 2),
 
-  // Data layer
+  // Data 层
   makeEdge('e17', 'model_base', 'database', 'import', 1),
   makeEdge('e18', 'model_base', 'query_builder', 'import', 1),
   makeEdge('e19', 'query_builder', 'database', 'data', 1),
@@ -128,7 +128,7 @@ const MOCK_EDGES = [
   makeEdge('e26', 'file_storage', 's3_uploader', 'import', 1),
   makeEdge('e27', 'email_sender', 'smtp_client', 'import', 1),
 
-  // Auth & sessions
+  // 认证与会话
   makeEdge('e28', 'auth_provider', 'crypto_utils', 'import', 1),
   makeEdge('e29', 'auth_provider', 'database', 'data', 2),
   makeEdge('e30', 'session_store', 'cache_store', 'data', 1),
@@ -136,13 +136,13 @@ const MOCK_EDGES = [
   makeEdge('e32', 'auth_provider', 'oauth_flow', 'import', 2),
   makeEdge('e33', 'oauth_flow', 'payment_gateway', 'import', 3),
 
-  // Utils
+  // 工具函数
   makeEdge('e34', 'rate_limiter', 'cache_store', 'data', 1),
   makeEdge('e35', 'rate_limiter', 'tokenizer', 'import', 2),
   makeEdge('e36', 'validator', 'serializer', 'import', 1),
   makeEdge('e37', 'validator', 'logger', 'import', 1),
 
-  // Temporal
+  // 时序
   makeEdge('e38', 'scheduler', 'job_worker', 'temporal', 1),
   makeEdge('e39', 'scheduler', 'cron_trigger', 'temporal', 1),
   makeEdge('e40', 'scheduler', 'queue_broker', 'data', 2),
@@ -154,7 +154,7 @@ const MOCK_EDGES = [
   makeEdge('e46', 'worker_pool', 'timer_pool', 'temporal', 1),
   makeEdge('e47', 'timer_pool', 'cache_store', 'data', 2),
 
-  // Cross-community
+  // 跨社区
   makeEdge('e48', 'server', 'cache_store', 'import', 2),
   makeEdge('e49', 'router', 'validator', 'import', 2),
   makeEdge('e50', 'middleware', 'rate_limiter', 'import', 2),
@@ -164,7 +164,7 @@ const MOCK_EDGES = [
   makeEdge('e54', 'websocket_hub', 'event_bus_internal', 'temporal', 2),
   makeEdge('e55', 'plugin_registry', 'file_storage', 'import', 3),
 
-  // Some L3/L4 coupling edges (deeper coupling depth)
+  // 一些 L3/L4 耦合边（更深的耦合度）
   { id: 'e56', source: 'router', target: 'cache_store', type: 'data', properties: { coupling_depth: 3 } },
   { id: 'e57', source: 'middleware', target: 'database', type: 'data', properties: { coupling_depth: 4 } },
   { id: 'e58', source: 'scheduler', target: 'payment_gateway', type: 'temporal', properties: { coupling_depth: 3 } },
@@ -172,7 +172,7 @@ const MOCK_EDGES = [
   { id: 'e60', source: 'response', target: 'serializer', type: 'data', properties: { coupling_depth: 1 } },
 ];
 
-// ── Communities ──
+// ── 社区 ──
 const MOCK_COMMUNITIES = [
   {
     id: 'comm_core',
@@ -222,7 +222,7 @@ const MOCK_COMMUNITIES = [
   { id: 'comm_config', label: 'Configuration', node_ids: ['config_loader', 'plugin_registry'] },
 ];
 
-// ── Build graph JSON ──
+// ── 构建 graph JSON ──
 function buildMockGraph() {
   return {
     nodes: MOCK_NODES.map((n) => ({ ...n })),
@@ -237,7 +237,7 @@ function buildMockGraph() {
   };
 }
 
-// ── Mock check result ──
+// ── Mock 简报结果 ──
 function buildMockCheck(passed: boolean) {
   return {
     passed,
@@ -311,7 +311,7 @@ function buildMockCheck(passed: boolean) {
   };
 }
 
-// ── Mock timeline events ──
+// ── Mock 时间线事件 ──
 const MOCK_TIMELINE = {
   events: [
     {
@@ -380,7 +380,7 @@ const MOCK_TIMELINE = {
   ],
 };
 
-// ── Mock diff ──
+// ── Mock 变更对比 ──
 const MOCK_DIFF = {
   is_empty: false,
   added_nodes: [{ id: 'websocket_hub', name: 'WebSocketHub', type: 'class' }],
@@ -394,7 +394,7 @@ const MOCK_DIFF = {
   modified_edges: [{ id: 'e57', source: 'middleware', target: 'database', type: 'data' }],
 };
 
-// ── Agent tool mock responses ──
+// ── Agent 工具 mock 响应 ──
 const MOCK_TOOL_RESPONSES: Record<string, any> = {
   analyze_project: JSON.stringify({
     nodes: MOCK_NODES.length,
@@ -536,11 +536,11 @@ C:\\mock\\nebula-project> dir
 nebula/  package.json  tsconfig.json  README.md`,
   hologram_diff: JSON.stringify(MOCK_DIFF),
 
-  // Write commands (no-op in mock)
+  // 写入命令（mock 中为空操作）
   write_constraints: '(mock: constraints saved)',
   write_file_content: '(mock: file saved)',
 
-  // ── File tree ──
+  // ── 文件树 ──
   list_directory: [
     {
       name: 'nebula',
@@ -681,7 +681,7 @@ nebula/  package.json  tsconfig.json  README.md`,
     { name: 'tsconfig.json', path: '/mock/nebula-project/tsconfig.json', is_dir: false, children: null },
     { name: 'README.md', path: '/mock/nebula-project/README.md', is_dir: false, children: null },
   ],
-  // Flat listing for lazy-load file tree (args.path → one level of children)
+  // 懒加载文件树的扁平列表（args.path → 一级子项）
   list_directory_flat: (args?: Record<string, unknown>) => {
     const p = (args?.path as string) || '/mock/nebula-project';
     const flatMap: Record<string, Array<{ name: string; path: string; is_dir: boolean; children: null }>> = {
@@ -766,32 +766,32 @@ nebula/  package.json  tsconfig.json  README.md`,
   },
 };
 
-// ── Mock invoke dispatcher ──
+// ── Mock invoke 分发器 ──
 export function mockInvoke(cmd: string, args?: Record<string, unknown>): string {
-  // RPC — all commands now route through invoke("rpc", {method, params}).
-  // Extract method + params and dispatch to existing handlers.
+  // RPC — 所有命令现在通过 invoke("rpc", {method, params}) 路由。
+  // 提取 method + params 并分发到现有处理器。
   if (cmd === 'rpc') {
     const method = args?.method as string;
     const params = args?.params as Record<string, unknown>;
     return mockInvoke(method, params);
   }
 
-  // Commands that return the full graph
+  // 返回完整图谱的命令
   if (cmd === 'analyze_and_load' || cmd === 'load_graph_json') {
     return JSON.stringify(buildMockGraph());
   }
 
-  // Check
+  // 简报
   if (cmd === 'validate_project') {
     return JSON.stringify(buildMockCheck(false));
   }
 
-  // Workspace lifecycle (no-op in browser)
+  // 工作区生命周期（浏览器中为空操作）
   if (cmd === 'workspace_start_watcher' || cmd === 'workspace_deactivate') {
     return '(mock: watcher not available in browser)';
   }
 
-  // hologram_call — unified dispatch for all hologram engine tools
+  // hologram_call — 所有 hologram 引擎工具的统一分发
   if (cmd === 'hologram_call') {
     const toolName = args?.tool as string;
     if (toolName && toolName in MOCK_TOOL_RESPONSES) {
@@ -802,7 +802,7 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     return JSON.stringify({ mock: true, cmd: 'hologram_call', tool: toolName, note: 'No mock data for this tool' });
   }
 
-  // hologram_tools_list — return mock tool schemas matching engine all_schemas()
+  // hologram_tools_list — 返回匹配引擎 all_schemas() 的 mock 工具 schema
   if (cmd === 'hologram_tools_list') {
     return JSON.stringify([
       {
@@ -971,13 +971,13 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     ]);
   }
 
-  // Look up in mock responses
+  // 在 mock 响应中查找
   if (cmd in MOCK_TOOL_RESPONSES) {
     const v = MOCK_TOOL_RESPONSES[cmd];
     return typeof v === 'function' ? v(args) : v;
   }
 
-  // Fallback
+  // 回退
   console.warn(`[mock] Unhandled command: ${cmd}`, args);
   return JSON.stringify({ mock: true, cmd, note: 'No mock data for this command' });
 }

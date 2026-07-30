@@ -13,8 +13,8 @@ pub(crate) fn is_rails_file(file: &str) -> bool {
     lower.ends_with(".rb") && (lower.contains("routes") || lower.contains("route"))
 }
 
-/// Detect Rails routes.rb DSL: `get '/path', to: 'controller#action'`
-/// Also: `resources :users`, `namespace :admin do ... end`
+/// 检测 Rails routes.rb DSL：`get '/path', to: 'controller#action'`
+/// 也包括：`resources :users`、`namespace :admin do ... end`
 pub(crate) fn detect_rails_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
@@ -41,7 +41,7 @@ pub(crate) fn detect_rails_routes(file: &str, source: &str) -> Vec<DetectedRoute
     let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
 
     while let Some(node) = stack.pop() {
-        // Rails routes are call nodes: `get '/path'` or `get '/path', to: 'controller#action'`
+        // Rails 路由是 call 节点：`get '/path'` 或 `get '/path', to: 'controller#action'`
         if node.kind() == "call" || node.kind() == "method_call" {
             if let Some((method, path, handler)) = extract_rails_route(&node, source, &http_methods) {
                 let line = node.start_position().row + 1;
@@ -63,7 +63,7 @@ fn extract_rails_route(
     source: &str,
     http_methods: &HashSet<&str>,
 ) -> Option<(String, String, String)> {
-    // Get the first identifier (HTTP method)
+    // 获取第一个标识符（HTTP 方法）
     let mut node_cursor = node.walk();
     let method = node.children(&mut node_cursor)
         .find(|c| c.kind() == "identifier")
@@ -73,10 +73,10 @@ fn extract_rails_route(
         return None;
     }
 
-    // Find first string (route path) — recursively search children
+    // 查找第一个字符串（路由路径）——递归搜索子节点
     let path = find_first_string(node, source)?;
 
-    // Find handler (to: 'controller#action')
+    // 查找处理函数（to: 'controller#action'）
     let handler = if method == "resources" || method == "resource" {
         format!("{}Controller", capitalize_first(&path))
     } else if method == "namespace" || method == "scope" {

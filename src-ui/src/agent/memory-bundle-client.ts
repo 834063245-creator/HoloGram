@@ -1,16 +1,16 @@
-// Memory Bundle HTTP client — calls the Dockerized FirstBeat memory service.
-// If the service is unreachable, all methods degrade gracefully (return null/empty).
+// Memory Bundle HTTP 客户端 — 调用 Dockerized FirstBeat 记忆服务。
+// 如果服务不可达，所有方法优雅降级（返回 null/空值）。
 //
-// NOTE: Currently only memoryBundleIngest() is wired into workspace.ts/runtime.ts.
-// The other exported functions (health/analyze/recall/portrait) are NOT yet
-// integrated — do not call them from agent logic without first wiring them up.
+// 注意：目前仅 memoryBundleIngest() 已接入 workspace.ts/runtime.ts。
+// 其他导出函数（health/analyze/recall/portrait）尚未集成 —
+// 未接入前不要从 agent 逻辑中调用。
 
 const BASE_URL = 'http://127.0.0.1:9600';
 const TIMEOUT_MS = 5000;
 
-// ── Types ──
-// These types are only used by the un-integrated APIs below.
-// They will become public once the corresponding functions are wired up.
+// ── 类型 ──
+// 这些类型仅被下方未集成的 API 使用。
+// 对应函数接入后将变为公开。
 
 interface EmotionResult {
   valence: number;
@@ -63,7 +63,7 @@ interface PortraitResult {
   turn_count?: number;
 }
 
-// ── HTTP helpers ──
+// ── HTTP 辅助函数 ──
 
 async function fetchJson<T>(path: string, body?: unknown): Promise<T | null> {
   const controller = new AbortController();
@@ -84,15 +84,15 @@ async function fetchJson<T>(path: string, body?: unknown): Promise<T | null> {
   }
 }
 
-// ── Un-integrated API (NOT yet wired into agent logic) ──
+// ── 未集成 API（尚未接入 agent 逻辑）──
 
-/** Check if the memory bundle service is alive. */
+/** 检查记忆 bundle 服务是否存活。 */
 async function memoryBundleHealth(): Promise<boolean> {
   const result = await fetchJson<{ status: string }>('/health');
   return result?.status === 'ok';
 }
 
-/** Analyze a single message: extract emotion, intent, entities, tags, relationship. */
+/** 分析单条消息：提取情感、意图、实体、标签、关系。 */
 async function memoryBundleAnalyze(
   text: string,
   userId: string = 'default',
@@ -101,7 +101,7 @@ async function memoryBundleAnalyze(
   return await fetchJson<AnalyzeResult>('/analyze', { text, user_id: userId, session_id: sessionId });
 }
 
-/** Recall facts and memory field residuals for a query. */
+/** 为查询召回事实和记忆场残差。 */
 async function memoryBundleRecall(
   query: string,
   topK: number = 10,
@@ -110,7 +110,7 @@ async function memoryBundleRecall(
   return await fetchJson<RecallResult>('/recall', { query, top_k: topK, include_text: includeText });
 }
 
-/** Ingest a complete session (array of {role, content} messages). */
+/** 摄入完整会话（{role, content} 消息数组）。 */
 export async function memoryBundleIngest(
   messages: Array<{ role: string; content: string }>,
   userId: string = 'default',
@@ -124,7 +124,7 @@ export async function memoryBundleIngest(
   return result?.status === 'ok';
 }
 
-/** Get current user portrait. */
+/** 获取当前用户画像。 */
 async function memoryBundlePortrait(): Promise<PortraitResult | null> {
   return await fetchJson<PortraitResult>('/portrait');
 }

@@ -1,31 +1,31 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! ToolResponse — three-state tool response model.
+//! ToolResponse — 三态工具响应模型。
 //!
-//! Replaces the json!({"error": "..."}) anti-pattern in all 30 handlers.
-//! Agent studies show that JSON-RPC isError kills tool adoption after 1-2 failures.
-//! Degraded responses let the Agent self-recover.
+//! 替代所有 30 个处理器中的 json!({"error": "..."}) 反模式。
+//! Agent 研究表明 JSON-RPC isError 在 1-2 次失败后会降低工具采用率。
+//! 降级响应让 Agent 能自我恢复。
 
 use serde_json::{json, Value};
 
-/// Three-state response for all hologram_* tool handlers.
+/// 所有 hologram_* 工具处理器的三态响应。
 #[allow(dead_code)]
 #[derive(Debug)]
 pub enum ToolResponse {
-    /// Normal success — full data returned.
+    /// 正常成功 —— 返回完整数据。
     Success(Value),
-    /// Recoverable failure — guidance + fallback, not an MCP error.
+    /// 可恢复失败 —— 引导 + 回退建议，不是 MCP 错误。
     Degraded {
         guidance: String,
         fallback: String,
         details: Value,
     },
-    /// Security refusal — the Agent must not retry.
+    /// 安全拒绝 —— Agent 不得重试。
     Refused {
         reason: String,
     },
-    /// Genuine fault — retry once, then continue without this tool.
+    /// 真正故障 —— 重试一次，然后放弃此工具继续。
     Fault {
         message: String,
         retry: bool,
@@ -33,8 +33,8 @@ pub enum ToolResponse {
 }
 
 impl ToolResponse {
-    /// Attach next-tool suggestions to Success and Degraded responses.
-    /// Fault/Refused pass through unchanged.
+    /// 将后续工具建议附加到 Success 和 Degraded 响应。
+    /// Fault/Refused 直接透传不变。
     pub fn with_suggestions(self, suggestions: &[&'static str]) -> Self {
         match self {
             Self::Success(mut data) => {
@@ -53,7 +53,7 @@ impl ToolResponse {
         }
     }
 
-    /// Convert to a JSON-RPC result or error Value.
+    /// 转换为 JSON-RPC result 或 error Value。
     pub fn to_mcp_value(&self, id: &Value) -> Value {
         match self {
             Self::Success(data) => tool_result(id, data.clone()),
@@ -81,7 +81,7 @@ impl ToolResponse {
     }
 }
 
-// ── JSON-RPC helpers (same shape as McpServer) ──
+// ── JSON-RPC 辅助函数（与 McpServer 同构）──
 
 fn success_response(id: &Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })

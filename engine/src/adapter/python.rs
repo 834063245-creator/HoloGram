@@ -10,8 +10,8 @@ thread_local! {
     static PY_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
 }
 
-/// Python adapter using tree-sitter for AST parsing.
-/// Uses a thread-local parser to avoid per-file allocation overhead.
+/// Python adapter，使用 tree-sitter 进行 AST 解析。
+/// 使用线程局部 parser 避免逐文件分配开销。
 pub struct PythonAdapter;
 
 impl Default for PythonAdapter {
@@ -56,7 +56,7 @@ impl LanguageAdapter for PythonAdapter {
     }
 }
 
-/// Walk up to find enclosing function/class, fall back to module.
+/// 向上遍历查找外层 function/class，回退到 module。
 fn enclosing_symbol(node: &tree_sitter::Node, source: &str, module_id: &str) -> String {
     let mut cur = node.parent();
     while let Some(p) = cur {
@@ -75,13 +75,13 @@ fn enclosing_symbol(node: &tree_sitter::Node, source: &str, module_id: &str) -> 
     module_id.to_string()
 }
 
-/// Walk a tree-sitter tree and extract symbols and import edges.
+/// 遍历 tree-sitter tree 并提取符号和 import 边。
 fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>) {
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
     let mut edge_counter = 0u32;
 
-    // Create a file-level module node — all file-scope edges use this as source
+    // 创建文件级 module 节点 — 所有文件作用域的边以此作为 source
     let module_node_id = file_id.to_string();
     nodes.push(Node::new(&module_node_id, file_id, NodeKind::File));
 
@@ -110,7 +110,7 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                         edge_counter += 1;
                         edges.push(Edge::new(format!("def_{}_{}", file_id, edge_counter), &module_node_id, &node_id, EdgeKind::Defines));
 
-                        // Extract base classes → inheritance edges
+                        // 提取基类 → 继承边
                         if let Some(bases) = node.child_by_field_name("superclasses") {
                             for base in bases.children(&mut cursor) {
                                 if let Ok(base_name) = base.utf8_text(source.as_bytes()) {
@@ -174,7 +174,7 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                 if let Some(func) = node.child_by_field_name("function") {
                     if let Ok(name) = func.utf8_text(source.as_bytes()) {
                         edge_counter += 1;
-                        // Find parent function/class context
+                        // 查找父级 function/class 上下文
                         let parent_id = enclosing_symbol(&node, source, &module_node_id);
                         let mut e = Edge::new(format!("call_{}_{}", file_id, edge_counter), &parent_id, name, EdgeKind::Calls);
                         e.coupling_depth = 1; e.cross_file = true;
@@ -185,9 +185,9 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
             _ => {}
         }
 
-        // Push children for BFS
+        // 将子节点压入栈以进行 BFS
         let mut children: Vec<_> = node.children(&mut cursor).collect();
-        // Reverse so we pop in correct order
+        // 反转以便按正确顺序弹出
         children.reverse();
         to_visit.extend(children);
     }
@@ -215,7 +215,7 @@ mod tests {
         let adapter = PythonAdapter::new();
         let source = "import os\nfrom django.http import HttpResponse\n";
         let (_nodes, edges, _) = adapter.analyze("views.py", source);
-        // Should have at least the import statement edges
+        // 至少应有 import 语句的边
         assert!(edges.iter().any(|e| matches!(e.kind, EdgeKind::Imports)),
             "should create import edges, got {} edges", edges.len());
     }
@@ -226,7 +226,7 @@ mod tests {
         let source = "def my_view():\n    render()\n";
         let (nodes, edges, _) = adapter.analyze("views.py", source);
         assert!(nodes.iter().any(|n| n.name == "my_view"), "should find my_view");
-        // The call to render() should create a calls edge
+        // 对 render() 的调用应创建 calls 边
         assert!(edges.iter().any(|e| matches!(e.kind, EdgeKind::Calls)),
             "should create call edge, got {} edges", edges.len());
     }
@@ -235,10 +235,10 @@ mod tests {
     fn test_empty_and_invalid() {
         let adapter = PythonAdapter::new();
         let (n1, e1, _) = adapter.analyze("empty.py", "");
-        assert_eq!(n1.len(), 1); // module node always created
+        assert_eq!(n1.len(), 1); // module 节点始终创建
         assert_eq!(e1.len(), 0);
         let (n2, e2, _) = adapter.analyze("bad.py", "this is not valid python @@@");
         assert!(!n2.is_empty());
-        let _ = e2; // edges may be empty on parse failure
+        let _ = e2; // 解析失败时边可能为空
     }
 }

@@ -12,8 +12,8 @@ import { bus } from './events';
 import type { StarGraph } from './graph';
 
 /**
- * Shared helper — send a question to the Agent (opens chat panel if closed).
- * Use this from any UI panel to let the user ask Agent about something.
+ * 共享辅助函数 — 向 Agent 发送问题（若聊天面板未打开则自动打开）。
+ * 任何 UI 面板均可调用此函数，让用户向 Agent 提问。
  */
 export function askAgent(question: string): void {
   shell.queryAgent(question);
@@ -22,13 +22,13 @@ export function askAgent(question: string): void {
 export class AgentVisualizer {
   private graph: StarGraph;
 
-  /** Set of node names the agent has ever touched (for lens mode). */
+  /** Agent 曾经访问过的节点名称集合（用于透镜模式）。 */
   private _visitedNodes = new Set<string>();
 
-  /** Ordered trail of recently focused nodes (max 50, for trail line). */
+  /** 最近聚焦节点的有序轨迹（最多 50 个，用于轨迹线）。 */
   private _trail: string[] = [];
 
-  /** Whether the retrospective trail visualization is currently active. */
+  /** 回溯轨迹可视化当前是否处于激活状态。 */
   private _trailActive = false;
 
   constructor(graph: StarGraph) {
@@ -36,14 +36,13 @@ export class AgentVisualizer {
     bus.on('agent:tool-done', this._onToolDone.bind(this));
   }
 
-  /** Update the star graph reference (for mode switches that recreate the graph). */
+  /** 更新星图引用（用于重建图的场景模式切换）。 */
   setGraph(graph: StarGraph): void {
     this.graph = graph;
   }
 
-  /** Toggle retrospective trail mode — shows the Agent's exploration path as
-   *  a glowing cyan trail through visited nodes, with unvisited nodes dimmed to
-   *  30% (still visible as backdrop). Camera flies to the trail centroid. */
+  /** 切换回溯轨迹模式 — 以青色发光轨迹线展示 Agent 的探索路径，
+   *  未访问节点亮度降至 30%（仍可见作为背景）。相机飞向轨迹质心。 */
   toggleTrail(): boolean {
     if (this._trailActive) {
       this.hideTrail();
@@ -53,14 +52,14 @@ export class AgentVisualizer {
     return this._trailActive;
   }
 
-  /** Activate trail mode. */
+  /** 激活轨迹模式。 */
   showTrail(): void {
     if (this._visitedNodes.size === 0) return;
     this._trailActive = true;
     this.graph.showAgentTrail(this._visitedNodes, this._trail);
   }
 
-  /** Deactivate trail mode, restore normal rendering. */
+  /** 停用轨迹模式，恢复正常渲染。 */
   hideTrail(): void {
     this._trailActive = false;
     this.graph.hideAgentTrail();
@@ -73,21 +72,21 @@ export class AgentVisualizer {
     return this._visitedNodes.size;
   }
 
-  // Backward compat — old toggleLens/AgentLens APIs map to trail mode
-  /** @deprecated Use toggleTrail() instead. */
+  // 向后兼容 — 旧的 toggleLens/AgentLens API 映射到轨迹模式
+  /** @deprecated 请改用 toggleTrail()。 */
   toggleLens(): boolean {
     return this.toggleTrail();
   }
-  /** @deprecated Use isTrailActive instead. */
+  /** @deprecated 请改用 isTrailActive。 */
   get isLensActive(): boolean {
     return this._trailActive;
   }
 
-  // ── Event handlers ────────────────────────────────────
+  // ── 事件处理 ────────────────────────────────────
 
   private _onToolDone(data: { toolName: string; args: Record<string, unknown>; output: string }): void {
     try {
-      // Extract focused node names from tool args (for lens + trail)
+      // 从工具参数中提取聚焦的节点名称（用于透镜 + 轨迹）
       const focusedNodes = this._extractFocusedNodes(data.toolName, data.args);
       for (const name of focusedNodes) {
         this._visitedNodes.add(name);
@@ -97,18 +96,18 @@ export class AgentVisualizer {
         }
       }
 
-      // If trail mode is active, update the visualization live
+      // 若轨迹模式已激活，实时更新可视化
       if (this._trailActive && this._visitedNodes.size > 0) {
         this.graph.showAgentTrail(this._visitedNodes, this._trail);
       }
     } catch {
-      // Visualization failure must never break chat or agent
+      // 可视化失败不得中断聊天或 Agent
     }
   }
 
-  // ── Focus extraction ──
+  // ── 聚焦提取 ──
 
-  /** Extract node names the agent is explicitly focusing on in this tool call. */
+  /** 提取 Agent 在本次工具调用中明确聚焦的节点名称。 */
   private _extractFocusedNodes(toolName: string, args: Record<string, unknown>): string[] {
     const names: string[] = [];
     const n = (key: string) => {

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Web search & fetch — Bing + DuckDuckGo + URL fetch.
+// Web 搜索与抓取 — Bing + DuckDuckGo + URL 抓取。
 
 
 const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
@@ -175,7 +175,7 @@ pub(crate) async fn web_fetch(
             .http_status_as_error(false)
             .timeout_per_call(Some(std::time::Duration::from_secs(10)))
             .timeout_global(Some(std::time::Duration::from_secs(30)))
-            .max_redirects(0) // Disable auto-redirect — manually re-check SSRF on each hop
+            .max_redirects(0) // 禁用自动重定向 — 每一跳手动重新检查 SSRF
             .build()
     );
 
@@ -188,11 +188,11 @@ pub(crate) async fn web_fetch(
                 .call()
         };
 
-    // Manually follow redirects, re-checking SSRF on each Location
+    // 手动跟随重定向，在每个 Location 上重新检查 SSRF
     let resp = match make_request(CHROME_UA) {
         Ok(r) if r.status().as_u16() != 403 => r,
         Ok(r) => {
-            // 403 — check if Cloudflare challenge
+            // 403 — 检查是否为 Cloudflare 验证
             let is_cf = r.headers().get("cf-mitigated")
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v == "challenge")
@@ -206,7 +206,7 @@ pub(crate) async fn web_fetch(
         Err(e) => return Err(format!("请求失败: {}", e)),
     };
 
-    // ── Manual redirect following with SSRF re-check ──
+    // ── 手动跟随重定向并重新检查 SSRF ──
     let mut current_resp = resp;
     let mut current_url = url.clone();
     let mut redirects = 0u32;
@@ -221,7 +221,7 @@ pub(crate) async fn web_fetch(
             .get("location")
             .and_then(|v| v.to_str().ok())
             .ok_or("重定向响应缺少 Location 头")?;
-        // Resolve relative URLs against the current redirect's URL
+        // 相对于当前重定向 URL 解析相对 URL
         let base = url::Url::parse(&current_url).map_err(|e| format!("无效基址 URL: {e}"))?;
         let next_url = base.join(location)
             .map_err(|e| format!("无效重定向 URL: {e}"))?;
@@ -233,7 +233,7 @@ pub(crate) async fn web_fetch(
         if next_host.is_empty() || crate::utils::is_private_ip(next_host) {
             return Err("SSRF 防护: 重定向到内网地址被拒绝".to_string());
         }
-        // Follow the redirect
+        // 跟随重定向
         current_url = next_url.to_string();
         current_resp = agent.get(&current_url)
             .header("User-Agent", CHROME_UA)

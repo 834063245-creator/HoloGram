@@ -1,25 +1,25 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// AgentSessionState — per-session non-serialisable state registry.
+// AgentSessionState — 每会话非序列化状态注册器。
 //
-// Replaces the four module-level Maps that lived in chat-session.ts:
+// 替代原 chat-session.ts 中的四个模块级 Map：
 //   agentHandles, sessionExecStates, turnPairsByPanel, agentFactoryByPanel
 //
-// Architecture (mirrors execution-state.ts):
-//   - Zustand vanilla store holds a `version` counter for subscription-based
-//     reactivity (Map mutations bump version → subscribers fire).
-//   - Internal Maps live in the factory closure (non-serialisable, not in
-//     the store state) — same pattern as AbortController in execution-state.
+// 架构（与 execution-state.ts 一致）：
+//   - Zustand vanilla store 持有 `version` 计数器，用于基于订阅的
+//     响应式（Map 变更时递增 version → 触发订阅者）。
+//   - 内部 Map 存放在工厂闭包中（非序列化，不在
+//     store 状态中）— 与 execution-state 中的 AbortController 模式一致。
 //
-// Composite keys (storeId:sid) prevent cross-panel collisions since session
-// IDs are per-panel (both start at 1).
+// 复合键（storeId:sid）防止跨面板冲突，因为会话
+// ID 是每面板的（都从 1 开始）。
 
 import type { ChatAgentHandle } from './chat-agent-handle';
 import { createExecState, type ExecStateInstance } from './execution-state';
 import { createStore } from 'zustand/vanilla';
 
-// ── Types ──
+// ── 类型 ──
 
 export interface TurnPair {
   userText: string;
@@ -30,61 +30,61 @@ export interface TurnPair {
 
 export type AgentFactory = () => Promise<ChatAgentHandle | null>;
 
-// ── Store state (serialisable) ──
+// ── Store 状态（可序列化）──
 
 interface AgentSessionStoreState {
-  /** Bumped on every agent/exec/factory mutation so subscribers re-read. */
+  /** 每次 agent/exec/factory 变更时递增，使订阅者重新读取。 */
   version: number;
 }
 
-// ── Public API ──
+// ── 公共 API ──
 
 export interface AgentSessionStateApi {
-  // ── Agent handles (per session) ──
+  // ── Agent 句柄（每会话）──
   setAgent(storeId: string, sessionId: number, agent: ChatAgentHandle): void;
   getAgent(storeId: string, sessionId: number): ChatAgentHandle | null;
   removeAgent(storeId: string, sessionId: number): void;
 
-  // ── Exec state (per session) ──
+  // ── Exec 状态（每会话）──
   setExec(storeId: string, sessionId: number, exec: ExecStateInstance): void;
   getExec(storeId: string, sessionId: number): ExecStateInstance | null;
   getOrCreateExec(storeId: string, sessionId: number): ExecStateInstance;
-  /** Cascade-abort agent, stop exec, remove entry. */
+  /** 级联中止 agent，停止 exec，移除条目。 */
   removeExec(storeId: string, sessionId: number): void;
 
-  // ── Agent factory (per panel) ──
+  // ── Agent 工厂（每面板）──
   setAgentFactory(storeId: string, fn: AgentFactory | null): void;
   getAgentFactory(storeId: string): AgentFactory | null;
 
-  // ── Turn pairs (per panel) ──
+  // ── 轮次对（每面板）──
   getTurnPairs(storeId: string): TurnPair[];
   setTurnPairs(storeId: string, pairs: TurnPair[]): void;
 
-  // ── Bulk operations ──
-  /** Remove all agent handles and exec states for a panel. */
+  // ── 批量操作 ──
+  /** 移除面板的所有 agent 句柄和 exec 状态。 */
   clearPanelState(storeId: string): void;
 
-  // ── Subscription ──
-  /** Subscribe to state changes. Returns unsubscribe. */
+  // ── 订阅 ──
+  /** 订阅状态变更。返回取消订阅函数。 */
   subscribe(fn: () => void): () => void;
-  /** Current version counter. */
+  /** 当前版本计数器。 */
   readonly version: number;
 }
 
-// ── Key helper ──
+// ── 键辅助函数 ──
 
 function agentKey(storeId: string, sid: number): string {
   return `${storeId}:${sid}`;
 }
 
-// ── Factory ──
+// ── 工厂 ──
 
 export function createAgentSessionState(): AgentSessionStateApi {
   const store = createStore<AgentSessionStoreState>(() => ({
     version: 0,
   }));
 
-  // ── Non-serialisable mutable state (closure) ──
+  // ── 非序列化可变状态（闭包）──
   const _agentBySession = new Map<string, ChatAgentHandle>();
   const _execBySession = new Map<string, ExecStateInstance>();
   const _agentFactoryByPanel = new Map<string, AgentFactory>();
@@ -95,7 +95,7 @@ export function createAgentSessionState(): AgentSessionStateApi {
   }
 
   const self: AgentSessionStateApi = {
-    // ── Agent handles ──
+    // ── Agent 句柄 ──
 
     setAgent(storeId, sessionId, agent): void {
       _agentBySession.set(agentKey(storeId, sessionId), agent);
@@ -111,7 +111,7 @@ export function createAgentSessionState(): AgentSessionStateApi {
       _bump();
     },
 
-    // ── Exec state ──
+    // ── Exec 状态 ──
 
     setExec(storeId, sessionId, exec): void {
       _execBySession.set(agentKey(storeId, sessionId), exec);
@@ -144,7 +144,7 @@ export function createAgentSessionState(): AgentSessionStateApi {
       }
     },
 
-    // ── Agent factory ──
+    // ── Agent 工厂 ──
 
     setAgentFactory(storeId, fn): void {
       if (fn) _agentFactoryByPanel.set(storeId, fn);
@@ -156,7 +156,7 @@ export function createAgentSessionState(): AgentSessionStateApi {
       return _agentFactoryByPanel.get(storeId) ?? null;
     },
 
-    // ── Turn pairs ──
+    // ── 轮次对 ──
 
     getTurnPairs(storeId): TurnPair[] {
       let tp = _turnPairsByPanel.get(storeId);
@@ -172,7 +172,7 @@ export function createAgentSessionState(): AgentSessionStateApi {
       _bump();
     },
 
-    // ── Bulk operations ──
+    // ── 批量操作 ──
 
     clearPanelState(storeId): void {
       const prefix = storeId + ':';
@@ -185,7 +185,7 @@ export function createAgentSessionState(): AgentSessionStateApi {
       _bump();
     },
 
-    // ── Subscription ──
+    // ── 订阅 ──
 
     subscribe(fn): () => void {
       return store.subscribe(fn);
@@ -199,6 +199,6 @@ export function createAgentSessionState(): AgentSessionStateApi {
   return self;
 }
 
-// ── Default singleton — shared across all panels ──
+// ── 默认单例 — 跨所有面板共享 ──
 
 export const agentSessionState = createAgentSessionState();

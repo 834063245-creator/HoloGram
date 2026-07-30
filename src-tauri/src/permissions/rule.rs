@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// 权限规则模型 — Rule parsing, matching, loading
+// 权限规则模型 — 规则解析、匹配、加载
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +23,7 @@ pub enum Behavior {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleValue {
     pub tool_name: String,       // PascalCase: "Bash", "Read", "Edit", "Git", "WebFetch"
-    pub content: Option<String>, // e.g. "npm test:*", "src/**"
+    pub content: Option<String>, // 例如 "npm test:*", "src/**"
 }
 
 #[derive(Debug, Clone)]
@@ -31,9 +31,9 @@ pub struct PermissionRule {
     pub source: RuleSource,
     pub behavior: Behavior,
     pub value: RuleValue,
-    /// If set, the frontend renders a red danger card with this label (e.g. "ForceRecursiveRoot").
-    /// Only meaningful for Ask rules. Tool-level Ask (bash.rs::check) supplies this natively;
-    /// system rules can carry it to avoid short-circuiting at step ② with danger: None.
+    /// 如果设置，前端会渲染带有此标签的红色危险卡片（例如 "ForceRecursiveRoot"）。
+    /// 仅对 Ask 规则有意义。工具级 Ask（bash.rs::check）原生提供此值；
+    /// 系统规则可以携带此值，以避免在步骤 ② 以 danger: None 短路。
     pub danger: Option<String>,
 }
 
@@ -44,7 +44,7 @@ pub struct PermissionRules {
     allow: Vec<PermissionRule>,
 }
 
-/// Parse a rule string like "Bash(npm test:*)" or "Bash" into a RuleValue.
+/// 将类似 "Bash(npm test:*)" 或 "Bash" 的规则字符串解析为 RuleValue。
 pub fn parse_rule_value(raw: &str) -> RuleValue {
     let raw = raw.trim();
     if let Some(open) = raw.find('(') {
@@ -63,11 +63,11 @@ pub fn parse_rule_value(raw: &str) -> RuleValue {
     }
 }
 
-/// Load built-in system rules (spec §4.9).
+/// 加载内置系统规则 (spec §4.9)。
 pub fn load_system_rules() -> Vec<PermissionRule> {
     let deny_patterns = &[
-        // Protect config files, not runtime data — HoloGram UI writes to
-        // memory/, sessions/, logs/ for normal operation.
+        // 保护配置文件，而非运行时数据 — HoloGram UI 在正常运行时
+        // 写入 memory/、sessions/、logs/。
         "Edit(.hologram/permissions.json)",
         "Edit(.hologram/baseline.json)",
         "Edit(.hologram/settings.json)",
@@ -80,7 +80,7 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
         "WebFetch(0.0.0.0:*)",
     ];
     let ask_patterns = &[
-        // High-risk ops — no danger label needed (plain ask card).
+        // 高风险操作 — 不需要 danger 标签（普通询问卡片）。
         "Bash(git push --force main)",
         "Bash(git push --force master)",
         "Git(push)",
@@ -92,9 +92,9 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
         "WebFetch(localhost:*)",
         "WebFetch(127.0.0.1:*)",
     ];
-    // Critical bash commands — carry a danger label for red ASK card.
-    // When the system ask rule (step ②) matches these, the danger propagates
-    // directly without needing bash.rs::check() at step ③.
+    // 关键 bash 命令 — 携带 danger 标签用于红色 ASK 卡片。
+    // 当系统 ask 规则（步骤 ②）匹配这些命令时，danger 会直接传播，
+    // 无需在步骤 ③ 调用 bash.rs::check()。
     let danger_ask_patterns: &[(&str, &str)] = &[
         ("Bash(rm -rf /*)", "ForceRecursiveRoot"),
         ("Bash(curl * | sh)", "PipeToShell"),
@@ -137,8 +137,8 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
     rules
 }
 
-/// Load project-specific rules from .hologram/permissions.json.
-/// Returns empty vec if file doesn't exist or can't be parsed.
+/// 从 .hologram/permissions.json 加载项目专属规则。
+/// 如果文件不存在或无法解析，返回空 vec。
 pub fn load_project_rules(project_root: &Path) -> Vec<PermissionRule> {
     let path = project_root.join(".hologram").join("permissions.json");
     let content = match std::fs::read_to_string(&path) {
@@ -173,9 +173,9 @@ pub fn load_project_rules(project_root: &Path) -> Vec<PermissionRule> {
     rules
 }
 
-/// Append a single rule to the project permissions.json.
-/// Creates the file + directory if they don't exist.
-/// Deduplicates: same rule string in same section won't be added twice.
+/// 向项目 permissions.json 追加单条规则。
+/// 如果文件和目录不存在则创建。
+/// 去重：同一 section 中相同的规则字符串不会被重复添加。
 #[allow(dead_code)] // API ready, not yet called from UI
 pub fn append_project_rule(project_root: &Path, rule_str: &str, behavior: &str) {
     let path = project_root.join(".hologram").join("permissions.json");
@@ -191,7 +191,7 @@ pub fn append_project_rule(project_root: &Path, rule_str: &str, behavior: &str) 
         "deny" => "deny",
         _ => "ask",
     };
-    // ponytail: ensure array exists before taking &mut ref (avoids NLL borrow conflict)
+    // ponytail: 确保数组存在后再取 &mut 引用（避免 NLL 借用冲突）
     if !json[section].is_array() {
         json[section] = serde_json::json!([]);
     }
@@ -205,13 +205,13 @@ pub fn append_project_rule(project_root: &Path, rule_str: &str, behavior: &str) 
 }
 
 impl PermissionRule {
-    /// Check if this rule matches a tool name and optional content.
+    /// 检查此规则是否匹配工具名和可选内容。
     pub fn matches(&self, tool_name: &str, command_or_path: Option<&str>) -> bool {
         if self.value.tool_name != tool_name {
             return false;
         }
         match (&self.value.content, command_or_path) {
-            (None, _) => true, // tool-level rule, matches all operations
+            (None, _) => true, // 工具级规则，匹配所有操作
             (Some(pattern), Some(actual)) => content_matches(pattern, actual),
             (Some(_), None) => false,
         }
@@ -265,7 +265,7 @@ impl PermissionRules {
         }
     }
 
-    /// Find first matching deny rule. Deny always takes priority — check this first.
+    /// 查找第一个匹配的 deny 规则。Deny 始终优先 — 请先检查此项。
     pub fn find_deny(
         &self,
         tool_name: &str,
@@ -298,29 +298,29 @@ impl PermissionRules {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Content pattern matching
+// 内容模式匹配
 // ═══════════════════════════════════════════════════════════════
 
-/// Match content pattern against actual content.
-/// - "npm test:*" prefix-matches "npm test --filter=foo"
-/// - "src/**" glob-matches "src/main.rs"
-/// - "push" substring-matches git subcommand
+/// 将内容模式与实际内容进行匹配。
+/// - "npm test:*" 前缀匹配 "npm test --filter=foo"
+/// - "src/**" glob 匹配 "src/main.rs"
+/// - "push" 子串匹配 git 子命令
 fn content_matches(pattern: &str, actual: &str) -> bool {
-    // ":*" suffix: prefix match (spec §4.3 — "npm test:*" matches "npm test --filter=foo")
-    // Also handles URL patterns like "0.0.0.0:*" matching "http://0.0.0.0:8080/"
+    // ":*" 后缀：前缀匹配 (spec §4.3 — "npm test:*" 匹配 "npm test --filter=foo")
+    // 也处理 URL 模式，如 "0.0.0.0:*" 匹配 "http://0.0.0.0:8080/"
     if let Some(prefix) = pattern.strip_suffix(":*") {
         return actual.starts_with(prefix) || actual.contains(&format!("://{prefix}"));
     }
-    // Contains glob — convert to regex
+    // 包含 glob — 转换为正则
     if pattern.contains('*') || pattern.contains('?') {
         let regex_str = glob_to_regex(pattern);
         if let Ok(re) = regex::Regex::new(&regex_str) {
             let normalized = actual.replace('\\', "/");
-            // Check at every path boundary — split on / and try matching
-            // from each component start. This handles `src/**` matching
-            // `mysrc/src/x` (match starts after the second /).
-            // find_iter is non-overlapping so a long match starting at a
-            // non-boundary position can consume a valid sub-match.
+            // 在每个路径边界检查 — 按 / 分割并从每个组件起始处尝试匹配。
+            // 这样可以处理 `src/**` 匹配
+            // `mysrc/src/x`（匹配从第二个 / 之后开始）。
+            // find_iter 是非重叠的，因此从非边界位置开始的长匹配
+            // 可能会消耗掉有效的子匹配。
             for i in 0..=normalized.len() {
                 if i == 0 || normalized.as_bytes().get(i - 1) == Some(&b'/') {
                     if let Some(m) = re.find(&normalized[i..]) {
@@ -334,13 +334,13 @@ fn content_matches(pattern: &str, actual: &str) -> bool {
         }
         return false;
     }
-    // Substring match (case-insensitive)
+    // 子串匹配（不区分大小写）
     actual
         .to_lowercase()
         .contains(&pattern.to_lowercase())
 }
 
-/// Convert a simple glob pattern to regex.
+/// 将简单的 glob 模式转换为正则表达式。
 /// "src/**" → "src/.*"
 /// "*.lock" → "[^/]*\.lock"
 /// "**/foo" → "(.*/)?foo"
@@ -356,11 +356,11 @@ fn glob_to_regex(pattern: &str) -> String {
                         chars.next();
                         out.push_str("(.*/)?");
                     } else if chars.peek().is_none() {
-                        // ** at end of pattern — match recursively (standard glob)
+                        // ** 在模式末尾 — 递归匹配（标准 glob）
                         out.push_str(".*");
                     } else {
-                        // ** in the middle of a component (e.g. foo**bar) —
-                        // treat as single * (don't cross directory separator)
+                        // ** 在组件中间（例如 foo**bar）—
+                        // 当作单个 * 处理（不跨越目录分隔符）
                         out.push_str("[^/]*");
                     }
                 } else {
@@ -411,10 +411,10 @@ mod tests {
 
     #[test]
     fn test_r3_glob_matches_nested_path() {
-        // R3: `src/**` should match `mysrc/src/x` (src starts at a path boundary after /)
+        // R3: `src/**` 应匹配 `mysrc/src/x`（src 从 / 之后的路径边界开始）
         assert!(content_matches("src/**", "mysrc/src/x"));
         assert!(content_matches("src/**", "proj/src/main.rs"));
-        // But NOT when src is part of a longer name (no boundary)
+        // 但当 src 是更长名称的一部分时不匹配（无边界）
         assert!(!content_matches("src/**", "mysrc/x"));
         assert!(!content_matches("src/**", "mysource/file.ts"));
     }

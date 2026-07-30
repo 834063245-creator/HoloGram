@@ -13,7 +13,7 @@ import { getChatStore } from '../chat-store';
 import { iconHtml } from '../icons';
 import type { CollaborationMode, PermissionMode } from '../panel-store';
 
-// ── Types ──
+// ── 类型 ──
 
 export interface FooterCallbacks {
   onOpenSettings: (() => void) | null;
@@ -21,7 +21,7 @@ export interface FooterCallbacks {
   onAttachFile: () => void;
 }
 
-// ── React Component ──
+// ── React 组件 ──
 
 function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: FooterCallbacks }) {
   const panelStore = getChatStore(panelId).panel;
@@ -30,7 +30,7 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
   const lastUsageText = useStore(panelStore, (s) => s.lastUsageText);
   const _projectPath = useStore(panelStore, (s) => s.projectPath);
 
-  // settings are non-reactive — read once and re-render when stores tick
+  // 设置非响应式 — 读取一次，store 变化时重新渲染
   const settings = loadSettings();
   const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
   const ctxWin = settings.agent?.contextWindow || 0;
@@ -41,7 +41,7 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
   const thinking = active?.thinking ? ' · 思考' : '';
   const usageStr = lastUsageText ? ` · ${lastUsageText}` : '';
 
-  // Token bar
+  // Token 进度条
   let tokenBar: React.ReactNode = null;
   if (ctxWin > 0 && totalTokensUsed > 0) {
     const pct = Math.min((totalTokensUsed / ctxWin) * 100, 100);
@@ -99,7 +99,7 @@ function ChatFooterRight({ callbacks }: { callbacks: FooterCallbacks }) {
   );
 }
 
-// ── Mode bar ──
+// ── 模式栏 ──
 
 function ChatModebar({ panelId }: { panelId: string }) {
   const panelStore = getChatStore(panelId).panel;
@@ -164,7 +164,7 @@ function ChatModebar({ panelId }: { panelId: string }) {
   );
 }
 
-// ── Full footer component（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
+// ── 完整底部组件（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
 
 export interface ChatFooterHandle {
   /** settings 变更后调用 —— 设置非响应式，需手动催更重读模型名 */

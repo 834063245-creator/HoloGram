@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// CacheStore — agent injection caches migrated from state-inject.ts module-level let.
-// All data is serialisable; no Map/Set/Promise/AbortController here.
+// CacheStore — 从 state-inject.ts 模块级 let 迁移而来的 agent 注入缓存。
+// 所有数据均可序列化；不含 Map/Set/Promise/AbortController。
 
 import { createStore } from 'zustand/vanilla';
 
-// ── Types ──
+// ── 类型 ──
 
 export interface GitStatusSummary {
   branch: string;
@@ -60,7 +60,7 @@ export const cacheStore = createStore<CacheState>(() => ({
   timelineCacheTs: 0,
 }));
 
-// ── Accessors (mirror state-inject.ts export surface) ──
+// ── 访问器（镜像 state-inject.ts 导出接口）──
 
 export function getGitCache(): GitStatusSummary | null {
   return cacheStore.getState().gitCache;

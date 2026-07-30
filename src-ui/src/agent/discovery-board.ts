@@ -31,8 +31,8 @@ export class DiscoveryBoard {
   private entries: DiscoveryEntry[] = [];
   private _store: BoardPersistence;
 
-  // ── Eviction: TTL + capacity cap ──
-  private static readonly TTL_MS = 2 * 60 * 60 * 1000; // 2h — crash residual only
+  // ── 淘汰：TTL + 容量上限 ──
+  private static readonly TTL_MS = 2 * 60 * 60 * 1000; // 2 小时 — 仅清理崩溃残留
   private static readonly MAX_ENTRIES = 200;
 
   constructor(projectPath?: string, sessionId?: string) {
@@ -56,14 +56,14 @@ export class DiscoveryBoard {
     try {
       const arr = JSON.parse(raw) as DiscoveryEntry[];
       if (Array.isArray(arr)) {
-        // Dedup by agentId+key before evict — last entry wins (same semantics as post())
+        // 淘汰前去重 — 以 agentId+key 为准，最后一条生效（与 post() 语义一致）
         const seen = new Map<string, number>();
         arr.forEach((e, i) => seen.set(`${e.agentId}:${e.key}`, i));
         this.entries = arr.filter((e, i) => seen.get(`${e.agentId}:${e.key}`) === i);
         this._evict();
       }
     } catch {
-      /* corrupt file — no data to restore */
+      /* 文件损坏 — 无数据可恢复 */
     }
   }
 
@@ -86,7 +86,7 @@ export class DiscoveryBoard {
   /** 发布一条发现。同 agentId + 同 key 覆盖，从源头消灭重复版本。 */
   post(agentId: string, key: string, value: string, category: string): string {
     const id = `disc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    // Remove existing entry with same agentId + key (override, not accumulate)
+    // 移除同 agentId + key 的已有条目（覆盖而非累积）
     this.entries = this.entries.filter(
       (e) => !(e.agentId === agentId && e.key === key),
     );
@@ -108,7 +108,7 @@ export class DiscoveryBoard {
     if (changed) this._scheduleFlush();
   }
 
-  /** Remove expired entries and enforce capacity cap. */
+  /** 移除过期条目并强制执行容量上限。 */
   private _evict(): void {
     const now = Date.now();
     const before = this.entries.length;
@@ -161,9 +161,9 @@ export class DiscoveryBoard {
   }
 }
 
-/** Proxy that delegates to a swappable target DiscoveryBoard.
- *  Used by the main agent (which persists across session switches)
- *  to dynamically route to the current session's board. */
+/** 代理类，委托到可替换的目标 DiscoveryBoard。
+ *  主 Agent（跨会话切换持久存在）用它
+ *  动态路由到当前会话的 board。 */
 export class DiscoveryBoardProxy {
   private _target: DiscoveryBoard;
 
@@ -171,7 +171,7 @@ export class DiscoveryBoardProxy {
     this._target = target;
   }
 
-  /** Swap the underlying board — called when the active session changes */
+  /** 切换底层 board — 活跃会话变更时调用 */
   setTarget(board: DiscoveryBoard): void {
     this._target = board;
   }

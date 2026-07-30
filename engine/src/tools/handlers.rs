@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Tool handler implementations.
+//! 工具处理器实现。
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -130,7 +130,7 @@ pub(crate) fn handler_path(args: &Value) -> ToolResponse {
     }))
 }
 
-// ponytail: handler_history deleted — symbol_history now routes to handler_node (richer output)
+// ponytail：handler_history 已删除 —— symbol_history 现在路由到 handler_node（输出更丰富）
 
 pub(crate) fn handler_community(args: &Value) -> ToolResponse {
     let node_id = get_str(args, &["node_id", "nodeId"]);
@@ -248,7 +248,7 @@ pub(crate) fn handler_delayed(args: &Value) -> ToolResponse {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// V2 Analysis Handlers
+// V2 分析处理器
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn handler_fragile(args: &Value) -> ToolResponse {
@@ -336,8 +336,8 @@ pub(crate) fn handler_cycle(args: &Value) -> ToolResponse {
 pub(crate) fn handler_thread_conflicts(_args: &Value) -> ToolResponse {
     ToolResponse::Success(with_store(|idx| {
         use crate::graph::EdgeKind;
-        // Scan all Writes / Shares edges for shared resources with multiple writers.
-        // A "resource" is any graph node that has ≥2 distinct sources writing/shares-ing it.
+        // 扫描所有 Writes / Shares 边，查找有多个写入者的共享资源。
+        // "资源"是任何有 ≥2 个不同源节点写入/共享的图节点。
         let mut writers: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         for (source, targets) in idx.edges_iter() {
             for (target, kind, _, _) in targets {
@@ -352,7 +352,7 @@ pub(crate) fn handler_thread_conflicts(_args: &Value) -> ToolResponse {
         let mut resources: Vec<serde_json::Value> = Vec::new();
         let mut total_unlocked = 0usize;
         for (resource, sources) in &writers {
-            // Dedup sources (same function may write multiple times)
+            // 去重源节点（同一函数可能多次写入）
             let mut unique: Vec<&str> = sources.iter().map(|s| s.as_str()).collect();
             unique.sort();
             unique.dedup();
@@ -457,7 +457,7 @@ pub(crate) fn handler_blindspots(args: &Value) -> ToolResponse {
         let cycles = detect_cycles_from_index(idx);
         let mut blind = find_blindspots(l4_total, cycles.len(), 0);
 
-        // When filter is "L4" or detail is requested, include per-file L4 breakdown
+        // 当 filter 为 "L4" 或请求 detail 时，包含按文件的 L4 分解
         if detail || filter == "L4" {
             let l4_files: Vec<serde_json::Value> = count_l4_by_file(idx)
                 .into_iter()
@@ -567,7 +567,7 @@ pub(crate) fn handler_search(args: &Value) -> ToolResponse {
             details: json!({}),
         };
     }
-    // 1. FTS5 exact search
+    // 1. FTS5 精确搜索
     if let Ok(results) = engine::engine_fts_search(query_str, limit) {
         if !results.is_empty() {
             let mut out = json!({
@@ -576,12 +576,12 @@ pub(crate) fn handler_search(args: &Value) -> ToolResponse {
                 "results": results.iter().map(node_to_value).collect::<Vec<_>>(),
                 "engine": "fts5",
             });
-            // append vector results if available
+            // 如果可用，附加向量搜索结果
             merge_vector_hits(&mut out, query_str, limit);
             return ToolResponse::Success(out);
         }
     }
-    // 2. Linear fuzzy fallback
+    // 2. 线性模糊回退
     let mut out = with_graph(|g| {
         let results = query::search_nodes(g, query_str);
         let count = results.len().min(limit);
@@ -592,17 +592,17 @@ pub(crate) fn handler_search(args: &Value) -> ToolResponse {
             "engine": "linear",
         })
     });
-    // append vector results
+    // 附加向量搜索结果
     merge_vector_hits(&mut out, query_str, limit);
     ToolResponse::Success(out)
 }
 
-/// Append vector (semantic) search results to the output if available.
-/// ponytail: fire-and-forget — if vector index isn't built, silently skip.
+/// 将向量（语义）搜索结果附加到输出（如果可用）。
+/// ponytail：即发即忘 —— 如果向量索引未构建，静默跳过。
 pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
     let root = project_root();
     if root.as_os_str().is_empty() { return; }
-    // Use cached index — avoids reloading 40+ MB from disk on every search
+    // 使用缓存的索引 —— 避免每次搜索都从磁盘重新加载 40+ MB
     let (index, slots) = match crate::vector::get_or_load_index(&root) {
         Ok(pair) => pair,
         Err(_) => return,
@@ -641,8 +641,8 @@ pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
         .collect();
     out["vector_hits"] = json!(vec_results);
     if let Some(obj) = out.as_object_mut() {
-        // Don't add to count — vector_hits is a separate field.
-        // count reflects the primary (FTS5/linear) result set only.
+        // 不计入 count —— vector_hits 是独立字段。
+        // count 仅反映主（FTS5/linear）结果集。
         obj.insert("vector_count".into(), json!(vec_results.len()));
     }
 }
@@ -828,9 +828,9 @@ pub(crate) fn handler_run_check(args: &Value) -> ToolResponse {
             details: json!({}),
         };
     }
-    // Load baseline snapshot (saved from last check) for before/after diff
+    // 加载基线快照（上次检查保存的）用于前后对比
     let before = load_baseline(&root);
-    // Prefer in-memory cached graph; only re-analyze when truly empty
+    // 优先使用内存缓存的图；仅在确实为空时才重新分析
     let after = match engine::engine_read_graph(|g| g.clone()) {
         Ok(g) if g.node_count() > 0 || g.edge_count() > 0 => g,
         _ => {
@@ -857,9 +857,9 @@ pub(crate) fn handler_run_check(args: &Value) -> ToolResponse {
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     let check_result = run_full_check(&before, &after, &changed_files, path);
-    // Advance baseline so next check diffs against this snapshot
+    // 推进基线，使下次检查与此次快照对比
     save_baseline(&root, &after);
-    // Record to timeline (skip quiet polls — only meaningful checks)
+    // 记录到时间线（跳过静默轮询 —— 仅记录有意义的检查）
     let passed = check_result["passed"].as_bool().unwrap_or(true);
     let violation_count = check_result["violation_count"].as_u64().unwrap_or(0);
     if violation_count > 0 || !changed_files.is_empty() {
@@ -939,7 +939,7 @@ pub(crate) fn handler_run_health(args: &Value) -> ToolResponse {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Rename — two-phase preview/apply with expiry + unified diff
+// 重命名 —— 两阶段预览/应用，带过期 + 统一 diff
 // ═══════════════════════════════════════════════════════════════
 
 const RENAME_EXPIRY_SECS: u64 = 600; // 10 minutes
@@ -963,7 +963,7 @@ fn refactor_id() -> String {
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    // Atomic counter + timestamp: collision-free under concurrent calls.
+    // 原子计数器 + 时间戳：并发调用下无冲突。
     format!("ref_{:012x}_{:04x}", nanos, seq & 0xFFFF)
 }
 
@@ -979,7 +979,7 @@ fn cleanup_expired_renames(lock: &mut HashMap<String, (Instant, RenamePlan)>) {
     }
 }
 
-/// Generate a unified-diff preview of the rename across affected files.
+/// 生成跨受影响文件的重命名 unified-diff 预览。
 fn generate_rename_diff(plan: &RenamePlan) -> String {
     let mut output = String::new();
     let old = &plan.old_name;
@@ -1001,7 +1001,7 @@ fn generate_rename_diff(plan: &RenamePlan) -> String {
         output.push_str(&format!("--- a/{}\n", file_path));
         output.push_str(&format!("+++ b/{}\n", file_path));
 
-        // Collect hunks — simple scan for changed lines with 3-line context
+        // 收集 hunk —— 简单扫描变更行，带 3 行上下文
         let mut hunks: Vec<(usize, usize, usize, usize)> = Vec::new(); // (old_start, old_len, new_start, new_len)
         let max_len = orig_lines.len().max(new_lines.len());
         let mut i = 0usize;
@@ -1011,7 +1011,7 @@ fn generate_rename_diff(plan: &RenamePlan) -> String {
             if old_line != new_line {
                 let hunk_start = i.saturating_sub(3);
                 let mut hunk_end = i + 1;
-                // Extend forward to capture adjacent changes within 3-line context
+                // 向前扩展以捕获 3 行上下文内的相邻变更
                 let mut j = i + 1;
                 while j < max_len && j <= i + 6 {
                     let ol = orig_lines.get(j).copied().unwrap_or("");
@@ -1022,7 +1022,7 @@ fn generate_rename_diff(plan: &RenamePlan) -> String {
                     j += 1;
                 }
                 hunk_end = (hunk_end + 3).min(max_len);
-                // Ponytail: merge with previous hunk if they overlap
+                // Ponytail：与前一个 hunk 合并（如果重叠）
                 if let Some(last) = hunks.last_mut() {
                     if hunk_start <= last.3 + 3 {
                         last.3 = hunk_end;
@@ -1046,13 +1046,13 @@ fn generate_rename_diff(plan: &RenamePlan) -> String {
             ));
             let ctx_start = old_start.saturating_sub(1);
             let ctx_end = (old_start + old_len - 1).min(orig_lines.len());
-            // Show context before
+            // 显示前导上下文
             for li in ctx_start..(*old_start - 1) {
                 if let Some(l) = orig_lines.get(li) {
                     output.push_str(&format!(" {}\n", l));
                 }
             }
-            // Show changed lines
+            // 显示变更行
             for li in (*old_start - 1)..ctx_end {
                 let orig = orig_lines.get(li).copied().unwrap_or("");
                 let renamed_line = new_lines.get(li).copied().unwrap_or("");
@@ -1067,7 +1067,7 @@ fn generate_rename_diff(plan: &RenamePlan) -> String {
                     output.push_str(&format!(" {}\n", orig));
                 }
             }
-            // Show context after
+            // 显示后续上下文
             for li in ctx_end..(ctx_end + 3).min(orig_lines.len()) {
                 if let Some(l) = orig_lines.get(li) {
                     output.push_str(&format!(" {}\n", l));
@@ -1084,7 +1084,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
     let dry_run = args.get("dry_run").or_else(|| args.get("dryRun")).and_then(|v| v.as_bool()).unwrap_or(true);
     let ref_id = args.get("refactor_id").or_else(|| args.get("refactorId")).and_then(|v| v.as_str());
 
-    // ── Phase 2: apply by refactor_id ──
+    // ── 阶段 2：通过 refactor_id 应用 ──
     if let Some(rid) = ref_id {
         let mut lock = PENDING_RENAMES.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_expired_renames(&mut lock);
@@ -1098,7 +1098,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
                 };
             }
         };
-        // Execute the actual rename
+        // 执行实际重命名
         let count = plan.matched_ids.len();
         let matched_ids = plan.matched_ids;
         if let Err(e) = engine::engine_write(|idx| {
@@ -1130,7 +1130,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
         }));
     }
 
-    // ── Phase 1: dry_run preview (default) ──
+    // ── 阶段 1：dry_run 预览（默认）──
     if old_name.is_empty() || new_name.is_empty() {
         return ToolResponse::Degraded {
             guidance: "old_name and new_name are required for preview".into(),
@@ -1147,7 +1147,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
         };
     }
 
-    // dry_run: preview with unified diff
+    // dry_run：使用统一 diff 预览
     let (matched_ids, matched_locations): (Vec<String>, Vec<String>) = {
         match engine::engine_read(|idx| {
             let ids: Vec<String> = idx.nodes_iter().filter(|n| n.name == old_name).map(|n| n.id.clone()).collect();
@@ -1174,7 +1174,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
         };
     }
 
-    // Snapshot affected files for diff generation
+    // 为 diff 生成快照受影响文件
     let mut file_snapshots: HashMap<String, String> = HashMap::new();
     let mut seen_files: Vec<String> = Vec::new();
     for loc in &matched_locations {
@@ -1190,7 +1190,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
         };
         if !seen_files.iter().any(|f| f == file_path) {
             seen_files.push(file_path.to_string());
-            // Read file content from disk
+            // 从磁盘读取文件内容
             let full_path = project_root().join(file_path);
             if let Ok(content) = std::fs::read_to_string(&full_path) {
                 file_snapshots.insert(file_path.to_string(), content);
@@ -1208,7 +1208,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
     };
     let diff = generate_rename_diff(&plan);
 
-    // Store plan for later apply
+    // 存储计划供后续应用
     {
         let mut lock = PENDING_RENAMES.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_expired_renames(&mut lock);
@@ -1233,8 +1233,8 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
 }
 
 pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
-    // Warm LSP pool only when uninitialized or project root changed.
-    // (Don't restart healthy servers on every engine_status poll.)
+    // 仅在未初始化或项目根目录变更时预热 LSP 池。
+    //（不在每次 engine_status 轮询时重启健康的服务器。）
     {
         let proj = project_root();
         let root = if proj.as_os_str().is_empty() {
@@ -1251,7 +1251,7 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
             });
         }
     }
-    // LSP status is independent of engine state — always collect it
+    // LSP 状态独立于引擎状态 —— 始终收集
     let lsp = crate::lsp_manager::LspManager::lsp_status();
     let lsp_available: Vec<&str> = lsp.iter()
         .filter(|s| s["available"].as_bool().unwrap_or(false))
@@ -1378,11 +1378,11 @@ pub(crate) fn handler_node(args: &Value) -> ToolResponse {
     }))
 }
 
-/// Check whether a node is a known entry point that static analysis can't see
-/// (framework-registered commands, constructors, test functions, etc.).
+/// 检查节点是否为静态分析无法识别的已知入口点
+///（框架注册的命令、构造函数、测试函数等）。
 
-/// Strip the trailing `:line_number` suffix from a location string.
-/// Handles Windows drive-letter paths (e.g. `C:\foo\bar.rs:42` → `C:\foo\bar.rs`).
+/// 从位置字符串中去除末尾的 `:line_number` 后缀。
+/// 处理 Windows 驱动器号路径（如 `C:\foo\bar.rs:42` → `C:\foo\bar.rs`）。
 fn strip_loc_suffix(loc: &str) -> &str {
     if let Some(pos) = loc.rfind(':') {
         let maybe_line = &loc[pos + 1..];
@@ -1398,41 +1398,41 @@ fn is_entry_point(node: &Node) -> bool {
     let raw_loc = node.location.as_deref().unwrap_or("");
     let loc = strip_loc_suffix(raw_loc);
 
-    // Binary entry points (main in any language)
+    // 二进制入口点（任何语言的 main）
     if name == "main" {
         return true;
     }
-    // Class constructors (called via `new` keyword in JS/TS)
+    // 类构造函数（在 JS/TS 中通过 `new` 关键字调用）
     if name == "constructor" || name.ends_with(".constructor") {
         return true;
     }
-    // Test functions (dynamically discovered by test frameworks)
+    // 测试函数（由测试框架动态发现）
     if name.starts_with("test_") || name.ends_with("_test") || name.ends_with("Test") {
         return true;
     }
-    // Tauri command dispatcher (registered via #[command] macro)
+    // Tauri 命令分发器（通过 #[command] 宏注册）
     if name == "rpc" && loc.contains("rpc.rs") {
         return true;
     }
-    // Engine pipeline entry
+    // 引擎流水线入口
     if name == "run_pipeline" {
         return true;
     }
-    // Tauri command handler modules (in commands/ directory, registered by macro)
+    // Tauri 命令处理器模块（在 commands/ 目录中，由宏注册）
     if loc.contains("/commands/") || loc.contains("\\commands\\") {
         return true;
     }
-    // React/Vue component entry points
+    // React/Vue 组件入口点
     if name == "App" && (loc.ends_with("App.tsx") || loc.ends_with("App.ts")) {
         return true;
     }
-    // Framework init/bootstrap functions
+    // 框架初始化/引导函数
     if name == "init" && node.out_degree > 3 {
         return true;
     }
-    // ponytail: common entry-point name patterns across languages.
-    // These functions are invoked by framework/CLI/test runners,
-    // not by direct CALLS edges — static analysis can't see them.
+    // ponytail：跨语言的常见入口点名称模式。
+    // 这些函数由框架/CLI/测试运行器调用，
+    // 而非通过直接的 CALLS 边 —— 静态分析无法看到它们。
     const ENTRY_PATTERNS: &[&str] = &[
         "handle", "process", "run", "start", "stop", "serve",
         "migrate", "setup", "teardown", "bootstrap", "execute",
@@ -1447,14 +1447,14 @@ fn is_entry_point(node: &Node) -> bool {
     false
 }
 
-/// Check whether a node name looks like a mock/stub test fixture.
-/// These are referenced by test framework wiring, not direct CALLS edges.
+/// 检查节点名称是否为 mock/stub 测试夹具。
+/// 这些由测试框架连接引用，而非直接的 CALLS 边。
 fn is_mock_or_stub(name: &str) -> bool {
     // mockSomething, MockXxx, createMockXxx
     if name.starts_with("mock") || name.starts_with("Mock") || name.starts_with("createMock") {
         return true;
     }
-    // somethingMock, dbStub, s3Fake, userSpy
+    // somethingMock, dbStub, s3Fake, userSpy（这些是代码标识符，保留英文）
     for suffix in &["Mock", "Stub", "Fake", "Spy"] {
         if name.ends_with(suffix) {
             return true;
@@ -1463,28 +1463,28 @@ fn is_mock_or_stub(name: &str) -> bool {
     false
 }
 
-/// Framework base classes that are instantiated via metaclass/DI/framework magic,
-/// not by direct CALLS edges. Inheriting from one of these means the class is
-/// framework-managed — not dead code.
+/// 通过元类/DI/框架魔法实例化的框架基类，
+/// 而非通过直接的 CALLS 边。继承自其中之一意味着该类是
+/// 框架管理的 —— 不是死代码。
 fn is_framework_base(name: &str) -> bool {
     matches!(
         name,
         // Python ORM / Pydantic
         "Base" | "DeclarativeBase" | "Model" | "BaseModel" | "BaseSettings"
         | "db.Model" | "TableBase"
-        // AWS CDK / IaC constructs
+        // AWS CDK / IaC 构造
         | "Stack" | "NestedStack" | "Construct" | "Resource"
         // Django REST / DRF
         | "Serializer" | "ViewSet" | "ModelViewSet"
-        // Android / mobile
+        // Android / 移动端
         | "Activity" | "Fragment" | "ViewModel" | "Service"
         // Spring / Java EE
         | "Application" | "Configuration"
     )
 }
 
-/// React/Vue/Android lifecycle methods — called by the framework,
-/// never by direct CALLS edges.
+/// React/Vue/Android 生命周期方法 —— 由框架调用，
+/// 从不通过直接的 CALLS 边。
 fn is_lifecycle_method(name: &str) -> bool {
     matches!(
         name,
@@ -1506,13 +1506,13 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
     let kind_label = kind_str.to_string();
     let kinds: Vec<&str> = kind_str.split(',').map(|s| s.trim()).collect();
     ToolResponse::Success(with_store(|idx| {
-        // ponytail: in_degree counts ALL edge types (defines+calls+imports+inherits).
-        // Every function has ≥1 defines edge from its parent module, so in_degree==0
-        // never matches functions — only orphan symbols. in_degree≤1 catches functions
-        // whose sole incoming edge is their own defines (nobody calls/imports them).
-        // Exclusions: entry points (framework/CLI), mocks/stubs (test wiring),
-        // framework base classes (ORM/Pydantic/CDK — instantiated via metaclass magic),
-        // and lifecycle methods (React/Vue/Android — called by framework runtime).
+        // ponytail：in_degree 统计所有边类型（defines+calls+imports+inherits）。
+        // 每个函数都有 ≥1 条来自父模块的 defines 边，所以 in_degree==0
+        // 永远匹配不到函数 —— 只匹配孤儿符号。in_degree≤1 能捕获那些
+        // 唯一入边是自身 defines 的函数（无人调用/导入它们）。
+        // 排除项：入口点（框架/CLI）、mock/stub（测试连接）、
+        // 框架基类（ORM/Pydantic/CDK —— 通过元类魔法实例化）、
+        // 和生命周期方法（React/Vue/Android —— 由框架运行时调用）。
         let mut candidates: Vec<&Node> = idx
             .nodes_iter()
             .filter(|n| {
@@ -1543,8 +1543,8 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
     }))
 }
 
-/// On-demand type-aware call resolution via native LSP.
-/// Degrades gracefully when the LSP server is not installed.
+/// 通过原生 LSP 按需进行类型感知的调用解析。
+/// LSP 服务器未安装时优雅降级。
 pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
     let file_path = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
     let func_name = args.get("function").and_then(|v| v.as_str()).unwrap_or("");
@@ -1566,7 +1566,7 @@ pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
     let path_str = abs_path.to_string_lossy().replace('\\', "/");
     let ext = path_str.rsplit('.').next().unwrap_or("").to_lowercase();
 
-    // Read source
+    // 读取源码
     let source = match std::fs::read_to_string(&abs_path) {
         Ok(s) => s,
         Err(e) => return ToolResponse::Degraded {
@@ -1576,7 +1576,7 @@ pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
         },
     };
 
-    // ── Path 1: Real LSP server (if pool is warm) ──
+    // 尝试原生 LSP（如果池已预热）──
     let lsp_result = if line > 0 || column > 0 {
         crate::lsp_manager::LspManager::resolve_definition(
             &path_str, &source, line, column, &ext,
@@ -1608,7 +1608,7 @@ pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
         }
     }
 
-    // ── Path 2: No native LSP available → degraded ──
+    // ── 路径 2：无原生 LSP 可用 → 降级 ──
     ToolResponse::Degraded {
         guidance: format!("Native LSP unavailable for .{} — call resolution skipped.", ext),
         fallback: format!("Install an LSP server for .{} to enable precise call resolution. Check engine_status for details.", ext),
@@ -1619,7 +1619,7 @@ pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
     }
 }
 
-/// Resolve the type of a symbol at a specific position.
+/// 解析指定位置符号的类型。
 pub(crate) fn handler_resolve_type(args: &Value) -> ToolResponse {
     let (path_str, source, ext) = match resolve_tool_prepare(args) {
         Ok(v) => v,
@@ -1635,7 +1635,7 @@ pub(crate) fn handler_resolve_type(args: &Value) -> ToolResponse {
     let line = get_usize(args, "line", 0) as u32;
     let column = get_usize(args, "column", 0) as u32;
 
-    // Try native LSP
+    // 尝试原生 LSP
     match crate::lsp_manager::LspManager::resolve_type(&path_str, &source, line, column, &ext) {
         Ok(hover) if !hover.is_empty() => {
             return ToolResponse::Success(json!({
@@ -1647,7 +1647,7 @@ pub(crate) fn handler_resolve_type(args: &Value) -> ToolResponse {
         _ => {}
     }
 
-    // ── Path 2: No native LSP available → degraded ──
+    // ── 路径 2：无原生 LSP 可用 → 降级 ──
     ToolResponse::Degraded {
         guidance: format!("Native LSP unavailable for .{} — type resolution skipped.", ext),
         fallback: format!("Install an LSP server for .{} to enable precise type resolution. Check engine_status for details.", ext),
@@ -1658,7 +1658,7 @@ pub(crate) fn handler_resolve_type(args: &Value) -> ToolResponse {
     }
 }
 
-/// Find all implementations of an interface/trait at a specific position.
+/// 查找指定位置接口/trait/抽象类的所有实现。
 pub(crate) fn handler_find_implementations(args: &Value) -> ToolResponse {
     let (path_str, source, ext) = match resolve_tool_prepare(args) {
         Ok(v) => v,
@@ -1674,7 +1674,7 @@ pub(crate) fn handler_find_implementations(args: &Value) -> ToolResponse {
     let line = get_usize(args, "line", 0) as u32;
     let column = get_usize(args, "column", 0) as u32;
 
-    // Try native LSP
+    // 尝试原生 LSP
     match crate::lsp_manager::LspManager::find_implementations(&path_str, &source, line, column, &ext) {
         Ok(locs) if !locs.is_empty() => {
             return ToolResponse::Success(json!({
@@ -1691,7 +1691,7 @@ pub(crate) fn handler_find_implementations(args: &Value) -> ToolResponse {
         _ => {}
     }
 
-    // Fallback: no native LSP → degraded
+    // 回退：无原生 LSP → 降级
     ToolResponse::Degraded {
         guidance: format!("Native LSP unavailable for .{} — implementation search skipped.", ext),
         fallback: format!("Install an LSP server for .{} to enable interface implementation search.", ext),
@@ -1702,7 +1702,7 @@ pub(crate) fn handler_find_implementations(args: &Value) -> ToolResponse {
     }
 }
 
-/// Find all references to a symbol at a specific position.
+/// 查找指定位置符号的所有引用。
 pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
     let (path_str, source, ext) = match resolve_tool_prepare(args) {
         Ok(v) => v,
@@ -1719,7 +1719,7 @@ pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
     let column = get_usize(args, "column", 0) as u32;
     let _include_decl = args.get("includeDeclaration").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    // Try native LSP
+    // 尝试原生 LSP
     match crate::lsp_manager::LspManager::find_references(&path_str, &source, line, column, &ext) {
         Ok(locs) if !locs.is_empty() => {
             return ToolResponse::Success(json!({
@@ -1736,7 +1736,7 @@ pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
         _ => {}
     }
 
-    // Fallback: use graph to find incoming references
+    // 回退：使用图查找入边引用
     match engine::engine_read_graph(|g| {
         let _node_ids: Vec<String> = g.nodes.keys().cloned().collect();
         let refs: Vec<Value> = g.edges.iter()
@@ -1765,7 +1765,7 @@ pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
     }
 }
 
-/// Shared preparation for resolve_* tools: read file, get ext, return (path, source, ext).
+/// resolve_* 工具的共享准备：读取文件、获取扩展名，返回 (path, source, ext)。
 pub(crate) fn resolve_tool_prepare(args: &Value) -> Result<(String, String, String), Value> {
     let file_path = get_str(args, &["file"]);
     if file_path.is_empty() {
@@ -1832,7 +1832,7 @@ pub(crate) fn handler_dataflow(args: &Value) -> ToolResponse {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Flow tools: list_flows, get_flow, get_affected_flows
+// 流程工具: list_flows, get_flow, get_affected_flows
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn handler_list_flows(args: &Value) -> ToolResponse {
@@ -1859,7 +1859,7 @@ pub(crate) fn handler_list_flows(args: &Value) -> ToolResponse {
                     .to_string();
                 let framework = flow.get("framework").and_then(|v| v.as_str());
 
-                // Apply kind filter
+                // 应用类型过滤
                 if let Some(kf) = kind_filter {
                     if entry_kind != kf {
                         return None;
@@ -1894,7 +1894,7 @@ pub(crate) fn handler_list_flows(args: &Value) -> ToolResponse {
             })
             .collect();
 
-        // Sort
+        // 排序
         flows.sort_by(|a, b| {
             match sort_by {
                 "depth" => b["depth"].as_u64().cmp(&a["depth"].as_u64()),
@@ -1936,7 +1936,7 @@ pub(crate) fn handler_get_flow(args: &Value) -> ToolResponse {
     let include_source = args.get("include_source").and_then(|v| v.as_bool()).unwrap_or(false);
 
     ToolResponse::Success(with_store(|idx| {
-        // Find the entry point node with matching flow
+        // 查找匹配流程的入口点节点
         let entry: Option<(&crate::graph::Node, &serde_json::Value)> = idx
             .nodes_iter()
             .find_map(|n| {
@@ -1973,7 +1973,7 @@ pub(crate) fn handler_get_flow(args: &Value) -> ToolResponse {
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
             .unwrap_or_default();
 
-        // Build the flow path with node details
+        // 构建包含节点详情的流程路径
         let path: Vec<serde_json::Value> = node_ids
             .iter()
             .filter_map(|nid| {
@@ -1986,7 +1986,7 @@ pub(crate) fn handler_get_flow(args: &Value) -> ToolResponse {
                 });
                 if include_source {
                     if let Some(loc) = &n.location {
-                        // Strip line suffix properly (handles Windows drive letters)
+                        // 正确去除行号后缀（处理 Windows 驱动器号）
                         let (file, line_num) = if let Some(pos) = loc.rfind(':') {
                             let maybe_line = &loc[pos + 1..];
                             if maybe_line.chars().all(|c| c.is_ascii_digit()) {
@@ -2062,10 +2062,10 @@ pub(crate) fn handler_affected_flows(args: &Value) -> ToolResponse {
     }
 
     ToolResponse::Success(with_store(|idx| {
-        // Build set of nodes that belong to changed files
+        // 构建属于变更文件的节点集合
         let mut changed_set: HashSet<String> = changed_node_ids.into_iter().collect();
         for file_path in &files {
-            // Normalize the query path for comparison
+            // 归一化查询路径以便比较
             let query_normalized = file_path.replace('\\', "/");
             for n in idx.nodes_iter() {
                 if let Some(loc) = &n.location {
@@ -2115,7 +2115,7 @@ pub(crate) fn handler_affected_flows(args: &Value) -> ToolResponse {
             })
             .collect();
 
-        // Sort by criticality descending
+        // 按关键度降序排序
         affected.sort_by(|a, b| {
             b["criticality"].as_f64().unwrap_or(0.0)
                 .partial_cmp(&a["criticality"].as_f64().unwrap_or(0.0))

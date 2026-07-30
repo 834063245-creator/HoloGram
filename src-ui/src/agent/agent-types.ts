@@ -1,8 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Shared agent types — extracted from agent.ts to avoid circular imports
-// between agent.ts and streaming-executor.ts.
+// 共享 agent 类型 — 从 agent.ts 中提取，避免 agent.ts 和 streaming-executor.ts 之间的循环依赖。
 
 import type { Message, Usage } from '../provider/types';
 
@@ -52,9 +51,9 @@ export interface AgentEvent {
 }
 
 export interface Pricing {
-  cache_hit: number; // per 1M tokens
-  input: number; // per 1M tokens
-  output: number; // per 1M tokens
+  cache_hit: number; // 每 1M tokens
+  input: number; // 每 1M tokens
+  output: number; // 每 1M tokens
   currency: string;
 }
 
@@ -65,29 +64,29 @@ export function computeCost(p: Pricing | undefined, u: Usage | undefined): numbe
   );
 }
 
-/** Sink receives the agent's typed event stream. */
+/** Sink 接收 agent 的类型化事件流。 */
 export type EventSink = (event: AgentEvent) => void;
 
-/** UI notification port — injected by the workspace so the agent core never
- *  imports UI modules (one-way boundary: ui → agent, never agent → ui).
- *  All members optional; a headless agent simply gets none. */
+/** UI 通知端口 — 由 workspace 注入，使 agent 核心永远不
+ *  导入 UI 模块（单向边界：ui → agent，绝无 agent → ui）。
+ *  所有成员可选；headless agent 不需要任何通知。 */
 export interface AgentUINotifier {
-  /** Loop progress (drives the status bar). */
+  /** 循环进度（驱动状态栏）。 */
   progress?(step: number, toolName: string): void;
-  /** A tool call finished (panels auto-refresh). */
+  /** 工具调用完成（面板自动刷新）。 */
   toolDone?(toolName: string, args: Record<string, unknown>, output: string): void;
-  /** A sub-agent is starting. The UI builds its render state here and returns
-   *  the EventSink the child agent should stream into (undefined → no-op sink).
-   *  sessionId identifies the UI session that owns this sub-agent's output. */
+  /** 子 Agent 启动中。UI 在此构建其渲染状态，并返回
+   *  子 agent 应流式输出的 EventSink（undefined → 空操作 sink）。
+   *  sessionId 标识拥有此子 Agent 输出的 UI 会话。 */
   subAgentSpawn?(
     info: { agentId: string; description: string; sessionId: number },
     onProgress?: (chunk: string) => void,
   ): EventSink | undefined;
   /** Agent 运行状态变更（idle ↔ running） */
   onStatusChange?(running: boolean): void;
-  /** Sub-agent finished — UI finalizes its render state. */
+  /** 子 Agent 完成 — UI 完成其渲染状态。 */
   subAgentFinished?(agentId: string, sessionId: number, ok: boolean): void;
-  /** Agent's session array has been replaced (compaction / retract / setSession).
-   *  ChatCore needs to rebuild its ChatMessage[] projection. */
+  /** Agent 的会话数组已被替换（压缩 / 撤回 / setSession）。
+   *  ChatCore 需要重建其 ChatMessage[] 投影。 */
   sessionReplaced?(messages: Message[]): void;
 }

@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Search & glob — coding agent tools.
+// 搜索与 glob — 编码 agent 工具。
 
 use hologram_engine::pipeline::discovery::is_ignored_path;
 
-/// Expand brace expressions in a glob pattern.
+/// 展开 glob 模式中的花括号表达式。
 /// "**/*.{ts,rs}" → ["**/*.ts", "**/*.rs"]
-/// Supports nested braces: "a/{b,c}/{d,e}" expands correctly.
+/// 支持嵌套花括号："a/{b,c}/{d,e}" 可正确展开。
 fn expand_braces(pattern: &str) -> Vec<String> {
     if let Some(start) = pattern.find('{') {
         if let Some(end) = pattern[start..].find('}') {
@@ -95,7 +95,7 @@ pub(crate) async fn search_code(
             regex::Regex::new(&format!("^{}$", pat)).ok()
         });
 
-        // ── Scan budget: prevent unbounded traversal on huge trees ──
+        // ── 扫描预算：防止在巨大目录树中无限遍历 ──
         const MAX_SCAN_FILES: usize = 20_000;
         const TIME_BUDGET_SECS: u64 = 60;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIME_BUDGET_SECS);
@@ -110,7 +110,7 @@ pub(crate) async fn search_code(
                 )
             })
         {
-            // ── Budget checks ──
+            // ── 预算检查 ──
             if scanned_files >= MAX_SCAN_FILES || std::time::Instant::now() > deadline {
                 truncated_by_budget = true;
                 break;
@@ -181,7 +181,7 @@ pub(crate) async fn search_code(
                 }
             }
             if file_has_match { file_sets.insert(fp_str.clone()); }
-            // Early exit for files_with_matches/count modes when enough matches found
+            // 在 files_with_matches/count 模式下找到足够匹配时提前退出
             if mode != "content" && file_sets.len() >= max {
                 truncated_by_budget = true;
                 break;
@@ -260,9 +260,9 @@ pub(crate) async fn search_code(
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-/// Alias for search_code — identical implementation, separate Tauri command
-/// for tool name compatibility (Agent tools: search_content, search_code).
-/// If search_code's behavior changes, this inherits it automatically.
+/// search_code 的别名 — 实现相同，作为独立的 Tauri 命令
+/// 用于工具名兼容（Agent 工具：search_content、search_code）。
+/// 如果 search_code 的行为变化，此命令自动继承。
 pub(crate) async fn search_content(
     directory: String, pattern: String, file_types: Option<String>,
     max_results: Option<usize>, use_regex: Option<bool>,
@@ -293,7 +293,7 @@ pub(crate) async fn glob(
     let dir = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
     let root = crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
 
-    // Expand brace expressions ({a,b,c}) — the glob crate doesn't support them.
+    // 展开花括号表达式 ({a,b,c}) — glob crate 不支持它们。
     let expanded = expand_braces(&pattern);
     let glob_patterns: Vec<glob::Pattern> = expanded.iter()
         .map(|p| glob::Pattern::new(p).map_err(|e| format!("无效的 glob 模式 '{}': {}", p, e)))

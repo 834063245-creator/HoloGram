@@ -7,16 +7,16 @@ use std::cell::RefCell;
 use crate::engine::GRAMMAR_LOADER;
 use tree_sitter::{Language, Parser};
 
-// Thread-local parser cache — reuses parser across files of the same language.
-// Avoids Parser::new() + set_language() allocation overhead for thousands of files.
+// 线程局部 parser 缓存 — 在同语言文件间复用 parser。
+// 避免对数千个文件进行 Parser::new() + set_language() 的分配开销。
 thread_local! {
-    // ponytail: cached (Parser, Language, ext). Language is stored so GRAMMAR_LOADER
-    // RwLock is hit only once per extension per thread, not once per file.
+    // ponytail: 缓存 (Parser, Language, ext)。存储 Language 使 GRAMMAR_LOADER
+    // 的 RwLock 每个扩展名每线程只命中一次，而非每文件一次。
     static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = const { RefCell::new(None) };
 }
 
-/// Generic tree-sitter adapter covering all languages beyond Python and JS/TS.
-/// Each language is matched explicitly due to inconsistent crate APIs.
+/// 通用 tree-sitter 适配器，覆盖 Python 和 JS/TS 之外的所有语言。
+/// 由于各 crate API 不一致，每种语言都显式匹配。
 pub struct TreeSitterAdapter;
 
 impl Default for TreeSitterAdapter {
@@ -31,11 +31,11 @@ impl TreeSitterAdapter {
     fn parse_ext(ext: &str, source: &str, file_id: &str) -> (Vec<Node>, Vec<Edge>, Option<tree_sitter::Tree>) {
         TL_PARSER.with(|cell| {
             let mut borrow = cell.borrow_mut();
-            // ponytail: resolve Language inside the TL cache check.
-            // GrammarLoader commit (d3d373d) moved per-file Language resolution through
-            // RwLock<HashMap> — 1468 files × 6 threads contending = memory barrier storm.
-            // Cache Language in TL_PARSER so GRAMMAR_LOADER is called once per extension
-            // per thread (~10 calls total instead of 1468×6).
+            // ponytail: 在 TL 缓存检查内解析 Language。
+            // GrammarLoader 提交 (d3d373d) 将逐文件的 Language 解析改为
+            // 通过 RwLock<HashMap> — 1468 个文件 × 6 个线程竞争 = 内存屏障风暴。
+            // 在 TL_PARSER 中缓存 Language，使 GRAMMAR_LOADER 每个扩展名
+            // 每线程仅调用一次（总共约 10 次调用，而非 1468×6 次）。
             let reuse = borrow.as_ref().is_some_and(|(_, _, cached_ext)| cached_ext == ext);
             if !reuse {
                 let lang = match GRAMMAR_LOADER.get(ext) {
@@ -71,10 +71,10 @@ impl LanguageAdapter for TreeSitterAdapter {
     }
 }
 
-/// Extract base-type names from an inheritance-clause CST node.
-/// Some grammars wrap names in container nodes (PHP `base_clause` → child identifier),
-/// others expose text directly (JS `extends` → "Foo, Bar"). Try children first, fall
-/// back to raw text split.
+/// 从继承子句 CST 节点中提取基类型名。
+/// 某些语法将名称包装在容器节点中（PHP `base_clause` → 子 identifier），
+/// 其他语法直接暴露文本（JS `extends` → "Foo, Bar"）。先尝试子节点，
+/// 回退到原始文本分割。
 fn extract_base_names(container: &tree_sitter::Node, source: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut to_visit: Vec<tree_sitter::Node> = vec![*container];
@@ -91,16 +91,16 @@ fn extract_base_names(container: &tree_sitter::Node, source: &str) -> Vec<String
                     names.push(t);
                 }
             }
-            continue; // leaf node
+            continue; // 叶节点
         }
-        // Recurse into named container nodes (type, mixins, interfaces, etc.)
+        // 递归进入命名容器节点（type、mixins、interfaces 等）
         if node.is_named() || recurse_kinds.contains(&ck) {
             let mut cursor = node.walk();
             let children: Vec<_> = node.children(&mut cursor).collect();
             to_visit.extend(children.into_iter().rev());
         }
     }
-    // Fallback: raw text split when grammar bakes names into container text
+    // 回退：当语法将名称烘焙到容器文本中时使用原始文本分割
     if names.is_empty() {
         if let Ok(text) = container.utf8_text(source.as_bytes()) {
             let text = text.trim();
@@ -127,10 +127,10 @@ fn emit_inherits_edges(
     counter: &mut u32,
     edges: &mut Vec<Edge>,
 ) {
-    // ponytail: walk children by kind, not field_name. tree-sitter field names
-    // are grammar-version-dependent and often differ from the node kind in the
-    // CST (e.g., C# kind="base_list" but field="bases"). Walking by kind is
-    // more reliable across grammar versions.
+    // ponytail: 按 kind 而非 field_name 遍历子节点。tree-sitter 字段名
+    // 依赖于语法版本，且通常与 CST 中的节点 kind 不同
+    // （例如 C# kind="base_list" 但 field="bases"）。按 kind 遍历
+    // 在不同语法版本间更可靠。
     let inherit_container_kinds: &[&str] = &[
         "base_list", "base_clause", "superclass", "super_classes",
         "interfaces", "super_interfaces", "supertype_list",
@@ -166,7 +166,7 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
     nodes.push(file_node);
 
     let root = tree.root_node();
-    // Scope stack: (node, scope_id) — tracks enclosing function/class for accurate call attribution
+    // 作用域栈：(node, scope_id) — 追踪外层 function/class 用于准确的 call 归属
     let mut to_visit: Vec<(tree_sitter::Node, String)> = vec![(root, module_id.clone())];
 
     let func_kinds: &[&str] = &["function_definition","function_declaration","method_definition","function_item","func_declaration",
@@ -178,7 +178,7 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
 
     while let Some((node, scope_id)) = to_visit.pop() {
         let kind = node.kind();
-        // Rust: impl Trait for Type → Type inherits Trait
+        // Rust: impl Trait for Type → Type 继承 Trait
         if kind == "impl_item" && ext == "rs" {
             if let (Some(trait_n), Some(type_n)) = (
                 node.child_by_field_name("trait"),
@@ -203,7 +203,7 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
             continue;
         }
         if func_kinds.contains(&kind) || class_kinds.contains(&kind) {
-            // ponytail: tree-sitter-c puts function name under declarator→identifier, not "name" field
+            // ponytail: tree-sitter-c 将函数名放在 declarator→identifier 下，而非 "name" 字段
             let name_node = node.child_by_field_name("name").or_else(|| {
                 let decl = node.child_by_field_name("declarator")?;
                 let mut cursor = decl.walk();
@@ -226,7 +226,7 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                     n.location = Some(format!("{}:{}", file_id, row + 1));
                     nodes.push(n);
                     emit_inherits_edges(&node, source, ext, &nid, &module_id, file_id, &mut counter, &mut edges);
-                    // Children inherit this function/class as scope
+                    // 子节点继承此 function/class 作为作用域
                     push_children_with_scope(&node, &nid, &mut to_visit);
                     continue;
                 }
@@ -256,7 +256,7 @@ fn generic_walk(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
                 }
             }
         }
-        // Push children with current scope
+        // 以当前作用域压入子节点
         push_children_with_scope(&node, &scope_id, &mut to_visit);
     }
     (nodes, edges)
@@ -273,7 +273,7 @@ fn dump_ast(node: &tree_sitter::Node, source: &str, depth: usize) {
     }
 }
 
-/// Push a node's children onto the visit stack, each tagged with the given scope_id.
+/// 将节点的子节点压入遍历栈，每个标记为给定的 scope_id。
 fn push_children_with_scope<'a>(node: &tree_sitter::Node<'a>, scope_id: &str, to_visit: &mut Vec<(tree_sitter::Node<'a>, String)>) {
     let mut cursor = node.walk();
     let mut children: Vec<tree_sitter::Node<'a>> = node.children(&mut cursor).collect();
@@ -319,7 +319,7 @@ func main() {
 }
 "#;
         let (nodes, _edges, _) = a.analyze("main.go", src);
-        // Should find at least the module node + main function
+        // 应至少找到 module 节点 + main 函数
         assert!(nodes.len() >= 2, "expected module + at least one function");
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"main"), "should find main function");
@@ -354,7 +354,7 @@ pub fn add(a: i32, b: i32) -> i32 {
     fn test_analyze_empty_source() {
         let a = TreeSitterAdapter;
         let (nodes, edges, _) = a.analyze("main.go", "");
-        // Should have the module node at minimum
+        // 至少应有 module 节点
         assert!(!nodes.is_empty(), "should have at least module node");
         assert!(edges.is_empty());
     }
@@ -371,21 +371,21 @@ pub fn add(a: i32, b: i32) -> i32 {
 
     #[test]
     fn test_analyze_csharp_smoke() {
-        // Smoke test: C# grammar loads and parses without panic
+        // 冒烟测试：C# 语法加载和解析不 panic
         let a = TreeSitterAdapter;
         let (_nodes, _edges, _) = a.analyze("Service.cs", "class UserService {}");
     }
 
     #[test]
     fn test_analyze_swift_smoke() {
-        // Smoke test: Swift grammar loads and parses without panic
+        // 冒烟测试：Swift 语法加载和解析不 panic
         let a = TreeSitterAdapter;
         let (_nodes, _edges, _) = a.analyze("App.swift", "func greet() {}");
     }
 
     #[test]
     fn test_analyze_kotlin_pending() {
-        // tree-sitter-kotlin pending 0.23+ upgrade (C symbol clash)
+        // tree-sitter-kotlin 待 0.23+ 升级（C 符号冲突）
         let a = TreeSitterAdapter;
         let (nodes, _, _) = a.analyze("Main.kt", "fun main() {}");
         assert!(nodes.is_empty(), "kt not yet wired — pending grammar upgrade");
@@ -393,7 +393,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 
     #[test]
     fn test_analyze_bash_skipped() {
-        // Temporarily skipped — tree-sitter-bash needs cross-version FFI bridge
+        // 暂时跳过 — tree-sitter-bash 需要跨版本 FFI 桥接
     }
 
     #[test]
@@ -404,7 +404,7 @@ pub fn add(a: i32, b: i32) -> i32 {
         eprintln!("C test: {} nodes, {} edges", nodes.len(), edges.len());
         for n in &nodes { eprintln!("  node: id={} name={} kind={}", n.id, n.name, n.kind.as_str()); }
         for e in &edges { eprintln!("  edge: {} -> {} kind={}", e.source, e.target, e.kind.as_str()); }
-        // Dump tree-sitter AST to diagnose missing function_definition nodes
+        // 导出 tree-sitter AST 以诊断缺失的 function_definition 节点
         if let Some(tree) = &tree {
             let root = tree.root_node();
             eprintln!("AST root: {} has_error={}", root.kind(), root.has_error());
@@ -416,7 +416,7 @@ pub fn add(a: i32, b: i32) -> i32 {
 
     #[test]
     fn test_rust_call_source_is_enclosing_function() {
-        // Scope tracking: calls inside a function should originate from that function
+        // 作用域追踪：函数内部的调用应源自该函数
         let a = TreeSitterAdapter;
         let src = r#"
 fn helper() {}
@@ -429,7 +429,7 @@ fn outer() {
         let call = edges.iter().find(|e| matches!(e.kind, EdgeKind::Calls) && e.target == "helper");
         assert!(call.is_some(), "should have call to helper");
         let call = call.unwrap();
-        // Source should be outer's node ID, not the file's module ID
+        // Source 应为 outer 的 node ID，而非文件的 module ID
         assert!(call.source.contains("outer"), "call source should be 'outer', got '{}'", call.source);
     }
 
@@ -490,14 +490,14 @@ fn outer() {
 
     #[test]
     fn test_dart_full_heritage_inherits() {
-        // Note: tree-sitter-dart has a parse bug with `implements X with Y` —
-        // "with" after "implements" produces an ERROR node. Test the valid
-        // combinations separately and assert what the grammar actually gives us.
+        // 注意：tree-sitter-dart 存在 `implements X with Y` 的解析 bug —
+        // "implements" 之后的 "with" 会产生 ERROR 节点。分别测试有效的
+        // 组合，并断言语法实际给出的结果。
         let a = TreeSitterAdapter;
         let src = "class Dog extends Animal implements Pettable with MixinA, MixinB {}";
         let (_, edges, _) = a.analyze("Test.dart", src);
         let inh: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Inherits)).collect();
-        // Grammar bug: MixinA is inside an ERROR node. We get Animal + Pettable + MixinB.
+        // 语法 bug：MixinA 在 ERROR 节点内。我们得到 Animal + Pettable + MixinB。
         assert!(inh.len() >= 3, "extends+implements+with should produce >=3 edges, got {}", inh.len());
         let targets: Vec<&str> = inh.iter().map(|e| e.target.as_str()).collect();
         for name in &["Animal", "Pettable"] {

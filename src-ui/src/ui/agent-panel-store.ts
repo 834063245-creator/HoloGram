@@ -87,7 +87,7 @@ export const useAgentPanelStore = create<AgentPanelState>((set, get) => ({
   pushAlert: (alert) => {
     const full: LifecycleAlert = { ...alert, ts: Date.now() };
     const existing = get().alerts;
-    // Replace if same ID (content-hash dedup) — prevents duplicate alerts piling up
+    // 相同 ID 则替换（内容哈希去重）— 防止重复告警堆积
     const idx = existing.findIndex((a) => a.id === alert.id);
     let alerts: LifecycleAlert[];
     if (idx >= 0) {

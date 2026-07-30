@@ -1,23 +1,23 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Shared utilities for provider implementations — extracted from anthropic.ts and openai.ts
+// provider 实现的共享工具函数 — 从 anthropic.ts 和 openai.ts 中提取
 
-/** Extract partial content from streaming JSON args for write/edit tools.
- *  Handles incomplete JSON — the content string may not be closed yet. */
+/** 从流式 JSON 参数中提取 write/edit 工具的部分内容。
+ *  处理不完整的 JSON — content 字符串可能尚未闭合。 */
 export function extractWritePreview(toolName: string, args: string): string | null {
   const isWrite = toolName === 'write_file' || toolName === 'write_file_content';
   const isEdit = toolName === 'edit_file';
   if (!isWrite && !isEdit) return null;
 
   const key = isEdit ? 'newString' : 'content';
-  // regex extracts "key": "..." from partial JSON.
-  // Handles escaped chars (\", \\, \n, etc.) inside the string value.
+  // 正则从部分 JSON 中提取 "key": "..."。
+  // 处理字符串值中的转义字符（\"、\\、\n 等）。
   const re = new RegExp(`"${key}"\\s*:\\s*"(.*)`, 's');
   const m = args.match(re);
   if (!m) return null;
 
-  // Unescape JSON escapes so the preview is readable
+  // 反转义 JSON 转义字符，使预览可读
   return (
     m[1]
       .replace(
@@ -25,19 +25,19 @@ export function extractWritePreview(toolName: string, args: string): string | nu
         (_, c: string) => ({ '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' })[c] || c,
       )
       .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-      // Strip trailing garbage (partial JSON may have " or "} or nothing trailing)
+      // 去除尾部垃圾（部分 JSON 可能以 " 或 "} 结尾，也可能没有尾部内容）
       .replace(/"\s*\}?\s*$/, '')
   );
 }
 
-/** Pre-warm HTTP connection pool with a short-lived request. Best-effort — failures are silent. */
+/** 通过短生命周期的请求预热 HTTP 连接池。尽力而为 — 失败静默处理。 */
 export function prewarmEndpoint(url: string, headers: Record<string, string>): void {
   const ctrl = new AbortController();
   setTimeout(() => ctrl.abort(), 3000);
   fetch(url, { headers, signal: ctrl.signal }).catch(() => {});
 }
 
-/** Fetch JSON with a timeout. Returns null on any failure (non-ok, network error, timeout). */
+/** 带超时的 JSON 获取。任何失败均返回 null（非 ok、网络错误、超时）。 */
 export async function fetchJsonWithTimeout(
   url: string,
   headers: Record<string, string>,
@@ -54,8 +54,8 @@ export async function fetchJsonWithTimeout(
   }
 }
 
-/** Parse SSE stream and yield decoded JSON events. Handles reader/decoder/buffer
- *  management and trailing data flush. Caller processes each event per provider format. */
+/** 解析 SSE 流并 yield 解码后的 JSON 事件。处理 reader/decoder/buffer
+ *  管理和尾部数据刷新。调用方按各 provider 格式处理每个事件。 */
 export async function* sseEvents(
   body: ReadableStream<Uint8Array>,
   name: string,
@@ -70,14 +70,14 @@ export async function* sseEvents(
       if (signal?.aborted) throw new Error(`${name}: aborted`);
       const { done, value } = await reader.read();
       if (done) {
-        // Flush decoder internal state and process any trailing data in buffer
+        // 刷新 decoder 内部状态并处理 buffer 中的尾部数据
         buffer += decoder.decode();
         break;
       }
       buffer += decoder.decode(value, { stream: true });
 
       const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // keep incomplete last line
+      buffer = lines.pop() || ''; // 保留不完整的最后一行
 
       for (const raw of lines) {
         const line = raw.trim();
@@ -90,7 +90,7 @@ export async function* sseEvents(
       }
     }
 
-    // Process any remaining complete lines in buffer after stream ends
+    // 流结束后处理 buffer 中剩余的完整行
     if (buffer.trim()) {
       const remaining = buffer.split('\n').filter((l) => l.trim());
       for (const raw of remaining) {

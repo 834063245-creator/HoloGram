@@ -132,7 +132,7 @@ class AgentHandleImpl implements AgentHandle {
     return this._agent.setUiSessionId(sid);
   }
 
-  /** Direct access to the underlying Agent — for internal use only */
+  /** 直接访问底层 Agent — 仅供内部使用 */
   _getAgent(): Agent {
     return this._agent;
   }
@@ -247,7 +247,7 @@ export class AgentRuntime implements RuntimePort {
   setCurrentSession(sessionId: string): void {
     const tb = this._getOrCreateTaskBoard(sessionId);
     const db = this._getOrCreateDiscoveryBoard(sessionId);
-    // Lazy restore if not yet restored
+    // 尚未恢复的会话进行懒加载恢复
     if (!this._restoredSessions.has(sessionId)) {
       this._restoredSessions.add(sessionId);
       void tb.restore();
@@ -255,7 +255,7 @@ export class AgentRuntime implements RuntimePort {
     }
     this._mainTaskProxy?.setTarget(tb);
     this._mainDiscoveryProxy?.setTarget(db);
-    // Update main agent's session mapping so sub-agents inherit the active session
+    // 更新主 Agent 的会话映射，使子 Agent 继承活跃会话
     if (this._mainAgentId) {
       this._agentSessions.set(this._mainAgentId, sessionId);
     }
@@ -314,7 +314,7 @@ export class AgentRuntime implements RuntimePort {
   private async _migrateGlobalBoards(): Promise<void> {
     if (!this._projectPath) return;
     const base = this._projectPath.replace(/\\/g, '/').replace(/\/$/, '');
-    // Migrate global discoveries.json
+    // 迁移全局 discoveries.json
     const oldDiscPath = `${base}/.hologram/discoveries.json`;
     try {
       const raw = await rpc<string>('read_file_content', { filePath: oldDiscPath });
@@ -326,28 +326,28 @@ export class AgentRuntime implements RuntimePort {
         }
         await db.flush();
       }
-      // Delete old file after migration
+      // 迁移后删除旧文件
       await rpc('delete_file_or_dir', { path: oldDiscPath }).catch(() => {});
     } catch {
-      /* file doesn't exist — no migration needed */
+      /* 文件不存在 — 无需迁移 */
     }
-    // Migrate global taskboard.json
+    // 迁移全局 taskboard.json
     const oldTaskPath = `${base}/.hologram/taskboard.json`;
     try {
       const raw = await rpc<string>('read_file_content', { filePath: oldTaskPath });
       const arr = JSON.parse(raw.replace(/^\s*\d+\t/gm, ''));
       if (Array.isArray(arr) && arr.length > 0) {
         const tb = this._getOrCreateTaskBoard('default');
-        // Directly write migrated entries to the new path
+        // 直接将迁移的条目写入新路径
         await rpc('write_file_content', {
           filePath: `${base}/.hologram/taskboard/default.json`,
           content: JSON.stringify(arr, null, 2),
         });
       }
-      // Delete old file after migration
+      // 迁移后删除旧文件
       await rpc('delete_file_or_dir', { path: oldTaskPath }).catch(() => {});
     } catch {
-      /* file doesn't exist — no migration needed */
+      /* 文件不存在 — 无需迁移 */
     }
   }
 
@@ -362,12 +362,12 @@ export class AgentRuntime implements RuntimePort {
       ?? 'default';
     const taskBoard = this._getOrCreateTaskBoard(sessionId);
     const discoveryBoard = this._getOrCreateDiscoveryBoard(sessionId);
-    // Proxy allows the main agent (which persists across session switches)
-    // to dynamically route to the current session's board.
+    // Proxy 允许主 Agent（跨会话切换时持久存在）
+    // 动态路由到当前会话的 board。
     const taskProxy = new TaskBoardProxy(taskBoard);
     const discoveryProxy = new DiscoveryBoardProxy(discoveryBoard);
     this._agentSessions.set(agentId, sessionId);
-    // Track main agent's proxies for session switching
+    // 追踪主 Agent 的 proxies 用于会话切换
     if (!config.parentId) {
       this._mainTaskProxy = taskProxy;
       this._mainDiscoveryProxy = discoveryProxy;
@@ -401,26 +401,26 @@ export class AgentRuntime implements RuntimePort {
       );
     }
 
-    // 2. Clone tools registry (each agent gets its own copy)
+    // 2. 克隆工具注册表（每个 Agent 获得自己的副本）
     const r = new ToolRegistry();
     for (const t of config.tools.all()) r.register(t);
 
-    // 2b. Plan mode state — created before planRegistry so tools can reference it
+    // 2b. Plan 模式状态 — 在 planRegistry 之前创建，使工具能引用它
     const planState = new PlanStateManager();
     if (config.collaborationMode === 'plan') {
       planState.enter(config.projectPath);
     }
 
-    // 2c. Register plan tools (readOnly: true → survive planRegistry filtering)
+    // 2c. 注册 plan 工具（readOnly: true → 通过 planRegistry 过滤）
     r.register(createEnterPlanModeTool(planState, config.projectPath));
-    // exit_plan_mode uses eventSink to push PlanReview event into chat stream
+    // exit_plan_mode 使用 eventSink 将 PlanReview 事件推入聊天流
     r.register(createExitPlanModeTool(planState, config.eventSink));
 
-    // 3. Plan mode: filter to read-only, but allow plan file writes
+    // 3. Plan 模式：过滤为只读，但允许 plan 文件写入
     const effR =
       config.collaborationMode === 'plan' ? planRegistry(r, planState) : r;
 
-    // 4. Create Agent instance
+    // 4. 创建 Agent 实例
     const execState = config.execState ?? createExecState();
     const newAgent = new Agent(config.provider, effR, sysPrompt, {
       agentId,
@@ -437,31 +437,31 @@ export class AgentRuntime implements RuntimePort {
       taskBoard: taskProxy as any as TaskBoard,
     });
 
-    // 5. Wire isolation
+    // 5. 接线隔离
     if (config.isolationId) {
       newAgent._isolationId = config.isolationId;
     }
 
-    // 6. Wire compaction tools
+    // 6. 接线压缩工具
     newAgent.setCompactionConfigPath(config.projectPath);
 
-    // 7. Wire persistence
+    // 7. 接线持久化
     if (config.agentStore) newAgent.setAgentStore(config.agentStore);
     if (config.goalManager) newAgent.setGoalManager(config.goalManager);
     if (config.subAgentPool) newAgent.setSubAgentPool(config.subAgentPool);
 
-    // 7b. Wire message bus + register communication tools
-    // setBus() handles bus.register() with wake callback — no duplicate call needed
+    // 7b. 接线消息总线 + 注册通信工具
+    // setBus() 处理 bus.register() 及唤醒回调 — 无需重复调用
     newAgent.setBus(this._bus);
-    // Wire discovery board for inter-agent knowledge sharing (session-scoped via proxy)
+    // 接线 discovery board 用于 Agent 间知识共享（通过 proxy 实现会话隔离）
     newAgent.setDiscoveryBoard(discoveryProxy as any);
-    // Register communication tools — plan mode gets only read-only tools (agent_inbox / agent_list)
+    // 注册通信工具 — plan 模式仅获得只读工具（agent_inbox / agent_list）
     for (const tool of createCommunicationTools(this._bus, () => newAgent.id)) {
       if (config.collaborationMode === 'plan' && !tool.readOnly()) continue;
       effR.register(tool);
     }
 
-    // Register discovery tools — plan mode: only read-only agent_lookup
+    // 注册 discovery 工具 — plan 模式：仅只读 agent_lookup
     for (const tool of createDiscoveryTools(discoveryProxy as any, () => newAgent.id)) {
       if (config.collaborationMode === 'plan' && !tool.readOnly()) continue;
       effR.register(tool);
@@ -474,27 +474,27 @@ export class AgentRuntime implements RuntimePort {
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
 
-    // Register agent_merge tool — allows parent to merge completed async sub-agent worktrees
+    // 注册 agent_merge 工具 — 允许父 Agent 合并已完成的异步子 Agent worktree
     if (config.collaborationMode !== 'plan' && config.subAgentPool) {
       effR.register(createMergeTool(taskProxy as any, () => newAgent.id, isolationExec));
       effR.register(createAgentKillTool(config.subAgentPool, isolationExec));
     }
 
-    // Register agent_request tool — synchronous request with timeout
+    // 注册 agent_request 工具 — 带超时的同步请求
     if (config.collaborationMode !== 'plan') {
       effR.register(createRequestTool(this._bus, () => newAgent.id));
     }
 
-    // 7c. Wire LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理
+    // 7c. 接线 LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理
     if (config.subAgentPool) {
-      // Stop any previous LifecycleManager for this agentId — its 60s setInterval
-      // would otherwise leak and stack up across session create/restore cycles.
+      // 停止此 agentId 的前一个 LifecycleManager — 否则其 60s setInterval
+      // 会在会话创建/恢复周期中泄漏并堆积。
       this._lifecycleManagers.get(agentId)?.stop();
 
       const rawSink = config.eventSink ?? (() => {});
       const wrappedSink: EventSink = (ev) => {
         rawSink(ev);
-        // Forward Notice events to the notifier for the panel
+        // 将 Notice 事件转发给通知器以驱动面板
         if (ev.kind === EventKind.Notice) {
           this.notifier?.onLifecycleAlert?.(agentId, ev.level ?? 'info', ev.text ?? '');
         }
@@ -509,7 +509,7 @@ export class AgentRuntime implements RuntimePort {
       lifecycle.start();
       this._lifecycleManagers.set(agentId, lifecycle);
 
-      // Wire sub-agent finish → archive discoveries (session-scoped)
+      // 接线子 Agent 完成 → 归档 discoveries（会话级）
       if (!config.parentId) {
         config.subAgentPool.onFinish = (subId: string) => {
           discoveryProxy.archive(subId);
@@ -517,10 +517,10 @@ export class AgentRuntime implements RuntimePort {
       }
     }
 
-    // 8. Register compaction tools on the agent's effective registry
+    // 8. 在 Agent 的有效注册表上注册压缩工具
     registerCompactionTools(newAgent, effR);
 
-    // 9. Wire hooks (graph context + state + board tracking + plan)
+    // 9. 接线 hooks（图上下文 + 状态 + board 追踪 + plan）
     const hooks = new HookRegistry();
     const preflightHooks = new PreflightHookRegistry();
     if (config.graphContext) {
@@ -537,27 +537,27 @@ export class AgentRuntime implements RuntimePort {
       hooks.register(createPlanExploreHook(config.graphContext, planState));
       hooks.register(createPlanWriteHook(config.graphContext, planState));
     }
-    // Board tracking hook — always register when board is available
+    // Board 追踪 hook — board 可用时始终注册
     hooks.register(createBoardTrackingHook(agentId, taskProxy as any));
     newAgent.setHooks(hooks);
     newAgent.setPreflightHooks(preflightHooks);
 
-    // 9b. Wire plan mode — injector for runLoop reminders + state notifications
+    // 9b. 接线 plan 模式 — runLoop 提醒注入器 + 状态通知
     const planInjector = new PlanModeInjector();
     newAgent.setPlanState(planState, planInjector);
     planState.onChange((s) => {
       this.notifier?.onPlanModeChange?.(agentId, s.active, s.planFilePath);
     });
 
-    // 10. Wire pre-run hook (AuraSDK semantic recall)
+    // 10. 接线 pre-run hook（AuraSDK 语义检索）
     if (config.preRunHook) {
       newAgent.setPreRunHook(config.preRunHook);
     }
 
-    // 11. Auto-tune
+    // 11. 自动调优
     newAgent.applyAutoTuneConfig().catch(() => {});
 
-    // 12. Register and return
+    // 12. 注册并返回
     const handle = new AgentHandleImpl(newAgent, this);
     this.agents.set(agentId, handle);
     log.info('runtime', `agent created: ${agentId}`);
@@ -572,7 +572,7 @@ export class AgentRuntime implements RuntimePort {
   destroyAgent(id: string): void {
     const handle = this.agents.get(id);
     if (!handle) return;
-    // Get session-scoped boards for this agent
+    // 获取此 Agent 的会话级 board
     const sessionId = this._agentSessions.get(id) ?? 'default';
     const taskBoard = this._taskBoards.get(sessionId);
     const discoveryBoard = this._discoveryBoards.get(sessionId);
@@ -603,17 +603,16 @@ export class AgentRuntime implements RuntimePort {
       parentId: h.parentId,
       status: h.status,
       description: h.id === 'main' ? '主Agent' : `Agent (${h.id})`,
-      subagentDepth: 0, // TODO: expose from Agent
+      subagentDepth: 0, // TODO: 从 Agent 暴露
     }));
   }
 
-  /** E6: Flush all session-scoped boards synchronously (best-effort).
-   *  Called from beforeunload to prevent data loss on tab/window close.
-   *  Clears debounce timers (sync) and fires flush() (async, may not complete). */
-  /** Flush all session-scoped boards + message bus. Awaits every flush so
-   *  callers on the main cleanup path (deactivate) can guarantee data is
-   *  persisted before tearing down the runtime. Uses allSettled so one
-   *  failing board doesn't block the others. */
+  /** E6: 同步刷新所有会话级 board（best-effort）。
+   *  在 beforeunload 时调用以防止标签页/窗口关闭时数据丢失。
+   *  清除防抖定时器（同步）并触发 flush()（异步，可能未完成）。 */
+  /** 刷新所有会话级 board + 消息总线。等待每个 flush 完成以确保
+   *  主清理路径（deactivate）上的调用方在销毁 runtime 前数据已持久化。
+   *  使用 allSettled 以防一个 board 失败阻塞其他 board。 */
   async flushAllBoards(): Promise<void> {
     const flushes: Promise<unknown>[] = [];
     for (const board of this._taskBoards.values()) {
@@ -629,7 +628,7 @@ export class AgentRuntime implements RuntimePort {
     await Promise.allSettled(flushes);
   }
 
-  // ── Private: wrap RuntimeNotifier into AgentUINotifier ──
+  // ── 私有：将 RuntimeNotifier 包装为 AgentUINotifier ──
 
   private _wrapNotifier(agentId: string): AgentUINotifier {
     return {
@@ -660,8 +659,8 @@ export class AgentRuntime implements RuntimePort {
     };
   }
 
-  // ── Private: diagnostics source ──
-  // Injected by setDiagnosticsSource() — agent-builder can't import ui/lsp-client
+  // ── 私有：诊断数据源 ──
+  // 由 setDiagnosticsSource() 注入 — agent-builder 无法 import ui/lsp-client
   private _diagSource: DiagnosticsSource | null = null;
 
   setDiagnosticsSource(fn: DiagnosticsSource): void {

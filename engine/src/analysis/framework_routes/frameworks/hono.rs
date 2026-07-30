@@ -10,9 +10,9 @@ pub(crate) fn is_hono_candidate(file: &str) -> bool {
     lower.ends_with(".ts") || lower.ends_with(".js") || lower.ends_with(".mjs")
 }
 
-/// Content gate for Hono detection. Hono shares Express's `.get()/.post()/.use()`
-/// call shape and `is_hono_candidate` matches every .ts/.js/.mjs file, so the
-/// dispatcher must confirm Hono-specific markers before claiming the file.
+/// Hono 检测的内容门控。Hono 与 Express 共享 `.get()/.post()/.use()`
+/// 调用形式，且 `is_hono_candidate` 匹配所有 .ts/.js/.mjs 文件，因此
+/// 调度器在认领文件之前必须确认 Hono 特有的标记。
 pub(crate) fn has_hono_content(source: &str) -> bool {
     source.contains("from 'hono'")
         || source.contains("from \"hono\"")
@@ -21,20 +21,19 @@ pub(crate) fn has_hono_content(source: &str) -> bool {
         || source.contains("new Hono(")
 }
 
-/// Detect Hono routes. Mirrors express.rs (handler = LAST non-punctuation arg).
-/// Patterns:
-///   app.get('/path', handler) — also post/put/delete/patch/options/all
-///   app.use('/prefix', ...) → method USE
-///   app.basePath('/api') — single-level prefix propagation: recorded in
-///       statement order and prepended to subsequently detected routes in the
-///       same file; the chained form app.basePath('/api').get(...) takes the
-///       prefix from its own receiver chain.
-///   app.route('/sub', subApp) with an identifier arg is skipped (not in the
-///       method set) — the sub-app's routes are not statically resolvable here.
+/// 检测 Hono 路由。与 express.rs 一致（处理函数 = 最后一个非标点参数）。
+/// 模式：
+///   app.get('/path', handler) —— 也包括 post/put/delete/patch/options/all
+///   app.use('/prefix', ...) → 方法为 USE
+///   app.basePath('/api') —— 单层前缀传播：按语句顺序记录，
+///       并添加到同文件中后续检测到的路由前；链式形式
+///       app.basePath('/api').get(...) 从其自身的接收者链获取前缀。
+///   app.route('/sub', subApp) 中标识符参数被跳过（不在方法集合中）——
+///       子应用的路由在此无法静态解析。
 pub(crate) fn detect_hono_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
-    // Determine which tree-sitter language to use
+    // 确定使用哪种 tree-sitter 语言
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let ext = if is_ts { "ts" } else { "js" };
     let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return result };
@@ -59,15 +58,15 @@ pub(crate) fn detect_hono_routes(file: &str, source: &str) -> Vec<DetectedRoute>
     let mut cursor = root.walk();
     let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
 
-    // basePath prefix — applies to routes seen AFTER the basePath statement
-    // (this walk is preorder = statement order).
+    // basePath 前缀——应用于在 basePath 语句之后看到的路由
+    // （此遍历为先序遍历 = 语句顺序）。
     let mut current_prefix = String::new();
 
     while let Some(node) = stack.pop() {
         if node.kind() == "call_expression" {
             if let Some(func) = node.child_by_field_name("function") {
                 if func.kind() == "member_expression" {
-                    // e.g. app.get() or app.basePath()
+                    // 例如 app.get() 或 app.basePath()
                     let mut prop_cursor = func.walk();
                     let func_children: Vec<_> = func.children(&mut prop_cursor).collect();
 
@@ -82,11 +81,11 @@ pub(crate) fn detect_hono_routes(file: &str, source: &str) -> Vec<DetectedRoute>
                     let method_lower = method_name.to_lowercase();
 
                     if method_lower == "basepath" {
-                        // app.basePath('/api') — record the prefix, emit no route.
-                        // Chained form app.basePath('/api').get(...): this call is
-                        // the RECEIVER of an enclosing member call — its prefix is
-                        // applied per-route via chain_basepath_prefix, so it must
-                        // NOT mutate the statement-level current_prefix (F3).
+                        // app.basePath('/api') —— 记录前缀，不发出路由。
+                        // 链式形式 app.basePath('/api').get(...)：此调用是
+                        // 外层 member 调用的接收者——其前缀通过
+                        // chain_basepath_prefix 逐路由应用，因此不得
+                        // 修改语句级别的 current_prefix（F3）。
                         let is_chain_receiver = match node.parent() {
                             Some(p) if p.kind() == "member_expression" => {
                                 matches!(p.child_by_field_name("object"), Some(o) if o.id() == node.id())
@@ -129,9 +128,9 @@ pub(crate) fn detect_hono_routes(file: &str, source: &str) -> Vec<DetectedRoute>
                                         continue;
                                     }
 
-                                    // Track the last non-punctuation argument as the handler
-                                    // (Hono convention, same as Express:
-                                    // app.get('/path', middleware, handler))
+                                    // 跟踪最后一个非标点参数作为处理函数
+                                    // （Hono 约定，与 Express 相同：
+                                    // app.get('/path', middleware, handler)）
                                     if found_route && kind != "," && kind != "(" && kind != ")" {
                                         last_identifier = text.to_string();
                                     }
@@ -147,8 +146,8 @@ pub(crate) fn detect_hono_routes(file: &str, source: &str) -> Vec<DetectedRoute>
                                     if handler.is_empty() {
                                         handler = format!("<inline@{}>", line);
                                     }
-                                    // Chained app.basePath('/api').get(...) takes the prefix
-                                    // from its own receiver chain; otherwise the recorded one.
+                                    // 链式 app.basePath('/api').get(...) 从其自身的
+                                    // 接收者链获取前缀；否则使用已记录的前缀。
                                     let prefix = chain_basepath_prefix(&func, source)
                                         .unwrap_or_else(|| current_prefix.clone());
                                     result.push((method, join_paths(&prefix, &route_str), handler, file.to_string(), line));
@@ -169,8 +168,8 @@ pub(crate) fn detect_hono_routes(file: &str, source: &str) -> Vec<DetectedRoute>
     result
 }
 
-/// Walk the receiver chain of a member call looking for `basePath('/prefix')`,
-/// e.g. the `app.basePath('/api')` inside `app.basePath('/api').get(...)`.
+/// 遍历 member 调用的接收者链以查找 `basePath('/prefix')`，
+/// 例如 `app.basePath('/api').get(...)` 中的 `app.basePath('/api')`。
 fn chain_basepath_prefix(func: &tree_sitter::Node, source: &str) -> Option<String> {
     let mut obj = func.child_by_field_name("object")?;
     loop {
@@ -199,7 +198,7 @@ fn chain_basepath_prefix(func: &tree_sitter::Node, source: &str) -> Option<Strin
     }
 }
 
-/// First string/template-literal argument, quotes stripped.
+/// 第一个字符串/模板字面量参数，去除引号。
 fn first_string_arg(args: &tree_sitter::Node, source: &str) -> Option<String> {
     let mut c = args.walk();
     for ac in args.children(&mut c) {

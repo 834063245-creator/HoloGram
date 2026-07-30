@@ -10,8 +10,8 @@ pub(crate) fn is_fastapi_candidate(file: &str) -> bool {
     lower.ends_with(".py")
 }
 
-/// Detect FastAPI `@app.get("/path")` and `@router.post("/path")` decorators.
-/// Pattern: decorator is a call on an attribute of app/router with an HTTP method name.
+/// 检测 FastAPI `@app.get("/path")` 和 `@router.post("/path")` 装饰器。
+/// 模式：装饰器是对 app/router 属性的调用，属性名为 HTTP 方法名。
 pub(crate) fn detect_fastapi_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
@@ -42,7 +42,7 @@ pub(crate) fn detect_fastapi_routes(file: &str, source: &str) -> Vec<DetectedRou
             let mut handler_name = String::new();
             let mut decorators = Vec::new();
 
-            // Collect children: decorator nodes vs definition node
+            // 收集子节点：装饰器节点 vs 定义节点
             let mut node_cursor = node.walk();
             for child in node.children(&mut node_cursor) {
                 match child.kind() {
@@ -56,7 +56,7 @@ pub(crate) fn detect_fastapi_routes(file: &str, source: &str) -> Vec<DetectedRou
                 }
             }
 
-            // Try each decorator for HTTP method pattern
+            // 对每个装饰器尝试 HTTP 方法模式匹配
             for deco in &decorators {
                 if let Some((method, path)) = extract_fastapi_decorator(deco, source, &http_methods) {
                     let line = node.start_position().row + 1;
@@ -74,28 +74,28 @@ pub(crate) fn detect_fastapi_routes(file: &str, source: &str) -> Vec<DetectedRou
     result
 }
 
-/// Extract (HTTP_METHOD, route_path) from a FastAPI decorator node.
-/// tree-sitter-python decorator: `@` call
-/// where call has an attribute function (app.get, router.post) and argument_list.
+/// 从 FastAPI 装饰器节点中提取 (HTTP_METHOD, route_path)。
+/// tree-sitter-python 装饰器：`@` call
+/// 其中 call 具有属性函数（app.get、router.post）和 argument_list。
 fn extract_fastapi_decorator(
     decorator: &tree_sitter::Node,
     source: &str,
     http_methods: &HashSet<&str>,
 ) -> Option<(String, String)> {
-    // decorator children: ['@', call]
+    // 装饰器子节点：['@', call]
     let mut dec_cursor = decorator.walk();
     let children: Vec<_> = decorator.children(&mut dec_cursor).collect();
 
-    // Find the call node
+    // 查找 call 节点
     let call_node = children.iter().find(|c| c.kind() == "call")?;
 
-    // Get the function (must be attribute: app.get, router.post)
+    // 获取函数（必须是属性：app.get、router.post）
     let func = call_node.child_by_field_name("function")?;
     if func.kind() != "attribute" {
         return None;
     }
 
-    // Extract method name (last identifier in the attribute)
+    // 提取方法名（属性中的最后一个标识符）
     let mut attr_cursor = func.walk();
     let method = func.children(&mut attr_cursor)
         .filter(|c| c.kind() == "identifier")
@@ -106,7 +106,7 @@ fn extract_fastapi_decorator(
         return None;
     }
 
-    // Extract route path from first string in argument_list
+    // 从 argument_list 中的第一个字符串提取路由路径
     let args = call_node.child_by_field_name("arguments")?;
     let mut args_cursor = args.walk();
     for child in args.children(&mut args_cursor) {

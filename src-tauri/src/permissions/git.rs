@@ -5,22 +5,22 @@
 use crate::permissions::rule::PermissionRules;
 use crate::permissions::PermissionResult;
 
-/// Check git subcommand permission against rules.
-/// Called by GitTool.check_permissions().
+/// 检查 git 子命令的权限规则。
+/// 由 GitTool.check_permissions() 调用。
 pub fn check(subcommand: &str, rules: &PermissionRules) -> PermissionResult {
-    // 1. Content-level Deny rules
+    // 1. 内容级 Deny 规则
     if let Some(rule) = rules.find_deny("Git", Some(subcommand)) {
         return PermissionResult::Deny {
             reason: rule.explain(),
         };
     }
 
-    // 2. Content-level Allow rules — user/session/project rules override system Ask
+    // 2. 内容级 Allow 规则 — 用户/会话/项目规则覆盖系统 Ask
     if rules.find_allow("Git", Some(subcommand)).is_some() {
         return PermissionResult::Allow;
     }
 
-    // 3. Content-level Ask rules — only reached if no Allow rule matched
+    // 3. 内容级 Ask 规则 — 仅在没有 Allow 规则匹配时到达
     if let Some(rule) = rules.find_ask("Git", Some(subcommand)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -34,7 +34,7 @@ pub fn check(subcommand: &str, rules: &PermissionRules) -> PermissionResult {
         };
     }
 
-    // 4. Safe read-only subcommands → Passthrough (central engine will allow)
+    // 4. 安全的只读子命令 → Passthrough（中央引擎将放行）
     match subcommand {
         "log" | "status" | "diff_unstaged" | "diff_staged" | "blame"
         | "show" | "file_at_head" | "list_branches" | "stash_list"
@@ -42,7 +42,7 @@ pub fn check(subcommand: &str, rules: &PermissionRules) -> PermissionResult {
         | "create_branch" | "stash_push" => {
             PermissionResult::Passthrough
         }
-        // Destructive subcommands → Ask by default
+        // 破坏性子命令 → 默认 Ask
         _ => PermissionResult::Ask {
             reason: format!("Git {} 需要用户确认", subcommand),
             suggestions: vec![
@@ -77,12 +77,12 @@ mod tests {
         assert!(matches!(check("checkout", &rules), PermissionResult::Ask { .. }));
     }
 
-    // ── E2: Additional git permission tests ──
+    // ── E2: 额外的 git 权限测试 ──
 
     #[test]
     fn test_git_all_safe_commands_passthrough() {
         let rules = PermissionRules::new();
-        // Exhaustive safe-read / safe-write subcommands
+        // 穷举安全只读 / 安全写入子命令
         for cmd in &[
             "log", "status", "diff_unstaged", "diff_staged", "blame", "show",
             "file_at_head", "list_branches", "stash_list", "pull", "fetch",
@@ -123,7 +123,7 @@ mod tests {
             danger: None,
         });
         assert!(matches!(check("push", &rules), PermissionResult::Deny { .. }));
-        // Other commands are not affected by the deny rule
+        // 其他命令不受 deny 规则影响
         assert!(matches!(check("log", &rules), PermissionResult::Passthrough));
     }
 
@@ -136,7 +136,7 @@ mod tests {
             value: parse_rule_value("Git(commit)"),
             danger: None,
         });
-        // commit is destructive by default (Ask), but Allow rule overrides
+        // commit 默认是破坏性的（Ask），但 Allow 规则覆盖了它
         assert!(
             matches!(check("commit", &rules), PermissionResult::Allow),
             "Allow rule should override default Ask for git commit"
@@ -152,7 +152,7 @@ mod tests {
             value: parse_rule_value("Git(fetch)"),
             danger: None,
         });
-        // fetch is safe by default (Passthrough), but Ask rule overrides
+        // fetch 默认是安全的（Passthrough），但 Ask 规则覆盖了它
         let r = check("fetch", &rules);
         match r {
             PermissionResult::Ask { suggestions, .. } => {
@@ -178,7 +178,7 @@ mod tests {
             value: parse_rule_value("Git(push)"),
             danger: None,
         });
-        // Deny always wins over Allow
+        // Deny 始终优先于 Allow
         assert!(
             matches!(check("push", &rules), PermissionResult::Deny { .. }),
             "Deny rule must take priority over Allow"

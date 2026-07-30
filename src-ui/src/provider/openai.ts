@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// OpenAI-compatible provider — DeepSeek, MiMo, and any OpenAI-compatible endpoint
+// OpenAI 兼容 provider — DeepSeek、MiMo 及任何 OpenAI 兼容端点
 // 手写 fetch() + SSE 解析，零第三方 SDK
 
 import { clampMaxTokens } from './catalog';
@@ -18,20 +18,20 @@ import {
   sanitizeToolPairing,
 } from './types';
 
-const DEFAULT_MAX_TOKENS = 32000; // ponytail: safe ceiling across providers (GLM caps at 131072)
+const DEFAULT_MAX_TOKENS = 32000; // ponytail：跨提供商的安全上限（GLM 上限 131072）
 
 interface OpenAIConfig {
   name?: string;
   apiKey: string;
-  baseUrl: string; // e.g. "https://api.deepseek.com/v1" or "https://api.openai.com/v1"
+  baseUrl: string; // 例如 "https://api.deepseek.com/v1" 或 "https://api.openai.com/v1"
   model: string;
-  /** Disable reasoning/thinking mode (DeepSeek v4-pro). Default: false (auto). */
+  /** 禁用 reasoning/thinking 模式（DeepSeek v4-pro）。默认：false（自动）。 */
   disableThinking?: boolean;
 }
 
 export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
   const name = cfg.name || 'openai';
-  const baseUrl = cfg.baseUrl.replace(/\/$/, ''); // user controls v1 prefix in baseUrl
+  const baseUrl = cfg.baseUrl.replace(/\/$/, ''); // 用户在 baseUrl 中控制 v1 前缀
   const { model, apiKey, disableThinking } = cfg;
 
   return {
@@ -98,7 +98,7 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
   };
 }
 
-// ---- Request building ----
+// ---- 请求构建 ----
 
 interface ChatMessage {
   role: string;
@@ -171,7 +171,7 @@ function buildChatRequest(
               arguments: tc.arguments,
             },
           }));
-          // OpenAI doesn't want content alongside tool_calls
+          // OpenAI 不希望 tool_calls 旁边有 content
           if (!m.content) cm.content = null;
         }
         chatMsgs.push(cm);
@@ -180,10 +180,10 @@ function buildChatRequest(
     }
   }
 
-  // OpenAI-compatible protocol has NO cache_control field — each provider
-  // does its own server-side prefix caching (auto for DeepSeek, prompt_cache_key
-  // for official OpenAI). Injecting Anthropic's cache_control here would 400 on
-  // strict validators (GLM, Qwen, etc.). cc-switch regression_gh3805.
+  // OpenAI 兼容协议没有 cache_control 字段 — 每个 provider
+  // 自行做服务端前缀缓存（DeepSeek 自动，官方 OpenAI 用 prompt_cache_key）。
+  // 在此注入 Anthropic 的 cache_control 会在严格的验证器上返回 400
+  // （GLM、Qwen 等）。cc-switch regression_gh3805.
   const chatTools: ChatTool[] | undefined =
     tools.length > 0
       ? tools.map((t) => ({
@@ -209,23 +209,23 @@ function buildChatRequest(
   return r;
 }
 
-// ---- SSE stream parsing ----
+// ---- SSE 流解析 ----
 
 async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?: AbortSignal): AsyncGenerator<Chunk> {
   const toolsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
   let usage: Chunk['usage'];
 
   for await (const ev of sseEvents(body, name, signal)) {
-    // In-stream error from OpenAI-compatible API (DeepSeek overload, rate limit, etc.)
+    // 来自 OpenAI 兼容 API 的流内错误（DeepSeek 过载、限流等）
     if ((ev as { error?: { message?: string } }).error) {
       const e = (ev as { error?: { message?: string } }).error!;
       yield { type: ChunkType.Error, err: new Error(`${name}: ${e.message || JSON.stringify(e)}`) };
       return;
     }
 
-    // Usage may come in a separate chunk or alongside the last choice.
-    // Process it but DO NOT continue — the same chunk may also carry choices
-    // with finish_reason that we need for tool call completion detection.
+    // Usage 可能出现在单独的 chunk 中，也可能伴随最后一个 choice 出现。
+    // 处理它但不要 continue — 同一个 chunk 可能还携带带 finish_reason 的 choices，
+    // 我们需要它来检测工具调用是否完成。
     if (ev.usage) {
       usage = {
         prompt_tokens: ev.usage.prompt_tokens,
@@ -241,17 +241,17 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
     for (const choice of ev.choices) {
       const delta = choice.delta;
 
-      // Text content
+      // 文本内容
       if (delta.content) {
         yield { type: ChunkType.Text, text: delta.content };
       }
 
-      // Reasoning content (DeepSeek thinking mode)
+      // 推理内容（DeepSeek thinking 模式）
       if (delta.reasoning_content) {
         yield { type: ChunkType.Reasoning, text: delta.reasoning_content };
       }
 
-      // Tool calls
+      // 工具调用
       if (delta.tool_calls) {
         for (const tcDelta of delta.tool_calls) {
           let tc = toolsByIndex.get(tcDelta.index);
@@ -269,7 +269,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
           }
           if (tcDelta.function?.arguments) {
             tc.arguments += tcDelta.function.arguments;
-            // Streaming write preview: extract content from partial JSON args
+            // 流式写入预览：从部分 JSON 参数中提取内容
             const preview = extractWritePreview(tc.name, tc.arguments);
             if (preview) {
               yield {
@@ -281,12 +281,12 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
         }
       }
 
-      // Finish reason — detect completed tool calls
+      // 完成原因 — 检测已完成的工具调用
       if (choice.finish_reason) {
         if (usage) {
           usage.finish_reason = choice.finish_reason;
         }
-        // Emit completed tool calls
+        // 输出已完成的工具调用
         for (const tc of toolsByIndex.values()) {
           yield {
             type: ChunkType.ToolCall,
@@ -297,7 +297,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
       }
     }
 
-    // Emit usage after choices (so finish_reason is correct)
+    // 在 choices 之后输出 usage（确保 finish_reason 正确）
     if (ev.usage && usage) {
       yield { type: ChunkType.Usage, usage };
     }

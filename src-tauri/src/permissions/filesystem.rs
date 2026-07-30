@@ -10,14 +10,14 @@ use crate::permissions::safety;
 use crate::permissions::PermissionResult;
 use crate::sandbox::{Sandbox, SandboxResult};
 
-/// Read permission check — shared by ReadFile/Glob/Grep/ListDir/SearchContent.
-/// Path resolution → deny rules → safety → ask rules → allow rules.
-/// Sandbox boundary is not a hard deny for reads: user Allow rules can grant
-/// cross-project access (spec Phase 2 cross-directory read requirement).
+/// 读权限检查 — 被 ReadFile/Glob/Grep/ListDir/SearchContent 共用。
+/// 路径解析 → deny 规则 → 安全检查 → ask 规则 → allow 规则。
+/// sandbox 边界对读取不是硬拒绝：用户 Allow 规则可授予
+/// 跨项目访问权限 (spec Phase 2 跨目录读取需求)。
 ///
-/// `match_path_override`: when worktree isolation is active, this is the
-/// reverse-mapped logical path used for rule matching (spec §5.6).
-/// Physical path resolution still uses `raw_path`.
+/// `match_path_override`：当 worktree 隔离激活时，此参数是
+/// 用于规则匹配的反向映射逻辑路径 (spec §5.6)。
+/// 物理路径解析仍使用 `raw_path`。
 pub fn check_read_permission(
     raw_path: &str,
     sandbox: &Sandbox,
@@ -26,29 +26,29 @@ pub fn check_read_permission(
 ) -> PermissionResult {
     let path = Path::new(raw_path);
 
-    // 1. Resolve path via sandbox (canonicalization, not boundary enforcement)
+    // 1. 通过 sandbox 解析路径（规范化，不强制边界检查）
     let resolved = match sandbox.resolve_read(path) {
         SandboxResult::Allowed(p) => Some(p),
         SandboxResult::Denied(_) => None,
     };
 
-    // Use override (reverse-mapped path) for rule matching if provided
+    // 如提供则使用 override（反向映射路径）进行规则匹配
     let match_str: String = match match_path_override {
         Some(override_path) => override_path.replace('\\', "/"),
         None => path_to_match_str(resolved.as_deref().unwrap_or(path)),
     };
 
-    // 2. Content-level Deny rules (path glob matching)
+    // 2. 内容级 Deny 规则（路径 glob 匹配）
     if let Some(rule) = rules.find_deny("Read", Some(&match_str)) {
         return PermissionResult::Deny {
             reason: rule.explain(),
         };
     }
 
-    // 3. Safety check (bypass-immune) — only for paths within project boundary.
-    // Reads of .hologram/ files are NOT safety-checked — they're HoloGram's own
-    // data (memory, sessions, logs). Blocking them breaks the memory system and
-    // logger. For writes, the shared safety check protects .hologram/ below.
+    // 3. 安全检查（不可绕过）— 仅对项目边界内的路径。
+    // 读取 .hologram/ 文件不做安全检查 — 它们是 HoloGram 自身的
+    // 数据（记忆、会话、日志）。拦截它们会破坏记忆系统和
+    // 日志器。对于写入，下方的共享安全检查会保护 .hologram/。
     if let Some(ref resolved_path) = resolved {
         let safety = safety::check_path_safety_read(resolved_path);
         if !safety.safe {
@@ -66,12 +66,12 @@ pub fn check_read_permission(
         }
     }
 
-    // 4. Content-level Allow rules — user/session/project rules override system Ask
+    // 4. 内容级 Allow 规则 — 用户/会话/项目规则覆盖系统 Ask
     if rules.find_allow("Read", Some(&match_str)).is_some() {
         return PermissionResult::Allow;
     }
 
-    // 5. Content-level Ask rules — only reached if no Allow rule matched
+    // 5. 内容级 Ask 规则 — 仅在无 Allow 规则匹配时到达
     if let Some(rule) = rules.find_ask("Read", Some(&match_str)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -85,10 +85,10 @@ pub fn check_read_permission(
         };
     }
 
-    // 6. Within project → Allow; outside → Ask user (not silent Deny).
-    // The user may have a legitimate reason to read outside the project
-    // (e.g. reading system headers, configs, or another project's source).
-    // Let them decide with a dialog rather than silently blocking.
+    // 6. 项目内 → Allow；项目外 → Ask 用户（不静默 Deny）。
+    // 用户可能有合理的理由读取项目外的文件
+    // （例如读取系统头文件、配置或另一个项目的源码）。
+    // 让用户通过对话框决定，而非静默拦截。
     if resolved.is_some() {
         PermissionResult::Allow
     } else {
@@ -105,12 +105,12 @@ pub fn check_read_permission(
     }
 }
 
-/// Write permission check — shared by WriteFile/EditFile/Delete/CreateDir/Rename.
-/// Path resolution → deny rules → safety → ask rules → allow rules.
+/// 写权限检查 — 被 WriteFile/EditFile/Delete/CreateDir/Rename 共用。
+/// 路径解析 → deny 规则 → 安全检查 → ask 规则 → allow 规则。
 ///
-/// `match_path_override`: when worktree isolation is active, this is the
-/// reverse-mapped logical path used for rule matching (spec §5.6).
-/// Physical path resolution and safety check still use `raw_path`.
+/// `match_path_override`：当 worktree 隔离激活时，此参数是
+/// 用于规则匹配的反向映射逻辑路径 (spec §5.6)。
+/// 物理路径解析和安全检查仍使用 `raw_path`。
 pub fn check_write_permission(
     raw_path: &str,
     sandbox: &Sandbox,
@@ -119,10 +119,10 @@ pub fn check_write_permission(
 ) -> PermissionResult {
     let path = Path::new(raw_path);
 
-    // 1. Resolve path via sandbox (may canonicalize or find nearest ancestor).
-    // Out-of-project writes are escalated to Ask (user dialog), not silently
-    // denied — the user may have a valid reason (e.g. writing to a shared
-    // config directory or another project during cross-project tooling).
+    // 1. 通过 sandbox 解析路径（可能规范化或查找最近的祖先目录）。
+    // 项目外写入升级为 Ask（用户对话框），不静默拒绝 —
+    // 用户可能有合理的理由（例如写入共享配置目录或
+    // 跨项目工具操作时写入另一个项目）。
     let resolved = match sandbox.resolve_write(path) {
         SandboxResult::Allowed(p) => p,
         SandboxResult::Denied(reason) => {
@@ -139,20 +139,20 @@ pub fn check_write_permission(
         }
     };
 
-    // Use override (reverse-mapped path) for rule matching if provided
+    // 如提供则使用 override（反向映射路径）进行规则匹配
     let match_str: String = match match_path_override {
         Some(p) => p.replace('\\', "/"),
         None => path_to_match_str(&resolved),
     };
 
-    // 2. Content-level Deny rules (path glob matching)
+    // 2. 内容级 Deny 规则（路径 glob 匹配）
     if let Some(rule) = rules.find_deny("Edit", Some(&match_str)) {
         return PermissionResult::Deny {
             reason: rule.explain(),
         };
     }
 
-    // 3. Safety check (bypass-immune) — .git, .hologram, .ssh, etc.
+    // 3. 安全检查（不可绕过）— .git、.hologram、.ssh 等
     let safety = safety::check_path_safety(&resolved);
     if !safety.safe {
         let path_str = path_to_match_str(&resolved);
@@ -168,12 +168,12 @@ pub fn check_write_permission(
         };
     }
 
-    // 4. Content-level Allow rules — user/session/project rules override system Ask
+    // 4. 内容级 Allow 规则 — 用户/会话/项目规则覆盖系统 Ask
     if rules.find_allow("Edit", Some(&match_str)).is_some() {
         return PermissionResult::Allow;
     }
 
-    // 5. Content-level Ask rules — only reached if no Allow rule matched
+    // 5. 内容级 Ask 规则 — 仅在无 Allow 规则匹配时到达
     if let Some(rule) = rules.find_ask("Edit", Some(&match_str)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -187,12 +187,12 @@ pub fn check_write_permission(
         };
     }
 
-    // 6. Within project root → Allow (write after safety check passed)
+    // 6. 项目根目录内 → Allow（安全检查通过后写入）
     PermissionResult::Allow
 }
 
-/// Convert a PathBuf to a normalized string for rule matching.
-/// Uses POSIX-style separators for cross-platform consistency.
+/// 将 PathBuf 转换为用于规则匹配的标准化字符串。
+/// 使用 POSIX 风格的分隔符以保持跨平台一致性。
 fn path_to_match_str(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -230,7 +230,7 @@ mod tests {
     fn test_read_outside_project_ask() {
         let (s, _) = sandbox_in_temp();
         let rules = PermissionRules::new();
-        // Out-of-project reads escalate to Ask (user dialog), not silent Deny
+        // 项目外读取升级为 Ask（用户对话框），不静默 Deny
         let r = check_read_permission("C:\\Windows\\System32\\notepad.exe", &s, &rules, None);
         assert!(matches!(r, PermissionResult::Ask { .. }), "expected Ask, got: {:?}", r);
     }
@@ -271,7 +271,7 @@ mod tests {
     fn test_write_dangerous_path_ask() {
         let (s, root) = sandbox_in_temp();
         let rules = PermissionRules::new();
-        // .bashrc is dangerous
+        // .bashrc 是危险文件
         let r = check_write_permission(
             &root.join(".bashrc").to_string_lossy(),
             &s,
@@ -291,7 +291,7 @@ mod tests {
     fn test_read_safety_ask_has_suggestion() {
         let (s, _root) = sandbox_in_temp();
         let rules = PermissionRules::new();
-        // .bashrc anywhere triggers is_dangerous_file in check_path_safety_read
+        // 任意位置的 .bashrc 都会触发 check_path_safety_read 中的 is_dangerous_file
         let test_path = format!("{}/.bashrc",
             std::env::var("USERPROFILE").unwrap_or_default().replace('\\', "/"));
         let r = check_read_permission(&test_path, &s, &rules, None);
@@ -299,10 +299,10 @@ mod tests {
             PermissionResult::Ask { suggestions, .. } => {
                 assert!(!suggestions.is_empty(), "read safety Ask must include a suggestion");
             }
-            // May be Allow if path doesn't exist (sandbox canonicalize fails → resolved=None → outside → Ask)
-            // Or Ask if path exists and safety blocks
+            // 若路径不存在则可能为 Allow（sandbox 规范化失败 → resolved=None → 项目外 → Ask）
+            // 若路径存在且安全检查拦截则为 Ask
             PermissionResult::Allow => {
-                // ok — path doesn't exist on this system
+                // 正常 — 此系统上该路径不存在
             }
             other => panic!("expected Ask or Allow, got: {:?}", other),
         }

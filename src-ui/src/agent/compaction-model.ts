@@ -1,92 +1,92 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Compaction cost model — replaces hardcoded magic numbers with measurable math.
+// 压缩成本模型 — 用可度量的数学替代硬编码的魔法数字。
 //
-// Decision variables (currently hardcoded in agent.ts):
-//   r = compactRatio  (0.7) — trigger threshold as fraction of contextWindow
-//   k = recentKeep    (4)   — messages kept verbatim in tail
+// 决策变量（目前在 agent.ts 中硬编码）：
+//   r = compactRatio  (0.7) — 触发阈值，占 contextWindow 的比例
+//   k = recentKeep    (4)   — 尾部保留的完整消息数
 //
-// Model:
+// 模型：
 //   NetBenefit = |R|·c_in·(T-1) - |S|·c_out - L·avg_turn_cost
 //
-//   |R|  = tokens in summarized region
-//   |S|  = tokens in generated summary
-//   T    = remaining turns after compaction
-//   L    = expected extra turns from information loss
-//   c_in = input token cost per 1M
-//   c_out = output token cost per 1M
+//   |R|  = 被压缩区域的 token 数
+//   |S|  = 生成的摘要 token 数
+//   T    = 压缩后的剩余轮次
+//   L    = 信息丢失导致的预期额外轮次
+//   c_in = 每 1M input token 的成本
+//   c_out = 每 1M output token 的成本
 //
-// The unknown: L (information loss → extra turns).
-// This tracker instruments the agent loop to measure it.
+// 未知量：L（信息丢失 → 额外轮次）。
+// 此追踪器监测 agent 循环来度量它。
 
 import type { Pricing } from './agent-types';
 import { log } from './logger';
 import type { Tool } from './tool';
 
-// ── Collected metrics ──
+// ── 收集的指标 ──
 
 export interface CompactionEvent {
   ts: number;
-  /** Messages in the summarized region */
+  /** 被压缩区域的消息数 */
   regionMsgCount: number;
-  /** Estimated tokens in the region before summarization */
+  /** 压缩前区域的估算 token 数 */
   regionTokensEst: number;
-  /** Actual tokens the summarization LLM call consumed (input) */
+  /** 摘要 LLM 调用实际消耗的 token 数（输入） */
   summaryInputTokens: number;
-  /** Tokens in the generated summary (output) */
+  /** 生成摘要的 token 数（输出） */
   summaryOutputTokens: number;
-  /** Messages left in tail (verbatim) */
+  /** 尾部保留的消息数（完整保留） */
   tailMsgCount: number;
-  /** Estimated session tokens before compaction */
+  /** 压缩前估算的会话 token 数 */
   preTokens: number;
-  /** Estimated session tokens after compaction */
+  /** 压缩后估算的会话 token 数 */
   postTokens: number;
-  /** Outcome: 'summary' | 'truncated' | 'stuck' */
+  /** 结果: 'summary' | 'truncated' | 'stuck' */
   outcome: 'summary' | 'truncated' | 'stuck';
 }
 
 export interface CompactionSessionStats {
   events: CompactionEvent[];
-  /** Total summarization LLM cost (input + output) */
+  /** 摘要 LLM 总成本（输入 + 输出） */
   totalSummaryCost: number;
-  /** Estimated total tokens saved across all remaining turns */
+  /** 估算的跨所有剩余轮次节省的总 token 数 */
   estimatedTokensSaved: number;
-  /** Files read BEFORE compaction (tracked for re-read detection) */
+  /** 压缩前读取的文件（用于检测重读） */
   filesReadPreCompact: Set<string>;
-  /** Number of re-reads of pre-compaction files after compaction */
+  /** 压缩后重读压缩前文件次数 */
   reReadCount: number;
-  /** Duplicate tool calls post-compaction (same name + same args signature) */
+  /** 压缩后重复的工具调用（同名 + 同参数签名） */
   duplicateToolCalls: number;
-  /** Total turns in this session */
+  /** 本会话总轮次 */
   totalTurns: number;
-  /** Turns that happened after each compaction */
+  /** 每次压缩后发生的轮次 */
   turnsAfterCompaction: number[];
 }
 
-// ── Cost constants (Claude Sonnet, per 1M tokens) ──
+// ── 成本常量（Claude Sonnet，每 1M tokens）──
 
-const DEFAULT_C_IN = 3.0; // $3/1M input
-const DEFAULT_C_OUT = 15.0; // $15/1M output
+const DEFAULT_C_IN = 3.0; // $3/1M 输入
+const DEFAULT_C_OUT = 15.0; // $15/1M 输出
 
-/** ponytail: each re-read or duplicate tool call after compaction counts as
- *  0.25 extra turns — agent usually recovers quickly, not a full turn. */
+/** ponytail: 每次重读或压缩后重复工具调用计为
+ *  0.25 个额外轮次 — agent 通常恢复很快，不到一整轮。 */
 const LOSS_FACTOR_PER_EVENT = 0.25;
 
-// ── Compaction cost model ──
+// ── 压缩成本模型 ──
 
 export interface CompactionParams {
   regionTokens: number; // |R|
   summaryTokens: number; // |S|
   turnsRemaining: number; // T
   extraTurnsFromLoss: number; // L
-  avgTurnCost: number; // avg_turn_cost (dollars)
-  cIn?: number; // default $3
-  cOut?: number; // default $15
+  avgTurnCost: number; // avg_turn_cost（美元）
+  cIn?: number; // 默认 $3
+  cOut?: number; // 默认 $15
 }
 
-/** Compute net benefit of a single compaction.
- *  Positive = compaction saved money. Negative = cost more than it saved. */
+/** 计算单次压缩的净收益。
+ *  正值 = 压缩省钱。负值 = 成本大于节省。 */
 export function netBenefit(p: CompactionParams): number {
   const cIn = p.cIn ?? DEFAULT_C_IN;
   const cOut = p.cOut ?? DEFAULT_C_OUT;
@@ -101,15 +101,15 @@ export function netBenefit(p: CompactionParams): number {
   return savedCost - summaryCost - lossCost;
 }
 
-/** Break-even turns: how many remaining turns needed for compaction to pay off.
- *  Ignores information loss (L=0). Returns Infinity if summary is larger than region. */
+/** 盈亏平衡轮次：压缩回本需要多少剩余轮次。
+ *  忽略信息丢失（L=0）。如果摘要大于区域则返回 Infinity。 */
 export function breakevenTurns(p: CompactionParams): number {
   const cIn = p.cIn ?? DEFAULT_C_IN;
   const cOut = p.cOut ?? DEFAULT_C_OUT;
 
   if (p.regionTokens <= 0) return Infinity;
 
-  // Solve: |R|·c_in·(T-1) - |S|·c_out - L·avg = 0 for T
+  // 求解: |R|·c_in·(T-1) - |S|·c_out - L·avg = 0 中的 T
   // → T = 1 + (|S|·c_out + L·avg) / (|R|·c_in)
   const numerator = p.summaryTokens * cOut + p.extraTurnsFromLoss * p.avgTurnCost * 1_000_000;
   const denominator = p.regionTokens * cIn;
@@ -117,39 +117,39 @@ export function breakevenTurns(p: CompactionParams): number {
   return 1 + numerator / denominator;
 }
 
-// ── Optimal recentKeep estimator ──
+// ── 最优 recentKeep 估算器 ──
 
-/** Estimate information loss from keeping k messages in tail.
- *  ponytail: exponential decay model — each message further from current turn
- *  has geometrically lower relevance. Keeping more messages reduces loss
- *  but increases per-turn token cost.
+/** 估算保留 k 条尾部消息的信息丢失。
+ *  ponytail: 指数衰减模型 — 离当前轮次越远的消息
+ *  相关性几何级递减。保留更多消息能减少丢失
+ *  但增加每轮 token 成本。
  *
  *  loss(k) = base_loss * exp(-λ * k)
- *    where λ controls how fast relevance decays (higher = faster decay)
+ *    其中 λ 控制相关性衰减速度（越大 = 衰减越快）
  *
- *  Default λ ≈ 0.3 means each message ~74% as relevant as the previous one.
+ *  默认 λ ≈ 0.3 意味着每条消息的相关性约为前一条的 74%。
  */
 export function estimateLoss(k: number, totalRegionMsgs: number, lambda = 0.3): number {
-  // Each message omitted from tail has some probability of being needed later.
-  // Messages further back are less likely to be needed.
+  // 尾部省略的每条消息都有一定概率后续需要。
+  // 越早的消息被需要的概率越低。
   let cumulativeLoss = 0;
   for (let i = 0; i < totalRegionMsgs - k; i++) {
-    // Relevance of message at distance i from current turn
+    // 距当前轮次 i 步的消息相关性
     cumulativeLoss += Math.exp(-lambda * (i + k));
   }
-  // Scale: max loss is ~1 extra turn per 50 messages lost
+  // 缩放: 最大丢失约为每 50 条丢失消息 1 个额外轮次
   return cumulativeLoss * 0.02;
 }
 
-/** Expected per-turn cost for keeping k tail messages.
- *  avgMsgTokens = average token count per message. */
+/** 保留 k 条尾部消息的预期每轮成本。
+ *  avgMsgTokens = 每条消息的平均 token 数。 */
 export function tailCost(k: number, avgMsgTokens: number, cIn?: number): number {
   const c = cIn ?? DEFAULT_C_IN;
   return (k * avgMsgTokens * c) / 1_000_000;
 }
 
-/** Find optimal k (recentKeep) that minimizes total cost.
- *  Total cost = tail storage cost (k·|m̄|·c_in) + expected loss cost. */
+/** 找到使总成本最小的最优 k（recentKeep）。
+ *  总成本 = 尾部存储成本 (k·|m̄|·c_in) + 预期丢失成本。 */
 export function optimalRecentKeep(
   totalRegionMsgs: number,
   avgMsgTokens: number,
@@ -161,7 +161,7 @@ export function optimalRecentKeep(
   let bestCost = Infinity;
 
   for (let k = 1; k <= Math.min(totalRegionMsgs, 20); k++) {
-    const storageCost = tailCost(k, avgMsgTokens, cIn) * 10; // assume ~10 remaining turns
+    const storageCost = tailCost(k, avgMsgTokens, cIn) * 10; // 假设还有约 10 轮
     const loss = estimateLoss(k, totalRegionMsgs, lambda);
     const lossCost = loss * avgTurnCost;
     const totalCost = storageCost + lossCost;
@@ -175,20 +175,20 @@ export function optimalRecentKeep(
   return { k: bestK, cost: bestCost };
 }
 
-// ── Optimal compactRatio estimator ──
+// ── 最优 compactRatio 估算器 ──
 
-/** Find optimal r (compactRatio) given expected session length.
+/** 根据预期会话长度找到最优 r（compactRatio）。
  *
- *  If we compact too early (low r), we pay summarization cost for less gain
- *  because there aren't many tokens to compress.
- *  If we compact too late (high r), we pay more per turn before compaction.
+ *  如果压缩太早（低 r），为较少的收益支付摘要成本，
+ *  因为没有多少 token 可压缩。
+ *  如果压缩太晚（高 r），压缩前每轮成本更高。
  *
- *  For a session of N total messages:
- *    - Without compaction: total cost ∝ N² (each turn sends all previous msgs)
- *    - With compaction at r: compaction cost + linear growth after
+ *  对于 N 条总消息的会话：
+ *    - 不压缩：总成本 ∝ N²（每轮发送所有之前的消息）
+ *    - 在 r 处压缩：压缩成本 + 之后线性增长
  *
- *  ponytail: this is a simplified model. Real optimum depends on message size
- *  distribution and whether the session is mostly tool-heavy or chat-heavy.
+ *  ponytail: 这是简化模型。真正的最优值取决于消息大小
+ *  分布以及会话主要是工具密集型还是对话密集型。
  */
 export function optimalCompactRatio(
   contextWindow: number,
@@ -203,10 +203,10 @@ export function optimalCompactRatio(
     const triggerTokens = r * contextWindow;
     const triggerMsgs = Math.floor(triggerTokens / avgMsgTokens);
 
-    if (triggerMsgs >= expectedTurns) continue; // never triggers
+    if (triggerMsgs >= expectedTurns) continue; // 永不触发
 
-    const regionTokens = triggerTokens - avgMsgTokens * 4; // minus tail
-    const summaryTokens = regionTokens * 0.05; // ~5% compression ratio
+    const regionTokens = triggerTokens - avgMsgTokens * 4; // 减去尾部
+    const summaryTokens = regionTokens * 0.05; // ~5% 压缩比
     const turnsRemaining = expectedTurns - triggerMsgs;
 
     if (turnsRemaining <= 1) continue;
@@ -215,7 +215,7 @@ export function optimalCompactRatio(
       regionTokens,
       summaryTokens,
       turnsRemaining,
-      extraTurnsFromLoss: 0, // optimistic
+      extraTurnsFromLoss: 0, // 乐观估计
       avgTurnCost,
     });
 
@@ -229,7 +229,7 @@ export function optimalCompactRatio(
   return { r: bestR, estimatedSaving: bestSaving };
 }
 
-// ── CompactionTracker — instruments agent.ts ──
+// ── CompactionTracker — 监测 agent.ts ──
 
 export class CompactionTracker {
   private filesRead = new Set<string>();
@@ -241,7 +241,7 @@ export class CompactionTracker {
   private dupTools = 0;
   private currentPostCompactCounter = -1; // -1 = not post-compaction
 
-  /** Call before every API stream. */
+  /** 每次 API stream 前调用。 */
   recordTurn(): void {
     this.totalTurns++;
     if (this.currentPostCompactCounter >= 0) {
@@ -249,7 +249,7 @@ export class CompactionTracker {
     }
   }
 
-  /** Call when a read_file_content or read_file tool executes. */
+  /** read_file_content 或 read_file 工具执行时调用。 */
   recordFileRead(filePath: string): void {
     const norm = filePath.replace(/\\/g, '/').toLowerCase();
     if (this.currentPostCompactCounter >= 0 && this.filesRead.has(norm)) {
@@ -262,7 +262,7 @@ export class CompactionTracker {
     this.filesRead.add(norm);
   }
 
-  /** Call when any tool executes. Track sig for duplicate detection. */
+  /** 任意工具执行时调用。追踪签名用于重复检测。 */
   recordToolCall(name: string, args: string): void {
     const sig = `${name}:${args.slice(0, 200)}`;
     if (this.currentPostCompactCounter >= 0 && this.toolSigs.has(sig)) {
@@ -275,14 +275,14 @@ export class CompactionTracker {
     this.toolSigs.add(sig);
   }
 
-  /** Call after compaction completes. */
+  /** 压缩完成后调用。 */
   recordCompaction(event: CompactionEvent): void {
     this.events.push(event);
     this.turnsAfter.push(0);
     this.currentPostCompactCounter = 0;
   }
 
-  /** Compute session-level stats. */
+  /** 计算会话级统计。 */
   getStats(pricing?: Pricing): CompactionSessionStats {
     let totalSummaryCost = 0;
     let totalTokensSaved = 0;
@@ -306,14 +306,14 @@ export class CompactionTracker {
     };
   }
 
-  /** Estimate information loss factor L from collected data.
-   *  ponytail: heuristic — each re-read or duplicate tool call counts as
-   *  0.25 extra turns (not a full turn since agent usually recovers quickly). */
+  /** 从收集的数据估算信息丢失因子 L。
+   *  ponytail: 启发式 — 每次重读或重复工具调用计为
+   *  0.25 个额外轮次（不到一整轮，因为 agent 通常恢复很快）。 */
   estimateLossFactor(): number {
     return (this.reReads + this.dupTools) * LOSS_FACTOR_PER_EVENT;
   }
 
-  /** Compute average turn cost from pricing and token estimates. */
+  /** 从定价和 token 估算值计算平均轮次成本。 */
   estimateAvgTurnCost(avgInputTokens: number, avgOutputTokens: number, pricing?: Pricing): number {
     const cIn = pricing?.input ?? DEFAULT_C_IN;
     const cOut = pricing?.output ?? DEFAULT_C_OUT;
@@ -321,9 +321,9 @@ export class CompactionTracker {
   }
 
   reset(): void {
-    // E5: Preserve events, turnsAfter, and filesRead across sessions
-    // so compaction tuning doesn't restart from zero after restart.
-    // Only reset per-session transient counters.
+    // E5: 跨会话保留 events、turnsAfter 和 filesRead，
+    // 使压缩调优不会在重启后从零开始。
+    // 仅重置每会话的临时计数器。
     this.toolSigs.clear();
     this.totalTurns = 0;
     this.reReads = 0;
@@ -331,11 +331,11 @@ export class CompactionTracker {
     this.currentPostCompactCounter = -1;
   }
 
-  // ── E5: Cross-session persistence ──
+  // ── E5: 跨会话持久化 ──
 
-  /** Serialize persistent state for cross-session survival.
-   *  Only events, turnsAfter, and filesRead are persisted — per-session
-   *  counters (totalTurns, reReads, dupTools, etc.) start fresh each session. */
+  /** 序列化持久状态用于跨会话存活。
+   *  仅持久化 events、turnsAfter 和 filesRead — 每会话
+   *  计数器（totalTurns、reReads、dupTools 等）每次会话重新开始。 */
   serializeState(): string {
     return JSON.stringify({
       events: this.events,
@@ -344,7 +344,7 @@ export class CompactionTracker {
     });
   }
 
-  /** Restore state from a serialized string. Replaces existing data (not append). */
+  /** 从序列化字符串恢复状态。替换现有数据（非追加）。 */
   deserializeState(json: string): void {
     try {
       const data = JSON.parse(json) as {
@@ -352,7 +352,7 @@ export class CompactionTracker {
         turnsAfter?: number[];
         filesRead?: string[];
       };
-      // Replace, not append — prevents duplicate accumulation on repeated load
+      // 替换而非追加 — 防止重复加载时累积重复数据
       if (Array.isArray(data.events)) {
         this.events = [...data.events];
       }
@@ -363,66 +363,66 @@ export class CompactionTracker {
         this.filesRead = new Set(data.filesRead);
       }
     } catch {
-      /* corrupt file — start fresh */
+      /* 文件损坏 — 从零开始 */
     }
   }
 }
 
-// ── Auto-tune: persist optimal params across sessions ──
+// ── 自动调优：跨会话持久化最优参数 ──
 
 export interface CompactionConfig {
   compactRatio: number;
   recentKeep: number;
-  tunedAt: number; // timestamp of last tune
-  sampleCount: number; // number of compaction events used
+  tunedAt: number; // 上次调优时间戳
+  sampleCount: number; // 使用的压缩事件数量
   avgCompressionRatio: number;
   avgLossFactor: number;
-  reasoning: string; // human-readable explanation
+  reasoning: string; // 人类可读的说明
 }
 
 const MIN_SAMPLES_FOR_TUNE = 5;
 
-/** Compute optimal params from tracker data. Returns null if not enough data. */
+/** 从追踪器数据计算最优参数。数据不足时返回 null。 */
 export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Pricing): CompactionConfig | null {
   const stats = tracker.getStats(pricing);
   if (stats.events.length < MIN_SAMPLES_FOR_TUNE) return null;
 
-  // Average compression ratio across all events
+  // 所有事件的平均压缩比
   const avgCompressionRatio =
     stats.events.reduce((sum, e) => {
       if (e.regionTokensEst === 0) return sum;
       return sum + e.summaryOutputTokens / e.regionTokensEst;
     }, 0) / stats.events.length;
 
-  // Average turns after compaction
+  // 压缩后的平均轮次
   const _avgTurnsAfter =
     stats.turnsAfterCompaction.length > 0
       ? stats.turnsAfterCompaction.reduce((a, b) => a + b, 0) / stats.turnsAfterCompaction.length
       : 0;
 
-  // Average region size
+  // 平均区域大小
   const avgRegionMsgs = stats.events.reduce((sum, e) => sum + e.regionMsgCount, 0) / stats.events.length;
   const avgRegionTokens = stats.events.reduce((sum, e) => sum + e.regionTokensEst, 0) / stats.events.length;
 
-  // Average message tokens
+  // 平均消息 token 数
   const avgMsgTokens = avgRegionMsgs > 0 ? avgRegionTokens / avgRegionMsgs : 500;
 
-  // Loss factor from observed re-reads / dup tools
+  // 从观测到的重读/重复工具计算丢失因子
   const lossFactor = tracker.estimateLossFactor();
   const avgLossPerEvent = stats.events.length > 0 ? lossFactor / stats.events.length : 0;
 
-  // Average turn cost
+  // 平均轮次成本
   const avgTurnCost = tracker.estimateAvgTurnCost(avgRegionTokens, avgRegionTokens * 0.15, pricing);
 
-  // Compute optimal recentKeep
+  // 计算最优 recentKeep
   const { k: optimalK } = optimalRecentKeep(Math.round(avgRegionMsgs), avgMsgTokens, avgTurnCost, 0.3, pricing?.input);
 
-  // Compute optimal compactRatio based on expected session length
+  // 根据预期会话长度计算最优 compactRatio
   const { r: optimalR } = optimalCompactRatio(1_000_000, avgMsgTokens, stats.totalTurns, avgTurnCost);
-  // Clamp to reasonable range
+  // 限制到合理范围
   const tunedR = Math.max(0.35, Math.min(0.75, optimalR));
 
-  // Build reasoning
+  // 构建说明
   const parts: string[] = [];
   parts.push(
     `${stats.events.length}次压缩, 平均压缩比 ${(avgCompressionRatio * 100).toFixed(1)}%, 每次平均信息丢失 ${avgLossPerEvent.toFixed(2)} 轮`,
@@ -441,7 +441,7 @@ export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Prici
   };
 }
 
-/** Try to auto-tune and return a recommendation. Caller decides whether to apply. */
+/** 尝试自动调优并返回推荐。由调用方决定是否应用。 */
 export function maybeTune(
   tracker: CompactionTracker,
   currentR: number,
@@ -454,9 +454,9 @@ export function maybeTune(
   return { config, changed };
 }
 
-// ── Diagnostic report (for /compact-stats or MCP tool) ──
+// ── 诊断报告（用于 /compact-stats 或 MCP 工具）──
 
-/** ponytail: shared cost calc — used by both formatCompactionReport and the agent tool. */
+/** ponytail: 共享成本计算 — 被 formatCompactionReport 和 agent 工具共用。 */
 function compactionEventCost(e: CompactionEvent, pricing?: Pricing): number {
   return (
     (e.summaryInputTokens * (pricing?.input ?? DEFAULT_C_IN) +
@@ -504,10 +504,10 @@ export function formatCompactionReport(stats: CompactionSessionStats, pricing?: 
   return lines.join('\n');
 }
 
-// ── Agent tool: hologram_compaction_stats ──
+// ── Agent 工具：hologram_compaction_stats ──
 
-/** Create a read-only tool that lets the agent (and user) inspect compaction health.
- *  ponytail: no mutation — just formats the tracker's current state. */
+/** 创建只读工具，让 agent（和用户）检查压缩健康状态。
+ *  ponytail: 不做修改 — 仅格式化追踪器的当前状态。 */
 export function createCompactionTools(
   getTracker: () => CompactionTracker | null,
   getPricing: () => Pricing | undefined,

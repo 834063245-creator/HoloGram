@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// PTY Manager — pseudo-terminal sessions for the integrated terminal.
-// Uses portable-pty (WezTerm) for cross-platform ConPTY/pty support.
+// PTY 管理器 — 为集成终端提供伪终端会话。
+// 使用 portable-pty (WezTerm) 实现跨平台 ConPTY/pty 支持。
 
 use portable_pty::{CommandBuilder, PtySize, PtySystem, NativePtySystem};
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 struct PtySession {
     reader: Box<dyn Read + Send>,
     writer: Box<dyn Write + Send>,
-    /// Master for resize — kept after taking reader/writer.
+    /// 用于调整大小的 Master — 在取走 reader/writer 后保留。
     master: Box<dyn portable_pty::MasterPty + Send>,
     _child: Box<dyn portable_pty::ChildKiller + Send + Sync>,
 }
@@ -34,7 +34,7 @@ struct PtyOutputPayload {
     data: Vec<u8>,
 }
 
-/// Spawn a new PTY session with a shell. Returns the session ID.
+/// 使用 shell 创建新的 PTY 会话。返回会话 ID。
 #[tauri::command]
 pub async fn pty_spawn(
     app_handle: AppHandle,
@@ -80,7 +80,7 @@ pub async fn pty_spawn(
         map.insert(id, session);
     }
 
-    // Reader thread: stream PTY output to frontend
+    // 读取线程：将 PTY 输出流式传输到前端
     let sessions = pty_sessions();
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -109,7 +109,7 @@ pub async fn pty_spawn(
     Ok(id)
 }
 
-/// Write data to a PTY session's stdin.
+/// 向 PTY 会话的 stdin 写入数据。
 #[tauri::command]
 pub async fn pty_write(session_id: u32, data: String) -> Result<(), String> {
     let map_ref = pty_sessions();
@@ -122,7 +122,7 @@ pub async fn pty_write(session_id: u32, data: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Resize a PTY session.
+/// 调整 PTY 会话大小。
 #[tauri::command]
 pub async fn pty_resize(session_id: u32, cols: u16, rows: u16) -> Result<(), String> {
     let map_ref = pty_sessions();
@@ -134,7 +134,7 @@ pub async fn pty_resize(session_id: u32, cols: u16, rows: u16) -> Result<(), Str
     Ok(())
 }
 
-/// Kill a PTY session.
+/// 终止 PTY 会话。
 #[tauri::command]
 pub async fn pty_kill(session_id: u32) -> Result<(), String> {
     let map_ref = pty_sessions();
@@ -142,9 +142,9 @@ pub async fn pty_kill(session_id: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Kill all PTY sessions — called by ResourceLedger during shutdown.
+/// 终止所有 PTY 会话 — 在关闭时由 ResourceLedger 调用。
 pub fn kill_all() {
     let map_ref = pty_sessions();
     let mut map = map_ref.lock().unwrap();
-    map.clear(); // PtySession._child (ChildKiller) kills on drop
+    map.clear(); // PtySession._child (ChildKiller) 在 drop 时终止进程
 }

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// HoloGram Tauri Backend
+// HoloGram Tauri 后端
 // 桥接层：Agent (TypeScript) → Tauri commands → Rust engine
 // 不做分析逻辑，只做进程管理和文本转发
 
@@ -34,11 +34,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::Manager;
 
-// Re-export WorkspaceState so commands can reference it as crate::WorkspaceState
+// 重新导出 WorkspaceState，使命令可以以 crate::WorkspaceState 引用
 pub(crate) type WorkspaceState = Arc<Mutex<Option<workspace::WorkspaceHandle>>>;
 
-// Engine imports — needed by tests (mod tests below uses super::*).
-// Only types used by make_graph_with and serialize_cached_graph test helpers.
+// Engine 导入 — 测试需要（下方 mod tests 使用 super::*）。
+// 仅 make_graph_with 和 serialize_cached_graph 测试辅助函数使用的类型。
 #[cfg(test)]
 use hologram_engine as engine;
 #[cfg(test)]
@@ -46,15 +46,15 @@ use engine::graph::Graph;
 #[cfg(test)]
 use engine::graph::{Node, NodeKind, Edge, EdgeKind};
 
-/// Set the active workspace — now a no-op stub. Use workspace_activate instead.
-/// Kept for API compatibility; frontend never calls this directly.
+/// 设置活跃工作区 — 现为空操作桩。请改用 workspace_activate。
+/// 保留以维持 API 兼容性；前端从不直接调用此方法。
 #[tauri::command]
 fn set_active_project(_path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Return the currently active workspace path (empty string if none set).
-/// Used by the frontend as a fallback when graph meta.source_root is missing on cold start.
+/// 返回当前活跃工作区路径（未设置时为空字符串）。
+/// 前端在冷启动时 graph meta.source_root 缺失时用作回退。
 #[tauri::command]
 fn get_active_project(
     state: tauri::State<'_, WorkspaceState>,
@@ -63,7 +63,7 @@ fn get_active_project(
 }
 
 // ═══════════════════════════════════════════════════════
-// Watcher State (legacy — replaced by WorkspaceHandle in workspace.rs)
+// Watcher 状态（遗留 — 已被 workspace.rs 中的 WorkspaceHandle 替代）
 // ═══════════════════════════════════════════════════════
 
 fn main() {
@@ -77,13 +77,13 @@ fn main() {
         .manage(workspace_state)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Phase 1: Drain — gracefully stop all services via ResourceLedger
+                // Phase 1: Drain — 通过 ResourceLedger 优雅停止所有服务
                 let app = window.app_handle();
                 if let Some(ledger) = app.try_state::<std::sync::Mutex<lifecycle::ResourceLedger>>() {
                     let ledger = ledger.lock().unwrap();
                     ledger.shutdown_all(std::time::Duration::from_secs(2));
                 }
-                // Also deactivate the workspace handle (stops watcher thread)
+                // 同时停用工作区句柄（停止 watcher 线程）
                 if let Some(ws_state) = app.try_state::<WorkspaceState>() {
                     if let Ok(mut guard) = ws_state.lock() {
                         if let Some(handle) = guard.as_mut() {
@@ -91,7 +91,7 @@ fn main() {
                         }
                     }
                 }
-                // Phase 2: Purge — hard exit ensures no zombie processes
+                // Phase 2: Purge — 强制退出确保无僵尸进程
                 std::process::exit(0);
             }
         })
@@ -101,16 +101,16 @@ fn main() {
             get_active_project,
         ])
         .setup(|app| {
-            // Phase 4a: OS sandbox — Job Object for die-with-parent
+            // Phase 4a: OS 沙箱 — Job Object 实现 die-with-parent
             os_sandbox::init();
-            // Warn if OS sandbox is degraded — permission engine is the fallback
+            // 如果 OS 沙箱降级则警告 — 权限引擎作为回退
             let s = os_sandbox::status();
             if !matches!(s, os_sandbox::SandboxStatus::Available) {
                 eprintln!("[hologram] OS sandbox 不可用 — 仅权限引擎生效");
             }
-            // v4 Phase 4: server for Unity events
+            // v4 Phase 4: Unity 事件服务器
             commands::external::start_unity_event_server(app.handle().clone());
-            // Memory Bundle: spawn if exe found next to hologram
+            // Memory Bundle: 如果在 hologram 旁找到 exe 则启动
             if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_path.parent() {
                     let mb = exe_dir.join("memory-bundle.exe");
@@ -121,7 +121,7 @@ fn main() {
                             .stderr(std::process::Stdio::null());
                         #[cfg(windows)]
                         { mc.creation_flags(crate::utils::NO_WINDOW); }
-                        // Retain Child handle for ResourceLedger to kill on shutdown
+                        // 保留 Child 句柄供 ResourceLedger 在关闭时终止
                         if let Ok(child) = mc.spawn() {
                             *commands::external::MEMORY_BUNDLE_CHILD.lock().unwrap() = Some(child);
                         }
@@ -129,7 +129,7 @@ fn main() {
                 }
             }
 
-            // Register all services with the ResourceLedger
+            // 将所有服务注册到 ResourceLedger
             let mut ledger = lifecycle::ResourceLedger::new();
             ledger.register(Box::new(lifecycle::UnityEventService));
             ledger.register(Box::new(lifecycle::BgJobsService));
@@ -175,7 +175,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("hologram_test_deactivate");
         let _ = std::fs::create_dir_all(&tmp);
         let mut handle = workspace::WorkspaceHandle::new(&tmp.to_string_lossy());
-        // deactivate with no watcher running should not panic
+        // deactivate 在无 watcher 运行时不应 panic
         handle.deactivate();
         assert!(handle.changed_files.lock().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
@@ -197,11 +197,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Regression: serialize_cached_graph must never run on the async worker.
-    /// It does heavy JSON serialization for 10k+ nodes. When run on the async
-    /// thread it starves concurrent commands (read_file_content Promise hangs).
-    /// This test verifies serialization works in a blocking thread and that a
-    /// concurrent lightweight task can still make progress.
+    /// 回归测试：serialize_cached_graph 绝不能在 async worker 上运行。
+    /// 它需要对 10k+ 节点进行大量 JSON 序列化。在 async
+    /// 线程上运行会饿死并发命令（read_file_content Promise 挂起）。
+    /// 此测试验证序列化在阻塞线程中工作，且
+    /// 并发的轻量任务仍能继续执行。
     #[test]
     fn serialize_cached_graph_in_spawn_blocking_does_not_starve_runtime() {
         let tmp = std::env::temp_dir().join("hologram_test_serialize_async");
@@ -213,11 +213,11 @@ mod tests {
         )
         .unwrap();
 
-        // Init engine and run analysis to populate the graph store
+        // 初始化引擎并运行分析以填充图存储
         let tmp_s = tmp.to_string_lossy().to_string();
         utils::direct_analyze(&tmp_s, true).unwrap();
 
-        // Build a tokio runtime to test spawn_blocking behaviour
+        // 构建 tokio runtime 以测试 spawn_blocking 行为
         let rt = tokio::runtime::Runtime::new().unwrap();
         let tmp_c = tmp_s.clone();
         let serialized = rt.block_on(async {
@@ -232,14 +232,14 @@ mod tests {
         let nodes = parsed["nodes"].as_array().expect("should have nodes array");
         assert!(!nodes.is_empty(), "should have at least one node");
 
-        // Verify runtime not starved: a timer fires while serialization runs
+        // 验证运行时未被饿死：序列化运行时定时器能触发
         let tmp_c2 = tmp_s.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
             let _ = utils::serialize_cached_graph(&tmp_c2);
             tx.send(()).unwrap();
         });
-        // serialize_cached_graph on a blocking thread should complete quickly
+        // serialize_cached_graph 在阻塞线程上应快速完成
         rx.recv_timeout(std::time::Duration::from_secs(10))
             .expect("serialize_cached_graph should complete within 10s");
 
@@ -247,7 +247,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    // ── list_dir_flat tests ──
+    // ── list_dir_flat 测试 ──
 
     #[test]
     fn list_dir_flat_returns_one_level() {
@@ -261,13 +261,13 @@ mod tests {
         let entries = utils::list_dir_flat(&tmp);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
-        // Only direct children, not c.py inside sub/
+        // 仅直接子项，不含 sub/ 中的 c.py
         assert!(names.contains(&"a.py"));
         assert!(names.contains(&"b.rs"));
         assert!(names.contains(&"sub"));
         assert!(!names.contains(&"c.py"), "c.py is in sub/, should not appear at top level");
 
-        // All children must be null (no recursive loading)
+        // 所有子项的 children 必须为 null（无递归加载）
         for e in &entries {
             assert!(e.children.is_none(), "children must be None for flat listing");
         }
@@ -290,8 +290,8 @@ mod tests {
         let entries = utils::list_dir_flat(&tmp);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
-        // ponytail: only VCS internal dirs (.git/.hg/.svn) are hidden now;
-        // dotfiles and build dirs are visible — git ignored coloring is frontend's job
+        // ponytail: 现在仅隐藏 VCS 内部目录 (.git/.hg/.svn)；
+        // dotfile 和构建目录可见 — git ignored 着色由前端处理
         assert!(names.contains(&"main.py"));
         assert!(names.contains(&".hidden"), "dotfiles should be visible");
         assert!(!names.contains(&".git"), ".git should still be skipped (VCS internal)");
@@ -331,7 +331,7 @@ mod tests {
         let entries = utils::list_dir_flat(&tmp);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
-        // Directories first
+        // 目录在前
         let alpha_dir_pos = names.iter().position(|n| *n == "alpha_dir").unwrap();
         let zebra_pos = names.iter().position(|n| *n == "zebra").unwrap();
         let alpha_file_pos = names.iter().position(|n| *n == "alpha.py").unwrap();
@@ -339,18 +339,18 @@ mod tests {
 
         assert!(alpha_dir_pos < alpha_file_pos, "dirs should come before files");
         assert!(zebra_pos < alpha_file_pos, "dirs should come before files");
-        // Within dirs: alpha_dir < zebra (case-insensitive)
+        // 目录内：alpha_dir < zebra（不区分大小写）
         assert!(alpha_dir_pos < zebra_pos);
-        // Within files: alpha.py < beta.py
+        // 文件内：alpha.py < beta.py
         assert!(alpha_file_pos < beta_pos);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    // ── diff_to_json regression tests ──
-    // Bug: hologram_diff used to return `.len()` integers for added_nodes/
-    // removed_nodes/modified_nodes. Frontend showDiff expected `{id, name}`
-    // objects → `(5).map(...)` threw and status bar showed `+0 / -0 / ~0`.
+    // ── diff_to_json 回归测试 ──
+    // Bug: hologram_diff 过去返回 `.len()` 整数给 added_nodes/
+    // removed_nodes/modified_nodes。前端 showDiff 期望 `{id, name}`
+    // 对象 → `(5).map(...)` 抛出异常，状态栏显示 `+0 / -0 / ~0`。
 
     fn make_graph_with(nodes: &[(&str, &str, NodeKind)], edges: &[(&str, &str, &str, EdgeKind)]) -> Graph {
         let mut g = Graph::new();
@@ -371,7 +371,7 @@ mod tests {
             ("b", "new_fn", NodeKind::Function),
         ], &[]);
         let v = utils::diff_to_json(&before, &after);
-        // added_nodes must be an array of objects, not a number
+        // added_nodes 必须是对象数组，而非数字
         let added = v["added_nodes"].as_array().expect("added_nodes must be array");
         assert_eq!(added.len(), 1);
         assert_eq!(added[0]["id"].as_str(), Some("b"));
@@ -428,7 +428,7 @@ mod tests {
             ("b", "fn_b", NodeKind::Function),
         ], &[("e1", "a", "b", EdgeKind::Calls)]);
         let v = utils::diff_to_json(&before, &after);
-        // edges are counts in the command payload (showDiff only colors nodes)
+        // edges 在命令 payload 中是计数（showDiff 仅着色节点）
         assert_eq!(v["added_edges"].as_u64(), Some(1));
         assert_eq!(v["removed_edges"].as_u64(), Some(0));
     }

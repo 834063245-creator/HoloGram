@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Pipeline runner — the 10-stage analysis pipeline extracted from engine/mod.rs.
+// 流水线运行器 — 从 engine/mod.rs 中提取的 10 阶段分析流水线。
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,8 +26,8 @@ use crate::storage::MemoryIndex;
 use super::{AnalyzeResult, Engine, EngineState, StageTiming};
 
 impl Engine {
-    /// Pipeline body extracted so `catch_unwind` can guard against panics
-    /// without poisoning the analyze_lock or leaving state at Analyzing.
+    /// 流水线主体提取为独立方法，使 `catch_unwind` 可以防止 panic
+    /// 导致 analyze_lock 中毒或状态停留在 Analyzing。
     pub(super) fn run_pipeline(
         &self,
         project_root: &Path,
@@ -45,10 +45,10 @@ impl Engine {
             };
         };
 
-        // Per-stage timing collector
+        // 各阶段计时收集器
         let mut stage_timings: Vec<StageTiming> = Vec::new();
 
-        // 1. Core analysis (parse cache included for downstream synthesis)
+        // 1. 核心分析（解析缓存供下游合成阶段使用）
         set_progress("解析文件", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let mut result = analyze_project(project_root);
@@ -71,11 +71,11 @@ impl Engine {
         set_progress("解析完成", result.files_parsed, result.files_discovered,
             &if result.files_failed > 0 { format!("{} 个文件解析失败", result.files_failed) } else { String::new() });
 
-        // 1.5. LSP call resolution → moved to on-demand MCP tool
-        // (resolve_call). The graph stores coarse CALLS edges;
-        // type-aware disambiguation happens lazily when the Agent asks.
+        // 1.5. LSP 调用解析 → 已移至按需 MCP 工具
+        // (resolve_call)。Graph 存储粗粒度 CALLS 边；
+        // 类型感知的消歧在 Agent 请求时延迟执行。
 
-        // 2. Cross-file resolution
+        // 2. 跨文件解析
         set_progress("跨文件解析", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let resolved = CrossFileResolver::resolve(&mut result.graph);
@@ -91,7 +91,7 @@ impl Engine {
             return Err("分析已被新的重分析请求取消".to_string());
         }
 
-        // 3. Coupling analysis
+        // 3. 耦合分析
         set_progress("耦合分析", 0, 0, "");
         let stage_start = std::time::Instant::now();
         compute_coupling(&mut result.graph);
@@ -106,7 +106,7 @@ impl Engine {
             return Err("分析已被新的重分析请求取消".to_string());
         }
 
-        // 4. Framework route detection
+        // 4. 框架路由检测
         set_progress("框架路由检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let routes_found = detect_framework_routes(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -122,7 +122,7 @@ impl Engine {
             return Err("分析已被新的重分析请求取消".to_string());
         }
 
-        // 5. Dynamic dispatch synthesis
+        // 5. 动态调度合成
         set_progress("动态调度合成", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let syn_edges = synthesize_dynamic_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -134,7 +134,7 @@ impl Engine {
             detail: format!("{} edges", syn_edges),
         });
 
-        // 5.1. React synthesis
+        // 5.1. React 合成
         set_progress("React合成", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let react_edges = synthesize_react_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -146,7 +146,7 @@ impl Engine {
             detail: format!("{} edges", react_edges),
         });
 
-        // 5.2. Vue synthesis
+        // 5.2. Vue 合成
         set_progress("Vue合成", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let vue_edges = synthesize_vue_edges(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -158,7 +158,7 @@ impl Engine {
             detail: format!("{} edges", vue_edges),
         });
 
-        // 5.5. DI / Reflection detection
+        // 5.5. DI / 反射检测
         set_progress("DI/反射检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let di_edges = detect_di_reflection(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -170,7 +170,7 @@ impl Engine {
             detail: format!("{} edges", di_edges),
         });
 
-        // 5.6. Dynamic import detection
+        // 5.6. 动态导入检测
         set_progress("动态导入检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let dyn_imp_edges = detect_dynamic_imports(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -182,7 +182,7 @@ impl Engine {
             detail: format!("{} markers", dyn_imp_edges),
         });
 
-        // 5.7. Eval / dynamic code detection
+        // 5.7. Eval / 动态代码检测
         set_progress("Eval检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let eval_edges = detect_eval(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -194,7 +194,7 @@ impl Engine {
             detail: format!("{} markers", eval_edges),
         });
 
-        // 5.8. Cross-language call detection
+        // 5.8. 跨语言调用检测
         set_progress("跨语言调用检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let xlang_edges = detect_cross_lang_calls(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
@@ -206,12 +206,12 @@ impl Engine {
             detail: format!("{} markers", xlang_edges),
         });
 
-                // 6. Dataflow — now on-demand via query_file_dataflow().
-        // Pipeline no longer precomputes dataflow edges at graph build time.
-        // Agent tools call the query engine directly when tracing variables.
+                // 6. 数据流 — 现通过 query_file_dataflow() 按需执行。
+        // 流水线不再在 graph 构建时预计算数据流边。
+        // Agent 工具在追踪变量时直接调用查询引擎。
 
-        // 6.1. Re-run coupling for edges added during synthesis (steps 4-5.8).
-        // Uses incremental mode — preserves L3/L4 depths set by DI reflection.
+        // 6.1. 对合成阶段（步骤 4-5.8）新增的边重新运行耦合分析。
+        // 使用增量模式 — 保留 DI 反射设置的 L3/L4 深度。
         set_progress("耦合增量更新", 0, 0, "");
         let stage_start = std::time::Instant::now();
         compute_coupling_incremental(&mut result.graph);
@@ -223,13 +223,13 @@ impl Engine {
             detail: String::new(),
         });
 
-        // ── 5.9 Extract source snippets for vector index ──
-        // ponytail: build module→source index first (O(F)), then single-pass nodes
-        // (O(N×D) where D = module depth). Was O(F×N) — 1060 files × 26293 nodes = 27.8M iters.
+        // ── 5.9 为向量索引提取源码片段 ──
+        // ponytail: 先构建 module→source 索引（O(F)），再单次遍历节点
+        // （O(N×D)，D = module 深度）。原为 O(F×N) — 1060 文件 × 26293 节点 = 27.8M 次迭代。
         set_progress("源码片段提取", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let mut snippets_extracted = 0usize;
-        // Build file index: module_id → source (clone to release parse_cache borrow)
+        // 构建文件索引：module_id → source（clone 以释放 parse_cache 借用）
         let file_map: std::collections::HashMap<String, String> = result.parse_cache.iter()
             .map(|(fp, (src, _))| {
                 let mid = crate::path_utils::normalize_path(fp)
@@ -237,7 +237,7 @@ impl Engine {
                 (mid, src.clone())
             })
             .collect();
-        // Single pass over nodes — try node.id as module prefix, progressively strip
+        // 单次遍历节点 — 尝试将 node.id 作为 module 前缀，逐步剥离
         for (_, node) in result.graph.nodes.iter_mut() {
             if node.snippet.is_some() { continue; }
             let mut key: &str = node.id.as_str();
@@ -264,17 +264,17 @@ impl Engine {
             detail: format!("{} snippets", snippets_extracted),
         });
 
-        // ponytail: release parse_cache after synthesis
+        // ponytail: 合成完成后释放 parse_cache
         result.parse_cache.clear();
         result.parse_cache.shrink_to_fit();
 
-        // 7. Community detection (Leiden flat + Louvain hierarchical)
+        // 7. 社区检测（Leiden 扁平 + Louvain 层次）
         set_progress("社区检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
 
-        // Load previous community assignments for stable ID matching.
-        // This prevents community IDs from shifting across re-analyses:
-        // communities that retain most of their members inherit the old ID.
+        // 加载上次的社区分配以进行稳定 ID 匹配。
+        // 这防止社区 ID 在重新分析时发生偏移：
+        // 保留大部分成员的社区继承旧 ID。
         let old_assignment: std::collections::HashMap<String, usize> = {
             let store_guard = self.store.lock()
                 .map_err(|e| format!("Store lock poisoned: {}", e))?;
@@ -287,7 +287,7 @@ impl Engine {
 
         let (communities, hierarchical) = detect_communities_and_hierarchy(&result.graph, 42);
 
-        // Match new communities to old ones — stable IDs instead of position indices
+        // 将新社区匹配到旧社区 — 使用稳定 ID 而非位置索引
         let stable_ids = crate::community::match_communities_to_previous(
             &communities, &old_assignment,
         );
@@ -314,9 +314,9 @@ impl Engine {
             }
         }
 
-        // 7.6. Execution flow detection
-        // Entry points from framework routes + naming conventions → BFS forward
-        // through CALLS edges → criticality scoring → persisted as node properties.
+        // 7.6. 执行流检测
+        // 从框架路由 + 命名约定确定入口点 → 沿 CALLS 边前向 BFS
+        // → 临界性评分 → 持久化为节点属性。
         set_progress("执行流检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let flow_count = detect_all_flows(&mut result);
@@ -329,9 +329,9 @@ impl Engine {
             detail: format!("{} flows", flow_count),
         });
 
-        // 7.5. Build semantic vector index (fire-and-forget in background)
-        // ponytail: uses nodes with snippets populated in step 5.9.
-        // Runs on a background thread — doesn't block pipeline completion.
+        // 7.5. 构建语义向量索引（后台异步执行）
+        // ponytail: 使用步骤 5.9 中已填充 snippet 的节点。
+        // 在后台线程运行 — 不阻塞流水线完成。
         let vector_nodes: Vec<crate::graph::Node> = result.graph.nodes.values().cloned().collect();
         let vector_path = project_root.join(".hologram").join("vectors.usearch");
         std::thread::spawn(move || {
@@ -350,14 +350,14 @@ impl Engine {
             }
         });
 
-        // 8. Store into GraphStore (MemoryIndex + SQLite)
+        // 8. 写入 GraphStore（MemoryIndex + SQLite）
         set_progress("写入数据库", 0, 0, "");
         let stage_start = std::time::Instant::now();
         let graph_nodes = std::mem::take(&mut result.graph.nodes);
         let graph_edges = std::mem::take(&mut result.graph.edges);
         let idx = MemoryIndex::from_existing_graph(graph_nodes, graph_edges);
-        // Use deduped counts from MemoryIndex — raw Graph has duplicate edges
-        // from multi-stage synthesis that get collapsed during dedup.
+        // 使用 MemoryIndex 去重后的计数 — 原始 Graph 有来自多阶段合成的
+        // 重复边，在去重时会被合并。
         let node_count = idx.node_count();
         let edge_count = idx.edge_count();
         let elapsed = started_at.elapsed().as_secs_f64();
@@ -382,16 +382,16 @@ impl Engine {
             detail: String::new(),
         });
 
-        // Warm LSP server pool in background — fire-and-forget,
-        // doesn't block pipeline completion. Failed servers are
-        // silently skipped; handwritten adapters serve as fallback.
+        // 后台预热 LSP 服务器池 — 异步执行，
+        // 不阻塞流水线完成。失败的服务器被
+        // 静默跳过；手写适配器作为后备。
         let proj_root = project_root.to_path_buf();
         std::thread::spawn(move || {
             let root_str = proj_root.to_string_lossy().to_string();
             crate::lsp_manager::LspManager::warm(&root_str);
         });
 
-        // Set state back to Ready
+        // 将状态恢复为 Ready
         *self.state.write() = EngineState::Ready {
             node_count,
             edge_count,

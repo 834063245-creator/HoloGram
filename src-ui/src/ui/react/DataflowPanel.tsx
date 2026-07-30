@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// DataflowPanel — React rewrite of dataflow-panel.ts.
-// Floating trace browser: left panel = trace list + quick explore, right = trace content.
-// Supports drag (header) and resize (grip).
+// DataflowPanel — dataflow-panel.ts 的 React 重写。
+// 浮动追踪浏览器：左面板 = 追踪列表 + 快速探索，右侧 = 追踪内容。
+// 支持拖拽（标题栏）和缩放（右下角手柄）。
 
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -21,7 +21,7 @@ interface TraceSummary {
   hasContent: boolean;
 }
 
-// ── Helpers ──
+// ── 辅助函数 ──
 
 function fmtTime(iso: string): string {
   if (!iso) return '';
@@ -42,7 +42,7 @@ function inlineMd(text: string): string {
     .replace(/→/g, '<span class="df-md-arrow">→</span>');
 }
 
-// ── Markdown renderer (minimal, kept as html string builder) ──
+// ── Markdown 渲染器（精简版，仍以 HTML 字符串拼接） ──
 
 function renderMd(text: string): string {
   if (!text) return '';
@@ -102,7 +102,7 @@ function renderMd(text: string): string {
     .join('');
 }
 
-// ── Engine data renderers (kept as html string builders, same logic) ──
+// ── 引擎数据渲染器（仍以 HTML 字符串拼接，逻辑不变） ──
 
 function renderEngineExplore(explore: any): string {
   const parts: string[] = [];
@@ -244,7 +244,7 @@ function renderEngineDataflow(dfResult: any): string {
   return html;
 }
 
-// ── Component（P3：DockPanel 条件挂载 — 关闭即卸载重置，对齐旧 Controller 语义）──
+// ── 组件（P3：DockPanel 条件挂载 — 关闭即卸载重置，对齐旧 Controller 语义）──
 
 export function DataflowPanel() {
   const closePanel = useDockStore((s) => s.closePanel);
@@ -256,7 +256,7 @@ export function DataflowPanel() {
   const [exploreQuery, setExploreQuery] = useState('');
   const [zIndex, setZIndex] = useState(78);
 
-  // Position / size
+  // 位置 / 尺寸
   const [pos, setPos] = useState({ x: 120, y: 90 });
   const [size, setSize] = useState({ w: 900, h: 560 });
 
@@ -267,7 +267,7 @@ export function DataflowPanel() {
   const resizingRef = useRef(false);
   const dragStartRef = useRef({ x: 0, y: 0, elX: 0, elY: 0, w: 0, h: 0 });
 
-  // ── Trace loading ──
+  // ── 追踪加载 ──
 
   const loadTraceList = useCallback(async () => {
     try {
@@ -280,7 +280,7 @@ export function DataflowPanel() {
     }
   }, []);
 
-  // Load on mount + event bus
+  // 挂载时加载 + 事件总线
   useEffect(() => {
     loadTraceList();
 
@@ -303,7 +303,7 @@ export function DataflowPanel() {
     };
   }, [loadTraceList]);
 
-  // ── Select trace ──
+  // ── 选择追踪 ──
 
   const selectTrace = useCallback(async (tid: string) => {
     setSelectedTraceId(tid);
@@ -346,7 +346,7 @@ export function DataflowPanel() {
     }
   }, []);
 
-  // ── Delete trace ──
+  // ── 删除追踪 ──
 
   const deleteTrace = useCallback(
     async (e: React.MouseEvent, tid: string) => {
@@ -365,7 +365,7 @@ export function DataflowPanel() {
     [selectedTraceId],
   );
 
-  // ── Quick explore ──
+  // ── 快速探索 ──
 
   const doExplore = useCallback(async (query: string) => {
     if (!query) return;
@@ -391,7 +391,7 @@ export function DataflowPanel() {
             explore = JSON.parse(raw);
           }
         } catch {
-          /* Agent unavailable */
+          /* Agent 不可用 */
         }
       }
 
@@ -413,7 +413,7 @@ export function DataflowPanel() {
           const dfRaw = await rpc<string>('hologram_call', { tool: 'trace_dataflow', args: { files } });
           dfPart = renderEngineDataflow(JSON.parse(dfRaw));
         } catch {
-          /* optional */
+          /* 可选 */
         }
       }
 
@@ -423,7 +423,7 @@ export function DataflowPanel() {
     }
   }, []);
 
-  // ── Drag ──
+  // ── 拖拽 ──
 
   const onDragStart = useCallback(
     (e: React.PointerEvent) => {
@@ -450,7 +450,7 @@ export function DataflowPanel() {
     [pos],
   );
 
-  // ── Resize ──
+  // ── 缩放 ──
 
   const onResizeStart = useCallback(
     (e: React.PointerEvent) => {
@@ -494,7 +494,7 @@ export function DataflowPanel() {
       }}
       onPointerDown={() => setZIndex((z) => z + 1)}
     >
-      {/* Header */}
+      {/* 头部 */}
       <div
         ref={headerRef}
         className="df-panel-header"
@@ -510,9 +510,9 @@ export function DataflowPanel() {
         />
       </div>
 
-      {/* Body */}
+      {/* 内容区 */}
       <div className="df-panel-body" style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        {/* Left: trace list */}
+        {/* 左侧：追踪列表 */}
         <div
           className="df-left"
           style={{
@@ -566,7 +566,7 @@ export function DataflowPanel() {
             )}
           </div>
 
-          {/* Quick explore */}
+          {/* 快速探索 */}
           <div className="df-query-area">
             <div className="df-hist-sub" style={{ marginBottom: 4 }}>
               引擎直查（不保存）
@@ -592,7 +592,7 @@ export function DataflowPanel() {
           </div>
         </div>
 
-        {/* Right: trace content */}
+        {/* 右侧：追踪内容 */}
         <div
           className="df-right"
           style={{ flex: 1, overflow: 'auto', padding: 14 }}
@@ -608,7 +608,7 @@ export function DataflowPanel() {
         />
       </div>
 
-      {/* Resize grip */}
+      {/* 缩放手柄 */}
       <div ref={gripRef} className="df-grip" onPointerDown={onResizeStart} />
     </div>
   );

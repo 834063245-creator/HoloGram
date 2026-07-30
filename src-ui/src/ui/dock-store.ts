@@ -42,7 +42,7 @@ export const useDockStore = create<DockState>((set, get) => ({
   setProjectPath: (p) => set({ projectPath: p }),
 
   setCheckResult: (r) => {
-    // Feed check result to state injection cache so the agent sees it
+    // 将检查结果喂给状态注入缓存，使 Agent 能看到
     cacheCheckResult({
       passed: r.passed,
       violationCount:

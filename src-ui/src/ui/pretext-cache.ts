@@ -1,17 +1,17 @@
-// Pretext cache — singleton measurement engine for chat virtualization.
+// Pretext 缓存 — 聊天虚拟化的单例测量引擎。
 //
-// Pretext needs a Canvas 2D context for measureText. We lazily create an
-// offscreen canvas on first use (browser/Tauri WebView only). Font constants
-// mirror the CSS in chat.css so canvas measurements match DOM rendering.
+// Pretext 需要 Canvas 2D context 来执行 measureText。我们在首次使用时
+// 惰性创建离屏 canvas（仅浏览器/Tauri WebView）。字体常量
+// 镜像 chat.css 中的 CSS，使 canvas 测量与 DOM 渲染一致。
 
 import { prepare, layout, clearCache, type PreparedText } from '../lib/pretext/layout.js';
 
-// ── Font constants (must match chat.css) ──
+// ── 字体常量（必须与 chat.css 匹配）──
 
-// .msg-bubble: font-size = calc(11px * var(--font-scale)), line-height: 1.6
-// (assistant markdown text overrides to 1.7 via .msg-markdown).
-// --font-scale defaults to 1 (tokens.css). We read it at measurement time
-// in case the user changed it.
+// .msg-bubble: font-size = calc(11px * var(--font-scale))，line-height: 1.6
+// （助手 markdown 文本通过 .msg-markdown 覆盖为 1.7）。
+// --font-scale 默认 1（tokens.css）。我们在测量时读取，
+// 以防用户已更改。
 export function fontScale(): number {
   if (typeof document !== 'undefined') {
     const v = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();
@@ -21,20 +21,20 @@ export function fontScale(): number {
   return 1;
 }
 
-// Body font for user + assistant text parts.
-// NOTE: no Math.round — CSS keeps fractional px (e.g. 12.65px at scale 1.15)
-// and canvas accepts fractional sizes; rounding skews every measured width.
+// 用户 + 助手文本部分的正文字体。
+// 注意：无 Math.round — CSS 保留小数 px（如 scale 1.15 时 12.65px），
+// canvas 接受小数大小；取整会使每个测量宽度产生偏差。
 export function bodyFont(): string {
   return `${11 * fontScale()}px "LXGW WenKai", "Noto Sans SC", system-ui, sans-serif`;
 }
 
-// Body line-height: .msg-bubble uses 1.6, .msg-markdown (assistant text) 1.7.
-// Fractional too — Blink lays out at 17.6px, not 18px.
+// 正文行高：.msg-bubble 用 1.6，.msg-markdown（助手文本）用 1.7。
+// 同样保留小数 — Blink 以 17.6px 而非 18px 布局。
 export function bodyLineHeight(mult = 1.6): number {
   return 11 * fontScale() * mult;
 }
 
-// Mono font for code blocks (streaming tail + tool output)
+// 代码块的等宽字体（流式尾部 + 工具输出）
 export function monoFont(): string {
   return `${9 * fontScale()}px "JetBrains Mono", "Cascadia Code", monospace`;
 }
@@ -43,10 +43,10 @@ export function monoLineHeight(mult = 1.5): number {
   return 9 * fontScale() * mult;
 }
 
-// ── prepare() cache ──
-// Key: `${font}::${text}` → PreparedText. prepare() is expensive (segmentation +
-// canvas measurement); layout() is ~0.0002ms. We cache prepare() results so
-// repeated layout() calls at different widths are cheap.
+// ── prepare() 缓存 ──
+// Key: `${font}::${text}` → PreparedText。prepare() 开销大（分段 + canvas 测量）；
+// layout() 约 0.0002ms。我们缓存 prepare() 结果，
+// 使不同宽度的重复 layout() 调用成本很低。
 
 const prepareCache = new Map<string, PreparedText>();
 
@@ -54,12 +54,12 @@ export function getPrepared(text: string, font: string): PreparedText {
   const key = `${font}::${text}`;
   let p = prepareCache.get(key);
   if (p === undefined) {
-    // whiteSpace must mirror the DOM: .msg-text is pre-wrap, so \n is a hard
-    // line break — the library default 'normal' would collapse it to a space
-    // and undercount lines for any multi-line message.
+    // whiteSpace 必须镜像 DOM：.msg-text 是 pre-wrap，所以 \n 是硬换行 —
+    // 库默认的 'normal' 会将其折叠为空格，
+    // 导致多行消息行数计算不足。
     p = prepare(text, font, { whiteSpace: 'pre-wrap' });
     prepareCache.set(key, p);
-    // Cap cache size — evict oldest entries
+    // 限制缓存大小 — 淘汰最早的条目
     if (prepareCache.size > 500) {
       const firstKey = prepareCache.keys().next().value;
       if (firstKey !== undefined) prepareCache.delete(firstKey);
@@ -68,7 +68,7 @@ export function getPrepared(text: string, font: string): PreparedText {
   return p;
 }
 
-// ── Convenience: measure text height at a given width ──
+// ── 便捷方法：在给定宽度下测量文本高度 ──
 
 export function measureTextHeight(text: string, maxWidth: number, font?: string, lineHeight?: number): number {
   if (!text) return 0;
@@ -78,7 +78,7 @@ export function measureTextHeight(text: string, maxWidth: number, font?: string,
   return layout(prepared, maxWidth, lh).height;
 }
 
-// ── Cache management ──
+// ── 缓存管理 ──
 
 export function clearPretextCache(): void {
   prepareCache.clear();

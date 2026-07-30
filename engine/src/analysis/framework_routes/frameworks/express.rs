@@ -13,10 +13,10 @@ pub(crate) fn is_express_file(file: &str) -> bool {
     lower.contains("route") || lower.contains("router") || lower.contains("app")
 }
 
-/// D7: Content gate for Express detection. Without this, Koa/Fastify files
-/// (which also use `.get()`, `.post()`, etc.) are misidentified as Express
-/// because `is_express_file` matches on filename alone. This checks for
-/// Express-specific import/require patterns in the source.
+/// D7：Express 检测的内容门控。没有此检查，Koa/Fastify 文件
+/// （同样使用 `.get()`、`.post()` 等）会被误判为 Express，
+/// 因为 `is_express_file` 仅基于文件名匹配。此函数检查源码中
+/// Express 特有的 import/require 模式。
 pub(crate) fn has_express_content(source: &str) -> bool {
     source.contains("require('express')")
         || source.contains("require(\"express\")")
@@ -26,15 +26,15 @@ pub(crate) fn has_express_content(source: &str) -> bool {
         || source.contains("express()")
 }
 
-/// Detect Express-style route registrations.
-/// Patterns:
+/// 检测 Express 风格的路由注册。
+/// 模式：
 ///   app.get('/path', handler)
-///   router.post('/path', middleware, handler)  — last arg is the handler
+///   router.post('/path', middleware, handler)  —— 最后一个参数为处理函数
 ///   app.use('/prefix', subRouter)
 pub(crate) fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRoute> {
     let mut result = Vec::new();
 
-    // Determine which tree-sitter language to use
+    // 确定使用哪种 tree-sitter 语言
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
     let ext = if is_ts { "ts" } else { "js" };
     let lang = match GRAMMAR_LOADER.get(ext) { Some(l) => l, None => return result };
@@ -63,7 +63,7 @@ pub(crate) fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRou
         if node.kind() == "call_expression" {
             if let Some(func) = node.child_by_field_name("function") {
                 if func.kind() == "member_expression" {
-                    // e.g. app.get() or router.post()
+                    // 例如 app.get() 或 router.post()
                     let mut prop_cursor = func.walk();
                     let func_children: Vec<_> = func.children(&mut prop_cursor).collect();
 
@@ -104,9 +104,9 @@ pub(crate) fn detect_express_routes(file: &str, source: &str) -> Vec<DetectedRou
                                     continue;
                                 }
 
-                                // Track the last non-punctuation argument as the handler
-                                // Express convention: app.get('/path', middleware, handler)
-                                // The handler is the LAST function argument, not the first.
+                                // 跟踪最后一个非标点参数作为处理函数
+                                // Express 约定：app.get('/path', middleware, handler)
+                                // 处理函数是最后一个函数参数，而非第一个。
                                 if found_route && kind != "," && kind != "(" && kind != ")" {
                                     last_identifier = text.to_string();
                                 }

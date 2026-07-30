@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Debug diagnostics — controlled by localStorage.debugHologram = '1' or URL ?debug
-// Totally silent in normal use. Open browser console and type:
+// 调试诊断 — 由 localStorage.debugHologram = '1' 或 URL ?debug 控制
+// 正常使用时完全静默。打开浏览器控制台输入：
 //   localStorage.debugHologram = '1'
-// then refresh to see all interaction chain data flow.
+// 然后刷新即可查看所有交互链数据流。
 
 const isBrowser = typeof window !== 'undefined' && typeof window.location !== 'undefined';
 const isNode = !isBrowser;

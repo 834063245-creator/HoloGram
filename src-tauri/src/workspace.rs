@@ -1,21 +1,21 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// WorkspaceHandle — owns all backend state for one open project.
-// Replaces the scattered globals: ACTIVE_PROJECT, SANDBOX, AUDIT_LOGGER,
-// LAST_CHANGED_FILES, WatcherState.
+// WorkspaceHandle — 持有一个打开项目的所有后端状态。
+// 替代分散的全局变量: ACTIVE_PROJECT, SANDBOX, AUDIT_LOGGER,
+// LAST_CHANGED_FILES, WatcherState。
 //
 // v4 Phase 2: Sandbox 降级，权限系统升级为 PermissionContext（两层自治架构）。
 // check_read/check_write/check_command 已删除 — 替换为 has_permission_to_use_tool()。
 //
-// Lifecycle:
+// 生命周期:
 //   let mut handle = WorkspaceHandle::new(path);
-//   handle.activate(project_root);           // register as active
-//   handle.start_watcher(app_handle);       // begin file monitoring
-//   // ... user works ...
-//   handle.deactivate();                     // stop watcher, clear state
+//   handle.activate(project_root);           // 注册为活跃工作区
+//   handle.start_watcher(app_handle);       // 开始文件监控
+//   // ... 用户操作 ...
+//   handle.deactivate();                     // 停止监控，清理状态
 //
-// Managed as Tauri state: State<Arc<Mutex<Option<WorkspaceHandle>>>>
+// 作为 Tauri state 管理: State<Arc<Mutex<Option<WorkspaceHandle>>>>
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,26 +30,26 @@ use hologram_engine::graph::Graph;
 
 use crate::permissions::PermissionContext;
 
-// ── Workspace-scoped state ──────────────────────────────────────────
+// ── 工作区范围的状态 ──────────────────────────────────────────
 
 pub struct WorkspaceHandle {
-    /// Canonical workspace directory.
+    /// 规范化的工作区目录。
     pub path: String,
 
-    /// Permission system (replaces old Sandbox).
-    /// Arc for sharing across async Tauri commands without holding the state Mutex.
+    /// 权限系统（替代旧 Sandbox）。
+    /// 用 Arc 以便在不持有 state Mutex 的情况下跨异步 Tauri command 共享。
     pub permission_ctx: Arc<PermissionContext>,
 
-    /// Changed files since last check (was LAST_CHANGED_FILES global).
+    /// 自上次检查以来的变更文件（原 LAST_CHANGED_FILES 全局变量）。
     pub changed_files: Arc<Mutex<Vec<String>>>,
 
-    // Watcher internals
+    // 监控器内部状态
     watcher_running: Arc<AtomicBool>,
     watcher_thread: Option<JoinHandle<()>>,
 }
 
 impl WorkspaceHandle {
-    /// Create a new workspace handle. Does NOT activate it or start the watcher.
+    /// 创建新的工作区句柄。不会激活它或启动监控器。
     pub fn new(path: &str) -> Self {
         let project_path = Path::new(path);
         Self {
@@ -61,19 +61,19 @@ impl WorkspaceHandle {
         }
     }
 
-    /// Activate this workspace: persist to .last_project for cold-start recovery.
+    /// 激活此工作区: 持久化到 .last_project 以便冷启动恢复。
     pub fn activate(&self, project_root: &Path) {
         let last_path = project_root.join(".last_project");
         let _ = fs::write(&last_path, &self.path);
     }
 
-    /// Deactivate this workspace: stop the file watcher and clear transient state.
-    /// The watcher thread is given 2s to exit gracefully; after that it is detached.
+    /// 停用此工作区: 停止文件监控器并清理临时状态。
+    /// 监控线程有 2s 的优雅退出时间；超时后将被分离。
     pub fn deactivate(&mut self) {
         self.watcher_running.store(false, Ordering::SeqCst);
         if let Some(handle) = self.watcher_thread.take() {
-            // Poll for up to 2s for the thread to exit on its own.
-            // The watcher checks `running` every 1s, so 2s is enough for one poll cycle.
+            // 轮询最多 2s 等待线程自行退出。
+            // 监控器每 1s 检查一次 `running`，所以 2s 足够一个轮询周期。
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
             while std::time::Instant::now() < deadline {
                 if handle.is_finished() {
@@ -82,15 +82,15 @@ impl WorkspaceHandle {
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            // If still not finished after 2s, the handle is dropped (detached).
-            // The thread will exit on its next `running` check.
+            // 如果 2s 后仍未结束，句柄被丢弃（分离）。
+            // 线程将在下次检查 `running` 时退出。
         }
         if let Ok(mut files) = self.changed_files.lock() {
             files.clear();
         }
     }
 
-    /// Start the background file watcher for this workspace.
+    /// 启动此工作区的后台文件监控器。
     pub fn start_watcher(&mut self, app_handle: AppHandle) {
         self.watcher_running.store(false, Ordering::SeqCst);
         self.watcher_thread.take();
@@ -106,7 +106,7 @@ impl WorkspaceHandle {
             let poll_interval = Duration::from_secs(1);
             let debounce = Duration::from_secs(2);
             let mut consecutive_failures: u32 = 0;
-            // (path, action) — action is "modified" / "created" / "removed"
+            // (path, action) — action 为 "modified" / "created" / "removed"
             let mut pending_changed: Vec<(String, String)> = Vec::new();
             let mut last_change_at: Option<std::time::Instant> = None;
 
@@ -119,7 +119,7 @@ impl WorkspaceHandle {
 
                 let current_mtimes = collect_file_mtimes(&path);
 
-                // Detect changes with action tags for the incremental updater
+                // 检测变更并为增量更新器添加动作标签
                 let mut changed: Vec<(String, String)> = Vec::new();
                 for (fp, mt) in &current_mtimes {
                     match last_mtimes.get(fp) {
@@ -157,16 +157,15 @@ impl WorkspaceHandle {
                 let changed = std::mem::take(&mut pending_changed);
                 last_change_at = None;
 
-                // Extract just the paths for consumers that don't need actions
+                // 提取路径列表供不需要动作信息的消费者使用
                 let changed_paths: Vec<String> = changed.iter().map(|(p, _)| p.clone()).collect();
 
-                // ponytail: snapshot old graph before re-analysis so we can diff
+                // ponytail: 在重新分析前快照旧图以便做 diff
                 let before_graph = engine_api::engine_read_graph(|g| g.clone()).ok();
 
-                // Try incremental update first (Phase 1-3: re-parse changed files,
-                // intra-file diff, cross-file edge repair). Falls back to full
-                // re-analysis automatically if incremental fails or validation
-                // threshold (0.85 edge retention) is not met.
+                // 首先尝试增量更新 (Phase 1-3: 重新解析变更文件,
+                // 文件内 diff, 跨文件边修复)。如果增量失败或验证
+                // 阈值 (0.85 边保留率) 未达标，则自动回退到全量重新分析。
                 let changed_for_engine: Vec<(PathBuf, String)> = changed.iter()
                     .map(|(p, a)| (PathBuf::from(p), a.clone()))
                     .collect();
@@ -181,15 +180,14 @@ impl WorkspaceHandle {
                         *last = changed_paths.clone();
                     }
 
-                    // ponytail: compute diff between old and new graph for incremental update
+                    // ponytail: 计算旧图与新图之间的 diff 以供增量更新
                     let diff_json = compute_watcher_diff(before_graph.as_ref());
 
-                    // Read actual node/edge counts from the engine store so the
-                    // frontend's `nc > 0` guard passes and it fetches the fresh graph.
-                    // Previously this was hardcoded to 0, causing every graph-updated
-                    // event to be silently ignored — the backend store was updated but
-                    // the frontend kept showing stale data until the user manually
-                    // clicked "re-analyze".
+                    // 从引擎存储中读取实际节点/边数量，使前端的
+                    // `nc > 0` 守卫通过并获取最新图。
+                    // 之前这里硬编码为 0，导致每个 graph-updated
+                    // 事件被静默忽略 — 后端存储已更新但
+                    // 前端一直显示旧数据，直到用户手动点击"重新分析"。
                     let (nc, ec) = engine_api::engine_read(|idx| (idx.node_count(), idx.edge_count()))
                         .unwrap_or((0, 0));
 
@@ -228,14 +226,13 @@ impl WorkspaceHandle {
     }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
+// ── 辅助函数 ────────────────────────────────────────────────────
 
-/// Collect mtimes of all source files under root, keyed by path.
+/// 收集 root 下所有源文件的 mtime，按路径索引。
 fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
     let mut map = std::collections::HashMap::new();
-    // ponytail: dynamically load supported extensions from the engine's
-    // grammar loader instead of a hardcoded list — new grammar DLLs are
-    // automatically picked up without code changes.
+    // ponytail: 从引擎的 grammar loader 动态加载支持的扩展名，
+    // 而非硬编码列表 — 新的 grammar DLL 会被自动识别，无需修改代码。
     let exts: std::collections::HashSet<String> =
         engine_api::engine_supported_extensions().into_iter().collect();
     const IGNORE_DIRS: &[&str] = &[
@@ -293,8 +290,8 @@ fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
     map
 }
 
-/// Compute diff between previous graph and current engine graph for incremental update.
-/// Returns None if no previous graph or engine read fails.
+/// 计算前一次图与当前引擎图之间的 diff 以供增量更新。
+/// 如果没有前一次图或引擎读取失败则返回 None。
 pub(crate) fn compute_watcher_diff(before: Option<&Graph>) -> Option<serde_json::Value> {
     let before = before?;
     let after = engine_api::engine_read_graph(|g| g.clone()).ok()?;

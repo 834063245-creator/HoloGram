@@ -10,7 +10,7 @@ import { rpc } from '../bridge';
 import { askAgent } from './agent-visualizer';
 import { iconHtml, iconSvg } from './icons';
 
-// ponytail: read CSS var once at init; user changes require reload
+// ponytail: 初始化时读取一次 CSS 变量；用户修改需重新加载
 function getFontScale(): number {
   try {
     const v = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();
@@ -23,7 +23,7 @@ function getFontScale(): number {
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import { marked } from 'marked';
-// Monaco workers — Vite ?worker syntax bundles them as separate chunks
+// Monaco workers — Vite ?worker 语法将其打包为独立 chunk
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
@@ -44,10 +44,10 @@ import {
   stopAllLsp,
 } from './lsp-client';
 
-// LSP session cache: language -> session_id (shared across all FileViewer instances)
+// LSP 会话缓存：language -> session_id（所有 FileViewer 实例共享）
 const lspSessions = new Map<string, number>();
 
-// -- Monaco worker config --
+// -- Monaco worker 配置 --
 self.MonacoEnvironment = {
   getWorker(_workerId: string, label: string) {
     switch (label) {
@@ -78,7 +78,7 @@ interface TabData {
   originalContent: string;
   loading: boolean;
   error: string;
-  /** If set, this tab is a read-only diff view. */
+  /** 若设置，此标签页为只读 diff 视图。 */
   diffModels?: { original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel };
   viewMode?: 'edit' | 'preview';
 }
@@ -102,7 +102,7 @@ export class FileViewer {
   private diffEditor!: monaco.editor.IStandaloneDiffEditor;
   private resizeHandle!: HTMLElement;
   private translator!: FileTranslator;
-  // ── New chrome ──
+  // ── 新界面 ──
   private breadcrumb!: HTMLElement;
   private toolbar!: HTMLElement;
   private statusBar!: HTMLElement;
@@ -149,7 +149,7 @@ export class FileViewer {
   }
 
   private buildDOM(): void {
-    // ── Outer shell ──
+    // ── 外壳 ──
     this.el = document.createElement('div');
     this.el.id = 'file-viewer';
     this.el.className = 'file-viewer';
@@ -173,7 +173,7 @@ export class FileViewer {
     });
 
     // ═══════════════════════════════════════════════
-    // LAYER 1: Titlebar — breadcrumb + window actions
+    // LAYER 1: 标题栏 — 面包屑 + 窗口操作
     // ═══════════════════════════════════════════════
     this.header = document.createElement('div');
     this.header.className = 'fv-titlebar';
@@ -190,7 +190,7 @@ export class FileViewer {
       borderBottom: '1px solid var(--obs-line-soft)',
     });
 
-    // Breadcrumb
+    // 面包屑
     this.breadcrumb = document.createElement('div');
     this.breadcrumb.className = 'fv-breadcrumb';
     Object.assign(this.breadcrumb.style, {
@@ -206,7 +206,7 @@ export class FileViewer {
     });
     this.header.appendChild(this.breadcrumb);
 
-    // Window action buttons
+    // 窗口操作按钮
     const winActions = document.createElement('div');
     winActions.className = 'fv-win-actions';
     Object.assign(winActions.style, {
@@ -279,14 +279,14 @@ export class FileViewer {
     }
     this.header.appendChild(winActions);
 
-    // Drag from titlebar (not from buttons)
+    // 从标题栏拖拽（不从按钮上）
     this.header.addEventListener('pointerdown', (e) => {
       if ((e.target as HTMLElement).closest('button')) return;
       this.onDragStart(e);
     });
 
     // ═══════════════════════════════════════════════
-    // LAYER 2: Toolbar — save / undo / redo / format
+    // LAYER 2: 工具栏 — 保存 / 撤销 / 重做 / 格式化
     // ═══════════════════════════════════════════════
     this.toolbar = document.createElement('div');
     this.toolbar.className = 'fv-toolbar';
@@ -338,12 +338,12 @@ export class FileViewer {
       this.toolbar.appendChild(btn);
     }
 
-    // Separator
+    // 分隔符
     const sep = document.createElement('div');
     sep.style.cssText = 'width:1px;height:14px;background:var(--obs-line);margin:0 4px;';
     this.toolbar.appendChild(sep);
 
-    // Format button
+    // 格式化按钮
     const fmtBtn = document.createElement('button');
     fmtBtn.innerHTML = iconHtml('edit', 12);
     fmtBtn.title = '格式化文档';
@@ -372,7 +372,7 @@ export class FileViewer {
     this.toolbarBtns.format = fmtBtn;
     this.toolbar.appendChild(fmtBtn);
 
-    // Preview toggle
+    // 预览切换
     const prevSep = document.createElement('div');
     prevSep.style.cssText = 'width:1px;height:14px;background:var(--obs-line);margin:0 4px;';
     this.toolbar.appendChild(prevSep);
@@ -406,7 +406,7 @@ export class FileViewer {
     this.toolbar.appendChild(previewBtn);
 
     // ═══════════════════════════════════════════════
-    // LAYER 3: Tab bar — file tabs (clean, separate row)
+    // LAYER 3: 标签栏 — 文件标签（整洁，独立行）
     // ═══════════════════════════════════════════════
     this.tabBar = document.createElement('div');
     this.tabBar.className = 'fv-tabbar';
@@ -425,14 +425,14 @@ export class FileViewer {
     });
 
     // ═══════════════════════════════════════════════
-    // LAYER 4: Editor area
+    // LAYER 4: 编辑器区域
     // ═══════════════════════════════════════════════
     this.editorContainer = document.createElement('div');
     Object.assign(this.editorContainer.style, { flex: '1', overflow: 'hidden' });
     this.diffEditorContainer = document.createElement('div');
     Object.assign(this.diffEditorContainer.style, { flex: '1', overflow: 'hidden', display: 'none' });
 
-    // Preview container (markdown / image)
+    // 预览容器（markdown / 图片）
     this.previewContainer = document.createElement('div');
     this.previewContainer.className = 'fv-preview';
     Object.assign(this.previewContainer.style, {
@@ -447,7 +447,7 @@ export class FileViewer {
     });
 
     // ═══════════════════════════════════════════════
-    // LAYER 5: Status bar — LSP · language · cursor
+    // LAYER 5: 状态栏 — LSP · 语言 · 光标
     // ═══════════════════════════════════════════════
     this.statusBar = document.createElement('div');
     this.statusBar.className = 'fv-statusbar';
@@ -465,7 +465,7 @@ export class FileViewer {
       color: 'var(--obs-text-2)',
     });
 
-    // Left: LSP status + language
+    // 左侧：LSP 状态 + 语言
     const statusLeft = document.createElement('div');
     statusLeft.style.cssText = 'display:flex;align-items:center;gap:8px;';
 
@@ -481,7 +481,7 @@ export class FileViewer {
     statusLang.style.cssText = 'text-transform:uppercase;letter-spacing:0.5px;';
     statusLeft.appendChild(statusLang);
 
-    // Right: cursor position + encoding
+    // 右侧：光标位置 + 编码
     const statusRight = document.createElement('div');
     statusRight.style.cssText = 'display:flex;align-items:center;gap:10px;';
 
@@ -499,7 +499,7 @@ export class FileViewer {
     this.statusBar.appendChild(statusRight);
 
     // ═══════════════════════════════════════════════
-    // Assemble
+    // 组装
     // ═══════════════════════════════════════════════
     this.el.appendChild(this.header);
     this.el.appendChild(this.toolbar);
@@ -509,7 +509,7 @@ export class FileViewer {
     this.el.appendChild(this.previewContainer);
     this.el.appendChild(this.statusBar);
 
-    // Resize handle
+    // 调整大小手柄
     this.resizeHandle = document.createElement('div');
     this.resizeHandle.className = 'fv-grip';
     Object.assign(this.resizeHandle.style, {
@@ -523,7 +523,7 @@ export class FileViewer {
     });
     this.el.appendChild(this.resizeHandle);
 
-    // Global drag/resize listeners
+    // 全局拖拽/调整大小监听器
     window.addEventListener('pointermove', (e) => this.onDragMove(e));
     window.addEventListener('pointerup', () => this.onDragEnd());
     this.resizeHandle.addEventListener('pointerdown', (e) => this.onResizeStart(e));
@@ -557,15 +557,15 @@ export class FileViewer {
       matchBrackets: 'always',
     });
 
-    // Ctrl+S → save
+    // Ctrl+S → 保存
     this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => this.saveActiveTab());
 
-    // ── Cursor position → status bar ──
+    // ── 光标位置 → 状态栏 ──
     this.editor.onDidChangeCursorPosition((e) => {
       this.statusCursor.textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
     });
 
-    // ── Editor focus → update breadcrumb & status ──
+    // ── 编辑器聚焦 → 更新面包屑和状态 ──
     this.editor.onDidFocusEditorText(() => {
       const pos = this.editor.getPosition();
       if (pos) this.statusCursor.textContent = `Ln ${pos.lineNumber}, Col ${pos.column}`;
@@ -573,10 +573,10 @@ export class FileViewer {
       this.updateStatusBar();
     });
 
-    // LSP diagnostics listener
+    // LSP 诊断监听器
     listenForDiagnostics(this.editor, monaco);
 
-    // Editor context menu actions
+    // 编辑器右键菜单操作
     this.editor.addAction({
       id: 'format-document',
       label: '格式化文档',
@@ -610,7 +610,7 @@ export class FileViewer {
     });
   }
 
-  // ── Tab rendering ──
+  // ── 标签页渲染 ──
 
   private renderTabs(): void {
     this.tabBar.innerHTML = '';
@@ -640,13 +640,13 @@ export class FileViewer {
         borderRadius: '3px 3px 0 0',
       });
 
-      // File icon
+      // 文件图标
       const ficon = document.createElement('span');
       ficon.innerHTML = isDiff ? iconHtml('diff', 12) : fileIconSvg(tab.fileName, 12);
       ficon.style.cssText = 'display:flex;align-items:center;flex-shrink:0;opacity:0.7;';
       tabEl.appendChild(ficon);
 
-      // Dirty dot
+      // 未保存标记点
       if (tab.dirty) {
         const dot = document.createElement('span');
         dot.className = 'fv-tab-dirty';
@@ -654,12 +654,12 @@ export class FileViewer {
         tabEl.appendChild(dot);
       }
 
-      // Label
+      // 标签
       const label = document.createElement('span');
       label.style.cssText = 'overflow:hidden;text-overflow:ellipsis;';
       label.textContent = tab.fileName;
 
-      // Close button — hidden until hover
+      // 关闭按钮 — 悬停时显示
       const closeBtn = document.createElement('button');
       closeBtn.innerHTML = iconHtml('close', 10);
       Object.assign(closeBtn.style, {
@@ -699,7 +699,7 @@ export class FileViewer {
     this.activeIdx = idx;
     const tab = this.tabs[idx];
 
-    // Auto-preview images; restore preview for markdown
+    // 图片自动预览；markdown 恢复预览
     const ext = tab.fileName.split('.').pop()?.toLowerCase() || '';
     const imgExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']);
     if (imgExts.has(ext)) {
@@ -711,9 +711,9 @@ export class FileViewer {
       this.showDiffEditor();
       if (this.diffEditor) this.diffEditor.layout();
     } else if (tab.viewMode === 'preview' && this.canPreview(tab)) {
-      this.editor.setModel(tab.model); // ensure model is attached
-      this.showPreview(); // show container first for loading state
-      this.renderPreview(tab); // fire-and-forget, async load
+      this.editor.setModel(tab.model); // 确保 model 已挂载
+      this.showPreview(); // 先显示容器以显示加载状态
+      this.renderPreview(tab); // 异步加载，fire-and-forget
     } else {
       tab.viewMode = 'edit';
       this.editor.setModel(tab.model);
@@ -727,7 +727,7 @@ export class FileViewer {
     this.updatePreviewButton();
   }
 
-  // ── Breadcrumb: clickable path segments ──
+  // ── 面包屑：可点击的路径片段 ──
 
   private updateBreadcrumb(): void {
     const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
@@ -739,7 +739,7 @@ export class FileViewer {
     const parts = tab.filePath.replace(/\\/g, '/').split('/').filter(Boolean);
     if (parts.length === 0) return;
 
-    // Build clickable segments
+    // 构建可点击片段
     parts.forEach((seg, i) => {
       if (i > 0) {
         const arrow = document.createElement('span');
@@ -760,13 +760,13 @@ export class FileViewer {
         span.style.background = '';
       });
       span.addEventListener('click', () => {
-        // ponytail: file tree removed — breadcrumb clicks still work for visual feedback
+        // ponytail: 文件树已移除 — 面包屑点击仍提供视觉反馈
       });
       this.breadcrumb.appendChild(span);
     });
   }
 
-  // ── Status bar: LSP indicator + language + cursor ──
+  // ── 状态栏：LSP 指示器 + 语言 + 光标 ──
 
   private updateStatusBar(): void {
     const tab = this.activeIdx >= 0 ? this.tabs[this.activeIdx] : undefined;
@@ -778,13 +778,13 @@ export class FileViewer {
       return;
     }
 
-    // Language badge
+    // 语言标识
     const langSpan = this.statusBar.querySelector('.fv-lang-badge') as HTMLElement;
     if (langSpan) {
       langSpan.textContent = tab.model.getLanguageId();
     }
 
-    // LSP status indicator
+    // LSP 状态指示器
     const lang = tab.model.getLanguageId();
     const lspActive = lspSessions.has(lang);
     if (lspActive) {
@@ -793,7 +793,7 @@ export class FileViewer {
       this.statusLsp.style.opacity = '1';
       this.statusLsp.title = `${lang} LSP 已连接`;
     } else if (lang === 'typescript' || lang === 'javascript' || lang === 'json' || lang === 'css' || lang === 'html') {
-      // Monaco native support
+      // Monaco 内置支持
       this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
       this.statusLsp.style.color = 'var(--obs-text-2)';
       this.statusLsp.style.opacity = '1';
@@ -805,7 +805,7 @@ export class FileViewer {
       this.statusLsp.title = 'LSP 未启动';
     }
 
-    // Cursor
+    // 光标
     const pos = this.editor.getPosition();
     if (pos) {
       this.statusCursor.textContent = `Ln ${pos.lineNumber}, Col ${pos.column}`;
@@ -816,12 +816,12 @@ export class FileViewer {
     if (idx < 0 || idx >= this.tabs.length) return;
     const tab = this.tabs[idx];
 
-    // If closing the tab that's currently being translated, destroy the translator
+    // 若关闭的标签页正在翻译，则销毁翻译器
     if (this.translator.isTranslatingFile(tab.filePath)) {
       this.translator.destroy();
     }
 
-    // Check unsaved changes
+    // 检查未保存的修改
     if (tab.dirty) {
       const confirmed = confirm(`"${tab.fileName}" 有未保存的修改，确定关闭？`);
       if (!confirmed) return;
@@ -836,19 +836,19 @@ export class FileViewer {
     if (this.activeIdx >= this.tabs.length) this.activeIdx = this.tabs.length - 1;
     else if (idx < this.activeIdx) this.activeIdx--;
 
-    // If active tab was removed and new active tab is the same index position
+    // 若活跃标签页被移除且新活跃标签页在同一索引位置
     if (idx === this.activeIdx) {
       this.editor.setModel(this.tabs[this.activeIdx].model);
     }
     this.switchTab(this.activeIdx);
   }
 
-  /** Dispose a tab's editor resources without confirm dialog or UI update. */
+  /** 销毁标签页的编辑器资源，不弹确认框或更新 UI。 */
   private _disposeTab(idx: number): void {
     if (idx < 0 || idx >= this.tabs.length) return;
     const tab = this.tabs[idx];
 
-    // LSP: notify server that document is closed
+    // LSP：通知服务器文档已关闭
     const lang = tab.model.getLanguageId();
     const sid = lspSessions.get(lang);
     if (sid) didClose(sid, tab.model.uri.toString());
@@ -861,12 +861,12 @@ export class FileViewer {
     this.tabs.splice(idx, 1);
   }
 
-  // ── Public API ──
+  // ── 公共 API ──
 
   setProjectPath(path: string | null): void {
     if (this.projectPath && this.projectPath !== path) {
       stopAllLsp().catch(() => {});
-      // Close all tabs from old workspace — they reference paths that don't exist in the new one
+      // 关闭旧工作区的所有标签页 — 它们引用的路径在新工作区中不存在
       for (let i = this.tabs.length - 1; i >= 0; i--) {
         this._disposeTab(i);
       }
@@ -911,7 +911,7 @@ export class FileViewer {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
     const imgExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']);
 
-    // ── Image files: skip text read, show preview directly ──
+    // ── 图片文件：跳过文本读取，直接显示预览 ──
     if (imgExts.has(ext)) {
       this.state.open = true;
       this.centerOnScreen();
@@ -933,13 +933,13 @@ export class FileViewer {
       this.activeIdx = this.tabs.length - 1;
       this.editor.setModel(model);
       this.showPreview();
-      this.renderPreview(newTab); // fire-and-forget, async load
+      this.renderPreview(newTab); // 异步加载，无需等待
       this.renderTabs();
       this.updatePreviewButton();
       return;
     }
 
-    // Show loading state in a temp model
+    // 在临时 model 中显示加载状态
     const loadingModel = monaco.editor.createModel('加载中...', 'plaintext');
     this.editor.setModel(loadingModel);
     this.showNormalEditor();
@@ -951,13 +951,13 @@ export class FileViewer {
 
     try {
       const raw = await rpc<string>('read_file_content', { filePath: filePath });
-      // ponytail: read_file_content returns cat -n format. Strip before passing to Monaco/LSP.
+      // ponytail: read_file_content 返回 cat -n 格式。传递给 Monaco/LSP 前需去除行号。
       const content = stripLineNumbers(raw);
 
-      // Dispose temp loading model
+      // 销毁临时加载 model
       loadingModel.dispose();
 
-      // Create real model
+      // 创建真实 model
       const model = monaco.editor.createModel(content, language, uri);
 
       const newTab: TabData = {
@@ -970,16 +970,16 @@ export class FileViewer {
         error: '',
       };
 
-      // Track dirty state
+      // 跟踪脏状态
       model.onDidChangeContent(() => {
         newTab.dirty = model.getValue() !== newTab.originalContent;
         this.renderTabs();
-        // LSP: notify document change
+        // LSP：通知文档变更
         const sid = lspSessions.get(language);
         if (sid) didChange(sid, uri.toString(), model.getValue());
       });
 
-      // LSP: only attempt for languages with configured servers
+      // LSP：仅对已配置服务器的语言尝试
       const LSP_LANGUAGES = new Set([
         'python',
         'rust',
@@ -1012,7 +1012,7 @@ export class FileViewer {
         'nix',
         'ocaml',
       ]);
-      // ponytail: use project root as rootUri so LSP can find tsconfig/pyproject/etc.
+      // ponytail: 使用项目根作为 rootUri，使 LSP 能找到 tsconfig/pyproject 等。
       const rootUri = this.projectPath ? `file:///${this.projectPath.replace(/\\/g, '/')}` : `file:///${filePath}`;
       if (!lspSessions.has(language) && LSP_LANGUAGES.has(language)) {
         startLsp(language, rootUri).then((sid) => {
@@ -1061,7 +1061,7 @@ export class FileViewer {
     this.updatePreviewButton();
   }
 
-  /** Jump editor cursor to a 1-based line number. */
+  /** 将编辑器光标跳转到 1-based 行号。 */
   private jumpToLine(line: number): void {
     const ln = Math.max(1, Math.round(line));
     this.editor.setPosition({ lineNumber: ln, column: 1 });
@@ -1076,13 +1076,13 @@ export class FileViewer {
     const content = tab.model.getValue();
     try {
       await rpc('write_file_content', { filePath: tab.filePath, content });
-      // Record timeline event (fire-and-forget)
+      // 记录时间线事件（异步触发）
       rpc('hologram_record_event', {
         eventType: 'file_changed',
         file: tab.filePath,
         summary: `保存: ${tab.fileName}`,
       }).catch(() => {
-        /* timeline recording is best-effort */
+        /* 时间线记录为尽力而为 */
       });
       tab.originalContent = content;
       tab.dirty = false;
@@ -1093,11 +1093,11 @@ export class FileViewer {
     }
   }
 
-  /** Open a side-by-side diff view (Monaco DiffEditor) — used by GitPanel. */
+  /** 打开并排 diff 视图（Monaco DiffEditor）— 由 GitPanel 使用。 */
   openInlineDiff(fileName: string, originalContent: string, modifiedContent: string): void {
     const label = `差异: ${fileName.replace(/\\/g, '/').split('/').pop() || fileName}`;
 
-    // Lazy-init diff editor
+    // 延迟初始化 diff 编辑器
     if (!this.diffEditor) {
       this.diffEditor = monaco.editor.createDiffEditor(this.diffEditorContainer, {
         theme: 'vs-dark',
@@ -1121,7 +1121,7 @@ export class FileViewer {
     const tab: TabData = {
       filePath: `[diff] ${fileName}`,
       fileName: label,
-      model: modModel, // placeholder; diff editors use diffModels
+      model: modModel, // 占位符；diff 编辑器使用 diffModels
       dirty: false,
       originalContent: '',
       loading: false,
@@ -1138,7 +1138,7 @@ export class FileViewer {
     this.diffEditor.layout();
   }
 
-  /** Legacy wrapper — raw diff text as plain diff model. */
+  /** 旧版包装器 — 原始 diff 文本作为普通 diff model。 */
   openDiff(fileName: string, diffContent: string): void {
     const label = `差异: ${fileName.replace(/\\/g, '/').split('/').pop() || fileName}`;
     const uri = monaco.Uri.parse(`diff:///${label}`);
@@ -1182,7 +1182,7 @@ export class FileViewer {
     this.previewContainer.style.display = '';
   }
 
-  // ── Preview mode ──
+  // ── 预览模式 ──
 
   private previewableExts = new Set(['md', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']);
 
@@ -1219,7 +1219,7 @@ export class FileViewer {
       this.updatePreviewButton();
     } else {
       tab.viewMode = 'preview';
-      this.showPreview(); // show container first so loading state is visible
+      this.showPreview(); // 先显示容器使加载状态可见
       await this.renderPreview(tab);
       this.updatePreviewButton();
     }
@@ -1240,7 +1240,7 @@ export class FileViewer {
     const rawHtml = marked.parse(content) as string;
     const safeHtml = DOMPurify.sanitize(rawHtml);
     this.previewContainer.innerHTML = safeHtml;
-    // Syntax highlight code blocks
+    // 语法高亮代码块
     this.previewContainer.querySelectorAll('pre code').forEach((block) => {
       hljs.highlightElement(block as HTMLElement);
     });
@@ -1269,10 +1269,10 @@ export class FileViewer {
   }
 
   closeAll(): void {
-    // Destroy translator before disposing models (needs access to tab info)
+    // 销毁翻译器后再销毁 model（需要访问标签页信息）
     this.translator.destroy();
     this.state.open = false;
-    // Dispose all models
+    // 销毁所有 model
     for (const tab of this.tabs) {
       if (tab.diffModels) {
         tab.diffModels.original.dispose();
@@ -1310,7 +1310,7 @@ export class FileViewer {
     return this.state.open;
   }
 
-  // ── Drag ──
+  // ── 拖拽 ──
 
   private onDragStart(e: PointerEvent): void {
     this.dragging = true;
@@ -1341,7 +1341,7 @@ export class FileViewer {
     this.dragging = false;
   }
 
-  // ── Resize ──
+  // ── 调整大小 ──
 
   private onResizeStart(e: PointerEvent): void {
     e.stopPropagation();
@@ -1373,7 +1373,7 @@ export class FileViewer {
   }
 }
 
-// ── File icon by extension ──
+// ── 按扩展名的文件图标 ──
 
 function fileIconSvg(fileName: string, size: number): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
@@ -1421,7 +1421,7 @@ function fileIconSvg(fileName: string, size: number): string {
   return iconSvg(map[ext] || 'file', size);
 }
 
-// ── Language detection ──
+// ── 语言检测 ──
 
 function detectLanguage(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';

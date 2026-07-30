@@ -35,7 +35,7 @@ pub fn detect_cycles_from_index(idx: &MemoryIndex) -> Vec<serde_json::Value> {
     for (source, targets) in idx.edges_iter() {
         if let Some(&s) = id_to_idx.get(source.as_str()) {
             for (target, _, _, _) in targets {
-                // Skip synthesized edges (heuristic channels, not real structural deps)
+                // 跳过合成的边（启发式通道，非真实结构依赖）
                 if idx.is_edge_synthesized(&source, &target) {
                     continue;
                 }

@@ -1,18 +1,18 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Pure dataflow query engine — runs tree-sitter .scm queries and returns
-//! structured reads/writes/shares/triggers/sequences per scope. No Graph
-//! dependency — designed for on-demand Agent dataflow tracing.
+//! 纯数据流查询引擎 — 运行 tree-sitter .scm 查询并返回
+//! 按作用域结构化的 reads/writes/shares/triggers/sequences。无 Graph
+//! 依赖 — 设计用于按需的 Agent 数据流追踪。
 //!
-//! Architecture:
-//!   1. Phase 1: walk tree → collect scope boundaries (functions/classes)
-//!   2. Phase 2: run .scm queries → collect captures
-//!   3. Phase 3: resolve captures to per-scope reads/writes/triggers/sequences
-//!   4. Phase 5: reverse-index cross-function shared state detection
+//! 架构：
+//!   1. Phase 1：遍历树 → 收集作用域边界（函数/类）
+//!   2. Phase 2：运行 .scm 查询 → 收集 captures
+//!   3. Phase 3：将 captures 解析为按作用域的 reads/writes/triggers/sequences
+//!   4. Phase 5：反向索引跨函数共享状态检测
 //!
-//! A new language needs only a ~30-line .scm file + a builtin-name list —
-//! no Rust walker code required.
+//! 新增语言只需一个约 30 行的 .scm 文件 + 内置名称列表 —
+//! 无需编写 Rust 遍历代码。
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -22,16 +22,16 @@ use tree_sitter::{Language, Node as TsNode, Query, QueryCursor};
 use streaming_iterator::StreamingIterator;
 use rayon::prelude::*;
 
-// ── Language config ──
+// ── 语言配置 ──
 
 pub struct LangDataflowConfig {
-    /// Compiled-in .scm query source
+    /// 编译内置的 .scm 查询源码
     pub query_src: &'static str,
-    /// Names to filter out (builtins, host objects)
+    /// 需要过滤掉的名称（内置对象、宿主对象）
     pub skip_names: &'static [&'static str],
-    /// Function-scope node kinds (for scope-boundary detection)
+    /// 函数作用域节点类型（用于作用域边界检测）
     pub func_kinds: &'static [&'static str],
-    /// Class-scope node kinds
+    /// 类作用域节点类型
     pub class_kinds: &'static [&'static str],
 }
 
@@ -47,7 +47,7 @@ impl LangDataflowConfig {
     }
 }
 
-// ── Python config ──
+// ── Python 配置 ──
 
 static PY_BUILTINS: &[&str] = &[
     "str","int","float","bool","bytes","bytearray","complex",
@@ -67,7 +67,7 @@ static PY_BUILTINS: &[&str] = &[
 static PY_FUNC_KINDS: &[&str] = &["function_definition","lambda"];
 static PY_CLASS_KINDS: &[&str] = &["class_definition"];
 
-// ── JS/TS config ──
+// ── JS/TS 配置 ──
 
 static JS_SKIP_NAMES: &[&str] = &[
     "this","super","undefined","null","NaN","Infinity",
@@ -88,7 +88,7 @@ static JS_FUNC_KINDS: &[&str] = &[
 
 static JS_CLASS_KINDS: &[&str] = &["class_declaration"];
 
-// ── Rust config ──
+// ── Rust 配置 ──
 
 static RS_SKIP_NAMES: &[&str] = &[
     "self","Self","true","false","None","Ok","Err","Some","Option","Result",
@@ -104,7 +104,7 @@ static RS_SKIP_NAMES: &[&str] = &[
 static RS_FUNC_KINDS: &[&str] = &["function_item","closure_expression"];
 static RS_CLASS_KINDS: &[&str] = &["impl_item","struct_item","enum_item","trait_item"];
 
-// ── Go config ──
+// ── Go 配置 ──
 
 static GO_SKIP_NAMES: &[&str] = &[
     "nil","true","false","iota","string","int","int8","int16","int32","int64",
@@ -118,7 +118,7 @@ static GO_SKIP_NAMES: &[&str] = &[
 static GO_FUNC_KINDS: &[&str] = &["function_declaration","method_declaration","func_literal"];
 static GO_CLASS_KINDS: &[&str] = &["type_declaration"];
 
-// ── Java config ──
+// ── Java 配置 ──
 
 static JAVA_SKIP_NAMES: &[&str] = &[
     "this","super","null","true","false","System","String","Object","Class",
@@ -133,7 +133,7 @@ static JAVA_SKIP_NAMES: &[&str] = &[
 static JAVA_FUNC_KINDS: &[&str] = &["method_declaration","constructor_declaration","lambda_expression"];
 static JAVA_CLASS_KINDS: &[&str] = &["class_declaration","interface_declaration","enum_declaration"];
 
-// ── C/C++ config ──
+// ── C/C++ 配置 ──
 
 static C_SKIP_NAMES: &[&str] = &[
     "NULL","nullptr","true","false","printf","scanf","fprintf","sprintf","snprintf",
@@ -151,7 +151,7 @@ static C_SKIP_NAMES: &[&str] = &[
 static C_FUNC_KINDS: &[&str] = &["function_definition","lambda_expression"];
 static C_CLASS_KINDS: &[&str] = &["class_specifier","struct_specifier","union_specifier"];
 
-// ── C# config ──
+// ── C# 配置 ──
 
 static CS_SKIP_NAMES: &[&str] = &[
     "null","true","false","this","base","var","string","int","long","double",
@@ -164,7 +164,7 @@ static CS_SKIP_NAMES: &[&str] = &[
 static CS_FUNC_KINDS: &[&str] = &["method_declaration","constructor_declaration","lambda_expression"];
 static CS_CLASS_KINDS: &[&str] = &["class_declaration","struct_declaration","interface_declaration","enum_declaration"];
 
-// ── Ruby config ──
+// ── Ruby 配置 ──
 
 static RB_SKIP_NAMES: &[&str] = &[
     "nil","true","false","self","puts","print","p","pp","gets","raise","require",
@@ -178,7 +178,7 @@ static RB_SKIP_NAMES: &[&str] = &[
 static RB_FUNC_KINDS: &[&str] = &["method","lambda","block"];
 static RB_CLASS_KINDS: &[&str] = &["class","module"];
 
-// ── Lua config ──
+// ── Lua 配置 ──
 
 static LUA_SKIP_NAMES: &[&str] = &[
     "nil","true","false","print","pairs","ipairs","next","type","tostring",
@@ -191,7 +191,7 @@ static LUA_SKIP_NAMES: &[&str] = &[
 static LUA_FUNC_KINDS: &[&str] = &["function_declaration","function_definition"];
 static LUA_CLASS_KINDS: &[&str] = &[];
 
-// ── PHP config ──
+// ── PHP 配置 ──
 
 static PHP_SKIP_NAMES: &[&str] = &[
     "null","true","false","this","self","static","parent","echo","print",
@@ -208,7 +208,7 @@ static PHP_SKIP_NAMES: &[&str] = &[
 static PHP_FUNC_KINDS: &[&str] = &["method_declaration","function_definition","arrow_function"];
 static PHP_CLASS_KINDS: &[&str] = &["class_declaration","interface_declaration","trait_declaration"];
 
-// ── Swift config ──
+// ── Swift 配置 ──
 
 static SWIFT_SKIP_NAMES: &[&str] = &[
     "nil","true","false","self","Self","print","debugPrint","fatalError",
@@ -222,7 +222,7 @@ static SWIFT_SKIP_NAMES: &[&str] = &[
 static SWIFT_FUNC_KINDS: &[&str] = &["function_declaration","method_declaration","closure_expression"];
 static SWIFT_CLASS_KINDS: &[&str] = &["class_declaration","struct_declaration","enum_declaration","protocol_declaration"];
 
-// ── Dart config ──
+// ── Dart 配置 ──
 
 static DART_SKIP_NAMES: &[&str] = &[
     "null","true","false","this","super","print","debugPrint","String","int",
@@ -235,7 +235,7 @@ static DART_SKIP_NAMES: &[&str] = &[
 static DART_FUNC_KINDS: &[&str] = &["function_declaration","method_declaration","function_expression"];
 static DART_CLASS_KINDS: &[&str] = &["class_declaration","enum_declaration","mixin_declaration"];
 
-// ── Scala config ──
+// ── Scala 配置 ──
 
 static SCALA_SKIP_NAMES: &[&str] = &[
     "null","true","false","this","super","println","print","String","Int","Long",
@@ -248,7 +248,7 @@ static SCALA_SKIP_NAMES: &[&str] = &[
 static SCALA_FUNC_KINDS: &[&str] = &["function_definition","method_definition","lambda_expression"];
 static SCALA_CLASS_KINDS: &[&str] = &["class_definition","object_definition","trait_definition"];
 
-// ── Zig config ──
+// ── Zig 配置 ──
 
 static ZIG_SKIP_NAMES: &[&str] = &[
     "null","true","false","undefined","void","bool","u8","u16","u32","u64",
@@ -262,7 +262,7 @@ static ZIG_SKIP_NAMES: &[&str] = &[
 static ZIG_FUNC_KINDS: &[&str] = &["function_declaration"];
 static ZIG_CLASS_KINDS: &[&str] = &[];
 
-// ── Elixir config ──
+// ── Elixir 配置 ──
 
 static EX_SKIP_NAMES: &[&str] = &[
     "nil","true","false","__MODULE__","__DIR__","__ENV__","__CALLER__",
@@ -279,7 +279,7 @@ static EX_SKIP_NAMES: &[&str] = &[
 static EX_FUNC_KINDS: &[&str] = &["function","anonymous_function"];
 static EX_CLASS_KINDS: &[&str] = &["module","defmodule"];
 
-// ── Bash config ──
+// ── Bash 配置 ──
 
 static SH_SKIP_NAMES: &[&str] = &[
     "echo","printf","cd","ls","pwd","cat","cp","mv","rm","mkdir","rmdir",
@@ -294,7 +294,7 @@ static SH_SKIP_NAMES: &[&str] = &[
 static SH_FUNC_KINDS: &[&str] = &["function_definition"];
 static SH_CLASS_KINDS: &[&str] = &[];
 
-// ── R config ──
+// ── R 配置 ──
 
 static R_SKIP_NAMES: &[&str] = &[
     "NULL","NA","NaN","Inf","TRUE","FALSE","T","F","print","cat","summary",
@@ -315,7 +315,7 @@ static R_SKIP_NAMES: &[&str] = &[
 static R_FUNC_KINDS: &[&str] = &["function_definition","lambda_definition"];
 static R_CLASS_KINDS: &[&str] = &[];
 
-// ── Capture type ──
+// ── Capture 类型 ──
 
 #[derive(Debug, Clone)]
 struct Cap {
@@ -334,10 +334,10 @@ enum CapKind {
     AwaitCb,
     AwaitFn,
     ThenMethod(#[allow(dead_code)] String),
-    Sequence(String), // call target name
+    Sequence(String), // 调用目标名称
 }
 
-// ── Scope info ──
+// ── 作用域信息 ──
 
 #[derive(Debug, Clone)]
 struct Scope {
@@ -346,7 +346,7 @@ struct Scope {
     name: String,
 }
 
-// ── File helpers ──
+// ── 文件辅助函数 ──
 
 fn extract_fn_name(node: &TsNode, source: &str) -> String {
     if let Some(nn) = node.child_by_field_name("name") {
@@ -361,21 +361,21 @@ fn extract_name(node: &TsNode, source: &str) -> String {
     node.utf8_text(source.as_bytes()).unwrap_or("?").to_string()
 }
 // ═══════════════════════════════════════════════════════════════
-// Pure query result types
+// 纯查询结果类型
 // ═══════════════════════════════════════════════════════════════
 
-/// Per-function dataflow summary.
+/// 按函数的数据流摘要。
 #[derive(Debug, Clone)]
 pub struct ScopeFlow {
     pub name: String,
     pub reads: Vec<String>,
     pub writes: Vec<String>,
-    pub triggers: Vec<String>,         // await f() targets
-    pub awaits_callbacks: Vec<String>, // .then(cb) callbacks
-    pub sequence_calls: Vec<String>,   // consecutive call ordering
+    pub triggers: Vec<String>,         // await f() 目标
+    pub awaits_callbacks: Vec<String>, // .then(cb) 回调
+    pub sequence_calls: Vec<String>,   // 连续调用顺序
 }
 
-/// Cross-function shared state variable.
+/// 跨函数共享状态变量。
 #[derive(Debug, Clone)]
 pub struct SharedVarFlow {
     pub var: String,
@@ -383,7 +383,7 @@ pub struct SharedVarFlow {
     pub writers: Vec<String>,
 }
 
-/// Pure dataflow result for one file — no Graph dependency.
+/// 单个文件的纯数据流结果 — 无 Graph 依赖。
 #[derive(Debug, Clone)]
 pub struct FileDataflow {
     pub scopes: Vec<ScopeFlow>,
@@ -391,18 +391,18 @@ pub struct FileDataflow {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Public API: query_file_dataflow
+// 公共 API：query_file_dataflow
 // ═══════════════════════════════════════════════════════════════
 
-/// Run dataflow queries on a single already-parsed file.
+/// 对单个已解析文件运行数据流查询。
 ///
-/// Returns per-function reads/writes/triggers/sequences + cross-function
-/// shared state detection. Pure — does not touch the Graph.
+/// 返回按函数的 reads/writes/triggers/sequences + 跨函数共享状态检测。
+/// 纯函数 — 不触碰 Graph。
 ///
-/// For batch file queries with auto-detection of language + parsing,
-/// use [`query_dataflow_files`] instead.
+/// 如需带语言自动检测和解析的批量文件查询，
+/// 请使用 [`query_dataflow_files`]。
 ///
-/// # Example output
+/// # 示例输出
 /// ```text
 /// FileDataflow {
 ///   scopes: [ScopeFlow { name: "login", reads: ["db","hash"],
@@ -424,7 +424,7 @@ pub fn query_file_dataflow(
     let root = tree.root_node();
     let source_bytes = source.as_bytes();
 
-    // ── Phase 1: collect scopes ──
+    // ── Phase 1：收集作用域 ──
     let mut scopes: Vec<Scope> = Vec::new();
     {
         let mut stack: Vec<(TsNode, String)> = vec![(root, String::new())];
@@ -443,7 +443,7 @@ pub fn query_file_dataflow(
     }
     scopes.sort_by_key(|s| -(s.start as i64));
 
-    // ── Phase 2: collect captures ──
+    // ── Phase 2：收集 captures ──
     let mut write_offsets: HashSet<usize> = HashSet::new();
     let mut caps: Vec<Cap> = Vec::new();
 
@@ -486,7 +486,7 @@ pub fn query_file_dataflow(
         }
     }
 
-    // ── Phase 3: resolve captures → per-scope HashMaps (no Graph) ──
+    // ── Phase 3：解析 captures → 按作用域 HashMap（无 Graph）──
     let mut scope_writes: HashMap<String, HashSet<String>> = HashMap::new();
     let mut scope_reads: HashMap<String, HashSet<String>> = HashMap::new();
     let mut scope_triggers: HashMap<String, Vec<String>> = HashMap::new();
@@ -495,7 +495,7 @@ pub fn query_file_dataflow(
     let mut module_vars: HashSet<String> = HashSet::new();
 
     for cap in &caps {
-        // ponytail: captures outside any function scope → module level
+        // ponytail：不在任何函数作用域内的 captures → 模块级别
         let scope_id = find_scope(cap.start, &scopes).unwrap_or_else(|| "<module>".into());
 
         match &cap.capture {
@@ -530,7 +530,7 @@ pub fn query_file_dataflow(
         }
     }
 
-    // ── Phase 5: shared state detection (reverse index) ──
+    // ── Phase 5：共享状态检测（反向索引）──
     let mut var_to_writers: HashMap<&str, HashSet<&str>> = HashMap::new();
     for (sid, wvars) in &scope_writes {
         for v in wvars {
@@ -560,7 +560,7 @@ pub fn query_file_dataflow(
         }
     }
 
-    // ── Build per-scope output ──
+    // ── 构建按作用域的输出 ──
     let scope_names: Vec<String> = {
         let mut set: HashSet<String> = scope_reads.keys()
             .chain(scope_writes.keys())
@@ -569,7 +569,7 @@ pub fn query_file_dataflow(
             .chain(scope_sequences.keys())
             .cloned()
             .collect();
-        // Include scopes that only write (no reads)
+        // 包含只有写操作（无读操作）的作用域
         for s in &scopes {
             set.insert(s.name.clone());
         }
@@ -602,32 +602,32 @@ fn sorted(set: &HashSet<String>) -> Vec<String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Engine-native API: query_dataflow_files
+// 引擎原生 API：query_dataflow_files
 // ═══════════════════════════════════════════════════════════════
 
-/// Result for one file in a batch dataflow query.
+/// 批量数据流查询中单个文件的结果。
 #[derive(Debug, Clone)]
 pub struct DataflowFileResult {
     pub file: String,
     pub result: Result<FileDataflow, String>,
 }
 
-/// Batch dataflow query — reads files from disk, auto-detects language,
-/// parses, and runs [`query_file_dataflow`] on each.
+/// 批量数据流查询 — 从磁盘读取文件，自动检测语言、
+/// 解析，并对每个文件运行 [`query_file_dataflow`]。
 ///
-/// Errors (missing file, unsupported extension, parse failure) are captured
-/// per-file in `DataflowFileResult::result` — never propagated.
+/// 错误（文件缺失、不支持的扩展名、解析失败）按文件捕获在
+/// `DataflowFileResult::result` 中 — 不会向上传播。
 ///
-/// # Agent workflow pattern
+/// # Agent 工作流模式
 /// ```text
-/// 1. search_symbols("db") → find candidate files
-/// 2. query_dataflow_files(&[path1, path2, path3]) → dataflow results
-/// 3. For each shared variable found, cross-reference with graph structure
+/// 1. search_symbols("db") → 查找候选文件
+/// 2. query_dataflow_files(&[path1, path2, path3]) → 数据流结果
+/// 3. 对每个发现的共享变量，与 Graph 结构进行交叉引用
 /// ```
 ///
-/// 18 languages supported. See [`config_for_ext`] for the full list.
-// ponytail: global cache keyed by (path, mtime_secs). Handles hot-reload
-// correctly; 200-file first parse ~1-2s with rayon, subsequent calls <1ms.
+/// 支持 18 种语言。完整列表见 [`config_for_ext`]。
+// ponytail：以 (path, mtime_secs) 为键的全局缓存。正确处理热重载；
+// 200 文件首次解析约 1-2 秒（rayon 并行），后续调用 <1ms。
 static DF_CACHE: std::sync::LazyLock<Mutex<HashMap<(PathBuf, u64), DataflowFileResult>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -690,9 +690,9 @@ pub fn query_dataflow_files(files: &[std::path::PathBuf]) -> Vec<DataflowFileRes
     }).collect()
 }
 
-/// Find the tightest enclosing scope for a byte offset.
-/// ponytail: scopes sorted by start descending — nested scopes always have
-/// larger start bytes, so first match is tightest. Amortized O(1) per capture.
+/// 查找字节偏移的最紧包含作用域。
+/// ponytail：作用域按 start 降序排列 — 嵌套作用域总有更大的 start 字节，
+/// 因此第一个匹配即为最紧包含。每个 capture 摊销 O(1)。
 fn find_scope(offset: usize, scopes: &[Scope]) -> Option<String> {
     for s in scopes {
         if offset >= s.start && offset <= s.end {
@@ -703,7 +703,7 @@ fn find_scope(offset: usize, scopes: &[Scope]) -> Option<String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Public config constructors
+// 公共配置构造函数
 // ═══════════════════════════════════════════════════════════════
 
 pub fn python_config() -> LangDataflowConfig {
@@ -758,7 +758,7 @@ pub fn r_config() -> LangDataflowConfig {
     LangDataflowConfig { query_src: include_str!("../../queries/r_dataflow.scm"), skip_names: R_SKIP_NAMES, func_kinds: R_FUNC_KINDS, class_kinds: R_CLASS_KINDS }
 }
 
-/// Map a file extension to (grammar_key, dataflow_config). Returns None for unsupported languages.
+/// 将文件扩展名映射到 (grammar_key, dataflow_config)。不支持的语言返回 None。
 pub fn config_for_ext(ext: &str) -> Option<(&'static str, LangDataflowConfig)> {
     match ext {
         "py" | "pyi" | "pyx" => Some(("py", python_config())),
@@ -784,13 +784,13 @@ pub fn config_for_ext(ext: &str) -> Option<(&'static str, LangDataflowConfig)> {
     }
 }
 
-/// Validate all dataflow query configs compile against their grammars.
-/// Call once at engine startup; panics on parse in test, logs errors in production.
+/// 验证所有数据流查询配置能否对其语法进行编译。
+/// 在引擎启动时调用一次；测试中解析失败会 panic，生产环境记录错误日志。
 pub fn validate_all_queries() -> Vec<String> {
     let mut errors: Vec<String> = Vec::new();
-    // All known extension→config pairs. Extensions that map to the same config
-    // (e.g. js/ts) only need one check per config; we use the primary extension.
-    // ponytail: grammar_key = file extension (how GRAMMAR_LOADER registers static grammars)
+    // 所有已知的扩展名→配置对。映射到同一配置的扩展名
+    // （如 js/ts）只需检查一次；使用主扩展名。
+    // ponytail：grammar_key = 文件扩展名（GRAMMAR_LOADER 以此注册静态语法）
     let checks: &[(&str, fn() -> LangDataflowConfig)] = &[
         ("py", python_config),
         ("js", js_ts_config),
@@ -838,7 +838,7 @@ pub fn validate_all_queries() -> Vec<String> {
     errors
 }
 
-// ── Tests ──
+// ── 测试 ──
 
 #[cfg(test)]
 mod tests {
@@ -953,7 +953,7 @@ def foo():
 
     #[test]
     fn test_demo_realistic() {
-        // Realistic patterns: shared config, caching, async, pipeline
+        // 真实场景模式：共享配置、缓存、异步、流水线
         let src = r#"
 config = {"host": "localhost"}
 _cache = {}
@@ -985,21 +985,21 @@ def pipeline():
         for sh in &df.shared {
             eprintln!("  {}: readers={:?} writers={:?}", sh.var, sh.readers, sh.writers);
         }
-        // Assertions
+        // 断言
         assert!(df.scopes.iter().any(|s| s.name == "connect"), "should find connect");
         assert!(df.scopes.iter().any(|s| s.name == "query"), "should find query");
         assert!(df.scopes.iter().any(|s| s.name == "fetch_users"), "should find fetch_users");
         assert!(df.scopes.iter().any(|s| s.name == "pipeline"), "should find pipeline");
-        // connect reads config
+        // connect 读取 config
         let connect = df.scopes.iter().find(|s| s.name == "connect").unwrap();
         assert!(connect.reads.contains(&"config".into()), "connect should read config");
-        // fetch_users has trigger
+        // fetch_users 有 trigger
         let fetch = df.scopes.iter().find(|s| s.name == "fetch_users").unwrap();
         assert!(!fetch.triggers.is_empty(), "fetch_users should have trigger");
-        // pipeline has sequence_calls
+        // pipeline 有 sequence_calls
         let pipe = df.scopes.iter().find(|s| s.name == "pipeline").unwrap();
         assert_eq!(pipe.sequence_calls.len(), 3, "pipeline should have 3 sequence calls");
-        // config should be shared (read by connect)
+        // config 应为共享状态（被 connect 读取）
         let config_shared = df.shared.iter().find(|s| s.var == "config");
         assert!(config_shared.is_some(), "config should be detected as shared");
     }
@@ -1010,20 +1010,20 @@ def pipeline():
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // Unsupported extension
+        // 不支持的扩展名
         std::fs::write(tmp.join("readme.txt"), "hello").unwrap();
         let results = super::query_dataflow_files(&[tmp.join("readme.txt")]);
         assert!(results[0].result.is_err());
         assert!(results[0].result.as_ref().unwrap_err().contains("unsupported"));
 
-        // Parse error — garbage Python
+        // 解析错误 — 无效的 Python 代码
         std::fs::write(tmp.join("bad.py"), "def foo(:").unwrap();
         let _results = super::query_dataflow_files(&[tmp.join("bad.py")]);
-        // ponytail: tree-sitter is error-tolerant, so this parses. Truly
-        // empty or binary file should work gracefully instead.
+        // ponytail：tree-sitter 是容错的，所以这能解析。
+        // 真正空文件或二进制文件应能优雅处理。
         std::fs::write(tmp.join("empty.py"), "").unwrap();
         let results = super::query_dataflow_files(&[tmp.join("empty.py")]);
-        assert!(results[0].result.is_ok()); // empty file = valid parse, zero scopes
+        assert!(results[0].result.is_ok()); // 空文件 = 有效解析，零作用域
         assert_eq!(results[0].result.as_ref().unwrap().scopes.len(), 0);
 
         let _ = std::fs::remove_dir_all(&tmp);

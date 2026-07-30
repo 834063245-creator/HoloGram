@@ -10,12 +10,12 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
-/// Path to the per-project graph snapshot used as the briefing baseline.
+/// 每项目 graph 快照路径，用作简报基线。
 pub fn baseline_path(project_root: &Path) -> PathBuf {
     project_root.join(".hologram").join("baseline.json")
 }
 
-/// Path to the violation-id snapshot — IDs from the last non-quiet check.
+/// 违规 ID 快照路径 — 来自上次非静默检查的 ID。
 fn baseline_violations_path(project_root: &Path) -> PathBuf {
     project_root.join(".hologram").join("baseline_violations.json")
 }
@@ -52,7 +52,7 @@ fn save_violation_ids(project_root: &Path, ids: &[String]) {
     }
 }
 
-/// Extract violation IDs from a slice of violation Value objects.
+/// 从违规 Value 对象切片中提取违规 ID。
 fn extract_violation_ids(violations: &[Value]) -> Vec<String> {
     violations.iter()
         .filter_map(|v| v["signal"]["violation_id"].as_str().map(String::from))
@@ -67,7 +67,7 @@ pub fn save_baseline(project_root: &Path, graph: &Graph) {
     }
 }
 
-/// Full CheckResult properties for timeline round-trip (historical briefing click).
+/// 用于时间线往返的完整 CheckResult 属性（历史简报点击）。
 pub fn check_timeline_props(result: &Value) -> Value {
     json!({
         "passed": result["passed"],
@@ -120,26 +120,26 @@ fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: b
     })
 }
 
-/// run_full_check — equivalent of Python preflight.py run_full_check()
+/// run_full_check — 等价于 Python preflight.py 的 run_full_check()
 pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _project_root: &str) -> Value {
-    // Filter out changes to ignored directories (.hologram, .git, node_modules, etc.)
-    // These are tooling/runtime artifacts — not user source code — and should not
-    // generate constraint violations in the briefing.
+    // 过滤掉被忽略目录（.hologram、.git、node_modules 等）的变更
+    // 这些是工具/运行时产物 — 非用户源码 — 不应在简报中
+    // 产生约束违规。
     let changed_files: Vec<String> = changed_files.iter()
         .filter(|f| !is_ignored_path(f))
         .cloned()
         .collect();
     let changed_files = changed_files.as_slice();
 
-    // First open: establish baseline quietly — don't audit the whole project.
+    // 首次打开：静默建立基线 — 不审计整个项目。
     if before.nodes.is_empty() && !after.nodes.is_empty() && changed_files.is_empty() {
         return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
     }
 
-    // No file changes → nothing to report, regardless of graph size difference.
-    // A size difference without changed_files means the graph was rebuilt (e.g.
-    // re-analysis with more nodes discovered), not a user edit. Reporting L2/L4
-    // deltas in that case is a stale-baseline false positive.
+    // 无文件变更 → 无需报告，不论 graph 大小差异如何。
+    // 没有 changed_files 时的 graph 大小差异意味着 graph 被重建（例如
+    // 重新分析发现了更多节点），而非用户编辑。在此情况下报告 L2/L4
+    // 差异是过期基线的误报。
     if changed_files.is_empty() {
         return quiet_check_result(changed_files, "无新变更", false);
     }
@@ -150,7 +150,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let cycle_count = cycles.len();
     let cycles_before = detect_cycles(before).len();
 
-    // ── Dataflow: run on changed_files for L3/L4 signals ──
+    // ── 数据流：对 changed_files 运行以生成 L3/L4 信号 ──
     let df_counts: Option<DataflowSignalCounts> = if !changed_files.is_empty() {
         let paths: Vec<std::path::PathBuf> = changed_files.iter()
             .map(std::path::PathBuf::from)
@@ -178,7 +178,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     } else {
         None
     };
-    // Use dataflow L4 count when available, else fall back to graph edges
+    // 有数据流 L4 计数时使用，否则回退到 graph 边
     let effective_l4 = df_counts.as_ref()
         .map(|d| d.l4_triggers + d.l4_awaits + d.l4_sequences)
         .unwrap_or(l4_count);
@@ -189,7 +189,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let violations: Vec<Value> = constraint_result["violations"].as_array().cloned().unwrap_or_default();
     let summary = generate_summary(changed_files, &violations, l4_count, cycle_count);
 
-    // ── Violation diff: compare current IDs with previous check snapshot ──
+    // ── 违规差异：将当前 ID 与上次检查快照对比 ──
     let current_ids: Vec<String> = extract_violation_ids(&violations);
     let previous_ids: HashSet<String> = load_previous_violation_ids(&PathBuf::from(_project_root))
         .into_iter().collect();
@@ -197,11 +197,11 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let new_count      = current_set.difference(&previous_ids).count() as u32;
     let resolved_count = previous_ids.difference(&current_set).count() as u32;
     let persistent_count = current_set.intersection(&previous_ids).count() as u32;
-    // Save current IDs so the next check can compute a diff against this run.
+    // 保存当前 ID，以便下次检查可以与此运行计算差异。
     let project_path = PathBuf::from(_project_root);
     save_violation_ids(&project_path, &current_ids);
 
-    // ── blast_radius: BFS from all nodes whose file is in changed_files ──
+    // ── blast_radius：从文件在 changed_files 中的所有节点出发进行 BFS ──
     let blast_radius = if changed_files.is_empty() {
         0usize
     } else {
@@ -213,14 +213,14 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
                 }
             }
         }
-        // BFS up to depth 3 from seed nodes
+        // 从种子节点开始 BFS，深度上限为 3
         let mut visited: HashSet<&str> = HashSet::new();
         let mut queue = VecDeque::new();
         for &sid in &seed_nodes {
             visited.insert(sid);
             queue.push_back((sid, 0usize));
         }
-        // Build adjacency
+        // 构建邻接表
         let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
         for edge in after.edges.values() {
             adj.entry(&edge.source).or_default().push(&edge.target);
@@ -236,10 +236,10 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
                 }
             }
         }
-        visited.len().saturating_sub(seed_nodes.len()) // exclude seeds themselves
+        visited.len().saturating_sub(seed_nodes.len()) // 排除种子节点自身
     };
 
-    // ── cross_community_edges: communities on after graph ──
+    // ── cross_community_edges：after graph 上的社区 ──
     let communities = detect_communities(after, 42);
     let mut node_to_comm: HashMap<&str, usize> = HashMap::new();
     for (ci, comm) in communities.iter().enumerate() {
@@ -255,10 +255,10 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         })
         .count();
 
-        // ── thread_conflicts ──
+        // ── 线程冲突 ──
     let new_thread_conflicts = 0u32;
 
-    // ── api_signature_changes: count function/method nodes changed ──
+    // ── api_signature_changes：统计变更的函数/方法节点 ──
     let api_signature_changes = if before.nodes.is_empty() {
         0u32
     } else {
@@ -266,14 +266,14 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         for (nid, after_node) in after.nodes.iter() {
             if !matches!(after_node.kind, NodeKind::Symbol) { continue; }
             if let Some(before_node) = before.nodes.get(nid) {
-                // Count as changed if in/out degree differs
+                // 入度/出度不同则计为变更
                 if before_node.out_degree != after_node.out_degree
                     || before_node.in_degree != after_node.in_degree
                 {
                     changed += 1;
                 }
             } else {
-                // New symbol node
+                // 新增 symbol 节点
                 changed += 1;
             }
         }
@@ -354,7 +354,7 @@ mod tests {
         g.add_edge_unchecked(Edge::new("e2", "c", "b", EdgeKind::Calls));
 
         let r = run_full_check(&g, &g, &["src/handler.rs".into()], ".");
-        // BFS from a,b should include c within depth 3
+        // 从 a,b 的 BFS 应在深度 3 内包含 c
         assert!(r["blast_radius"].as_u64().unwrap() > 0);
     }
 
@@ -367,7 +367,7 @@ mod tests {
 
         let mut after = Graph::new();
         let mut a2 = Node::new("a", "fn_a", NodeKind::Symbol);
-        a2.out_degree = 3; // changed
+        a2.out_degree = 3; // 已变更
         after.add_node(a2);
         let mut b = Node::new("b", "fn_b", NodeKind::Symbol);
         b.out_degree = 1;
@@ -402,36 +402,36 @@ mod tests {
         assert_eq!(r["violation_count"], 0);
     }
 
-    /// Regression: stale baseline (fewer nodes/cycles) + re-analysis (more nodes/cycles)
-    /// + NO changed_files → must NOT produce false L2 "new cycles" violations.
-    /// This is the exact bug that produced the "53 new circular dependency cycles" false alarm.
+    /// 回归测试：过期基线（更少节点/环）+ 重新分析（更多节点/环）
+    /// + 无 changed_files → 不得产生误报的 L2 "new cycles" 违规。
+    /// 这是导致 "53 new circular dependency cycles" 误报的确切 bug。
     #[test]
     fn test_stale_baseline_no_false_positive() {
-        // ── "Old baseline": small graph with 1 cycle (3 nodes) ──
+        // ── "旧基线"：小 graph，含 1 个环（3 个节点）──
         let mut before = Graph::new();
         before.add_node(Node::new("x", "old_x", NodeKind::Symbol));
         before.add_node(Node::new("y", "old_y", NodeKind::Symbol));
         before.add_node(Node::new("z", "old_z", NodeKind::Symbol));
         before.add_edge_unchecked(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
         before.add_edge_unchecked(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
-        before.add_edge_unchecked(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // 1 cycle: x→y→z→x
+        before.add_edge_unchecked(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // 1 个环：x→y→z→x
 
-        // ── "After re-analysis": bigger graph with 2 cycles ──
+        // ── "重新分析后"：更大的 graph，含 2 个环 ──
         let mut after = Graph::new();
         after.add_node(Node::new("x", "old_x", NodeKind::Symbol));
         after.add_node(Node::new("y", "old_y", NodeKind::Symbol));
         after.add_node(Node::new("z", "old_z", NodeKind::Symbol));
         after.add_edge_unchecked(Edge::new("e_xy", "x", "y", EdgeKind::Calls));
         after.add_edge_unchecked(Edge::new("e_yz", "y", "z", EdgeKind::Calls));
-        after.add_edge_unchecked(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // cycle 1
+        after.add_edge_unchecked(Edge::new("e_zx", "z", "x", EdgeKind::Calls)); // 环 1
         after.add_node(Node::new("a", "new_a", NodeKind::Symbol));
         after.add_node(Node::new("b", "new_b", NodeKind::Symbol));
         after.add_node(Node::new("c", "new_c", NodeKind::Symbol));
         after.add_edge_unchecked(Edge::new("e_ab", "a", "b", EdgeKind::Calls));
         after.add_edge_unchecked(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
-        after.add_edge_unchecked(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // cycle 2
+        after.add_edge_unchecked(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // 环 2
 
-        // No files changed — this should be quiet
+        // 无文件变更 — 应为静默
         let r = run_full_check(&before, &after, &[], ".");
         assert!(r["passed"].as_bool().unwrap(), "stale baseline without changed_files should pass");
         assert_eq!(r["violation_count"], 0, "should have zero violations");
@@ -439,9 +439,9 @@ mod tests {
         assert_eq!(r["new_cycles"], 0, "should report 0 new cycles");
     }
 
-    /// Companion: same scenario as test_stale_baseline_no_false_positive, but WITH
-    /// changed_files → must still detect real violations.  Ensures the guard doesn't
-    /// suppress genuine alerts.
+    /// 配套测试：与 test_stale_baseline_no_false_positive 相同场景，但带
+    /// changed_files → 仍必须检测真实违规。确保防护不会
+    /// 抑制真正的告警。
     #[test]
     fn test_stale_baseline_still_detects_with_real_changes() {
         let mut before = Graph::new();
@@ -460,22 +460,22 @@ mod tests {
         after.add_edge_unchecked(Edge::new("e_bc", "b", "c", EdgeKind::Calls));
         after.add_edge_unchecked(Edge::new("e_ca", "c", "a", EdgeKind::Calls)); // 1 new cycle
 
-        // WITH changed files → should still fire
+        // 有变更文件 → 应仍触发
         let r = run_full_check(&before, &after, &["src/new_module.rs".into()], ".");
         assert!(!r["passed"].as_bool().unwrap(), "real changes should not pass");
         assert!(r["violation_count"].as_u64().unwrap() > 0, "should have violations");
         assert!(r["new_cycles"].as_u64().unwrap() > 0, "should detect new cycles");
     }
 
-    /// Regression: changes to `.hologram/` or other ignored directories must NOT
-    /// produce violations. Previously, `.hologram/baseline.json` matched the
-    /// config-file pattern (`.json$`) and triggered a false L5 violation.
+    /// 回归测试：对 `.hologram/` 或其他被忽略目录的变更不得
+    /// 产生违规。此前，`.hologram/baseline.json` 匹配了
+    /// 配置文件模式（`.json$`）并触发了误报的 L5 违规。
     #[test]
     fn test_preflight_filters_ignored_paths() {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
 
-        // Only ignored paths → should be quiet (no violations)
+        // 仅被忽略路径 → 应为静默（无违规）
         let r = run_full_check(&g, &g, &[
             ".hologram/baseline.json".into(),
             ".hologram/memory/context.json".into(),
@@ -487,17 +487,17 @@ mod tests {
         assert_eq!(r["total_changed_files"], 0, "ignored paths should be filtered out");
     }
 
-    /// Mixed: ignored paths + real source files → only real files counted.
+    /// 混合场景：被忽略路径 + 真实源文件 → 仅真实文件被计入。
     #[test]
     fn test_preflight_filters_ignored_mixed_with_real() {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
 
         let r = run_full_check(&g, &g, &[
-            ".hologram/baseline.json".into(),  // ignored — would be L5 false positive
-            "migrations/0001_init.py".into(),   // real — should be L5
+            ".hologram/baseline.json".into(),  // 被忽略 — 否则会误报 L5
+            "migrations/0001_init.py".into(),   // 真实文件 — 应为 L5
         ], ".");
-        // Only the migration file should produce a violation
+        // 仅迁移文件应产生违规
         assert!(!r["passed"].as_bool().unwrap(), "migration file should produce violation");
         assert_eq!(r["violation_count"], 1, "only 1 violation from migration, not from .hologram");
         assert_eq!(r["total_changed_files"], 1, "only 1 real changed file");

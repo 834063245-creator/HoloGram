@@ -23,9 +23,9 @@ pub(crate) fn detect_nestjs_routes(file: &str, source: &str) -> Vec<DetectedRout
         None => return result,
     };
 
-    // NestJS decorators and their decorated members are SIBLINGS inside class_body,
-    // unlike Python where decorator+definition form a single node.
-    // Strategy: walk class_body children sequentially, pairing decorator → method_definition.
+    // NestJS 装饰器及其修饰的成员在 class_body 内是兄弟节点，
+    // 不像 Python 中装饰器+定义构成单个节点。
+    // 策略：顺序遍历 class_body 子节点，将装饰器与 method_definition 配对。
 
     let mut controller_prefixes: HashMap<usize, String> = HashMap::new();
 
@@ -34,7 +34,7 @@ pub(crate) fn detect_nestjs_routes(file: &str, source: &str) -> Vec<DetectedRout
     let mut stack: Vec<tree_sitter::Node<'_>> = vec![root];
 
     while let Some(node) = stack.pop() {
-        // Capture @Controller prefix per class
+        // 捕获每个类的 @Controller 前缀
         if node.kind() == "class_declaration" {
             let start = node.start_byte();
             let mut class_prefix = String::new();
@@ -49,7 +49,7 @@ pub(crate) fn detect_nestjs_routes(file: &str, source: &str) -> Vec<DetectedRout
             controller_prefixes.insert(start, class_prefix);
         }
 
-        // class_body: decorator + method_definition are siblings — pair them
+        // class_body：装饰器 + method_definition 是兄弟节点——将它们配对
         if node.kind() == "class_body" {
             let parent_prefix = find_parent_controller_prefix(&node, &controller_prefixes);
 
@@ -105,7 +105,7 @@ fn extract_nestjs_controller_prefix(decorator: &tree_sitter::Node, source: &str)
     let mut dc = decorator.walk();
     for child in decorator.children(&mut dc) {
         if child.kind() == "call_expression" {
-            // @Controller('prefix') — identifier is a direct child, not a field
+            // @Controller('prefix') —— identifier 是直接子节点，不是 field
             let name = find_callee_name(&child, source);
             if name == Some("Controller".to_string()) {
                 if let Some(args) = child.child_by_field_name("arguments") {
@@ -117,23 +117,23 @@ fn extract_nestjs_controller_prefix(decorator: &tree_sitter::Node, source: &str)
                         }
                     }
                 }
-                return Some(String::new()); // @Controller() without prefix
+                return Some(String::new()); // 无前缀的 @Controller()
             }
         }
     }
     None
 }
 
-/// Find the callee name in a call_expression — looks for identifier child (TS) or
-/// `function` field (Python/Java).
+/// 在 call_expression 中查找被调用者名称——查找 identifier 子节点（TS）或
+/// `function` field（Python/Java）。
 fn find_callee_name(call: &tree_sitter::Node, source: &str) -> Option<String> {
-    // Try field name first
+    // 先尝试 field 名称
     if let Some(func) = call.child_by_field_name("function") {
         if func.kind() == "identifier" || func.kind() == "property_identifier" {
             return Some(func.utf8_text(source.as_bytes()).unwrap_or("").to_string());
         }
     }
-    // Fallback: find identifier among direct children
+    // 回退：在直接子节点中查找 identifier
     let mut cc = call.walk();
     for child in call.children(&mut cc) {
         if child.kind() == "identifier" || child.kind() == "property_identifier" {

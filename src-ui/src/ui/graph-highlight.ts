@@ -67,10 +67,10 @@ export class GraphHighlight {
 
   // ── File highlight (文件树 → 星图联动) ────────────────────
 
-  /** Highlight all nodes belonging to a file (match by location prefix). */
+  /** 高亮属于某个文件的所有节点（按位置前缀匹配）。 */
   highlightFile(filePath: string): void {
     if (this.host.focusSubgraphActive) this.host.exitFocusSubgraph();
-    // Restore any previous highlight before applying new one
+    // 恢复之前的所有高亮再应用新的
     if (this._fileHighlight) this.clearFileHighlight();
 
     const normalized = filePath.replace(/\\/g, '/');
@@ -89,9 +89,9 @@ export class GraphHighlight {
     this._applyFileHighlight();
   }
 
-  /** Highlight all nodes under a directory (recursive prefix match). */
+  /** 高亮某个目录下的所有节点（递归前缀匹配）。 */
   highlightFolder(folderPath: string): void {
-    // Restore any previous highlight before applying new one
+    // 恢复之前的所有高亮再应用新的
     if (this._fileHighlight) this.clearFileHighlight();
 
     const normalized = folderPath.replace(/\\/g, '/');
@@ -123,7 +123,7 @@ export class GraphHighlight {
     const hl = this._fileHighlight;
     const idxs = this._fileHighlightIndices;
 
-    // Nodes: dim non-highlighted, set override so shader doesn't animate over
+    // 节点：调暗未高亮的，设置 override 使 shader 不覆盖动画
     for (let i = 0; i < this.host._nodeCount; i++) {
       const visible = !hl || idxs.has(i);
       if (hl && !visible) {
@@ -139,7 +139,7 @@ export class GraphHighlight {
       this._fileOpacityOriginal.clear();
     }
 
-    // Edges: dim all when highlighting
+    // 边线：高亮时全部调暗
     for (const lines of this.host.edgeLineGroups) {
       const mat = lines.material as LineMaterial;
       if (hl) {
@@ -151,13 +151,13 @@ export class GraphHighlight {
       }
     }
 
-    // Labels: hide non-highlighted
+    // 标签：隐藏未高亮的
     for (let k = 0; k < this.host.nodeLabelIdx.length; k++) {
       this.host.labelDivs[k].style.display = !hl || idxs.has(this.host.nodeLabelIdx[k]) ? '' : 'none';
     }
   }
 
-  /** Highlight only edges of one type, dim all others. null = clear filter. */
+  /** 仅高亮一种边类型，其余调暗。null = 清除过滤。 */
   setEdgeTypeFilter(edgeType: string | null): void {
     this.host._edgeTypeFilter = edgeType;
     if (edgeType === null) {
@@ -178,7 +178,7 @@ export class GraphHighlight {
     this._updateLegendActive(edgeType, this.host._nodeKindFilter);
   }
 
-  /** Dim all nodes except those matching a kind filter. null = clear. */
+  /** 调暗所有不匹配类型过滤的节点。null = 清除。 */
   setNodeKindFilter(filter: string | null): void {
     this.host._nodeKindFilter = filter;
     if (filter === null) {
@@ -203,7 +203,7 @@ export class GraphHighlight {
     for (let i = 0; i < this.host._nodeCount; i++) {
       const kind = (this.host.graphNodes[i]?.type || this.host.graphNodes[i]?.kind || 'symbol') as string;
       const hit = matches(kind);
-      this.host._overrideFlags[i] = hit ? 0 : 1; // matching=let shader animate, non-matching=CPU freeze at alpha 0
+      this.host._overrideFlags[i] = hit ? 0 : 1; // 匹配=由 shader 动画，不匹配=CPU 冻结在 alpha 0
       if (hit) {
         this.host._setGlowAlpha(i, 0.88);
         if (this.host._glow2Rgba.length > 0) this.host._setGlow2Alpha(i, 0.48);
@@ -232,13 +232,13 @@ export class GraphHighlight {
 
   // ── Agent highlight (Agent ↔ 星图联动) ──────────────────
 
-  /** Highlight a set of nodes by name (fuzzy match). Matched nodes glow in the given color; others dim. */
+  /** 按名称高亮一组节点（模糊匹配）。匹配的节点以指定颜色发光；其余调暗。 */
   highlightNodeNames(names: string[], colorHex?: string): void {
     if (this.host.focusSubgraphActive) this.host.exitFocusSubgraph();
     this._clearAgentHighlightState();
     if (!names.length || this.host._nodeCount === 0) return;
 
-    const color = colorHex ? parseInt(colorHex.replace('#', ''), 16) : 0xf0b848; // default sol
+    const color = colorHex ? parseInt(colorHex.replace('#', ''), 16) : 0xf0b848; // 默认 sol 色
     const lowerNames = names.map((n) => n.trim().toLowerCase());
 
     for (let i = 0; i < this.host._nodeCount; i++) {
@@ -254,7 +254,7 @@ export class GraphHighlight {
 
     if (this._agentHighlightIndices.size === 0) return;
 
-    // Apply: dim non-highlighted, recolor highlighted
+    // 应用：调暗未高亮的，重新着色已高亮的
     for (let i = 0; i < this.host._nodeCount; i++) {
       this.host._overrideFlags[i] = 1;
       if (this._agentHighlightIndices.has(i)) {
@@ -266,16 +266,16 @@ export class GraphHighlight {
       }
     }
     this.host._flushOverrideAttrs();
-    // Dim non-path edges
+    // 调暗非路径边线
     for (const lines of this.host.edgeLineGroups) {
       (lines.material as LineMaterial).opacity = 0.008;
     }
   }
 
-  /** Clear all Agent-triggered highlights (path + node highlight). */
+  /** 清除所有 Agent 触发的高亮（路径 + 节点高亮）。 */
   clearAgentHighlight(): void {
     this._clearAgentHighlightState();
-    // Also restore any file highlight if active
+    // 如果文件高亮仍活跃，也恢复之
     if (this._fileHighlight) {
       this._applyFileHighlight();
     }
@@ -283,7 +283,7 @@ export class GraphHighlight {
 
   private _clearAgentHighlightState(): void {
     if (this._agentHighlightIndices.size === 0) return;
-    // Restore original glows for previously highlighted nodes + clear override
+    // 恢复先前高亮节点的原始辉光 + 清除 override
     for (const i of this._agentHighlightIndices) {
       if (i < this.host._nodeCount) {
         this.host._overrideFlags[i] = 0;
@@ -292,7 +292,7 @@ export class GraphHighlight {
       }
       this.host._setCoreVisible(i, true);
     }
-    // Restore non-highlighted dimmed nodes (opacity + visibility)
+    // 恢复未高亮的调暗节点（透明度 + 可见性）
     for (let i = 0; i < this.host._nodeCount; i++) {
       if (!this._agentHighlightIndices.has(i)) {
         this.host._overrideFlags[i] = 0;
@@ -301,7 +301,7 @@ export class GraphHighlight {
       }
     }
     this.host._flushOverrideAttrs();
-    // Restore edge opacities
+    // 恢复边线透明度
     for (const lines of this.host.edgeLineGroups) {
       (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
     }
@@ -310,19 +310,19 @@ export class GraphHighlight {
 
   // ── P6: Hotspot highlighting — 复发热点着色 ──
 
-  /** Color nodes belonging to hotspot files with intensity proportional to L4 recurrence count. */
+  /** 按热点文件为节点着色，强度与 L4 复发次数成正比。 */
   highlightHotspots(hotspots: Array<{ file: string; count: number }>): void {
     this.clearHotspots();
     if (!hotspots.length || this.host._nodeCount === 0) return;
 
-    // Build a map of filename → count
+    // 构建文件名 → 次数 的映射
     for (const hs of hotspots) {
       const key = (hs.file || '').replace(/\\/g, '/').toLowerCase();
       const prev = this._hotspotFiles.get(key) || 0;
       this._hotspotFiles.set(key, Math.max(prev, hs.count));
     }
 
-    // Apply coloring: intensity from 0.3 (count=2) to 1.0 (count≥8)
+    // 着色：强度从 0.3（count=2）到 1.0（count≥8）
     for (let i = 0; i < this.host._nodeCount; i++) {
       const loc = (this.host.graphNodes[i].location || '').toLowerCase();
       if (!loc) continue;
@@ -346,7 +346,7 @@ export class GraphHighlight {
   clearHotspots(): void {
     if (this._hotspotFiles.size === 0) return;
     this._hotspotFiles.clear();
-    // Restore original glow colors and clear override flags
+    // 恢复原始辉光颜色并清除 override 标志
     for (let i = 0; i < this.host._nodeCount; i++) {
       if (i < this.host._nodeCount) {
         this.host._overrideFlags[i] = 0;
@@ -357,16 +357,16 @@ export class GraphHighlight {
     this.host._flushOverrideAttrs();
   }
 
-  // ── Agent Lens (Step 2) — dim everything except visited nodes ──
+  // ── Agent 透镜（Step 2）— 调暗除已访问节点外的所有内容 ──
 
-  /** Dim all nodes except those matching the given names to 1% opacity. */
+  /** 将不匹配给定名称的所有节点调暗至 1% 透明度。 */
   setAgentLens(nodeNames: Set<string>): void {
     if (!nodeNames || nodeNames.size === 0 || this.host._nodeCount === 0) {
       this.clearAgentLens();
       return;
     }
 
-    // Build set of matched node indices
+    // 构建匹配节点索引集合
     const lensIndices = new Set<number>();
     const lowerNames = Array.from(nodeNames).map((n) => n.trim().toLowerCase());
 
@@ -381,7 +381,7 @@ export class GraphHighlight {
 
     if (lensIndices.size === 0) return;
 
-    // Apply lens: visited nodes stay bright, others dim to 1%
+    // 应用透镜：已访问节点保持明亮，其余调暗至 1%
     for (let i = 0; i < this.host._nodeCount; i++) {
       this.host._overrideFlags[i] = 1;
       if (lensIndices.has(i)) {
@@ -393,7 +393,7 @@ export class GraphHighlight {
     }
     this.host._flushOverrideAttrs();
 
-    // Dim all edges
+    // 调暗所有边线
     for (const lines of this.host.edgeLineGroups) {
       (lines.material as LineMaterial).opacity = 0.005;
     }
@@ -401,7 +401,7 @@ export class GraphHighlight {
     this.host._lensActive = true;
   }
 
-  /** Restore normal rendering from agent lens mode. */
+  /** 从 agent 透镜模式恢复正常渲染。 */
   clearAgentLens(): void {
     if (!this.host._lensActive) return;
     this.host._lensActive = false;
@@ -413,7 +413,7 @@ export class GraphHighlight {
     }
     this.host._flushOverrideAttrs();
 
-    // Restore edge opacities
+    // 恢复边线透明度
     for (const lines of this.host.edgeLineGroups) {
       (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
     }
@@ -421,15 +421,15 @@ export class GraphHighlight {
     this._clearTrailLine();
   }
 
-  // ── Agent Trail (retrospective mode) — thick glowing line + visited node highlight ──
+  // ── Agent 轨迹（回溯模式）— 粗发光线 + 已访问节点高亮 ──
 
-  /** Activate retrospective trail mode: highlight all visited nodes, dim others
-   *  to 30% (not 2.5% — still visible, just backgrounded), draw a thick glowing
-   *  trail line through the exploration sequence, and fly camera to the centroid. */
+  /** 激活回溯轨迹模式：高亮所有已访问节点，其余调暗
+   *  至 30%（非 2.5% — 仍可见，只是作为背景），绘制一条粗发光
+   *  轨迹线穿过探索序列，并将相机飞向质心。 */
   showAgentTrail(visitedNames: Set<string>, trailNames: string[]): void {
     if (this.host._nodeCount === 0) return;
 
-    // 1. Find indices for visited nodes
+    // 1. 查找已访问节点的索引
     const visitedIndices = new Set<number>();
     for (const name of visitedNames) {
       const idx = this._findNodeIndexByName(name);
@@ -437,7 +437,7 @@ export class GraphHighlight {
     }
     if (visitedIndices.size === 0) return;
 
-    // 2. Apply lens: visited at 80%, unvisited at 30% (readable backdrop)
+    // 2. 应用透镜：已访问 80%，未访问 30%（可读背景）
     for (let i = 0; i < this.host._nodeCount; i++) {
       this.host._overrideFlags[i] = 1;
       if (visitedIndices.has(i)) {
@@ -449,21 +449,21 @@ export class GraphHighlight {
     }
     this.host._flushOverrideAttrs();
 
-    // 3. Dim edges so trail pops
+    // 3. 调暗边线以突出轨迹
     for (const lines of this.host.edgeLineGroups) {
       (lines.material as LineMaterial).opacity = 0.015;
     }
 
-    // 4. Draw thick trail line
+    // 4. 绘制粗轨迹线
     this._drawAgentTrail(trailNames);
 
-    // 5. Fly camera to trail centroid
+    // 5. 将相机飞向轨迹质心
     this.host._focus._flyToCentroid(visitedIndices);
 
     this.host._trailActive = true;
   }
 
-  /** Restore normal rendering from trail mode. */
+  /** 从轨迹模式恢复正常渲染。 */
   hideAgentTrail(): void {
     if (!this.host._trailActive) return;
     this.host._trailActive = false;
@@ -482,8 +482,8 @@ export class GraphHighlight {
     this._clearTrailLine();
   }
 
-  /** Draw the thick glowing trail line through visited nodes. Uses LineMaterial
-   *  for variable width support. */
+  /** 绘制穿过已访问节点的粗发光轨迹线。使用 LineMaterial
+   *  以支持可变线宽。 */
   private _drawAgentTrail(trailNames: string[]): void {
     this._clearTrailLine();
 
@@ -532,7 +532,7 @@ export class GraphHighlight {
     this.host.nodeGroup.add(this._trailLine);
   }
 
-  /** Remove the existing trail line. Handles both LineSegments (old) and LineSegments2 (new). */
+  /** 移除现有轨迹线。兼容 LineSegments（旧）和 LineSegments2（新）。 */
   _clearTrailLine(): void {
     if (this._trailLine) {
       this.host.nodeGroup.remove(this._trailLine);
@@ -546,7 +546,7 @@ export class GraphHighlight {
     }
   }
 
-  /** Find a node's array index by name (fuzzy). Returns -1 if not found. */
+  /** 按名称模糊查找节点的数组索引。未找到返回 -1。 */
   _findNodeIndexByName(query: string): number {
     const q = query.trim().toLowerCase();
     if (!q || this.host._nodeCount === 0) return -1;

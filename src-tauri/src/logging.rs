@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// HoloGram Tauri Bridge structured logging — NDJSON to .hologram/logs/bridge.log
+// HoloGram Tauri 桥接层结构化日志 — NDJSON 输出到 .hologram/logs/bridge.log
 use std::path::Path;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Registry};
 
-/// Initialize bridge logging. Returns a `WorkerGuard` that must be held
-/// for the lifetime of the process.
+/// 初始化桥接层日志。返回一个 `WorkerGuard`，必须在
+/// 进程生命周期内持有。
 pub fn init_logging(project_root: &Path) -> WorkerGuard {
     let log_dir = project_root.join(".hologram").join("logs");
     let _ = std::fs::create_dir_all(&log_dir);

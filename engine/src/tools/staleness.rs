@@ -1,21 +1,21 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Staleness banner — warns the Agent when tool responses reference files
-//! that were edited since the last index sync.
+//! 过期警告横幅 —— 当工具响应引用了自上次索引同步后已编辑的文件时，
+//! 向 Agent 发出警告。
 
 use serde_json::Value;
 
 use crate::engine;
 
-/// Check whether the result references files pending sync, and render a banner.
+/// 检查结果是否引用了待同步文件，并渲染警告横幅。
 pub fn check_staleness(result: &Value) -> Option<String> {
     let pending = engine::with_engine(|eng| eng.get_pending_files()).unwrap_or_default();
     if pending.is_empty() {
         return None;
     }
 
-    // Collect file paths referenced in the result (heuristic: sourceCode sections)
+    // 收集结果中引用的文件路径（启发式：sourceCode 部分）
     let mut referenced: Vec<String> = Vec::new();
     collect_file_paths(result, &mut referenced);
 
@@ -29,7 +29,7 @@ pub fn check_staleness(result: &Value) -> Option<String> {
 
     for (path, ts_ms, indexing) in &pending {
         let age = now_ms.saturating_sub(*ts_ms);
-        let status = if *indexing { "indexing in progress" } else { "pending sync" };
+        let status = if *indexing { "索引中" } else { "待同步" };
         let matched = referenced.iter().any(|r| path.contains(r.as_str()) || r.contains(path.as_str()));
         if matched {
             referenced_pending.push(format!("  - {} (edited {}ms ago, {})", path, age, status));
@@ -45,14 +45,14 @@ pub fn check_staleness(result: &Value) -> Option<String> {
     let mut banner = String::new();
     if !referenced_pending.is_empty() {
         banner.push_str(&format!(
-            "⚠️ Some files referenced below were edited since the last index sync:\n{}\n\
-             For accurate content, Read those specific files directly.\n",
+            "⚠️ 以下引用的文件自上次索引同步后已被编辑：\n{}\n\
+             如需准确内容，请直接读取这些文件。\n",
             referenced_pending.join("\n")
         ));
     }
     if other_count > 0 {
         banner.push_str(&format!(
-            "({} other file(s) elsewhere are also pending sync but not referenced here.)",
+            "（另有 {} 个其他文件也待同步，但未在此处引用。）",
             other_count
         ));
     }

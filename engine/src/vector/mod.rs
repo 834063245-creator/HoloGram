@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Code vector index — embeds function/class source snippets via n-gram hashing,
-// stores in HNSW index, serves semantic search.
+// 代码向量索引 —— 通过 n-gram 哈希嵌入函数/类源码片段，
+// 存储到 HNSW 索引中，提供语义搜索。
 //
-// ponytail: pure Rust embedder (embed.rs) — zero deps, zero models, zero downloads.
-// 3-gram character hashing captures lexical similarity well enough for code search.
-// When a proper embedding model is available (e.g. bundled MiniLM ONNX), swap
-// the embed module for neural embeddings.
+// ponytail：纯 Rust 嵌入器（embed.rs）—— 零依赖、零模型、零下载。
+// 3-gram 字符哈希能很好地捕获词法相似性，足以满足代码搜索。
+// 当有合适的嵌入模型可用时（如内置 MiniLM ONNX），可将
+// embed 模块替换为神经网络嵌入。
 
 mod embed;
 pub use embed::embed;
@@ -62,10 +62,10 @@ impl CodeVectorIndex {
         Ok(())
     }
 
-    /// Build the vector index from graph nodes.
+    /// 从图节点构建向量索引。
     pub fn build(&self, nodes: &[Node]) -> Result<usize, String> {
         self.ensure_index(nodes.len())?;
-        // Reserve capacity (always, even if index was already initialized)
+        // 预留容量（始终执行，即使索引已初始化）
         if let Some(ref idx) = *self.index.read().unwrap() {
             idx.reserve(nodes.len().max(1))
                 .map_err(|e| format!("usearch reserve failed: {e}"))?;
@@ -82,10 +82,10 @@ impl CodeVectorIndex {
             snippets.push(text);
         }
 
-        if snippets.is_empty() { warn!("[vector] no nodes to embed"); return Ok(0); }
+        if snippets.is_empty() { warn!("[vector] 无节点可嵌入"); return Ok(0); }
 
         let total = snippets.len();
-        info!("[vector] embedding {} nodes (ngram hash, {} dim)...", total, VECTOR_DIM);
+        info!("[vector] 正在嵌入 {} 个节点（ngram hash, {} 维）...", total, VECTOR_DIM);
 
         let mut slot = 0usize;
         let mut slots = self.slots.write().unwrap();
@@ -111,11 +111,11 @@ impl CodeVectorIndex {
             }
         }
 
-        info!("[vector] indexed {} nodes", slots.len());
+        info!("[vector] 已索引 {} 个节点", slots.len());
         Ok(slots.len())
     }
 
-    /// Search. Returns ranked (node_id, similarity) pairs.
+    /// 搜索。返回排序后的 (node_id, 相似度) 对。
     pub fn search(&self, query: &str, top_k: usize) -> Result<Vec<(String, f32)>, String> {
         let q_vec = embed::embed(query);
 
@@ -144,7 +144,7 @@ impl CodeVectorIndex {
         let index = index.as_ref().ok_or("index not initialized")?;
         let path_str = self.path.to_str().ok_or("non-UTF8 path")?;
         index.save(path_str).map_err(|e| format!("usearch save: {e}"))?;
-        info!("[vector] saved index to {}", path_str);
+        info!("[vector] 索引已保存到 {}", path_str);
 
         let slot_path = self.path.with_extension("slots.json");
         let slots = self.slots.read().unwrap();
@@ -182,19 +182,19 @@ impl CodeVectorIndex {
 
         let count = self.slots.read().unwrap().len();
         *self.index.write().unwrap() = Some(idx);
-        info!("[vector] loaded index: {} vectors", count);
+        info!("[vector] 已加载索引: {} 个向量", count);
         Ok(count)
     }
 
     pub fn exists_on_disk(&self) -> bool { self.path.exists() }
 }
 
-// ── Process-level cache: loaded vector index reused across searches ──
+// ── 进程级缓存：加载的向量索引在搜索间复用 ──
 static CACHED_INDEX: LazyLock<Mutex<Option<CodeVectorIndex>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Get or create a cached CodeVectorIndex for the given project root.
-/// Loads from disk on first access. Subsequent calls return the same instance.
-/// Cache is invalidated when the index file mtime changes (re-analysis rebuilt it).
+/// 获取或创建给定项目根目录的缓存 CodeVectorIndex。
+/// 首次访问时从磁盘加载。后续调用返回同一实例。
+/// 索引文件 mtime 变化时缓存失效（重新分析会重建它）。
 pub fn get_or_load_index(project_root: &std::path::Path) -> Result<(Arc<RwLock<Option<usearch::Index>>>, Arc<RwLock<Vec<String>>>), String> {
     let path = project_root.join(".hologram").join("vectors.usearch");
     let mut cache = CACHED_INDEX.lock().map_err(|e| format!("vector cache lock: {e}"))?;
@@ -209,7 +209,7 @@ pub fn get_or_load_index(project_root: &std::path::Path) -> Result<(Arc<RwLock<O
     Ok((vi.index.clone(), vi.slots.clone()))
 }
 
-/// Extract source snippet for a node from file content.
+/// 从文件内容中提取节点的源码片段。
 pub fn extract_snippet(source: &str, node_name: &str, node_kind: &NodeKind) -> Option<String> {
     if matches!(node_kind, NodeKind::File) {
         let lines: Vec<&str> = source.lines().take(5).collect();
@@ -240,17 +240,17 @@ mod tests {
 
     #[test]
     fn test_real_generated_index() {
-        // Verify the vector index built during tauri dev actually works
+        // 验证 tauri dev 期间构建的向量索引确实可用
         let path = "D:/HoloGramHG/.hologram/vectors.usearch";
         if !std::path::Path::new(path).exists() {
-            eprintln!("SKIP: {path} not found — run analyze first");
+            eprintln!("跳过: 未找到 {path} —— 请先运行 analyze");
             return;
         }
         let vi = CodeVectorIndex::new(path);
         let n = vi.load().unwrap();
-        eprintln!("Loaded {n} vectors from {path}");
+        eprintln!("从 {path} 加载了 {n} 个向量");
 
-        // Test searches against the actual HoloGram codebase
+        // 对真实 HoloGram 代码库进行搜索测试
         let tests = [
             ("payment processing", "Should find payment/transaction related code"),
             ("window button minimize", "Should find window control UI code"),
@@ -263,7 +263,7 @@ mod tests {
             for (id, score) in &results {
                 eprintln!("  {:.2}  {id}", score);
             }
-            assert!(!results.is_empty(), "search '{query}' should return results");
+            assert!(!results.is_empty(), "搜索 '{query}' 应返回结果");
         }
     }
 
@@ -288,7 +288,7 @@ mod tests {
         let results = vi.search("payment processing", 2).unwrap();
         assert!(!results.is_empty());
         eprintln!("search 'payment processing': {:?}", results.iter().map(|(id, s)| format!("{id}({:.2})", s)).collect::<Vec<_>>());
-        // handle_payment should be top
+        // handle_payment 应排在首位
         assert_eq!(results[0].0, "n1");
 
         vi.save().unwrap();

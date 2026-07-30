@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-/// Aggregate boundary markers from coupling + cycles + conflicts.
+/// 聚合来自 coupling + cycles + conflicts 的边界标记。
 pub fn find_blindspots(
     coupling_l4: usize,
     cycle_count: usize,
@@ -11,7 +11,7 @@ pub fn find_blindspots(
 ) -> Value {
     let mut boundaries = Vec::new();
 
-    // L4 coupling → encapsulation boundary
+    // L4 耦合 → 封装边界
     if coupling_l4 > 0 {
         boundaries.push(json!({
             "type": "encapsulation_penetration",
@@ -20,7 +20,7 @@ pub fn find_blindspots(
         }));
     }
 
-    // Cycles → architectural boundary
+    // 循环 → 架构边界
     if cycle_count > 0 {
         boundaries.push(json!({
             "type": "circular_dependency",
@@ -29,7 +29,7 @@ pub fn find_blindspots(
         }));
     }
 
-    // Thread conflicts → concurrent access boundary
+    // 线程冲突 → 并发访问边界
     if conflict_count > 0 {
         boundaries.push(json!({
             "type": "concurrent_access",

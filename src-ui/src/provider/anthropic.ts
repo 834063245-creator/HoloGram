@@ -19,14 +19,14 @@ import {
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
-const DEFAULT_MAX_TOKENS = 32000; // ponytail: safe ceiling across providers
+const DEFAULT_MAX_TOKENS = 32000; // ponytail：跨提供商的安全上限
 
 interface AnthropicConfig {
   name?: string;
   apiKey: string;
   baseUrl?: string;
   model: string;
-  /** "adaptive" enables extended thinking */
+  /** "adaptive" 启用扩展思考 */
   thinking?: string;
 }
 
@@ -96,7 +96,7 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
   };
 }
 
-// ---- Request building ----
+// ---- 请求构建 ----
 
 interface CacheControl {
   type: 'ephemeral';
@@ -147,8 +147,8 @@ function ephemeral(): CacheControl {
   return { type: 'ephemeral' };
 }
 
-/** Return the last content block that is NOT a thinking/redacted_thinking block.
- *  Anthropic 400s if cache_control is placed on a thinking block. */
+/** 返回最后一个非 thinking/redacted_thinking 的内容块。
+ *  如果 cache_control 放在 thinking 块上，Anthropic 会返回 400。 */
 function findLastNonThinkingBlock(blocks: ContentBlock[]): ContentBlock | undefined {
   for (let i = blocks.length - 1; i >= 0; i--) {
     const t = blocks[i].type;
@@ -192,7 +192,7 @@ function buildRequest(
       }
       case 'assistant': {
         const blocks: ContentBlock[] = [];
-        // Replay signed thinking block first (Anthropic requires it precede tool_use)
+        // 先重放已签名的 thinking 块（Anthropic 要求它在 tool_use 之前）
         if (thinkingCfg && m.reasoning_content && m.reasoning_signature) {
           blocks.push({
             type: 'thinking',
@@ -209,7 +209,7 @@ function buildRequest(
             try {
               input = JSON.parse(tc.arguments);
             } catch {
-              /* malformed JSON → empty input */
+              /* 格式错误的 JSON → 空输入 */
             }
           }
           blocks.push({
@@ -231,32 +231,32 @@ function buildRequest(
     input_schema: Object.keys(t.parameters).length > 0 ? t.parameters : { type: 'object', properties: {} },
   }));
 
-  // Cache breakpoints — up to 4, Anthropic's per-request limit.
-  // Pattern from cc-switch cache_injector: system → tools → latest msg → prior user.
-  // Each breakpoint snapshots all content before it. Anthropic 400s on
-  // thinking/redacted_thinking blocks, so findLastNonThinkingBlock skips those.
+  // 缓存断点 — 最多 4 个，Anthropic 每次请求的上限。
+  // 模式来自 cc-switch cache_injector：system → tools → 最新消息 → 前一个 user。
+  // 每个断点会快照其之前的所有内容。Anthropic 对 thinking/redacted_thinking
+  // 块返回 400，因此 findLastNonThinkingBlock 会跳过这些块。
 
-  // (a) System: cache the full static system prompt at its last block
+  // (a) System：在 system 提示词的最后一个块上设置缓存
   if (system.length > 0) {
     system[system.length - 1].cache_control = ephemeral();
   }
 
-  // (b) Tools: always cache tool definitions at the last tool entry
+  // (b) Tools：始终在最后一个工具定义上设置缓存
   if (anthTools.length > 0) {
     anthTools[anthTools.length - 1].cache_control = ephemeral();
   }
 
-  // (c) Latest message: mark last non-thinking block of the last message.
-  //     When the model just issued tool_use, this anchors the tool-result turn.
+  // (c) 最新消息：在最后一条消息的最后一个非 thinking 块上标记缓存。
+  //     当模型刚发起 tool_use 时，此处锚定工具结果轮次。
   if (anthMsgs.length > 0) {
     const last = anthMsgs[anthMsgs.length - 1];
     const anchor = findLastNonThinkingBlock(last.content);
     if (anchor) anchor.cache_control = ephemeral();
   }
 
-  // (d) Prior user anchor: second user/tool_result from the end.
-  //     Long tool-result turns push the stable prefix outside Anthropic's
-  //     20-block scan window from (c); this second anchor extends it.
+  // (d) 前一个 user 锚点：倒数第二个 user/tool_result。
+  //     较长的工具结果轮次会将稳定前缀推到 Anthropic 从 (c) 出发的
+  //     20 块扫描窗口之外；这第二个锚点用于扩展该窗口。
   if (anthMsgs.length >= 4) {
     let userCount = 0;
     for (let i = anthMsgs.length - 1; i >= 0; i--) {
@@ -300,7 +300,7 @@ function buildRequest(
   return r;
 }
 
-// ---- SSE stream parsing ----
+// ---- SSE 流解析 ----
 
 async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?: AbortSignal): AsyncGenerator<Chunk> {
   const toolsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
@@ -353,7 +353,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
             const tc = toolsByIndex.get(ev.index);
             if (tc) {
               tc.arguments += ev.delta.partial_json;
-              // Streaming write preview: extract content from partial JSON args
+              // 流式写入预览：从部分 JSON 参数中提取内容
               const preview = extractWritePreview(tc.name, tc.arguments);
               if (preview) {
                 yield {
@@ -390,7 +390,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
         break;
 
       case 'message_stop':
-        // stream complete
+        // 流完成
         break;
 
       case 'error': {

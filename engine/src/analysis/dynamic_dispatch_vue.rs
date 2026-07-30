@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Vue dynamic dispatch synthesis — event bindings, composables, Vuex, Pinia.
+//! Vue 动态分派合成 — 事件绑定、composables、Vuex、Pinia。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

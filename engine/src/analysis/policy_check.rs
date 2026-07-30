@@ -1,17 +1,17 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Policy check — boundary rule engine.
-// Users define rules (source_pattern, target_pattern, edge_kinds) and the engine
-// checks the dependency graph for violations. Unlike generic graph queries, this
-// incorporates project-specific "thou shalt not" boundary rules.
+// Policy check — 边界规则引擎。
+// 用户定义规则（source_pattern, target_pattern, edge_kinds），引擎
+// 检查依赖图中是否存在违规。与通用 Graph 查询不同，此处
+// 融合了项目特定的"禁止"边界规则。
 //
-// Example rule:
+// 规则示例：
 //   { "name": "no-cross-module-import", "source": "modules/foo/**",
 //     "target": "modules/bar/**", "edge_kinds": ["imports"],
 //     "message": "禁止跨模块直接import" }
 //
-// Patterns are regex. Simple globs (*, **, ?) are auto-converted.
+// Pattern 为正则表达式。简单 glob（*、**、?）会自动转换。
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::graph::EdgeKind;
 use crate::storage::MemoryIndex;
 
-// ── output types ──
+// ── 输出类型 ──
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicyViolation {
@@ -41,7 +41,7 @@ pub struct RuleDetail {
     pub violation_count: usize,
 }
 
-// ── internal rule representation ──
+// ── 内部规则表示 ──
 
 struct PolicyRule {
     name: String,
@@ -51,13 +51,13 @@ struct PolicyRule {
     message: String,
 }
 
-// ── helpers ──
+// ── 辅助函数 ──
 
-/// Extract the file path from a node location string.
-/// Handles both "path/to/file.rs:42" (line number suffix) and
-/// "C:\\path\\to\\file.rs:42" (Windows drive letter + line number).
+/// 从节点位置字符串中提取文件路径。
+/// 同时处理 "path/to/file.rs:42"（行号后缀）和
+/// "C:\\path\\to\\file.rs:42"（Windows 驱动器号 + 行号）两种格式。
 fn extract_file(location: &str) -> &str {
-    // Find the last ':' — if everything after it is digits, it's a line number.
+    // 查找最后一个 ':' — 如果其后全为数字，则为行号。
     if let Some(pos) = location.rfind(':') {
         let after = &location[pos + 1..];
         if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
@@ -67,11 +67,11 @@ fn extract_file(location: &str) -> &str {
     location
 }
 
-/// Convert a pattern string to a compiled regex.
-/// If the pattern contains explicit regex metacharacters (^ $ [ ( \ + {),
-/// it's treated as a regex directly. Otherwise, glob wildcards are converted:
-///   ** → .*  (matches path separators)
-///   *  → [^/\\]* (single path segment)
+/// 将模式字符串转换为编译后的正则表达式。
+/// 如果模式包含显式的正则元字符（^ $ [ ( \ + {），
+/// 则直接作为正则表达式处理。否则，将 glob 通配符转换：
+///   ** → .*  （匹配路径分隔符）
+///   *  → [^/\\]* （单个路径段）
 ///   ?  → [^/\\]
 fn compile_pattern(pattern: &str) -> Result<Regex, String> {
     let looks_like_regex = pattern.contains('^')
@@ -87,7 +87,7 @@ fn compile_pattern(pattern: &str) -> Result<Regex, String> {
             .map_err(|e| format!("Invalid regex '{}': {}", pattern, e));
     }
 
-    // Glob → regex conversion
+    // Glob → 正则转换
     let mut re_str = String::with_capacity(pattern.len() + 4);
     re_str.push('^');
 
@@ -96,11 +96,11 @@ fn compile_pattern(pattern: &str) -> Result<Regex, String> {
     while i < chars.len() {
         if chars[i] == '*' {
             if i + 1 < chars.len() && chars[i + 1] == '*' {
-                re_str.push_str(".*"); // ** matches everything
+                re_str.push_str(".*"); // ** 匹配所有内容
                 i += 2;
                 continue;
             }
-            re_str.push_str("[^/\\\\]*"); // * matches within a path segment
+            re_str.push_str("[^/\\\\]*"); // * 匹配单个路径段内的内容
             i += 1;
             continue;
         }
@@ -109,7 +109,7 @@ fn compile_pattern(pattern: &str) -> Result<Regex, String> {
             i += 1;
             continue;
         }
-        // Escape regex metacharacters
+        // 转义正则元字符
         if ".+()[]{}^$|\\".contains(chars[i]) {
             re_str.push('\\');
         }
@@ -121,15 +121,15 @@ fn compile_pattern(pattern: &str) -> Result<Regex, String> {
     Regex::new(&re_str).map_err(|e| format!("Invalid glob pattern '{}': {}", pattern, e))
 }
 
-/// Parse rule definitions from JSON. Accepts either a single object or an array.
+/// 从 JSON 解析规则定义。接受单个对象或数组。
 fn parse_rules(rules_json: &serde_json::Value) -> Result<Vec<PolicyRule>, String> {
     let arr = if rules_json.is_array() {
         rules_json.as_array().unwrap()
     } else if rules_json.is_object() {
-        // Single rule object → wrap in vec
-        // This can't actually be a &Vec from as_array, so we handle via raw pointer cast
-        // Actually the simplest way: just return a vec with one element parsed below
-        // But we need a slice. Let's handle the single-object case differently.
+        // 单个规则对象 → 包装为 vec
+        // 无法通过 as_array 获取 &Vec，因此通过原始指针转换处理
+        // 最简单的方式：返回包含一个元素的 vec，在下方解析
+        // 但需要切片。改为单独处理单对象情况。
         return parse_rules(&serde_json::json!([rules_json]));
     } else {
         return Err("rules must be a JSON array or object".to_string());
@@ -165,7 +165,7 @@ fn parse_rules(rules_json: &serde_json::Value) -> Result<Vec<PolicyRule>, String
                 .filter_map(EdgeKind::from_str)
                 .collect()
         } else {
-            vec![EdgeKind::Imports] // default: check imports only
+            vec![EdgeKind::Imports] // 默认：仅检查 imports
         };
 
         if edge_kinds.is_empty() {
@@ -193,7 +193,7 @@ fn parse_rules(rules_json: &serde_json::Value) -> Result<Vec<PolicyRule>, String
     Ok(rules)
 }
 
-// ── main entry point ──
+// ── 主入口点 ──
 
 pub fn policy_check_from_index(
     idx: &MemoryIndex,
@@ -204,8 +204,8 @@ pub fn policy_check_from_index(
         Err(e) => return serde_json::json!({"error": e}),
     };
 
-    // Build node_id → file_path lookup (one pass over all nodes).
-    // Skips nodes without locations (Medium, Temporal, etc.).
+    // 构建 node_id → file_path 查找表（遍历所有节点一次）。
+    // 跳过无位置的节点（Medium、Temporal 等）。
     let node_file: HashMap<String, String> = {
         let mut map = HashMap::new();
         for node in idx.nodes_iter() {
@@ -216,7 +216,7 @@ pub fn policy_check_from_index(
         map
     };
 
-    // Pre-group source nodes by file for efficient lookup.
+    // 按文件预分组源节点以便高效查找。
     // file_path → Vec<node_id>
     let mut file_nodes: HashMap<String, Vec<String>> = HashMap::new();
     for (nid, file) in &node_file {
@@ -233,13 +233,13 @@ pub fn policy_check_from_index(
         let mut rule_violations: Vec<PolicyViolation> = Vec::new();
         let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
 
-        // Find all files whose path matches source_pattern
+        // 查找路径匹配 source_pattern 的所有文件
         for (src_file, src_node_ids) in &file_nodes {
             if !rule.source_re.is_match(src_file) {
                 continue;
             }
 
-            // Check outgoing edges from every node in this file
+            // 检查此文件中每个节点的出边
             for src_id in src_node_ids {
                 let outgoing = idx.outgoing(src_id, Some(&rule.edge_kinds));
                 for (tgt_id, kind, _, _) in outgoing {
@@ -252,7 +252,7 @@ pub fn policy_check_from_index(
                         continue;
                     }
 
-                    // Dedup: one violation per (source_file, target_file) pair per rule
+                    // 去重：每条规则每个 (source_file, target_file) 对仅报告一次违规
                     let pair = (src_file.clone(), tgt_file.clone());
                     if !seen_pairs.insert(pair) {
                         continue;
@@ -298,7 +298,7 @@ pub fn policy_check_from_index(
     })
 }
 
-// ── tests ──
+// ── 测试 ──
 
 #[cfg(test)]
 mod tests {
@@ -368,7 +368,7 @@ mod tests {
     fn test_policy_check_all_pass() {
         let mut idx = MemoryIndex::new();
 
-        // Two files in same module — no cross-module edges
+        // 同一模块内的两个文件 — 无跨模块边
         idx.insert_node(make_node("n1", "fn_a", NodeKind::Function, "modules/foo/api.py"));
         idx.insert_node(make_node("n2", "fn_b", NodeKind::Function, "modules/foo/utils.py"));
         idx.upsert_edge("n1", "n2", EdgeKind::Imports, 1, None);
@@ -418,14 +418,14 @@ mod tests {
     fn test_policy_check_dedup_file_pairs() {
         let mut idx = MemoryIndex::new();
 
-        // Multiple nodes in same source file
+        // 同一源文件中的多个节点
         idx.insert_node(make_node("n1a", "fn_a", NodeKind::Function, "modules/foo/api.py"));
         idx.insert_node(make_node("n1b", "fn_b", NodeKind::Function, "modules/foo/api.py"));
-        // Multiple nodes in same target file
+        // 同一目标文件中的多个节点
         idx.insert_node(make_node("n2a", "fn_x", NodeKind::Function, "modules/bar/lib.py"));
         idx.insert_node(make_node("n2b", "fn_y", NodeKind::Function, "modules/bar/lib.py"));
 
-        // Multiple edges between same file pair → should collapse to 1 violation
+        // 同一文件对间的多条边 → 应合并为 1 条违规
         idx.upsert_edge("n1a", "n2a", EdgeKind::Imports, 1, None);
         idx.upsert_edge("n1b", "n2b", EdgeKind::Imports, 1, None);
 
@@ -448,7 +448,7 @@ mod tests {
 
         idx.insert_node(make_node("n1", "fn_a", NodeKind::Function, "modules/foo/api.py"));
         idx.insert_node(make_node("n2", "fn_b", NodeKind::Function, "modules/bar/internal.py"));
-        // Imports edge
+        // Imports 边
         idx.upsert_edge("n1", "n2", EdgeKind::Imports, 1, None);
 
         let rules = serde_json::json!([{
@@ -471,7 +471,7 @@ mod tests {
 
         idx.insert_node(make_node("n1", "fn_a", NodeKind::Function, "modules/foo/api.py"));
         idx.insert_node(make_node("n2", "fn_b", NodeKind::Function, "modules/bar/internal.py"));
-        // Calls edge, but rule only checks imports
+        // Calls 边，但规则仅检查 imports
         idx.upsert_edge("n1", "n2", EdgeKind::Calls, 1, None);
 
         let rules = serde_json::json!([{
@@ -490,12 +490,12 @@ mod tests {
     fn test_policy_check_multiple_rules() {
         let mut idx = MemoryIndex::new();
 
-        // Rule 1 violation: foo/backend → bar/backend (cross-module)
+        // 规则 1 违规：foo/backend → bar/backend（跨模块）
         idx.insert_node(make_node("n1", "fn_a", NodeKind::Function, "modules/foo/backend/api.py"));
         idx.insert_node(make_node("n2", "fn_b", NodeKind::Function, "modules/bar/backend/internal.py"));
         idx.upsert_edge("n1", "n2", EdgeKind::Imports, 1, None);
 
-        // Rule 2 should pass: n3→n4 is same-module, not touching framework
+        // 规则 2 应通过：n3→n4 为同模块，不触及框架
         idx.insert_node(make_node("n3", "fn_c", NodeKind::Function, "modules/foo/api.py"));
         idx.insert_node(make_node("n4", "fn_d", NodeKind::Function, "modules/foo/utils.py"));
         idx.upsert_edge("n3", "n4", EdgeKind::Imports, 1, None);
@@ -519,14 +519,14 @@ mod tests {
 
         let result = policy_check_from_index(&idx, &rules);
         assert_eq!(result["rules_checked"], 2);
-        assert_eq!(result["passed"], false); // Rule 1 has a violation
+        assert_eq!(result["passed"], false); // 规则 1 有违规
 
-        // Rule 1: should have violation (foo→bar)
+        // 规则 1：应有违规（foo→bar）
         assert_eq!(result["rules_detail"][0]["name"], "no-cross-module-import");
         assert_eq!(result["rules_detail"][0]["passed"], false);
         assert_eq!(result["rules_detail"][0]["violation_count"], 1);
 
-        // Rule 2: should pass (no module→framework edge)
+        // 规则 2：应通过（无 module→framework 边）
         assert_eq!(result["rules_detail"][1]["passed"], true);
     }
 

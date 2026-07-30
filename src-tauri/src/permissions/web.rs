@@ -5,22 +5,22 @@
 use crate::permissions::rule::PermissionRules;
 use crate::permissions::PermissionResult;
 
-/// Check web_fetch URL permission against rules.
-/// Called by WebFetchTool.check_permissions().
+/// 检查 web_fetch URL 的权限规则。
+/// 由 WebFetchTool.check_permissions() 调用。
 pub fn check(url: &str, rules: &PermissionRules) -> PermissionResult {
-    // 1. Content-level Deny rules
+    // 1. 内容级 Deny 规则
     if let Some(rule) = rules.find_deny("WebFetch", Some(url)) {
         return PermissionResult::Deny {
             reason: rule.explain(),
         };
     }
 
-    // 2. Content-level Allow rules — user/session/project rules override system Ask
+    // 2. 内容级 Allow 规则 — 用户/会话/项目规则覆盖系统 Ask
     if rules.find_allow("WebFetch", Some(url)).is_some() {
         return PermissionResult::Allow;
     }
 
-    // 3. Content-level Ask rules — only reached if no Allow rule matched
+    // 3. 内容级 Ask 规则 — 仅在没有 Allow 规则匹配时到达
     if let Some(rule) = rules.find_ask("WebFetch", Some(url)) {
         return PermissionResult::Ask {
             reason: rule.explain(),
@@ -34,7 +34,7 @@ pub fn check(url: &str, rules: &PermissionRules) -> PermissionResult {
         };
     }
 
-    // 4. Passthrough — engine's default SSRF check handles the rest
+    // 4. Passthrough — 引擎的默认 SSRF 检查处理其余部分
     PermissionResult::Passthrough
 }
 
@@ -63,7 +63,7 @@ mod tests {
         assert!(matches!(r, PermissionResult::Passthrough));
     }
 
-    // ── E2: Additional web permission tests ──
+    // ── E2: 额外的 web 权限测试 ──
 
     #[test]
     fn test_web_fetch_allow_rule() {
@@ -118,7 +118,7 @@ mod tests {
             value: parse_rule_value("WebFetch(127.0.0.1:*)"),
             danger: None,
         });
-        // Deny wins over Allow
+        // Deny 优先于 Allow
         let r = check("http://127.0.0.1:3000/admin", &rules);
         assert!(
             matches!(r, PermissionResult::Deny { .. }),
@@ -141,11 +141,11 @@ mod tests {
             value: parse_rule_value("WebFetch(localhost:*)"),
             danger: None,
         });
-        // IPv4 loopback
+        // IPv4 回环地址
         assert!(matches!(check("http://127.0.0.1:8080", &rules), PermissionResult::Deny { .. }));
-        // localhost hostname
+        // localhost 主机名
         assert!(matches!(check("http://localhost:3000/api", &rules), PermissionResult::Deny { .. }));
-        // Non-loopback URL is unaffected
+        // 非回环 URL 不受影响
         assert!(matches!(check("https://example.com", &rules), PermissionResult::Passthrough));
     }
 }

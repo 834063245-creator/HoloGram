@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Shared retry logic for HTTP requests — extracted from openai.ts and anthropic.ts
+// HTTP 请求的共享重试逻辑 — 从 openai.ts 和 anthropic.ts 中提取
 
 import { classifyError } from './types';
 
@@ -17,7 +17,7 @@ export function isRetryableStatus(s: number): boolean {
   return s === 408 || s === 429 || (s >= 500 && s <= 599);
 }
 
-/** POST with up to 3 attempts, exponential backoff. Throws classified errors. */
+/** POST 最多 3 次尝试，指数退避。抛出分类后的错误。 */
 export async function sendWithRetry(cfg: RetryConfig): Promise<Response> {
   const maxAttempts = 3;
   let lastErr: Error | undefined;

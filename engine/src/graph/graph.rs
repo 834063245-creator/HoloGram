@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{Edge, Node};
 
-/// The dependency graph — the central data structure.
-/// Mirrors the Python `Graph` class, with the O(V×E) bug fixed.
+/// 依赖图 — 核心数据结构。
+/// 对应 Python 的 `Graph` 类，修复了 O(V×E) 性能问题。
 ///
 /// ```
 /// use hologram_engine::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
@@ -43,9 +43,9 @@ impl Graph {
         }
     }
 
-    /// Load a Graph from a JSON file.
-    /// Supports both array format (Python: nodes/edges as arrays) and
-    /// HashMap format (Rust serde: nodes/edges as objects).
+    /// 从 JSON 文件加载 Graph。
+    /// 同时支持数组格式（Python：nodes/edges 为数组）和
+    /// HashMap 格式（Rust serde：nodes/edges 为对象）。
     pub fn from_json_file(path: &str) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Cannot read {}: {}", path, e))?;
@@ -56,7 +56,7 @@ impl Graph {
         if let Some(meta) = val.get("meta") {
             g.meta = meta.clone();
         }
-        // Nodes: accept array format [n1, n2, ...] or HashMap format {"id": {...}, ...}
+        // Nodes：接受数组格式 [n1, n2, ...] 或 HashMap 格式 {"id": {...}, ...}
         if let Some(nodes_val) = val.get("nodes") {
             if let Some(arr) = nodes_val.as_array() {
                 for n in arr {
@@ -72,7 +72,7 @@ impl Graph {
                 }
             }
         }
-        // Edges: same dual-format support
+        // Edges：同样的双格式支持
         if let Some(edges_val) = val.get("edges") {
             if let Some(arr) = edges_val.as_array() {
                 for e in arr {
@@ -91,7 +91,7 @@ impl Graph {
         Ok(g)
     }
 
-    // ── Node operations ──
+    // ── Node 操作 ──
 
     pub fn add_node(&mut self, node: Node) {
         self.nodes.insert(node.id.clone(), node);
@@ -114,7 +114,7 @@ impl Graph {
         self.nodes.remove(id)
     }
 
-    // ── Edge operations ──
+    // ── Edge 操作 ──
 
     pub fn add_edge(&mut self, edge: Edge) -> Result<(), String> {
         if !self.nodes.contains_key(&edge.source) {
@@ -127,8 +127,8 @@ impl Graph {
         Ok(())
     }
 
-    /// Insert an edge without validating node existence.
-    /// Use only when the caller guarantees both endpoints already exist.
+    /// 插入边但不验证节点是否存在。
+    /// 仅在调用方确保两端节点已存在时使用。
     pub fn add_edge_unchecked(&mut self, edge: Edge) {
         if let Some(src) = self.nodes.get_mut(&edge.source) {
             src.out_degree += 1;
@@ -300,7 +300,7 @@ mod tests {
 
         g.remove_node("a");
         assert_eq!(g.node_count(), 1);
-        assert_eq!(g.edge_count(), 0); // edge removed
+        assert_eq!(g.edge_count(), 0); // 边被移除
     }
 
     #[test]
@@ -322,7 +322,7 @@ mod tests {
         merger.merge(g1);
         assert_eq!(merger.node_count(), 1);
         merger.merge(g2);
-        assert_eq!(merger.node_count(), 1, "duplicate should be skipped");
+        assert_eq!(merger.node_count(), 1, "重复项应被跳过");
     }
 
     #[test]
@@ -346,7 +346,7 @@ mod tests {
         before.add_node(Node::new("c", "fn_c", NodeKind::Symbol));
         before.add_edge_unchecked(Edge::new("e1", "a", "b", EdgeKind::Calls));
 
-        // After: a gains a new outgoing edge to c → a.out_degree and c.in_degree change
+        // 变更后：a 获得一条到 c 的新出边 → a.out_degree 和 c.in_degree 改变
         let mut after = before.clone();
         after.add_edge_unchecked(Edge::new("e2", "a", "c", EdgeKind::Calls));
 
@@ -380,8 +380,8 @@ mod tests {
 
     #[test]
     fn test_from_json_file_hashmap_format() {
-        // Rust serde serializes Graph with nodes/edges as HashMap objects, not arrays.
-        // This is the format save_baseline writes — from_json_file must be able to read it back.
+        // Rust serde 将 Graph 序列化为 HashMap 对象格式的 nodes/edges，而非数组。
+        // 这是 save_baseline 写入的格式 — from_json_file 必须能将其读回。
         let mut original = Graph::new();
         original.add_node(Node::new("n1", "main", NodeKind::Symbol));
         original.add_node(Node::new("n2", "helper", NodeKind::Function));
@@ -391,8 +391,8 @@ mod tests {
         let tmp = std::env::temp_dir().join("hologram_test_hashmap.json");
         std::fs::write(&tmp, &serialized).unwrap();
         let g = Graph::from_json_file(tmp.to_str().unwrap()).unwrap();
-        assert_eq!(g.node_count(), 2, "HashMap format nodes should be loaded");
-        assert_eq!(g.edge_count(), 1, "HashMap format edges should be loaded");
+        assert_eq!(g.node_count(), 2, "HashMap 格式的 nodes 应被加载");
+        assert_eq!(g.edge_count(), 1, "HashMap 格式的 edges 应被加载");
         assert_eq!(g.get_node("n2").unwrap().name, "helper");
         let _ = std::fs::remove_file(&tmp);
     }

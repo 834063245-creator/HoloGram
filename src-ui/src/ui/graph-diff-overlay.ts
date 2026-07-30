@@ -42,7 +42,7 @@ export class GraphDiffOverlay {
 
   constructor(private host: DiffOverlayHost) {}
 
-  /** Apply diff coloring: green=added, red=removed, orange=modified. */
+  /** 应用 diff 着色：绿色=新增，红色=删除，橙色=修改。 */
   showDiff(diffJson: {
     added_nodes?: Array<{ id: string }>;
     removed_nodes?: Array<{ id: string }>;
@@ -66,7 +66,7 @@ export class GraphDiffOverlay {
       else if (this.diffModifiedIds.has(nid)) diffColor = ORANGE;
 
       if (diffColor !== null) {
-        // ponytail: override=1 forces shader to use CPU-set color instead of animated twinkle
+        // ponytail: override=1 强制 shader 使用 CPU 设置的颜色而非动画闪烁
         this.host._overrideFlags[i] = 1;
         this.host._setGlowColor(i, diffColor);
         this.host._setGlowAlpha(i, 0.85);
@@ -75,7 +75,7 @@ export class GraphDiffOverlay {
     }
     this.host._flushOverrideAttrs();
 
-    // Pulse effect on added diff nodes: slightly increase scale
+    // 新增 diff 节点的脉冲效果：略微放大
     for (let i = 0; i < this.host._nodeCount; i++) {
       if (this.host.graphNodes[i] && this.diffAddedIds.has(this.host.graphNodes[i].id)) {
         this.host._setCoreScale(i, (this.host._coreScales[i] || 1) * 1.3);
@@ -83,7 +83,7 @@ export class GraphDiffOverlay {
     }
   }
 
-  /** Remove diff coloring, restore normal colors. */
+  /** 移除 diff 着色，恢复正常颜色。 */
   clearDiff(): void {
     if (!this.diffActive) return;
     this.diffActive = false;
@@ -95,7 +95,7 @@ export class GraphDiffOverlay {
     for (let i = 0; i < this.host._nodeCount; i++) {
       if (!this.host.graphNodes[i]) continue;
       if (this.host._deadIndices.has(i)) {
-        // ponytail: dead nodes stay invisible when diff is cleared
+        // ponytail: 清除 diff 时死亡节点保持不可见
         this.host._setGlowAlpha(i, 0);
         if (this.host._glow2Rgba.length > 0) this.host._setGlow2Alpha(i, 0);
         this.host._setCoreVisible(i, false);
@@ -103,7 +103,7 @@ export class GraphDiffOverlay {
       }
       const kind = ((this.host.graphNodes[i].type || this.host.graphNodes[i].kind || 'symbol') as string).toLowerCase();
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
-      this.host._overrideFlags[i] = 0; // restore shader animation
+      this.host._overrideFlags[i] = 0; // 恢复 shader 动画
       this.host._setGlowColor(i, glowColor);
       this.host._setGlowAlpha(i, 0.55);
       if (this.host._glow2Rgba.length > 0) this.host._setGlow2Alpha(i, 0.55);

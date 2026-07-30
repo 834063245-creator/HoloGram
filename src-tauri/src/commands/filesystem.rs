@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// File system operations — list, read, write, delete, rename, move.
+// 文件系统操作 — 列表、读取、写入、删除、重命名、移动。
 
 use std::io::Write;
 use base64::Engine;

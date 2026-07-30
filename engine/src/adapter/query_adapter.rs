@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Query-based structure adapter — replaces hand-written tree walkers.
-//! Uses tree-sitter .scm query files to find symbols and create Node/Edge.
-//! ponytail: one adapter per language family via per-language .scm files.
-//! Adding a new language = one .scm file + one new_xx() constructor.
-//! No hand-written match arms needed.
+//! 基于查询的结构适配器 — 替代手写的 tree 遍历器。
+//! 使用 tree-sitter .scm 查询文件来查找符号并创建 Node/Edge。
+//! ponytail: 每个语言族一个适配器，通过每种语言一个 .scm 文件实现。
+//! 添加新语言 = 一个 .scm 文件 + 一个 new_xx() 构造函数。
+//! 无需手写 match 分支。
 
 use crate::adapter::traits::LanguageAdapter;
 use crate::engine::GRAMMAR_LOADER;
@@ -21,7 +21,7 @@ thread_local! {
     static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = const { RefCell::new(None) };
 }
 
-// ── Scope boundary (Phase 1) ──
+// ── 作用域边界（Phase 1）──
 
 struct Scope {
     name: String,
@@ -32,14 +32,14 @@ struct Scope {
 fn find_scope(pos: usize, scopes: &[Scope]) -> Option<&str> {
     scopes
         .iter()
-        .rev() // last-declared scope wins (innermost)
+        .rev() // 最后声明的 scope 优先（最内层）
         .find(|s| s.start <= pos && pos < s.end)
         .map(|s| s.name.as_str())
 }
 
-/// Find the scope that strictly contains a node (start < node_start),
-/// excluding the node's own scope. Used for @fn/@class where the
-/// declaration IS the scope boundary.
+/// 查找严格包含某节点的 scope（start < node_start），
+/// 排除节点自身的 scope。用于 @fn/@class 中
+/// 声明本身即为 scope 边界的情况。
 fn find_enclosing_scope(node_start: usize, scopes: &[Scope]) -> Option<&str> {
     scopes
         .iter()
@@ -48,16 +48,16 @@ fn find_enclosing_scope(node_start: usize, scopes: &[Scope]) -> Option<&str> {
         .map(|s| s.name.as_str())
 }
 
-// ── Import path resolution ──
+// ── import 路径解析 ──
 
 fn resolve_import_path(import_path: &str, current_file: &str) -> String {
     let trimmed = import_path.trim_matches(|c| c == '\'' || c == '"' || c == '`');
     if trimmed.starts_with("./") || trimmed.starts_with("../") {
         let current_dir = Path::new(current_file).parent().unwrap_or(Path::new("."));
         let resolved = current_dir.join(trimmed);
-        // ponytail: Path::join does NOT normalize "..". Resolve segments manually.
+        // ponytail: Path::join 不会规范化 ".."。手动解析各段。
         let s = normalize_path(&resolved.to_string_lossy());
-        // Split by '/', resolve "." and ".." segments
+        // 按 '/' 分割，解析 "." 和 ".." 段
         let mut parts: Vec<&str> = Vec::new();
         for seg in s.split('/') {
             match seg {
@@ -72,17 +72,17 @@ fn resolve_import_path(import_path: &str, current_file: &str) -> String {
     }
 }
 
-// ── Inheritance name extraction ──
+// ── 继承名称提取 ──
 
-// ── Adapter ──
+// ── 适配器 ──
 
 pub struct QueryStructureAdapter {
     extensions: Vec<String>,
-    /// Query source: Some for single-query languages (Rust), None for JS/TS (picked at runtime).
+    /// 查询源：单查询语言（Rust）为 Some，JS/TS 为 None（运行时选择）。
     query_src: Option<&'static str>,
-    /// TS query (for .ts/.tsx/.mts/.cts)
+    /// TS 查询（用于 .ts/.tsx/.mts/.cts）
     ts_query_src: &'static str,
-    /// JS query (for .js/.jsx/.mjs/.cjs)
+    /// JS 查询（用于 .js/.jsx/.mjs/.cjs）
     js_query_src: &'static str,
     func_kinds: &'static [&'static str],
     class_kinds: &'static [&'static str],
@@ -95,7 +95,7 @@ impl QueryStructureAdapter {
                 "ts".into(), "tsx".into(), "mts".into(), "cts".into(),
                 "js".into(), "jsx".into(), "mjs".into(), "cjs".into(),
             ],
-            query_src: None, // picked at runtime based on extension
+            query_src: None, // 运行时根据扩展名选择
             ts_query_src: include_str!("../../queries/ts_structure.scm"),
             js_query_src: include_str!("../../queries/js_structure.scm"),
             func_kinds: &[
@@ -117,8 +117,8 @@ impl QueryStructureAdapter {
         }
     }
 
-    /// Generic constructor for single-query languages.
-    /// ponytail: one line per language in registry.rs — no per-language adapter file needed.
+    /// 单查询语言的通用构造函数。
+    /// ponytail: registry.rs 中每语言一行 — 无需每语言单独的适配器文件。
     pub fn new_generic(
         extensions: Vec<String>,
         query_src: &'static str,
@@ -137,9 +137,9 @@ impl QueryStructureAdapter {
 
     fn resolve_query_src(&self, ext: &str) -> &str {
         self.query_src.unwrap_or_else(|| {
-            // ponytail: TSX uses a separate grammar (LANGUAGE_TSX) with JSX support.
-            // The TSX query file includes JSX patterns that won't compile against
-            // the plain TypeScript grammar.
+            // ponytail: TSX 使用独立的语法（LANGUAGE_TSX），支持 JSX。
+            // TSX 查询文件包含的 JSX 模式无法在
+            // 普通 TypeScript 语法上编译。
             if ext == "tsx" {
                 include_str!("../../queries/tsx_structure.scm")
             } else if matches!(ext, "ts" | "mts" | "cts") {
@@ -170,8 +170,8 @@ impl LanguageAdapter for QueryStructureAdapter {
             Some(l) => l,
             None => return (vec![], vec![], None),
         };
-        // ponytail: Language is Clone. Keep a copy for the query after
-        // the original is moved into TL_PARSER.
+        // ponytail: Language 是 Clone 的。在原始 Language 被 move 到
+        // TL_PARSER 之后，保留一份副本供 query 使用。
         let lang_for_query = lang.clone();
 
         TL_PARSER.with(|cell| {
@@ -203,7 +203,7 @@ impl LanguageAdapter for QueryStructureAdapter {
     }
 }
 
-// ── Query processor ──
+// ── 查询处理器 ──
 
 fn process_query(
     tree: &tree_sitter::Tree,
@@ -217,15 +217,15 @@ fn process_query(
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut counter = 0u32;
-    // Per-scope dedup for USAGE edges — skip repeat references to same name
+    // 按作用域去重 USAGE 边 — 跳过对同一名称的重复引用
     let mut usage_seen: HashSet<String> = HashSet::new();
 
     let file_id = normalize_path(file_path);
-    // ponytail: include extension in module_id so CrossFileResolver can match
-    // import targets to module nodes. Match the format used by the old adapters.
+    // ponytail: 在 module_id 中包含扩展名，使 CrossFileResolver 能将
+    // import 目标匹配到 module 节点。匹配旧适配器使用的格式。
     let module_id = file_id.replace(['/', '\\'], ".");
 
-    // Module node
+    // Module 节点
     let mut file_node = Node::new(&module_id, &file_id, NodeKind::File);
     file_node.location = Some(file_path.to_string());
     nodes.push(file_node);
@@ -233,11 +233,11 @@ fn process_query(
     let root = tree.root_node();
     let source_bytes = source.as_bytes();
 
-    // ── Phase 1: collect scope boundaries with correct nesting ──
-    // ponytail: push (node, parent_scope_name) pairs so nested
-    // functions/classes get scope-qualified names (e.g. module.as_view.view
-    // not module.view). This is required so find_scope returns the correct
-    // enclosing scope for @fn/@class/@var/@call attribution.
+    // ── Phase 1：收集具有正确嵌套的 scope 边界 ──
+    // ponytail: 压入 (node, parent_scope_name) 对，使嵌套
+    // 函数/类获得带 scope 限定的名称（如 module.as_view.view
+    // 而非 module.view）。这是 find_scope 为 @fn/@class/@var/@call
+    // 归属返回正确外层 scope 所必需的。
     let mut scopes: Vec<Scope> = Vec::new();
     {
         let mut stack: Vec<(tree_sitter::Node, String)> = vec![(root, module_id.clone())];
@@ -269,7 +269,7 @@ fn process_query(
     }
     scopes.sort_by_key(|s| s.start);
 
-    // ── Phase 2: run structure query ──
+    // ── Phase 2：运行结构查询 ──
     let query = match Query::new(lang, query_src) {
         Ok(q) => q,
         Err(e) => {
@@ -283,7 +283,7 @@ fn process_query(
     let mut matches = cursor.matches(&query, root, source_bytes);
 
     while let Some(qmatch) = matches.next() {
-        // Find the primary capture (@fn, @class, @interface, @call, @import, @inherit)
+        // 查找主捕获（@fn、@class、@interface、@call、@import、@inherit）
         let mut primary_cap: Option<(&str, tree_sitter::Node)> = None;
         let mut trait_name: Option<String> = None;
         let mut type_name: Option<String> = None;
@@ -310,15 +310,15 @@ fn process_query(
 
         match cap_name {
             "fn" => {
-                // function_declaration, generator_function_declaration, function_expression,
-                // method_definition, arrow_function, or variable_declarator
+                // function_declaration、generator_function_declaration、function_expression、
+                // method_definition、arrow_function 或 variable_declarator
                 let (name, scope_end) = resolve_fn(&node, source_bytes, func_kinds);
                 let name = match name {
                     Some(n) => n,
-                    None => continue, // anonymous callback — skip
+                    None => continue, // 匿名回调 — 跳过
                 };
-                // ponytail: use enclosing scope so nested fns get correct path
-                // (e.g. module.as_view.view not module.view).
+                // ponytail: 使用外层 scope 使嵌套函数获得正确路径
+                // （如 module.as_view.view 而非 module.view）。
                 let scope_id = find_enclosing_scope(node.start_byte(), &scopes)
                     .unwrap_or(&module_id);
                 let nid = format!("{}.{}", scope_id, name);
@@ -336,8 +336,8 @@ fn process_query(
                 let mut n = Node::new(&nid, &name, NodeKind::Function);
                 n.location = Some(format!("{}:{}", file_path, node.start_position().row + 1));
                 nodes.push(n);
-                // Scope boundary — Phase 1 already found scope-defining nodes,
-                // but variable_declarator-wrapped fns need explicit scope for call attribution
+                // 作用域边界 — Phase 1 已找到 scope 定义节点，
+                // 但 variable_declarator 包装的函数需要显式 scope 以进行 call 归属
                 let end = scope_end.unwrap_or(node.end_byte());
                 scopes.push(Scope { name: nid.clone(), start: node.start_byte(), end });
                 scopes.sort_by_key(|s| s.start);
@@ -368,10 +368,10 @@ fn process_query(
                 let mut n = Node::new(&nid, &name, NodeKind::Class);
                 n.location = Some(format!("{}:{}", file_path, node.start_position().row + 1));
                 nodes.push(n);
-                // Scope
+                // 作用域
                 scopes.push(Scope { name: nid.clone(), start: node.start_byte(), end: node.end_byte() });
                 scopes.sort_by_key(|s| s.start);
-                // Inheritance: walk children for extends_clause / implements_clause
+                // 继承：遍历子节点查找 extends_clause / implements_clause
                 emit_class_inherits(&node, source_bytes, &nid, &module_id, &file_id, &mut counter, &mut edges);
             }
 
@@ -405,7 +405,7 @@ fn process_query(
                     Some(n) => n,
                     None => continue,
                 };
-                // require() → import edge
+                // require() → import 边
                 if name == "require" {
                     if let Some(target) = extract_first_string_arg(&node, source_bytes) {
                         let target = target.trim_matches(|c| c == '\'' || c == '"' || c == '`');
@@ -421,7 +421,7 @@ fn process_query(
                     }
                     continue;
                 }
-                // dynamic import() → import edge
+                // 动态 import() → import 边
                 if name == "import" {
                     if let Some(target) = extract_first_string_arg(&node, source_bytes) {
                         let target = target.trim_matches(|c| c == '\'' || c == '"' || c == '`');
@@ -438,7 +438,7 @@ fn process_query(
                     }
                     continue;
                 }
-                // Skip builtins
+                // 跳过内置名称
                 if is_skip_name(&name) {
                     continue;
                 }
@@ -454,11 +454,11 @@ fn process_query(
             }
 
             "import" => {
-                // ponytail: handler for @import captures.
-                // JS/TS: node has "source" field ("import x from 'y'")
-                // Python import_from_statement: "module_name" field ("from X import Y")
-                // Python import_statement: children contain dotted_name ("import X")
-                // Rust: use_declaration text (e.g. "use std::collections::HashMap")
+                // ponytail: @import 捕获处理器。
+                // JS/TS：节点有 "source" 字段（"import x from 'y'"）
+                // Python import_from_statement："module_name" 字段（"from X import Y"）
+                // Python import_statement：子节点包含 dotted_name（"import X"）
+                // Rust：use_declaration 文本（如 "use std::collections::HashMap"）
                 let raw_target = match node.child_by_field_name("source")
                     .and_then(|n| n.utf8_text(source_bytes).ok())
                 {
@@ -466,9 +466,9 @@ fn process_query(
                     None => {
                         let kind = node.kind();
                         if kind == "export_statement" {
-                            continue; // named export, not a re-export — skip
+                            continue; // 命名导出，非重新导出 — 跳过
                         }
-                        // Python: from X import Y
+                        // Python：from X import Y
                         if kind == "import_from_statement" {
                             match node.child_by_field_name("module_name")
                                 .and_then(|n| n.utf8_text(source_bytes).ok())
@@ -477,7 +477,7 @@ fn process_query(
                                 None => continue,
                             }
                         } else if kind == "import_statement" {
-                            // Python: import X → one edge per dotted_name child
+                            // Python：import X → 每个 dotted_name 子节点一条边
                             let mut cursor = node.walk();
                             for child in node.children(&mut cursor) {
                                 if child.kind() == "dotted_name" {
@@ -492,9 +492,9 @@ fn process_query(
                                     }
                                 }
                             }
-                            continue; // already emitted edges
+                            continue; // 已发出边
                         } else {
-                            // Rust use_declaration or other import-like node: use full text
+                            // Rust use_declaration 或其他 import 类节点：使用完整文本
                             node.utf8_text(source_bytes).ok()
                                 .map(|s| s.to_string())
                                 .unwrap_or_default()
@@ -515,7 +515,7 @@ fn process_query(
             }
 
             "inherit" => {
-                // Rust: impl Trait for Type — names come from capture loop
+                // Rust：impl Trait for Type — 名称来自捕获循环
                 if let (Some(tn), Some(tyn)) = (trait_name.as_ref(), type_name.as_ref()) {
                     let type_nid = format!("{}.{}", module_id, tyn);
                     let trait_nid = format!("{}.{}", module_id, tn);
@@ -528,17 +528,17 @@ fn process_query(
             }
 
             "var" => {
-                // Variable/constant → Variable node (scope-qualified).
-                // ponytail: scope to enclosing function/class so `x = 1` inside
-                // `foo()` creates `module.foo.x`, not `module.x`. This avoids
-                // cross-function name collisions and matches cbm's scoping.
+                // 变量/常量 → Variable 节点（带 scope 限定）。
+                // ponytail: 限定到外层 function/class，使 `foo()` 内的
+                // `x = 1` 创建 `module.foo.x` 而非 `module.x`。这避免了
+                // 跨函数名称冲突并与 cbm 的作用域规则一致。
                 let name = match node
                     .child_by_field_name("name")
                     .and_then(|n| n.utf8_text(source_bytes).ok())
                 {
                     Some(n) => n.to_string(),
                     None => {
-                        // No name field — try left-hand side of assignment
+                        // 无 name 字段 — 尝试赋值的左侧
                         let left = node.child_by_field_name("left")
                             .and_then(|l| l.utf8_text(source_bytes).ok())
                             .map(|s| s.to_string());
@@ -564,8 +564,8 @@ fn process_query(
             }
 
             "write" => {
-                // Assignment → WRITES edge from enclosing scope to variable.
-                // Target uses scope-qualified name to match Variable node.
+                // 赋值 → WRITES 边，从外层 scope 到变量。
+                // target 使用带 scope 限定的名称以匹配 Variable 节点。
                 let left = node.child_by_field_name("left");
                 let target = match left {
                     Some(l) => l.utf8_text(source_bytes).ok().map(|s| s.to_string()),
@@ -589,7 +589,7 @@ fn process_query(
             }
 
             "throws" => {
-                // raise/throw → THROWS edge from enclosing scope to exception type
+                // raise/throw → THROWS 边，从外层 scope 到异常类型
                 let exc_name = extract_throw_target(&node, source_bytes);
                 let name = match exc_name {
                     Some(n) => n,
@@ -604,14 +604,14 @@ fn process_query(
             }
 
             "usage" => {
-                // identifier/attribute reference → USAGE edge from enclosing scope
+                // identifier/attribute 引用 → USAGE 边，从外层 scope
                 let name = node.utf8_text(source_bytes).ok().map(|s| s.to_string());
                 let name = match name {
                     Some(n) => n,
                     None => continue,
                 };
                 let lang_ext = file_path.rsplit('.').next().unwrap_or("");
-                // Skip single-char, builtins, definition sites, parameter declarations
+                // 跳过单字符、内置名称、定义位置、参数声明
                 if name.len() <= 1 || is_skip_name(&name) || is_builtin_for_ext(&name, lang_ext)
                     || is_definition_site(&node, source_bytes) || is_param_decl(&node, source_bytes)
                 {
@@ -634,10 +634,10 @@ fn process_query(
     (nodes, edges)
 }
 
-// ── Name extraction helpers ──
+// ── 名称提取辅助函数 ──
 
-/// Resolve a function-like node: returns (name, scope_end_byte).
-/// For variable_declarators, checks if the value is a function.
+/// 解析函数类节点：返回 (name, scope_end_byte)。
+/// 对于 variable_declarator，检查其值是否为函数。
 fn resolve_fn(
     node: &tree_sitter::Node,
     source: &[u8],
@@ -645,7 +645,7 @@ fn resolve_fn(
 ) -> (Option<String>, Option<usize>) {
     let kind = node.kind();
     if func_kinds.contains(&kind) {
-        // Direct function node: function_declaration, arrow_function, etc.
+        // 直接函数节点：function_declaration、arrow_function 等。
         let name = node
             .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source).ok())
@@ -653,7 +653,7 @@ fn resolve_fn(
         if name.is_some() {
             return (name, Some(node.end_byte()));
         }
-        // Anonymous arrow/function — skip (callback, not a named symbol)
+        // 匿名箭头函数/函数 — 跳过（回调，非命名符号）
         return (None, None);
     }
     if kind == "variable_declarator" {
@@ -675,10 +675,10 @@ fn resolve_fn(
     (None, None)
 }
 
-/// Extract the call target name from a call/new/JSX node.
-/// Extract the function/method name from a function field child node.
-/// Handles member_expression (a.b.c → "c"), field_expression (v.len → "len"),
-/// attribute (obj.method → "method"), and plain identifiers.
+/// 从 call/new/JSX 节点提取调用目标名。
+/// 从函数字段子节点提取函数/方法名。
+/// 处理 member_expression（a.b.c → "c"）、field_expression（v.len → "len"）、
+/// attribute（obj.method → "method"）和普通 identifier。
 fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<String> {
     match func.kind() {
         "member_expression" => func
@@ -690,7 +690,7 @@ fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<Str
             .and_then(|f| f.utf8_text(source).ok())
             .map(|s| s.to_string()),
         "attribute" => {
-            // Python: obj.method() → extract "method" from attribute.object.method
+            // Python：obj.method() → 从 attribute.object.method 提取 "method"
             let attr = func
                 .child_by_field_name("attribute")
                 .and_then(|a| a.utf8_text(source).ok())
@@ -705,7 +705,7 @@ fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<Str
             }
         }
         "selector_expression" => {
-            // Dart: a.b.c() → walk chain to leaf
+            // Dart：a.b.c() → 遍历链到叶节点
             let mut cur = func;
             loop {
                 let field = cur.child_by_field_name("field");
@@ -723,7 +723,7 @@ fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<Str
         "identifier" | "simple_identifier" => func.utf8_text(source).ok().map(|s| s.to_string()),
         "import" => Some("import".to_string()),
         "dot" => {
-            // Elixir: Mod.func() → extract rightmost
+            // Elixir：Mod.func() → 提取最右侧
             func.child_by_field_name("right")
                 .and_then(|r| r.utf8_text(source).ok())
                 .map(|s| s.to_string())
@@ -734,46 +734,46 @@ fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<Str
 }
 
 fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
-    // ── Nodes with a "function" field ──
+    // ── 有 "function" 字段的节点 ──
     const FUNC_FIELD_NODES: &[&str] = &[
         "call_expression", "call", "function_call",
         "invocation_expression", "method_invocation",
         "selector", "command_call", "builtin_function",
         "constructor_expression", "generic_function",
         "navigation_expression", "with_statement",
-        // PHP: function_call_expression has "function" field;
+        // PHP：function_call_expression 有 "function" 字段；
         // member_call_expression / scoped_call_expression /
-        // nullsafe_member_call_expression have "name" field
+        // nullsafe_member_call_expression 有 "name" 字段
         "function_call_expression", "member_call_expression",
         "scoped_call_expression", "nullsafe_member_call_expression",
     ];
     let nk = node.kind();
     if FUNC_FIELD_NODES.contains(&nk) {
-        // Try "function" field first (JS/TS/Python/Rust/Go/Swift/C#/Scala)
+        // 先尝试 "function" 字段（JS/TS/Python/Rust/Go/Swift/C#/Scala）
         if let Some(result) = node
             .child_by_field_name("function")
             .and_then(|f| extract_func_field_name(f, source))
         {
             return Some(result);
         }
-        // Fallback: "method" field (Ruby call/command_call)
+        // 回退："method" 字段（Ruby call/command_call）
         if let Some(result) = node
             .child_by_field_name("method")
             .and_then(|f| extract_func_field_name(f, source))
         {
             return Some(result);
         }
-        // Fallback: "name" field (Java method_invocation, PHP member_call_expression)
+        // 回退："name" 字段（Java method_invocation、PHP member_call_expression）
         if let Some(result) = node
             .child_by_field_name("name")
             .and_then(|f| extract_func_field_name(f, source))
         {
             return Some(result);
         }
-        // Fall through to language-specific handlers below
+        // 继续到下面的语言特定处理器
     }
 
-    // ── Nodes with a "name" or "constructor" field ──
+    // ── 有 "name" 或 "constructor" 字段的节点 ──
     if nk == "object_creation_expression" || nk == "new_expression" {
         let ctor = node.child_by_field_name("constructor")
             .or_else(|| node.child_by_field_name("name"))?;
@@ -786,10 +786,10 @@ fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String
         return ctor.utf8_text(source).ok().map(|s| s.to_string());
     }
 
-    // ── Ruby: "method" + optional "receiver" fields ──
-    // ponytail: "command_call" (no-parens calls like `puts "hi"`) also
-    // uses "method" field. Handled by the FUNC_FIELD_NODES fallback above,
-    // but this path adds receiver.method qualification.
+    // ── Ruby："method" + 可选 "receiver" 字段 ──
+    // ponytail："command_call"（无括号调用如 `puts "hi"`）也
+    // 使用 "method" 字段。由上面的 FUNC_FIELD_NODES 回退处理，
+    // 但此路径添加 receiver.method 限定。
     if nk == "call" || nk == "command_call" {
         if let Some(method) = node.child_by_field_name("method") {
             let m = method.utf8_text(source).ok()?.to_string();
@@ -820,7 +820,7 @@ fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String
             .map(|s| s.to_string());
     }
 
-    // ── Bash: command — first named child is the command name ──
+    // ── Bash：command — 第一个命名子节点是命令名 ──
     if nk == "command" {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -830,7 +830,7 @@ fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String
         }
     }
 
-    // ── Elixir: dot → rightmost, binary_operator → operator text ──
+    // ── Elixir：dot → 最右侧，binary_operator → 运算符文本 ──
     if nk == "dot" {
         return node
             .child_by_field_name("right")
@@ -844,7 +844,7 @@ fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String
             .map(|s| s.to_string());
     }
 
-    // ── Functional families: first child is the callee ──
+    // ── 函数式族：第一个子节点是被调用者 ──
     if matches!(nk, "apply" | "application_expression" | "exp_apply" | "list" | "list_lit" | "applicative") {
         let first = node.child(0)?;
         return extract_func_field_name(first, source);
@@ -853,7 +853,7 @@ fn extract_call_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String
     None
 }
 
-/// Extract the first string argument from a call expression (for require/import).
+/// 从 call expression 中提取第一个字符串参数（用于 require/import）。
 fn extract_first_string_arg(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
     let args = node.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
@@ -866,9 +866,9 @@ fn extract_first_string_arg(node: &tree_sitter::Node, source: &[u8]) -> Option<S
     None
 }
 
-/// Extract exception class name from throw/raise node.
+/// 从 throw/raise 节点提取异常类名。
 fn extract_throw_target(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
-    // Named children after the throw/raise keyword are the exception type
+    // throw/raise 关键字之后的命名子节点是异常类型
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.is_named() && child.kind() != "throw" && child.kind() != "raise" {
@@ -878,27 +878,27 @@ fn extract_throw_target(node: &tree_sitter::Node, source: &[u8]) -> Option<Strin
     None
 }
 
-/// Check if identifier is at a definition site (should NOT create USAGE edge).
-/// ponytail: only skip (a) name-field definitions, (b) identifiers inside import/export
-/// statements (bindings, not usage references). Everything else — including function
-/// arguments and non-callee identifiers inside call expressions — gets a USAGE edge.
+/// 检查 identifier 是否在定义位置（不应创建 USAGE 边）。
+/// ponytail: 仅跳过 (a) name 字段定义、(b) import/export 语句中的
+/// identifier（绑定，非使用引用）。其他所有情况 — 包括函数
+/// 参数和 call expression 中的非被调用者 identifier — 都会创建 USAGE 边。
 fn is_definition_site(node: &tree_sitter::Node, _source: &[u8]) -> bool {
     if let Some(parent) = node.parent() {
-        // Case 1: identifier IS the "name" field of its parent → definition site
+        // 情况 1：identifier 是其父节点的 "name" 字段 → 定义位置
         if let Some(name_field) = parent.child_by_field_name("name") {
             if name_field.id() == node.id() {
                 return true;
             }
         }
-        // Case 2: identifier is inside an import/export statement → binding, not usage
-        // Walk up but stop at scope boundaries; ONLY check for import/export ancestors.
+        // 情况 2：identifier 在 import/export 语句中 → 绑定，非使用
+        // 向上遍历但在 scope 边界停止；仅检查 import/export 祖先。
         let mut cur = Some(parent);
         while let Some(p) = cur {
             let k = p.kind();
             if k.contains("import") || k.contains("export") {
                 return true;
             }
-            // Stop at scope boundary — don't walk past function/class/module
+            // 在 scope 边界停止 — 不要越过 function/class/module
             if k.contains("function") || k.contains("class") || k.contains("method")
                 || k == "lambda" || k == "arrow_function" || k == "module"
                 || k == "block" || k == "statement_block" || k == "source_file"
@@ -912,13 +912,13 @@ fn is_definition_site(node: &tree_sitter::Node, _source: &[u8]) -> bool {
     false
 }
 
-/// Check if identifier is inside a parameter declaration (function signature).
+/// 检查 identifier 是否在参数声明中（函数签名）。
 fn is_param_decl(node: &tree_sitter::Node, _source: &[u8]) -> bool {
     let mut cur = Some(*node);
     while let Some(p) = cur.and_then(|n| n.parent()) {
         let k = p.kind();
         if k.contains("parameter") || k.contains("param") { return true; }
-        // Stop at function/class boundary
+        // 在 function/class 边界停止
         if k.contains("function") || k.contains("class") || k.contains("method")
             || k == "lambda" || k == "arrow_function" || k == "module"
         {
@@ -929,7 +929,7 @@ fn is_param_decl(node: &tree_sitter::Node, _source: &[u8]) -> bool {
     false
 }
 
-/// Per-language builtin/common name blacklist for USAGE edge filtering.
+/// 各语言内置/常见名称黑名单，用于 USAGE 边过滤。
 fn is_builtin_for_ext(name: &str, ext: &str) -> bool {
     match ext {
         "py" | "pyi" => matches!(
@@ -1003,12 +1003,12 @@ fn is_builtin_for_ext(name: &str, ext: &str) -> bool {
                 | "array_map" | "array_filter" | "array_merge" | "array_keys"
                 | "json_encode" | "json_decode" | "file_get_contents" | "file_put_contents"
         ),
-        // Single-char identifiers are always noise
+        // 单字符 identifier 始终是噪声
         _ => name.len() <= 1,
     }
 }
 
-/// Noise names to skip in call edges.
+/// call 边中需跳过的噪声名称。
 fn is_skip_name(name: &str) -> bool {
     matches!(
         name,
@@ -1020,7 +1020,7 @@ fn is_skip_name(name: &str) -> bool {
     )
 }
 
-/// Walk class children for extends_clause / implements_clause and emit Inherits edges.
+/// 遍历类的子节点查找 extends_clause / implements_clause 并发出 Inherits 边。
 fn emit_class_inherits(
     class_node: &tree_sitter::Node,
     source: &[u8],
@@ -1032,7 +1032,7 @@ fn emit_class_inherits(
 ) {
     let mut found = false;
 
-    // Try field access first (works in some grammar versions)
+    // 先尝试字段访问（在某些语法版本中有效）
     if let Some(ext) = class_node.child_by_field_name("extends") {
         emit_inherits_from_clause(&ext, source, nid, module_id, file_id, counter, edges);
         found = true;
@@ -1042,7 +1042,7 @@ fn emit_class_inherits(
         found = true;
     }
 
-    // Walk children for extends_clause / implements_clause / class_heritage / argument_list
+    // 遍历子节点查找 extends_clause / implements_clause / class_heritage / argument_list
     let mut cursor = class_node.walk();
     for child in class_node.children(&mut cursor) {
         match child.kind() {
@@ -1059,7 +1059,7 @@ fn emit_class_inherits(
                     }
                 }
             }
-            // Python: class Foo(Bar) → argument_list contains base class identifiers
+            // Python：class Foo(Bar) → argument_list 包含基类 identifier
             "argument_list" => {
                 let mut ac = child.walk();
                 for gc in child.children(&mut ac) {
@@ -1076,26 +1076,26 @@ fn emit_class_inherits(
                     }
                 }
             }
-            // ponytail: some grammar versions embed implements types directly as children
-            // without an implements_clause wrapper. Scan for type/identifier children
-            // that appear after "implements" in the source text.
+            // ponytail: 某些语法版本将 implements 类型直接嵌入为子节点，
+            // 没有 implements_clause 包装。扫描在源文本中出现在
+            // "implements" 之后的 type/identifier 子节点。
             _ => {}
         }
     }
 
-    // Last resort: scan class source text for extends/implements patterns
+    // 最后手段：扫描类源文本查找 extends/implements 模式
     if !found {
-        // Skip — already handled by the main walk above
+        // 跳过 — 已由上面的主遍历处理
     }
-    // ponytail: last resort disabled — it was producing garbage edges
-    // by scanning class body text for "extends"/"implements" keywords.
+    // ponytail: 最后手段已禁用 — 它通过扫描类体文本中的
+    // "extends"/"implements" 关键字产生了垃圾边。
     #[allow(unreachable_code)]
     if false {
         if let Ok(text) = class_node.utf8_text(source) {
             for keyword in &["extends", "implements"] {
                 if let Some(pos) = text.find(keyword) {
                     let after = &text[pos + keyword.len()..];
-                    // Extract up to '{' or end
+                    // 提取到 '{' 或末尾
                     let clause = after.split('{').next().unwrap_or(after);
                     for part in clause.split(',') {
                         let name = part.split_whitespace().next().unwrap_or("").trim();
@@ -1139,9 +1139,9 @@ fn emit_inherits_from_clause(
     }
 }
 
-/// Extract base type names from an inheritance clause node (using source text).
-/// ponytail: simpler than extract_base_names — just reads text from "type_identifier"
-/// and "identifier" children. Used for extends/implements clauses.
+/// 从继承子句节点提取基类型名（使用源文本）。
+/// ponytail: 比 extract_base_names 更简单 — 仅从 "type_identifier"
+/// 和 "identifier" 子节点读取文本。用于 extends/implements 子句。
 fn extract_base_names_from_source(clause: &tree_sitter::Node, source: &[u8]) -> Vec<String> {
     let mut names = Vec::new();
     let mut to_visit: Vec<tree_sitter::Node> = vec![*clause];
@@ -1158,14 +1158,14 @@ fn extract_base_names_from_source(clause: &tree_sitter::Node, source: &[u8]) -> 
             }
             continue;
         }
-        // Recurse into container nodes
+        // 递归进入容器节点
         if node.is_named() {
             let mut cursor = node.walk();
             let children: Vec<_> = node.children(&mut cursor).collect();
             to_visit.extend(children.into_iter().rev());
         }
     }
-    // Fallback: raw text split
+    // 回退：原始文本分割
     if names.is_empty() {
         if let Ok(text) = clause.utf8_text(source) {
             let text = text.trim();
@@ -1184,13 +1184,13 @@ fn extract_base_names_from_source(clause: &tree_sitter::Node, source: &[u8]) -> 
     names
 }
 
-// ── Tests ──
+// ── 测试 ──
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── JS/TS tests ──
+    // ── JS/TS 测试 ──
 
     #[test]
     fn test_ts_function_declaration() {
@@ -1203,7 +1203,7 @@ mod tests {
 
     #[test]
     fn test_ts_variable_assigned_arrow() {
-        // ponytail: this was a critical gap — const f = () => {} was invisible
+        // ponytail: 这曾是一个关键缺口 — const f = () => {} 曾不可见
         let a = QueryStructureAdapter::new_js_ts();
         let src = "const fetchData = async () => { return 42; };";
         let (nodes, edges, _) = a.analyze("test.ts", src);
@@ -1243,7 +1243,7 @@ mod tests {
 
     #[test]
     fn test_ts_jsx_component() {
-        // ponytail: JSX requires LANGUAGE_TSX grammar (not LANGUAGE_TYPESCRIPT).
+        // ponytail: JSX 需要 LANGUAGE_TSX 语法（而非 LANGUAGE_TYPESCRIPT）。
         let a = QueryStructureAdapter::new_js_ts();
         let src = "function App() { return <div><Header /><Footer>text</Footer></div>; }";
         let (_nodes, edges, _) = a.analyze("test.tsx", src);
@@ -1254,7 +1254,7 @@ mod tests {
         assert!(targets.contains(&"div"), "should find <div> call, got {:?}", targets);
     }
 
-    /// Diagnostic: dump TSX AST to find JSX node type names in tree-sitter-typescript 0.23.
+    /// 诊断：导出 TSX AST 以查找 tree-sitter-typescript 0.23 中的 JSX 节点类型名。
     #[test]
     fn test_tsx_ast_dump() {
         use crate::engine::GRAMMAR_LOADER;
@@ -1265,7 +1265,7 @@ mod tests {
         let src = "<div><span>hello</span></div>";
         let tree = p.parse(src, None).unwrap();
         let root = tree.root_node();
-        // Walk all nodes and print kinds containing "jsx" or "element"
+        // 遍历所有节点并打印包含 "jsx" 或 "element" 的 kind
         let mut stack = vec![root];
         let mut jsx_nodes: Vec<String> = Vec::new();
         while let Some(node) = stack.pop() {
@@ -1278,7 +1278,7 @@ mod tests {
                 stack.push(child);
             }
         }
-        // Also dump ALL node kinds in the tree
+        // 同时导出树中所有节点 kind
         let mut kinds: Vec<String> = Vec::new();
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {
@@ -1304,7 +1304,7 @@ mod tests {
 
     #[test]
     fn test_ts_export_reexport() {
-        // ponytail: barrel file exports were invisible
+        // ponytail: barrel 文件导出曾不可见
         let a = QueryStructureAdapter::new_js_ts();
         let src = "export { foo } from './bar';";
         let (_nodes, edges, _) = a.analyze("src/index.ts", src);
@@ -1328,14 +1328,14 @@ mod tests {
         let a = QueryStructureAdapter::new_js_ts();
         let src = "class UserRepo implements IUserRepo {}";
         let (_nodes, edges, _) = a.analyze("test.ts", src);
-        // ponytail: implements_clause extraction depends on grammar structure.
-        // Verify that the class node and its children are accessible.
-        // Fallback text parsing in extract_base_names_from_source handles
-        // cases where structured walking misses names.
+        // ponytail: implements_clause 提取取决于语法结构。
+        // 验证类节点及其子节点可访问。
+        // extract_base_names_from_source 中的回退文本解析处理
+        // 结构化遍历遗漏名称的情况。
         let inh: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Inherits)).collect();
         if inh.is_empty() {
-            // If structured extraction missed it, the fallback text parser should catch it.
-            // Print edges for debugging grammar differences.
+            // 如果结构化提取遗漏了，回退文本解析器应能捕获。
+            // 打印边以调试语法差异。
             eprintln!("DEBUG implements: all edges = {:?}",
                 edges.iter().map(|e| format!("{} -> {} ({})", e.source, e.target, e.kind.as_str())).collect::<Vec<_>>());
         }
@@ -1392,7 +1392,7 @@ mod tests {
         assert!(!calls.is_empty(), "new Foo() should create call edge");
     }
 
-    // ── Rust tests ──
+    // ── Rust 测试 ──
 
     #[test]
     fn test_rust_function() {
@@ -1484,7 +1484,7 @@ mod tests {
 
     #[test]
     fn test_ts_multiple_imports() {
-        // Verify that all import variants create edges
+        // 验证所有 import 变体都创建边
         let a = QueryStructureAdapter::new_js_ts();
         let src = "import { bus } from './events';\nimport type { AgentEvent } from '../agent/types';\nexport function foo() {}";
         let (_nodes, edges, _) = a.analyze("src/ui/chat.ts", src);
@@ -1507,7 +1507,7 @@ mod tests {
         assert!(fid.contains("ui"), "file_id should contain subdir, got '{}'", fid);
     }
 
-    // ── Python coverage tests ──
+    // ── Python 覆盖率测试 ──
 
     fn py_adapter() -> QueryStructureAdapter {
         QueryStructureAdapter::new_generic(
@@ -1546,7 +1546,7 @@ mod tests {
         let (nodes, _edges, _) = a.analyze("test.py", src);
         let fns: Vec<_> = nodes.iter().filter(|n| matches!(n.kind, NodeKind::Function)).collect();
         assert!(!fns.is_empty(), "class method should be captured");
-        // Now scope-qualified: test.py.Foo.bar not test.py.bar
+        // 现在带 scope 限定：test.py.Foo.bar 而非 test.py.bar
         assert!(fns[0].id.contains("Foo.bar"), "method should be scoped to class, got id={}", fns[0].id);
     }
 
@@ -1588,7 +1588,7 @@ mod tests {
         let a = py_adapter();
         let src = "class Foo:\n    def bar(self):\n        val = 1\n        print(val)";
         let (_nodes, edges, _) = a.analyze("test.py", src);
-        // Usage edge for "val" should be from bar's scope
+        // "val" 的 Usage 边应来自 bar 的 scope
         let usage = edges.iter().find(|e| matches!(e.kind, EdgeKind::Usage) && e.target == "val");
         assert!(usage.is_some(), "should have Usage edge for val, got usages: {:?}",
             edges.iter().filter(|e| matches!(e.kind, EdgeKind::Usage)).map(|e| format!("{}->{}", e.source, e.target)).collect::<Vec<_>>());
@@ -1601,7 +1601,7 @@ mod tests {
         let a = py_adapter();
         let src = "class Foo:\n    def bar(self):\n        self.baz()";
         let (_nodes, edges, _) = a.analyze("test.py", src);
-        // Call edge for self.baz should be from bar's scope
+        // self.baz 的 Call 边应来自 bar 的 scope
         let call = edges.iter().find(|e| matches!(e.kind, EdgeKind::Calls));
         assert!(call.is_some(), "should have Calls edge for self.baz, got edges: {:?}",
             edges.iter().map(|e| format!("[{}] {}->{}", e.kind.as_str(), e.source, e.target)).collect::<Vec<_>>());
@@ -1621,8 +1621,8 @@ mod tests {
             writes.iter().map(|e| format!("{}->{}", e.source, e.target)).collect::<Vec<_>>());
     }
 
-    /// Diagnostic: parse a real file and dump all nodes and edges.
-    /// Run with: cargo test -p hologram-engine -- inspect_real_file --nocapture
+    /// 诊断：解析真实文件并导出所有节点和边。
+    /// 运行方式：cargo test -p hologram-engine -- inspect_real_file --nocapture
     #[test]
     fn inspect_real_file() {
         let path = r"D:\django\django\views\generic\base.py";
@@ -1647,7 +1647,7 @@ mod tests {
             &["class_definition"],
         );
 
-        // ── Summary ──
+        // ── 摘要 ──
         let mut nk: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for n in &nodes { *nk.entry(format!("{:?}", n.kind)).or_default() += 1; }
         let mut ek: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1658,14 +1658,14 @@ mod tests {
         println!("Node kinds: {:?}", nk);
         println!("Edge kinds: {:?}", ek);
 
-        // ── Nodes sorted by kind ──
+        // ── 按 kind 排序的节点 ──
         println!("\n=== NODES ===");
         for n in &nodes {
             let cf = if n.location.as_deref() == Some(path) { "" } else { " [REMOTE]" };
             println!("  [{:?}] id={} name={}{}", n.kind, n.id, n.name, cf);
         }
 
-        // ── Edges grouped by kind ──
+        // ── 按 kind 分组的边 ──
         println!("\n=== EDGES (Calls) ===");
         for e in &edges {
             if matches!(e.kind, crate::graph::EdgeKind::Calls) {

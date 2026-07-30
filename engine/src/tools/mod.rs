@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Tool registry — schema definitions + handler dispatch for all 27 hologram_* tools.
-// Separated from MCP transport so Tauri / TCP / CLI can share the same tool layer.
+// 工具注册表 —— 所有 27 个 hologram_* 工具的 schema 定义 + 处理器分发。
+// 与 MCP 传输层分离，使 Tauri / TCP / CLI 能共享同一套工具层。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use crate::pipeline::discovery::discover_files;
 use crate::storage::MemoryIndex;
 
 // ═══════════════════════════════════════════════════════════════
-// ToolSchema — metadata for a single tool
+// ToolSchema — 单个工具的元数据
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone)]
@@ -60,7 +60,7 @@ impl ToolSchema {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ToolRegistry — singleton dispatch
+// ToolRegistry — 单例分发
 // ═══════════════════════════════════════════════════════════════
 
 pub struct ToolRegistry;
@@ -169,19 +169,19 @@ impl ToolRegistry {
                 details: json!({}),
             }.to_mcp_value(id),
         };
-        // ponytail: inject next-tool suggestions at the dispatch layer
-        // so every handler gets them for free — no per-handler boilerplate.
+        // ponytail：在分发层注入后续工具建议，
+        // 使每个处理器免费获得 —— 无需逐处理器编写样板代码。
         resp.with_suggestions(suggestions_for(name)).to_mcp_value(id)
     }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Next-tool suggestions — static lookup, injected by dispatch().
+// 后续工具建议 —— 静态查找表，由 dispatch() 注入。
 // ═══════════════════════════════════════════════════════════════
 
 fn suggestions_for(name: &str) -> &'static [&'static str] {
     match name {
-        // ── Graph navigation ──
+        // ── 图导航 ──
         "search_symbols" => &["get_neighbors", "inspect_symbol", "trace_impact"],
         "get_neighbors" => &["trace_impact", "find_dep_path", "inspect_symbol"],
         "trace_impact" => &["find_dep_path", "preflight_check", "coupling_report"],
@@ -200,13 +200,13 @@ fn suggestions_for(name: &str) -> &'static [&'static str] {
         "coupling_report" => &["fragile_modules", "detect_cycles", "arch_blindspots"],
         "arch_blindspots" => &["preflight_check", "coupling_report", "thread_conflicts"],
         "check_boundaries" => &["preflight_check", "arch_blindspots", "coupling_report"],
-        // ── Dataflow ──
+        // ── 数据流 ──
         "trace_dataflow" => &["thread_conflicts", "preflight_check", "async_edges"],
         "async_edges" => &["trace_dataflow", "coupling_report", "detect_cycles"],
-        // ── Dead code / refactor ──
+        // ── 死代码 / 重构 ──
         "find_unused" => &["inspect_symbol", "trace_impact", "rename_symbol"],
         "rename_symbol" => &["search_symbols", "preflight_check", "trace_impact"],
-        // ── Preflight ──
+        // ── 预检 ──
         "preflight_check" => &["trace_impact", "trace_dataflow", "check_boundaries"],
         // ── LSP ──
         "resolve_call" => &["find_implementations", "infer_type", "find_references"],
@@ -221,7 +221,7 @@ fn suggestions_for(name: &str) -> &'static [&'static str] {
         "project_health" => &["fragile_modules", "arch_blindspots", "project_timeline"],
         "project_timeline" => &["inspect_symbol", "graph_diff", "project_health"],
         "engine_status" => &["graph_summary", "analyze_project", "search_symbols"],
-        // ── Flows ──
+        // ── 流程 ──
         "list_flows" => &["get_flow", "get_affected_flows", "trace_impact"],
         "get_flow" => &["trace_impact", "inspect_symbol", "preflight_check"],
         "get_affected_flows" => &["get_flow", "preflight_check", "detect_cycles"],
@@ -230,7 +230,7 @@ fn suggestions_for(name: &str) -> &'static [&'static str] {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Helpers
+// 辅助函数
 // ═══════════════════════════════════════════════════════════════
 
 
@@ -254,7 +254,7 @@ pub(crate) fn get_usize(args: &Value, key: &str, default: usize) -> usize {
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
         .unwrap_or_else(|| {
-            // Try camelCase variant (e.g. "min_size" → "minSize")
+            // 尝试 camelCase 变体（如 "min_size" → "minSize"）
             let camel = snake_to_camel(key);
             args.get(&camel)
                 .and_then(|v| v.as_u64())
@@ -263,7 +263,7 @@ pub(crate) fn get_usize(args: &Value, key: &str, default: usize) -> usize {
         })
 }
 
-/// Convert snake_case to camelCase (e.g. "min_size" → "minSize", "node_id" → "nodeId")
+/// 将 snake_case 转换为 camelCase（如 "min_size" → "minSize"，"node_id" → "nodeId"）
 pub(crate) fn snake_to_camel(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut upper = false;
@@ -304,7 +304,7 @@ where
     }
 }
 
-/// Resolve node reference in MemoryIndex: exact ID → exact name → not found.
+/// 在 MemoryIndex 中解析节点引用：精确 ID → 精确名称 → 未找到。
 pub(crate) fn resolve_in_index(idx: &MemoryIndex, node_id_or_name: &str) -> Option<String> {
     if idx.get_node(node_id_or_name).is_some() {
         return Some(node_id_or_name.to_string());
@@ -312,7 +312,7 @@ pub(crate) fn resolve_in_index(idx: &MemoryIndex, node_id_or_name: &str) -> Opti
     idx.get_nodes_by_name(node_id_or_name).first().cloned()
 }
 
-/// Resolve node reference in legacy Graph: exact ID → search → not found.
+/// 在旧版 Graph 中解析节点引用：精确 ID → 搜索 → 未找到。
 pub(crate) fn resolve_in_graph(g: &Graph, node_id_or_name: &str) -> Option<String> {
     if g.get_node(node_id_or_name).is_some() {
         return Some(node_id_or_name.to_string());
@@ -373,7 +373,7 @@ pub(crate) fn edge_to_value(e: &Edge) -> Value {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// V1 Handlers — graph queries
+// V1 处理器 —— 图查询
 // ═══════════════════════════════════════════════════════════════
 
 
@@ -389,7 +389,7 @@ macro_rules! p {
 
 fn all_schemas() -> &'static [ToolSchema] {
     &[
-        // ── Entry points ──
+        // ── 入口点 ──
         ToolSchema {
             name: "explore_deps",
             description: "【DEFAULT FIRST CHOICE】NL-powered dependency exploration — one call returns: dependency flow path + blast radius + relationships + source code + architecture alerts. Just type a natural-language question like \"DataRequest validate task\" or \"auth模块的依赖链\". When unsure which tool to use, START HERE — it auto-disambiguates.",
@@ -406,7 +406,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "graph",
         },
-        // ── Graph navigation ──
+        // ── 图导航 ──
         ToolSchema {
             name: "get_neighbors",
             description: "Get the direct neighborhood of a node — who depends on it and who it depends on (1-hop subgraph). Use after search_symbols when you've found a symbol and want to see its immediate coupling. \"这个模块被谁依赖？\" → call this.",
@@ -447,7 +447,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "graph",
         },
-        // ── Community ──
+        // ── 社区 ──
         ToolSchema {
             name: "get_community",
             description: "Which group does this module belong to? Returns the node's community (Leiden clustering), parent community, and sibling nodes. Use when asked \"this module is in which group?\" or to find closely-related modules. For global community structure, use cluster_report.",
@@ -464,7 +464,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "graph",
         },
-        // ── Analysis ──
+        // ── 分析 ──
         ToolSchema {
                         name: "fragile_modules",
             description: "Top N most coupled modules ranked by structural fan-in/fan-out and coupling depth. High score = core hub with many dependents (well-designed hubs naturally rank high). For data-flow coupling (reads/writes) and temporal coupling (triggers/awaits), use trace_dataflow or async_edges.",
@@ -513,7 +513,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "graph",
         },
-        // ── Temporal ──
+        // ── 时序 ──
         ToolSchema {
             name: "async_edges",
             description: "List all async/temporal edges — triggers, awaits/callbacks, scheduled tasks, sequenced calls. Use when investigating async coupling, race conditions, or temporal dependency chains. \"有哪些异步依赖？\" → this.",
@@ -530,7 +530,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "analysis",
         },
-        // ── Operations ──
+        // ── 操作 ──
         ToolSchema {
             name: "analyze_project",
             description: "Full pipeline re-analysis of a project directory. Parses, runs LSP, cross-file resolution, coupling depth, community detection — then reloads the graph. Use when the graph is stale or you've made many changes. SLOW — runs in background; check engine_status for progress.",
@@ -600,7 +600,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "analysis",
         },
-        // ── Dead code detection ──
+        // ── 死代码检测 ──
         ToolSchema {
             name: "find_unused",
             description: "Find dead code candidates — symbols with zero incoming references (nobody depends on them). Sorted by outgoing references descending (most impactful first). \"有没有没用到的代码？\" → this. Always review results before deleting — some low-fan-in symbols are intentional (entry points, tests).",
@@ -612,7 +612,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "analysis",
         },
-        // ── Flow detection ──
+        // ── 流程检测 ──
         ToolSchema {
             name: "list_flows",
             description: "List execution flows in the codebase, sorted by criticality. Each flow is a full call chain from an entry point (framework route, main function, CLI command) through all its callees. \"这个项目的核心业务流程是什么？\" \"哪些调用链最关键？\" → this. Follow up with get_flow to drill into a specific flow.",
@@ -649,7 +649,7 @@ fn all_schemas() -> &'static [ToolSchema] {
             read_only: true,
             category: "analysis",
         },
-        // ── Dataflow tracing ──
+        // ── 数据流追踪 ──
         ToolSchema {
             name: "trace_dataflow",
             description: "Per-function variable reads/writes, cross-function shared state, async triggers, call sequences. Answers: \"where is X written?\" \"who reads Y?\" \"which functions share Z?\". Pass the file paths you're investigating — returns scoped data movement analysis. Follow up with trace_impact on shared variables to trace downstream effects.",
@@ -739,7 +739,7 @@ mod tests {
     fn test_dispatch_unknown_tool() {
         let dummy_id = json!(1);
         let result = ToolRegistry::dispatch("nonexistent_tool", &json!({}), &dummy_id);
-        // Degraded response is still a success (no error field in JSON-RPC)
+        // 降级响应仍是成功（JSON-RPC 中无 error 字段）
         assert!(result.get("result").is_some(), "unknown tool should return degraded result, not error");
     }
 
@@ -777,7 +777,7 @@ mod tests {
     fn test_missing_required_params_error() {
         let dummy_id = json!(1);
         let result = ToolRegistry::dispatch("get_neighbors", &json!({}), &dummy_id);
-        // Degraded result wraps in JSON-RPC success format with _isDegraded flag
+        // 降级结果包装在 JSON-RPC 成功格式中，带 _isDegraded 标志
         let text = result["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("node_id") || text.contains("nodeId"),
             "get_neighbors should degrade on missing nodeId, got: {}", text);

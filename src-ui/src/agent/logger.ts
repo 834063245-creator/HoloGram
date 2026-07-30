@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// HoloGram UI logger — structured NDJSON to .hologram/logs/ui.log
-// Zero external dependencies. Writes via rpc('log_append').
+// HoloGram UI 日志器 — 结构化 NDJSON 写入 .hologram/logs/ui.log
+// 零外部依赖。通过 rpc('log_append') 写入。
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -21,7 +21,7 @@ const MAX_BUFFER = 50;
 const FLUSH_MS = 2000;
 
 export async function initLogger(projectPath: string): Promise<void> {
-  // Flush any remaining logs from the old workspace, then clear old timer
+  // 刷新旧 workspace 的剩余日志，然后清除旧定时器
   if (flushTimer) {
     clearInterval(flushTimer);
     flushTimer = null;
@@ -45,7 +45,7 @@ async function appendToFile(path: string, content: string): Promise<void> {
     const { rpc } = await import('../bridge');
     await rpc('log_append', { path, content });
   } catch {
-    // Log write failure is silently ignored — logging must not break the app
+    // 日志写入失败静默忽略 — 日志不能破坏应用
   }
 }
 

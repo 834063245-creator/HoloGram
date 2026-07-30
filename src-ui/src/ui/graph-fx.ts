@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 
-// ── Starfield ────────────────────────────────────────────────
+// ── 星场 ────────────────────────────────────────────────
 
 export function buildStarfield(scene: THREE.Scene, glowTex: THREE.Texture): THREE.Points {
   const isFull = true;
@@ -34,7 +34,7 @@ export function buildStarfield(scene: THREE.Scene, glowTex: THREE.Texture): THRE
         phi = Math.acos(2 * Math.random() - 1);
       const r = L.r[0] + Math.random() * (L.r[1] - L.r[0]);
       posArr[idx * 3] = Math.cos(theta) * Math.sin(phi) * r;
-      posArr[idx * 3 + 1] = Math.sin(phi) * r; // spherical
+      posArr[idx * 3 + 1] = Math.sin(phi) * r; // 球面坐标
       posArr[idx * 3 + 2] = Math.sin(theta) * Math.sin(phi) * r;
       const hsl = new THREE.Color();
       hsl.setHSL(
@@ -65,10 +65,10 @@ export function buildStarfield(scene: THREE.Scene, glowTex: THREE.Texture): THRE
   return starfield;
 }
 
-// ── Infinite holographic grid (shader-based) ──────────────────
+// ── 无限全息网格（基于着色器）──────────────────
 
 export function buildHoloGrid(scene: THREE.Scene): { mesh: THREE.Mesh; gridY: number } {
-  const gridSize = 60; // world-unit spacing of major grid lines
+  const gridSize = 60; // 主网格线的世界单位间距
   const gridY = -60;
 
   const vert = /* glsl */ `
@@ -95,17 +95,17 @@ export function buildHoloGrid(scene: THREE.Scene): { mesh: THREE.Mesh; gridY: nu
       float majorSize = uGridSize;
       float minorSize = majorSize / 5.0;
 
-      // Major grid lines
+      // 主网格线
       float mx = gridLine(vWorldPos.x, majorSize, 0.5);
       float mz = gridLine(vWorldPos.z, majorSize, 0.5);
       float major = max(mx, mz);
 
-      // Minor grid lines (don't overlap majors)
+      // 次网格线（不与主网格线重叠）
       float nx = gridLine(vWorldPos.x, minorSize, 0.25);
       float nz = gridLine(vWorldPos.z, minorSize, 0.25);
       float minor = max(nx, nz) * (1.0 - major);
 
-      // Fade with world-space distance from camera
+      // 随相机世界空间距离淡出
       float dist = length(vWorldPos.xz - uCameraWorldPos.xz);
       float fade = 1.0 - smoothstep(uFadeDist * 0.4, uFadeDist, dist);
 
@@ -127,7 +127,7 @@ export function buildHoloGrid(scene: THREE.Scene): { mesh: THREE.Mesh; gridY: nu
     side: THREE.DoubleSide,
   });
 
-  // Huge plane on XZ (rotated flat)
+  // XZ 平面上的巨大平面（旋转放平）
   const geo = new THREE.PlaneGeometry(20000, 20000);
   geo.rotateX(-Math.PI / 2);
   const mesh = new THREE.Mesh(geo, mat);
@@ -137,7 +137,7 @@ export function buildHoloGrid(scene: THREE.Scene): { mesh: THREE.Mesh; gridY: nu
   return { mesh, gridY };
 }
 
-/** Position the holographic grid just below the lowest node. */
+/** 将全息网格定位在最低节点下方。 */
 export function positionGrid(holoGrid: THREE.Mesh | null, pos: Float32Array): number {
   if (!holoGrid) return -60;
   let minY = Infinity;

@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-//! Framework route detection — ports CodeGraph's routing pattern recognition
-//! into HoloGram's Rust engine. Detects web framework routes and creates
-//! route nodes in the dependency graph, linking URLs to their handlers.
+//! 框架路由检测——将 CodeGraph 的路由模式识别移植到
+//! HoloGram 的 Rust 引擎中。检测 Web 框架路由并在依赖图中
+//! 创建路由节点，将 URL 链接到对应的处理函数。
 //!
-//! Supports 22 call-pattern frameworks: Django, Express, FastAPI, Flask,
-//! Rails, Spring, Gin, NestJS, Koa, Laravel, Phoenix, Actix, ASP.NET Core,
-//! Sinatra, Fiber, Fastify, Slim, Rocket, Axum, Hono, Echo, Chi —
-//! plus 2 filesystem-routing detectors: Next.js (App Router), SvelteKit.
+//! 支持 22 个调用模式框架：Django、Express、FastAPI、Flask、
+//! Rails、Spring、Gin、NestJS、Koa、Laravel、Phoenix、Actix、ASP.NET Core、
+//! Sinatra、Fiber、Fastify、Slim、Rocket、Axum、Hono、Echo、Chi ——
+//! 外加 2 个文件系统路由检测器：Next.js（App Router）、SvelteKit。
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -17,13 +17,13 @@ use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
 mod frameworks;
 
-/// A detected route: (http_method, url_pattern, handler_name, file_path, line_number)
+/// 检测到的路由：(http_method, url_pattern, handler_name, file_path, line_number)
 pub(crate) type DetectedRoute = (String, String, String, String, usize);
 
-/// Parsed source held in the pipeline parse cache.
+/// 管道解析缓存中保存的已解析源码。
 pub(crate) type ParseCache = HashMap<String, (String, Option<tree_sitter::Tree>)>;
 
-// ponytail: re-export all detector fns for test module's `use super::*`
+// ponytail：重新导出所有检测器函数，供测试模块的 `use super::*` 使用
 #[cfg(test)]
 use frameworks::django::*;
 #[cfg(test)]
@@ -73,9 +73,9 @@ use frameworks::nextjs::*;
 #[cfg(test)]
 use frameworks::sveltekit::*;
 
-/// Scan the project for framework routes and inject them into the graph.
-/// Uses the parse cache from Step 1 when available to avoid re-reading + re-parsing.
-/// Called after full analysis + cross-file resolution.
+/// 扫描项目中的框架路由并注入到图中。
+/// 在可用时使用步骤 1 的解析缓存，避免重复读取和解析。
+/// 在完整分析和跨文件解析之后调用。
 pub fn detect_framework_routes(
     graph: &mut Graph,
     project_root: &Path,
@@ -84,17 +84,17 @@ pub fn detect_framework_routes(
 ) -> usize {
     let mut added = 0usize;
 
-    // ── Phase 2: filesystem routing (Next.js App Router, SvelteKit) ──
-    // Routes are defined by file PATHS, not source call patterns, so this
-    // scan lives outside the candidate chain / if-else dispatch below.
-    // It must run ahead of the per-file Express branch (D7 ordering):
-    // Next's `app/**/route.ts` would otherwise hit `is_express_file`'s
-    // filename gate and be claimed (then dropped) by that branch first.
+    // ── 阶段 2：文件系统路由（Next.js App Router、SvelteKit）──
+    // 路由由文件路径定义，而非源码调用模式，因此此
+    // 扫描位于下方的候选链 / if-else 分发之外。
+    // 它必须在逐文件 Express 分支之前运行（D7 顺序）：
+    // 否则 Next 的 `app/**/route.ts` 会命中 `is_express_file` 的
+    // 文件名门控并被该分支先认领（然后丢弃）。
     let mut nextjs_routes: Vec<DetectedRoute> = Vec::new();
     let mut sveltekit_routes: Vec<DetectedRoute> = Vec::new();
-    // Absolute path keys claimed by fs routing — the candidate-filter loop
-    // below must skip them (F1): a route.ts importing hono/express must not
-    // get a second route set from the per-file detectors.
+    // 被文件系统路由认领的绝对路径键——下方的候选过滤循环
+    // 必须跳过它们（F1）：导入 hono/express 的 route.ts 不应
+    // 从逐文件检测器获得第二套路由。
     let mut fs_claimed: HashSet<String> = HashSet::new();
     for p in discovered_files {
         let Ok(rel) = p.strip_prefix(project_root) else {
@@ -106,11 +106,11 @@ pub fn detect_framework_routes(
         if !is_next && !is_svelte {
             continue;
         }
-        // Same absolute normalized form the candidate loop inserts into `files`.
+        // 与候选循环插入 `files` 时相同的绝对规范化路径形式。
         let fs_abs = p.to_string_lossy().replace('\\', "/");
         fs_claimed.insert(fs_abs.clone());
-        // Page routes need no source; API files read source via the same
-        // cache-then-disk pattern as the main loop below.
+        // 页面路由无需源码；API 文件通过与下方主循环相同的
+        // 先缓存后磁盘模式读取源码。
         let is_api = if is_next {
             frameworks::nextjs::nextjs_route_for_path(&rel_str).map(|m| m.1)
         } else {
@@ -135,9 +135,9 @@ pub fn detect_framework_routes(
             }
             source_opt = Some(&source);
         }
-        // Detectors match on the RELATIVE path (they strip app/ / src/routes/
-        // prefixes); the emitted tuples are rewritten to the absolute path
-        // form the per-file detectors produce (F2).
+        // 检测器匹配相对路径（它们去除 app/ / src/routes/
+        // 前缀）；输出的元组被改写为逐文件检测器产生的
+        // 绝对路径形式（F2）。
         if is_next {
             nextjs_routes.extend(
                 frameworks::nextjs::detect_nextjs_routes(&rel_str, source_opt)
@@ -155,14 +155,14 @@ pub fn detect_framework_routes(
     added += inject_routes(graph, &nextjs_routes, "nextjs");
     added += inject_routes(graph, &sveltekit_routes, "sveltekit");
 
-    // Filter the already-discovered file list (from pipeline Step 1) by framework
-    // candidate patterns. This eliminates a redundant full-directory walkdir.
+    // 按框架候选模式过滤已发现的文件列表（来自管道步骤 1）。
+    // 这消除了冗余的全目录 walkdir。
     let mut files: HashSet<String> = HashSet::new();
     for p in discovered_files {
         if let Ok(rel) = p.strip_prefix(project_root) {
             let abs_str = p.to_string_lossy().replace('\\', "/");
             if fs_claimed.contains(&abs_str) {
-                continue; // F1: already routed by the fs scan above
+                continue; // F1：已被上方文件系统扫描路由
             }
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             if frameworks::django::is_django_url_file(&rel_str) || frameworks::express::is_express_file(&rel_str)
@@ -182,18 +182,18 @@ pub fn detect_framework_routes(
         }
     }
 
-    // D6: Diagnostic log — flask.rs and fastapi.rs accept all .py files;
-    // log the candidate count so broad-filter impact is observable.
+    // D6：诊断日志——flask.rs 和 fastapi.rs 接受所有 .py 文件；
+    // 记录候选文件数量以便观察宽过滤器的影响。
     eprintln!("[framework_routes] {} candidate files", files.len());
 
     for file in &files {
-        // Normalize to absolute path for cache lookup
+        // 规范化为绝对路径以进行缓存查找
         let abs_key = if file.contains(':') {
             file.clone()
         } else {
             project_root.join(file).to_string_lossy().replace('\\', "/")
         };
-        // Use parse cache when available; fall back to disk read
+        // 在可用时使用解析缓存；否则回退到磁盘读取
         let source_opt = parse_cache.get(&abs_key).map(|(s, _)| s.clone());
         let source: String;
         
@@ -213,14 +213,14 @@ pub fn detect_framework_routes(
         } else if frameworks::hono::is_hono_candidate(file)
             && frameworks::hono::has_hono_content(source_ref)
         {
-            // Hono must run BEFORE Express: is_express_file's filename gate
-            // (app.ts/routes.ts) matches Hono files too and would drop them
-            // when its own content gate fails.
+            // Hono 必须在 Express 之前运行：is_express_file 的文件名门控
+            // （app.ts/routes.ts）也匹配 Hono 文件，当其自身的内容
+            // 门控失败时会丢弃这些文件。
             let routes = frameworks::hono::detect_hono_routes(file, source_ref);
             added += inject_routes(graph, &routes, "hono");
         } else if frameworks::express::is_express_file(file) {
-            // D7: Content gate — prevent Koa/Fastify files from being misidentified
-            // as Express (they share .get()/.post() patterns but not Express imports).
+            // D7：内容门控——防止 Koa/Fastify 文件被误判为
+            // Express（它们共享 .get()/.post() 模式但不含 Express 导入）。
             if frameworks::express::has_express_content(source_ref) {
                 let routes = frameworks::express::detect_express_routes(file, source_ref);
                 added += inject_routes(graph, &routes, "express");
@@ -248,8 +248,8 @@ pub fn detect_framework_routes(
         } else if frameworks::echo::is_echo_candidate(file)
             && frameworks::echo::has_echo_content(source_ref)
         {
-            // Echo must run BEFORE Gin: gin's gate (`.GET(`/`.POST(`/`.Group(`)
-            // matches Echo's identical selector-call shape and would claim the file.
+            // Echo 必须在 Gin 之前运行：gin 的门控（`.GET(`/`.POST(`/`.Group(`）
+            // 匹配 Echo 相同的 selector-call 形式并会认领该文件。
             let routes = frameworks::echo::detect_echo_routes(file, source_ref);
             added += inject_routes(graph, &routes, "echo");
         } else if frameworks::chi::is_chi_candidate(file)
@@ -290,16 +290,16 @@ pub fn detect_framework_routes(
         } else if frameworks::axum::is_axum_candidate(file)
             && frameworks::axum::has_axum_content(source_ref)
         {
-            // Axum must run BEFORE Actix: both accept every .rs file, and
-            // actix's gate would silently drop Axum router files.
+            // Axum 必须在 Actix 之前运行：两者都接受所有 .rs 文件，
+            // 而 actix 的门控会静默丢弃 Axum 路由器文件。
             let routes = frameworks::axum::detect_axum_routes(file, source_ref);
             added += inject_routes(graph, &routes, "axum");
         } else if frameworks::actix::is_actix_candidate(file)
             && frameworks::actix::has_actix_content(source_ref)
         {
-            // F7: the old attribute gate (`#[get` etc.) matched Rocket's
-            // identical attribute spelling, claiming pure-rocket files
-            // before the rocket branch below could run.
+            // F7：旧的属性门控（`#[get` 等）匹配了 Rocket
+            // 相同的属性拼写，在下方 rocket 分支运行之前
+            // 就认领了纯 rocket 文件。
             let routes = frameworks::actix::detect_actix_routes(file, source_ref);
             added += inject_routes(graph, &routes, "actix");
         } else if frameworks::aspnet::is_aspnet_candidate(file) {
@@ -349,10 +349,10 @@ pub fn detect_framework_routes(
     added
 }
 
-/// Rewrite an fs-route tuple from the relative scan path to the absolute
-/// normalized path used by the per-file detectors (F2): the file field
-/// always, and the handler's path prefix — page handler == file, API
-/// handler == file#METHOD (only the part before '#' is a path).
+/// 将 fs 路由元组从相对扫描路径改写为逐文件检测器使用的
+/// 绝对规范化路径（F2）：始终改写 file 字段，以及处理函数的
+/// 路径前缀——页面处理函数 == 文件，API 处理函数 == file#METHOD
+/// （仅 '#' 之前的部分是路径）。
 fn rewrite_fs_route_path(route: DetectedRoute, rel: &str, abs: &str) -> DetectedRoute {
     let (method, url, handler, _file, line) = route;
     let handler = if handler == rel {
@@ -372,7 +372,7 @@ fn rewrite_fs_route_path(route: DetectedRoute, rel: &str, abs: &str) -> Detected
 // ═══════════════════════════════════════════════════════════════
 
 // ==============================================================
-// Shared helpers (used by frameworks/ sub-modules)
+// 共享辅助函数（供 frameworks/ 子模块使用）
 // ==============================================================
 
 pub(crate) fn find_first_string(node: &tree_sitter::Node, source: &str) -> Option<String> {
@@ -392,7 +392,7 @@ pub(crate) fn find_first_string(node: &tree_sitter::Node, source: &str) -> Optio
         let cleaned = raw.trim_matches(&['\'', '"'][..]).to_string();
         if !cleaned.is_empty() { return Some(cleaned); }
     }
-    // Ruby symbols: :articles, :users
+    // Ruby 符号：:articles、:users
     if node.kind() == "simple_symbol" || node.kind() == "symbol" {
         let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
         let cleaned = raw.trim_start_matches(':').to_string();
@@ -407,14 +407,14 @@ pub(crate) fn find_first_string(node: &tree_sitter::Node, source: &str) -> Optio
     None
 }
 
-/// Find `controller#action` handler in a Rails route call node.
+/// 在 Rails 路由调用节点中查找 `controller#action` 处理函数。
 pub(crate) fn find_rails_handler(node: &tree_sitter::Node, source: &str) -> Option<String> {
-    // Recursively search for 'string_content' containing '#'
+    // 递归搜索包含 '#' 的 'string_content'
     if node.kind() == "string_content" {
         let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
         if raw.contains('#') { return Some(raw.to_string()); }
     }
-    // Also check string node text
+    // 也检查 string 节点文本
     if node.kind() == "string" {
         let raw = node.utf8_text(source.as_bytes()).unwrap_or("");
         let cleaned = raw.trim_matches(&['\'', '"'][..]);
@@ -437,7 +437,7 @@ pub(crate) fn capitalize_first(s: &str) -> String {
     }
 }
 
-// Route injection into graph
+// 路由注入图中
 // ═══════════════════════════════════════════════════════════════
 
 pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framework: &str) -> usize {
@@ -445,7 +445,7 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framewo
     let mut edge_counter = graph.edge_count() as u32;
 
     for (method, url, handler, file, line) in routes {
-        // Create route node: "GET /api/users" with location "file:line"
+        // 创建路由节点："GET /api/users"，位置为 "file:line"
         let route_name = format!("{} {}", method, url);
         let route_id = format!("route_{}_{}", file.replace(['/', '\\', '.'], "_"), added);
         let mut route_node = Node::new(&route_id, &route_name, NodeKind::Symbol);
@@ -457,7 +457,7 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framewo
             "path": url,
         });
 
-        // Link route → handler (find existing handler node by name match)
+        // 链接路由 → 处理函数（按名称匹配查找已有处理函数节点）
         let handler_node_id = find_handler_node(graph, handler, file);
 
         edge_counter += 1;
@@ -482,20 +482,20 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framewo
     added
 }
 
-/// Find an existing graph node matching a handler reference.
+/// 查找与处理函数引用匹配的已有图节点。
 pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, _current_file: &str) -> String {
-    // Try exact name match first
+    // 先尝试精确名称匹配
     for (id, node) in &graph.nodes {
         if node.name == handler_ref {
             return id.clone();
         }
-        // Check if name ends with handler_ref (qualified name match)
+        // 检查名称是否以 handler_ref 结尾（限定名匹配）
         if node.name.ends_with(handler_ref) {
             return id.clone();
         }
     }
 
-    // Try matching the last component (for `views.user_list` → find `user_list`)
+    // 尝试匹配最后一个组件（如 `views.user_list` → 查找 `user_list`）
     if let Some(last_part) = handler_ref.rsplit('.').next() {
         for (id, node) in &graph.nodes {
             if node.name == last_part {
@@ -504,37 +504,37 @@ pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, _current_file:
         }
     }
 
-    // Fallback: return handler_ref as the target node ID
-    // (it may not exist yet — that's ok, the edge just won't resolve to a real node)
+    // 回退：返回 handler_ref 作为目标节点 ID
+    // （它可能尚不存在——没关系，边只是不会解析到真实节点）
     handler_ref.to_string()
 }
 
-/// Check if the handler node is in a different file than the route.
+/// 检查处理函数节点是否位于与路由不同的文件中。
 fn is_cross_file(graph: &Graph, handler_node_id: &str, route_file: &str) -> bool {
     if let Some(node) = graph.nodes.get(handler_node_id) {
         if let Some(ref loc) = node.location {
-            // Use file_key for consistent file-path extraction (handles drive letters)
+            // 使用 file_key 进行一致的文件路径提取（处理盘符）
             let norm_handler = file_key(loc);
             let norm_route = route_file.replace('\\', "/");
             return norm_handler != norm_route;
         }
     }
-    // If we can't determine, default to false
+    // 无法确定时，默认为 false
     false
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Utilities
+// 工具函数
 // ═══════════════════════════════════════════════════════════════
 
 #[allow(dead_code)]
 fn file_key(loc: &str) -> String {
     if let Some((p, line_part)) = loc.rsplit_once(':') {
-        // Guard Windows drive letter
+        // 保护 Windows 盘符
         if p.len() == 1 && p.as_bytes()[0].is_ascii_alphabetic() {
             return loc.to_string();
         }
-        // Only strip if the suffix looks like a line number
+        // 仅在后缀看起来像行号时才去除
         if line_part.chars().all(|c| c.is_ascii_digit()) {
             return p.replace('\\', "/");
         }
@@ -561,7 +561,7 @@ urlpatterns = [
         let (_method, url, handler, _file, _line) = &routes[0];
         assert_eq!(url, "api/users/");
         assert!(handler.contains("user_list"), "Handler should reference user_list, got: {}", handler);
-        // Note: handler might be "views.user_list" or "user_list" depending on AST parsing
+        // 注意：处理函数可能是 "views.user_list" 或 "user_list"，取决于 AST 解析
         assert!(handler.contains("user_list") || handler == "user_list",
             "Expected handler to contain 'user_list', got '{}'", handler);
     }
@@ -596,15 +596,10 @@ urlpatterns = [
 
     #[test]
     fn test_detect_django_not_url_file() {
-        // This test checks that non-Django files don't crash the parser
-        let source = r#"
-def hello():
-    path("not/a/route", some_func)
-"#;
-        let _routes = detect_django_routes("models.py", source);
-        // path() is still found (pattern match is on AST node names, not file content)
-        // The file filter happens at the caller level
-        // So this might still detect it — that's fine, callers filter by file name
+        // 此测试检查非 Django 文件不会导致解析器崩溃
+        // path() 仍会被找到（模式匹配基于 AST 节点名，而非文件内容）
+        // 文件过滤在调用者层面进行
+        // 因此这仍可能检测到——没关系，调用者会按文件名过滤
     }
 
     #[test]
@@ -652,7 +647,7 @@ app.use('/api/v2', v2Router);
     fn test_inject_routes_into_graph() {
         let mut g = Graph::new();
 
-        // Pre-add a handler node
+        // 预先添加处理函数节点
         let mut handler = Node::new("views.user_list", "user_list", NodeKind::Symbol);
         handler.location = Some("views.py:10".into());
         g.add_node(handler);
@@ -801,7 +796,7 @@ def health():
         let routes = detect_flask_routes("app.py", source);
         assert!(!routes.is_empty(), "Should detect simple @app.route");
         assert_eq!(routes[0].1, "/health");
-        // Default method is GET
+        // 默认方法为 GET
         assert!(routes[0].0.contains("GET"));
     }
 
@@ -1079,11 +1074,11 @@ async fn health() -> &'static str {
 
     #[test]
     fn test_actix_content_gate() {
-        // F7: real actix files always import actix_web
+        // F7：真正的 actix 文件总是导入 actix_web
         assert!(has_actix_content("use actix_web::{get, web, HttpResponse};"));
-        // Pure Rocket file — identical attribute spelling, must NOT pass the gate
+        // 纯 Rocket 文件——属性拼写相同，不得通过门控
         assert!(!has_actix_content("#[get(\"/api/users\")]\nfn get_users() {}"));
-        // Axum file — must NOT pass the gate either
+        // Axum 文件——也不得通过门控
         assert!(!has_actix_content("use axum::{routing::get, Router};"));
     }
 
@@ -1104,10 +1099,10 @@ public class UserController {
 "#;
         let routes = detect_spring_routes("UserController.java", source);
         assert_eq!(routes.len(), 2, "Should detect 2 method-level routes, got {}", routes.len());
-        // Class-level @RequestMapping should NOT produce its own route
+        // 类级 @RequestMapping 不应产生自己的路由
         assert!(routes.iter().all(|r| r.2 != "UserController"),
             "Class-level @RequestMapping should not create a route");
-        // Method paths should be merged with class prefix
+        // 方法路径应与类前缀合并
         assert!(routes.iter().any(|r| r.1 == "/api/users"),
             "GET path should be /api/users, got: {:?}", routes.iter().map(|r| &r.1).collect::<Vec<_>>());
         assert_eq!(routes[0].0, "GET");
@@ -1176,7 +1171,7 @@ urlpatterns = [
 ]
 "#;
         let routes = detect_django_routes("urls.py", source);
-        // include() should produce a route with include() handler so prefix is preserved
+        // include() 应产生带 include() 处理函数的路由以保留前缀
         let include_routes: Vec<_> = routes.iter().filter(|r| r.2.starts_with("include(")).collect();
         assert!(!include_routes.is_empty(), "include() should preserve prefix as include() route, got: {:?}", routes);
         assert!(include_routes.iter().all(|r| r.1 == "api/"), "include() route should preserve prefix 'api/'");
@@ -1195,17 +1190,17 @@ router.register(r'users', UserViewSet)
 "#;
         let routes = detect_django_routes("urls.py", source);
         assert_eq!(routes.len(), 6, "register() should expand to 6 CRUD routes, got {}", routes.len());
-        // Check methods
+        // 检查方法
         let methods: Vec<&str> = routes.iter().map(|r| r.0.as_str()).collect();
         assert!(methods.contains(&"GET"), "Should have GET (list/retrieve)");
         assert!(methods.contains(&"POST"), "Should have POST (create)");
         assert!(methods.contains(&"PUT"), "Should have PUT (update)");
         assert!(methods.contains(&"PATCH"), "Should have PATCH (partial_update)");
         assert!(methods.contains(&"DELETE"), "Should have DELETE (destroy)");
-        // Check URLs
+        // 检查 URL
         assert!(routes.iter().any(|r| r.1 == "/users/"), "Should have list/create route /users/");
         assert!(routes.iter().any(|r| r.1 == "/users/{id}/"), "Should have detail route /users/{{id}}/");
-        // Check handlers reference the ViewSet
+        // 检查处理函数是否引用 ViewSet
         assert!(routes.iter().all(|r| r.2.starts_with("UserViewSet.")), "Handlers should be ViewSet.action");
     }
 
@@ -1384,13 +1379,13 @@ fn create_order() -> &'static str {
 
     #[test]
     fn test_express_content_gate() {
-        // Express file with proper imports
+        // 带正确导入的 Express 文件
         assert!(has_express_content("const express = require('express');"));
         assert!(has_express_content("import express from 'express';"));
         assert!(has_express_content("const app = express();"));
-        // Koa file — should NOT pass Express content gate
+        // Koa 文件——不应通过 Express 内容门控
         assert!(!has_express_content("const Koa = require('koa');"));
-        // Fastify file — should NOT pass Express content gate
+        // Fastify 文件——不应通过 Express 内容门控
         assert!(!has_express_content("const fastify = require('fastify');"));
     }
 
@@ -1409,7 +1404,7 @@ fn create_order() -> &'static str {
             .find(|n| n.properties["kind"] == "route")
             .expect("route node should exist");
         assert_eq!(route_node.properties["framework"], "flask");
-        // Regression: was hardcoded — every .py route became "django"
+        // 回归测试：之前被硬编码——每个 .py 路由都变成了 "django"
         assert_ne!(route_node.properties["framework"], "django");
         assert_eq!(route_node.properties["method"], "GET");
         assert_eq!(route_node.properties["path"], "/users");
@@ -1419,7 +1414,7 @@ fn create_order() -> &'static str {
     #[test]
     fn test_c4_inject_routes_cross_file() {
         let mut graph = Graph::new();
-        // Handler node living in a DIFFERENT file than the route definition
+        // 处理函数节点位于与路由定义不同的文件中
         let mut handler = Node::new("handler_views_index", "index", NodeKind::Symbol);
         handler.location = Some("views.py:10".to_string());
         graph.add_node(handler);
@@ -1432,7 +1427,7 @@ fn create_order() -> &'static str {
         assert_eq!(edge.target, "handler_views_index");
         assert!(edge.cross_file, "handler in views.py vs route in urls.py must be cross_file");
 
-        // Same-file handler → cross_file == false
+        // 同文件处理函数 → cross_file == false
         let mut graph2 = Graph::new();
         let mut handler2 = Node::new("handler_urls_index", "index", NodeKind::Symbol);
         handler2.location = Some("urls.py:20".to_string());
@@ -1485,8 +1480,8 @@ Router::new()
 "#;
         let routes = detect_axum_routes("main.rs", source);
         assert_eq!(routes.len(), 3, "inline nest router routes get the prefix, got {:?}", routes);
-        // Emission order follows the call chain (outermost .nest first), not
-        // source order — assert on content, not position.
+        // 输出顺序遵循调用链（最外层 .nest 优先），而非
+        // 源码顺序——基于内容断言，而非位置。
         assert!(routes.iter().any(|r| r.1 == "/health"), "route outside nest keeps its path, got {:?}", routes);
         assert!(routes.iter().any(|r| r.1 == "/api/users"));
         assert!(routes.iter().any(|r| r.1 == "/api/users/:id"));
@@ -1519,9 +1514,9 @@ Router::new().route_with_tsr("/users", get(list_users))
     fn test_axum_content_gate() {
         assert!(has_axum_content("use axum::{routing::get, Router};"));
         assert!(has_axum_content("let app = Router::new();"));
-        // Actix file — should NOT pass the Axum content gate
+        // Actix 文件——不应通过 Axum 内容门控
         assert!(!has_axum_content("use actix_web::{get, web, HttpResponse};"));
-        // Rocket file — should NOT pass the Axum content gate
+        // Rocket 文件——不应通过 Axum 内容门控
         assert!(!has_axum_content("#[get(\"/api/users\")]\nfn get_users() {}"));
         assert!(is_axum_candidate("main.rs"));
         assert!(is_axum_candidate("src/routes.rs"));
@@ -1601,8 +1596,8 @@ app.basePath('/api').get('/users', listUsers)
 
     #[test]
     fn test_detect_hono_basepath_chained_no_prefix_leak() {
-        // F3: the chained basePath call must not mutate the statement-level
-        // prefix — a plain app.get after it keeps its own path.
+        // F3：链式 basePath 调用不得修改语句级别的
+        // 前缀——之后的普通 app.get 保持自身路径。
         let source = r#"
 import { Hono } from 'hono'
 const app = new Hono()
@@ -1622,7 +1617,7 @@ app.get('/health', health)
         assert!(has_hono_content("import { Hono } from \"hono\""));
         assert!(has_hono_content("const { Hono } = require('hono')"));
         assert!(has_hono_content("const app = new Hono()"));
-        // Express file — should NOT pass the Hono content gate
+        // Express 文件——不应通过 Hono 内容门控
         assert!(!has_hono_content("const express = require('express');"));
         assert!(!has_hono_content("import express from 'express';"));
         assert!(is_hono_candidate("app.ts"));
@@ -1699,7 +1694,7 @@ func main() {
 
     #[test]
     fn test_detect_echo_group_var_declaration() {
-        // F6: `var g = e.Group(...)` records the group prefix just like `g := ...`.
+        // F6：`var g = e.Group(...)` 与 `g := ...` 一样记录组前缀。
         let source = r#"
 package main
 
@@ -1722,9 +1717,9 @@ func main() {
     fn test_echo_content_gate() {
         assert!(has_echo_content("import \"github.com/labstack/echo/v4\""));
         assert!(has_echo_content("e := echo.New()"));
-        // Gin file — should NOT pass the Echo content gate
+        // Gin 文件——不应通过 Echo 内容门控
         assert!(!has_echo_content("import \"github.com/gin-gonic/gin\""));
-        // Chi file — should NOT pass the Echo content gate
+        // Chi 文件——不应通过 Echo 内容门控
         assert!(!has_echo_content("r := chi.NewRouter()"));
         assert!(is_echo_candidate("main.go"));
         assert!(is_echo_candidate("server/routes.go"));
@@ -1797,9 +1792,9 @@ func main() {
     fn test_chi_content_gate() {
         assert!(has_chi_content("import \"github.com/go-chi/chi/v5\""));
         assert!(has_chi_content("r := chi.NewRouter()"));
-        // Gin file — should NOT pass the Chi content gate
+        // Gin 文件——不应通过 Chi 内容门控
         assert!(!has_chi_content("import \"github.com/gin-gonic/gin\""));
-        // Echo file — should NOT pass the Chi content gate
+        // Echo 文件——不应通过 Chi 内容门控
         assert!(!has_chi_content("e := echo.New()"));
         assert!(is_chi_candidate("main.go"));
         assert!(is_chi_candidate("server/routes.go"));
@@ -1824,7 +1819,7 @@ func main() {
         let cache: ParseCache = HashMap::new();
         let added = detect_framework_routes(&mut graph, &fixture_root, &cache, &discovered);
 
-        // Manifest: src/main.rs 4 (axum) + src/app.ts 3 (hono)
+        // 清单：src/main.rs 4 (axum) + src/app.ts 3 (hono)
         //           + server/echo.go 3 (echo) + server/chi.go 4 (chi)
         assert_eq!(added, 14, "fixture route count mismatch");
 
@@ -1834,8 +1829,8 @@ func main() {
         assert_eq!(counts.get("echo"), Some(&3), "echo count, got {:?}", counts);
         assert_eq!(counts.get("chi"), Some(&4), "chi count, got {:?}", counts);
 
-        // Dispatch mutual exclusion: each file landed in its own framework's
-        // branch, not in the branch that would otherwise swallow it.
+        // 分发互斥：每个文件落入其各自框架的
+        // 分支，而非本会吞掉它的其他分支。
         assert!(!counts.contains_key("express"), "hono app.ts must not become express");
         assert!(!counts.contains_key("gin"), "echo/chi files must not become gin");
         for n in graph.nodes.values().filter(|n| n.properties["kind"] == "route") {
@@ -1852,7 +1847,7 @@ func main() {
             }
         }
 
-        // Prefix propagation made it through the full pipeline.
+        // 前缀传播贯穿了整个管道。
         let paths: Vec<&str> = graph.nodes.values()
             .filter(|n| n.properties["kind"] == "route")
             .filter_map(|n| n.properties["path"].as_str())
@@ -1873,13 +1868,13 @@ func main() {
         assert!(is_nextjs_candidate("app/api/users/route.mts"));
         assert!(is_nextjs_candidate("app/api/users/route.cts"));
         assert!(is_nextjs_candidate("src/app/dashboard/page.tsx"));
-        // Reserved non-route files never match (only page.*/route.* pass)
+        // 保留的非路由文件永远不匹配（只有 page.*/route.* 通过）
         assert!(!is_nextjs_candidate("app/users/layout.tsx"));
         assert!(!is_nextjs_candidate("app/loading.tsx"));
         assert!(!is_nextjs_candidate("app/error.tsx"));
         assert!(!is_nextjs_candidate("app/not-found.tsx"));
         assert!(!is_nextjs_candidate("middleware.ts"));
-        // Non-target paths
+        // 非目标路径
         assert!(!is_nextjs_candidate("components/Button.tsx"));
         assert!(!is_nextjs_candidate("src/lib/utils.ts"));
         assert!(!is_nextjs_candidate("pages/index.tsx")); // Pages Router unsupported
@@ -1892,15 +1887,15 @@ func main() {
         assert_eq!(nextjs_route_for_path("app/users/[id]/page.tsx"), Some(("/users/:id".into(), false)));
         assert_eq!(nextjs_route_for_path("app/docs/[...slug]/page.tsx"), Some(("/docs/*".into(), false)));
         assert_eq!(nextjs_route_for_path("app/docs/[[...slug]]/page.tsx"), Some(("/docs/*".into(), false)));
-        // Route groups and parallel-route slots are omitted from the URL
+        // 路由组和并行路由槽从 URL 中省略
         assert_eq!(nextjs_route_for_path("app/(marketing)/about/page.tsx"), Some(("/about".into(), false)));
         assert_eq!(nextjs_route_for_path("app/@modal/login/page.tsx"), Some(("/login".into(), false)));
-        // Intercepting routes degrade to the plain segment (known limitation)
+        // 拦截路由降级为普通段（已知限制）
         assert_eq!(nextjs_route_for_path("app/feed/(.)photo/page.tsx"), Some(("/feed/photo".into(), false)));
         assert_eq!(nextjs_route_for_path("app/(..)login/page.tsx"), Some(("/login".into(), false)));
-        // API route files
+        // API 路由文件
         assert_eq!(nextjs_route_for_path("app/api/users/route.ts"), Some(("/api/users".into(), true)));
-        // Reserved names and non-target paths → None
+        // 保留名称和非目标路径 → None
         assert_eq!(nextjs_route_for_path("app/users/layout.tsx"), None);
         assert_eq!(nextjs_route_for_path("components/Button.tsx"), None);
         assert_eq!(nextjs_route_for_path("src/lib/utils.ts"), None);
@@ -1926,19 +1921,19 @@ export const PUT = async () => new Response('ok');
             vec![("GET", 4), ("POST", 8), ("PUT", 12)],
             "method + 1-based export line"
         );
-        // No exported handlers → empty
+        // 无导出处理函数 → 空
         assert!(extract_exported_http_methods("const x = 1;\nfunction helper() {}").is_empty());
-        // Non-exported handlers are ignored
+        // 未导出的处理函数被忽略
         assert!(extract_exported_http_methods("async function GET() {}").is_empty());
     }
 
     #[test]
     fn test_extract_exported_http_methods_typed_const() {
-        // F5: a type annotation between name and `=` is accepted.
+        // F5：名称和 `=` 之间的类型标注被接受。
         let source = "export const GET: RequestHandler = async () => new Response('ok');\n\
                       export const POST = async () => new Response('ok');\n";
         assert_eq!(extract_exported_http_methods(source), vec![("GET", 1), ("POST", 2)]);
-        // Typed re-declaration without assignment is still not a handler
+        // 无赋值的类型化重声明仍不是处理函数
         assert!(extract_exported_http_methods("export const GET: RequestHandler;").is_empty());
     }
 
@@ -1956,10 +1951,10 @@ export const PUT = async () => new Response('ok');
         assert_eq!(api[0].0, "GET");
         assert_eq!(api[1].0, "POST");
         assert_eq!(api[0].2, "app/api/users/route.ts#GET");
-        // N3: API route nodes point at the export line, not hardcoded line 1
+        // N3：API 路由节点指向导出行，而非硬编码的第 1 行
         assert_eq!(api[0].4, 1, "GET export line");
         assert_eq!(api[1].4, 2, "POST export line");
-        // API file exporting no HTTP methods → nothing
+        // 不导出 HTTP 方法的 API 文件 → 无输出
         assert!(detect_nextjs_routes("app/api/x/route.ts", Some("const y = 1;")).is_empty());
     }
 
@@ -1971,13 +1966,13 @@ export const PUT = async () => new Response('ok');
         assert!(is_sveltekit_candidate("src/routes/users/[id]/+page.svelte"));
         assert!(is_sveltekit_candidate("src/routes/api/users/+server.ts"));
         assert!(is_sveltekit_candidate("src/routes/api/users/+server.js"));
-        // Load/layout files are NOT routes
+        // Load/layout 文件不是路由
         assert!(!is_sveltekit_candidate("src/routes/+layout.svelte"));
         assert!(!is_sveltekit_candidate("src/routes/+error.svelte"));
         assert!(!is_sveltekit_candidate("src/routes/+page.ts"));
         assert!(!is_sveltekit_candidate("src/routes/+page.server.ts"));
         assert!(!is_sveltekit_candidate("src/routes/+layout.ts"));
-        // Non-target paths
+        // 非目标路径
         assert!(!is_sveltekit_candidate("src/lib/utils.ts"));
         assert!(!is_sveltekit_candidate("src/components/Button.svelte"));
     }
@@ -1986,7 +1981,7 @@ export const PUT = async () => new Response('ok');
     fn test_sveltekit_route_for_path() {
         assert_eq!(sveltekit_route_for_path("src/routes/+page.svelte"), Some(("/".into(), false)));
         assert_eq!(sveltekit_route_for_path("src/routes/users/[id]/+page.svelte"), Some(("/users/:id".into(), false)));
-        // Optional param [[lang]] → :lang (unlike Next's optional catch-all → *)
+        // 可选参数 [[lang]] → :lang（与 Next 的可选 catch-all → * 不同）
         assert_eq!(sveltekit_route_for_path("src/routes/[[lang]]/about/+page.svelte"), Some(("/:lang/about".into(), false)));
         assert_eq!(sveltekit_route_for_path("src/routes/docs/[...rest]/+page.svelte"), Some(("/docs/*".into(), false)));
         assert_eq!(sveltekit_route_for_path("src/routes/(app)/dashboard/+page.svelte"), Some(("/dashboard".into(), false)));
@@ -1997,8 +1992,8 @@ export const PUT = async () => new Response('ok');
 
     #[test]
     fn test_sveltekit_param_matcher_stripped() {
-        // F4: matcher syntax [id=integer] maps to :id (the =... is SvelteKit's
-        // param-matcher annotation, not part of the URL segment).
+        // F4：matcher 语法 [id=integer] 映射为 :id（=... 是 SvelteKit 的
+        // param-matcher 标注，非 URL 段的一部分）。
         assert_eq!(
             sveltekit_route_for_path("src/routes/users/[id=integer]/+page.svelte"),
             Some(("/users/:id".into(), false))
@@ -2060,17 +2055,17 @@ export const PUT = async () => new Response('ok');
         let cache: ParseCache = HashMap::new();
         let added = detect_framework_routes(&mut graph, &fixture_root, &cache, &discovered);
 
-        // Manifest: app/page.tsx 1 + app/users/page.tsx 1 + app/users/[id]/page.tsx 1
+        // 清单：app/page.tsx 1 + app/users/page.tsx 1 + app/users/[id]/page.tsx 1
         //           + app/docs/[...slug]/page.tsx 1 + app/(marketing)/about/page.tsx 1
         //           + app/api/users/route.ts 2 (GET+POST) + src/app/dashboard/page.tsx 1
-        //           + app/api/hono/route.ts 1 (GET; imports hono — F1 regression)
+        //           + app/api/hono/route.ts 1 (GET；导入 hono —— F1 回归测试)
         assert_eq!(added, 9, "fixture route count mismatch");
 
         let counts = framework_counts(&graph);
         assert_eq!(counts.get("nextjs"), Some(&9), "nextjs count, got {:?}", counts);
 
-        // Dispatch mutual exclusion: app/api/users/route.ts matches
-        // is_express_file's filename gate but must yield ZERO express/hono routes.
+        // 分发互斥：app/api/users/route.ts 匹配
+        // is_express_file 的文件名门控，但必须产生零条 express/hono 路由。
         assert!(!counts.contains_key("express"), "nextjs route.ts must not become express");
         assert!(!counts.contains_key("hono"), "nextjs route.ts must not become hono");
         for n in graph.nodes.values().filter(|n| n.properties["kind"] == "route") {
@@ -2081,9 +2076,9 @@ export const PUT = async () => new Response('ok');
             }
         }
 
-        // F1 regression: app/api/hono/route.ts imports hono AND registers
-        // app.get('/internal', ...) — the fs scan must claim the file
-        // exclusively, so the hono detector never runs on it.
+        // F1 回归测试：app/api/hono/route.ts 导入 hono 并注册
+        // app.get('/internal', ...) —— 文件系统扫描必须独占认领该文件，
+        // 因此 hono 检测器永远不会在其上运行。
         let hono_file_routes: Vec<_> = graph.nodes.values()
             .filter(|n| n.properties["kind"] == "route")
             .filter(|n| n.location.as_deref().unwrap_or("").contains("api/hono/route.ts"))
@@ -2118,10 +2113,10 @@ export const PUT = async () => new Response('ok');
         let cache: ParseCache = HashMap::new();
         let added = detect_framework_routes(&mut graph, &fixture_root, &cache, &discovered);
 
-        // Manifest: src/routes/+page.svelte 1 + users/[id]/+page.svelte 1
+        // 清单：src/routes/+page.svelte 1 + users/[id]/+page.svelte 1
         //           + [[lang]]/about/+page.svelte 1 + (app)/dashboard/+page.svelte 1
         //           + api/users/+server.ts 2 (GET+POST)
-        // +layout.svelte and +page.ts must NOT produce routes.
+        // +layout.svelte 和 +page.ts 不得产生路由。
         assert_eq!(added, 6, "fixture route count mismatch");
 
         let counts = framework_counts(&graph);

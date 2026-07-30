@@ -1,37 +1,37 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Unified lifecycle management — ResourceLedger + LifecycleService trait.
-// Replaces the scattered cleanup in main.rs WindowEvent::Destroyed.
+// 统一生命周期管理 — ResourceLedger + LifecycleService trait。
+// 替代 main.rs 中 WindowEvent::Destroyed 里分散的清理逻辑。
 
 use std::time::{Duration, Instant};
 
-/// Shutdown status returned by a service's shutdown() method.
+/// 服务 shutdown() 方法返回的关闭状态。
 #[derive(Debug)]
 pub enum ShutdownStatus {
-    /// Service shut down gracefully within the deadline.
+    /// 服务在截止时间内优雅关闭。
     Clean,
-    /// Service exceeded its deadline and was force-killed.
+    /// 服务超出截止时间并被强制终止。
     #[allow(dead_code)]
     Forced,
-    /// Service encountered an error during shutdown.
+    /// 服务在关闭过程中遇到错误。
     Failed(String),
-    /// Service has no state to clean up (e.g. stateless wrappers).
+    /// 服务无需清理状态（如无状态包装器）。
     NotApplicable,
 }
 
-/// Every backend service with lifecycle requirements implements this trait.
-/// Registered in ResourceLedger; shutdown is called in registration order
-/// during the Drain phase of app exit.
+/// 每个有生命周期需求的后端服务都实现此 trait。
+/// 在 ResourceLedger 中注册；在应用退出的 Drain 阶段
+/// 按注册顺序调用 shutdown。
 pub trait LifecycleService: Send + Sync {
     fn name(&self) -> &'static str;
-    /// Shut down the service. Must complete before `deadline`.
-    /// If the service cannot finish in time, it should force-kill and return `Forced`.
+    /// 关闭服务。必须在 `deadline` 之前完成。
+    /// 如果服务无法在时间内完成，应强制终止并返回 `Forced`。
     fn shutdown(&self, deadline: Instant) -> ShutdownStatus;
 }
 
-/// Central registry of all backend services with lifecycle management.
-/// Replaces ad-hoc cleanup scattered across main.rs setup() and Destroyed handler.
+/// 所有具有生命周期管理的后端服务的中央注册表。
+/// 替代 main.rs setup() 和 Destroyed 处理器中分散的清理逻辑。
 pub struct ResourceLedger {
     services: Vec<Box<dyn LifecycleService>>,
 }
@@ -46,10 +46,9 @@ impl ResourceLedger {
         self.services.push(svc);
     }
 
-    /// Phase 1 (Drain): sequentially shut down all registered services.
-    /// Each service gets up to `per_svc_budget`; total must not exceed `total_budget`.
-    /// Services that exceed their deadline are force-killed (if they support it)
-    /// or logged as `Forced`.
+    /// Phase 1 (Drain)：依次关闭所有已注册的服务。
+    /// 每个服务最多有 `per_svc_budget` 时间；总时间不得超过 `total_budget`。
+    /// 超出截止时间的服务被强制终止（如果支持）或记为 `Forced`。
     pub fn shutdown_all(&self, total_budget: Duration) {
         let global_deadline = Instant::now() + total_budget;
         let per_svc_budget = Duration::from_millis(500);
@@ -87,18 +86,18 @@ impl Default for ResourceLedger {
 }
 
 // ═══════════════════════════════════════════════════════
-// Service implementations — thin wrappers around existing globals
+// 服务实现 — 现有全局对象的轻量包装器
 // ═══════════════════════════════════════════════════════
 
-/// Background shell jobs — kill all spawned processes.
+/// 后台 shell 作业 — 终止所有已启动的进程。
 pub struct BgJobsService;
 
 impl LifecycleService for BgJobsService {
     fn name(&self) -> &'static str { "bg_jobs" }
 
     fn shutdown(&self, _deadline: Instant) -> ShutdownStatus {
-        // Use lock() instead of try_lock() — in shutdown path blocking is acceptable.
-        // Recover from poisoned mutex (a panicked monitor thread may have poisoned it).
+        // 使用 lock() 而非 try_lock() — 在关闭路径中阻塞是可接受的。
+        // 从中毒的 mutex 恢复（panic 的监控线程可能导致 mutex 中毒）。
         let mut jobs = crate::utils::BG_JOBS.lock().unwrap_or_else(|e| e.into_inner());
         for (_, job) in jobs.iter_mut() {
             let _ = job.child.kill();
@@ -109,7 +108,7 @@ impl LifecycleService for BgJobsService {
     }
 }
 
-/// MCP server process.
+/// MCP server 进程。
 pub struct McpService;
 
 impl LifecycleService for McpService {
@@ -123,7 +122,7 @@ impl LifecycleService for McpService {
     }
 }
 
-/// Unity editor process.
+/// Unity 编辑器进程。
 pub struct UnityService;
 
 impl LifecycleService for UnityService {
@@ -137,7 +136,7 @@ impl LifecycleService for UnityService {
     }
 }
 
-/// PTY sessions — kill all shells.
+/// PTY 会话 — 终止所有 shell。
 pub struct PtyService;
 
 impl LifecycleService for PtyService {
@@ -149,7 +148,7 @@ impl LifecycleService for PtyService {
     }
 }
 
-/// LSP servers — kill all language servers.
+/// LSP 服务器 — 终止所有语言服务器。
 pub struct LspService;
 
 impl LifecycleService for LspService {
@@ -161,7 +160,7 @@ impl LifecycleService for LspService {
     }
 }
 
-/// AuraSDK memory engine — close handle and free resources.
+/// AuraSDK 记忆引擎 — 关闭句柄并释放资源。
 pub struct AuraService;
 
 impl LifecycleService for AuraService {
@@ -175,7 +174,7 @@ impl LifecycleService for AuraService {
     }
 }
 
-/// memory-bundle.exe — kill the spawned process.
+/// memory-bundle.exe — 终止已启动的进程。
 pub struct MemoryBundleService;
 
 impl LifecycleService for MemoryBundleService {
@@ -192,7 +191,7 @@ impl LifecycleService for MemoryBundleService {
     }
 }
 
-/// Unity event TCP server — set shutdown flag so the listener thread exits.
+/// Unity 事件 TCP 服务器 — 设置关闭标志使监听线程退出。
 pub struct UnityEventService;
 
 impl LifecycleService for UnityEventService {
@@ -205,19 +204,19 @@ impl LifecycleService for UnityEventService {
     }
 }
 
-/// Structured logging — drop WorkerGuard to flush non-blocking writer.
+/// 结构化日志 — 丢弃 WorkerGuard 以刷新非阻塞写入器。
 pub struct LoggingService;
 
 impl LifecycleService for LoggingService {
     fn name(&self) -> &'static str { "logging" }
 
     fn shutdown(&self, _deadline: Instant) -> ShutdownStatus {
-        // Take the WorkerGuard out of the OnceLock and drop it to flush.
-        // OnceLock::get doesn't allow taking, so we use a different approach:
-        // The guard is stored in utils::LOG_GUARD (OnceLock<WorkerGuard>).
-        // OnceLock doesn't have take(), but we can't move out of it anyway.
-        // The non-blocking writer will be flushed when the process exits.
-        // For explicit flush, we rely on process::exit() which drops everything.
+        // 取出 WorkerGuard 并丢弃以刷新。
+        // OnceLock::get 不允许 take，所以我们用不同方式：
+        // guard 存储在 utils::LOG_GUARD (OnceLock<WorkerGuard>) 中。
+        // OnceLock 没有 take()，但我们也无法从中 move 出来。
+        // 非阻塞写入器在进程退出时会被刷新。
+        // 对于显式刷新，我们依赖 process::exit() 来 drop 所有内容。
         ShutdownStatus::NotApplicable
     }
 }
