@@ -133,16 +133,14 @@ const SettingsPanelApp: React.FC<{
   const isAnthropic = active?.kind === 'anthropic';
 
   // ── Load LSP status when Languages tab opens ──
-  // Poll until at least one server is running (backend warm is async).
   const lspLoaded = useRef(false);
   const lspPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lspPollCount = useRef(0);
+  const MAX_LSP_POLLS = 15; // 30s max
   useEffect(() => {
     if (activeTab !== 'languages' || lspLoaded.current) return;
     lspLoaded.current = true;
     setLspLoading(true);
-
-    let pollCount = useRef(0);
-    const MAX_POLLS = 15; // 30s max
 
     const fetchStatus = () => {
       invoke<string>('rpc', { method: 'hologram_call', params: { tool: 'engine_status', args: {} } })
@@ -152,11 +150,11 @@ const SettingsPanelApp: React.FC<{
             setLspStatus(parsed.lsp);
             // Stop when all installed servers have resolved (running or error),
             // or we've polled enough times.
-            pollCount.current += 1;
+            lspPollCount.current += 1;
             const allResolved = parsed.lsp.servers.every(
               (s: any) => s.available || s.error || !s.installed,
             );
-            if ((allResolved || pollCount.current >= MAX_POLLS) && lspPollTimer.current) {
+            if ((allResolved || lspPollCount.current >= MAX_LSP_POLLS) && lspPollTimer.current) {
               clearInterval(lspPollTimer.current);
               lspPollTimer.current = null;
             }
