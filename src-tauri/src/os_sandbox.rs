@@ -481,7 +481,7 @@ pub mod imp {
     /// (e.g. cargo test binaries spawned by bash) cannot hold the pipe
     /// open after the immediate child exits.
     pub fn spawn(cmdline: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
-        use std::os::windows::io::FromRawHandle;
+        use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
 
         let (program, args) = split_cmdline(cmdline);
 
@@ -505,10 +505,14 @@ pub mod imp {
         // Replace child's stdout/stderr with our reader handles.
         // Command::spawn leaves stdout/stderr as None when custom Stdio is used.
         child.stdout = Some(unsafe {
-            std::process::ChildStdout::from_raw_handle(stdout_read)
+            std::process::ChildStdout::from(OwnedHandle::from_raw_handle(
+                stdout_read as RawHandle,
+            ))
         });
         child.stderr = Some(unsafe {
-            std::process::ChildStderr::from_raw_handle(stderr_read)
+            std::process::ChildStderr::from(OwnedHandle::from_raw_handle(
+                stderr_read as RawHandle,
+            ))
         });
 
         job::assign(&child);
@@ -518,6 +522,7 @@ pub mod imp {
     /// Create a pipe where the child (write) end is marked non-inheritable.
     /// Returns (parent_read_handle, child_write_as_stdio).
     fn create_non_inheritable_pipe() -> io::Result<(isize, std::process::Stdio)> {
+        use std::os::windows::io::{FromRawHandle, RawHandle};
         let mut read: isize = 0;
         let mut write: isize = 0;
         let ret = unsafe {
@@ -540,7 +545,7 @@ pub mod imp {
         }
         // Convert write handle to Stdio — consumed by Command::stdout/stderr
         let child_stdio = unsafe {
-            std::process::Stdio::from_raw_handle(write)
+            std::process::Stdio::from_raw_handle(write as RawHandle)
         };
         Ok((read, child_stdio))
     }
