@@ -10,6 +10,7 @@
 // agent/ 层永远不 import 此文件。
 
 import type { AgentEvent, EventSink } from '../agent/agent-types';
+import { agentSessionState } from '../agent/agent-session-state';
 import type { AgentStatus, RuntimeNotifier } from '../agent/runtime/types';
 import type { Message } from '../provider/types';
 import { useAgentPanelStore } from './agent-panel-store';
@@ -45,11 +46,24 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
     },
 
     onSessionReplaced(_agentId: string, messages: Message[]): void {
-      const sessStore = getChatStore(storeId).sess.getState();
-      const sid = sessStore.sessions[sessStore.activeIdx]?.id;
-      if (sid != null) {
-        rebuildMessagesFromMessages(messages, storeId, sid);
+      // Route by ownership, NOT by active tab: find the session whose registered
+      // agent actually holds this session array (sessionReplaced passes
+      // `this.session` — the same reference getSession() returns).
+      // Previously this rebuilt the ACTIVE session's store unconditionally, so a
+      // background-session compaction (or a history-load setSession fired before
+      // the new tab became active) overwrote the foreground tab's messages with
+      // another session's content — every tab ended up showing the same chat.
+      const { sessions } = getChatStore(storeId).sess.getState();
+      for (const s of sessions) {
+        const agent = agentSessionState.getAgent(storeId, s.id);
+        if (agent && agent.getSession() === messages) {
+          rebuildMessagesFromMessages(messages, storeId, s.id);
+          return;
+        }
       }
+      // No registered owner: the agent is mid-restore — setSession() runs before
+      // setAgent() in loadSessionFromDisk / autoRestoreLastSession, and those
+      // flows rebuild explicitly via renderRestoredSession. Leave stores alone.
     },
 
     onSubAgentSpawn(info): EventSink | undefined {
