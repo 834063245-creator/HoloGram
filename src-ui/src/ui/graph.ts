@@ -643,6 +643,8 @@ export class StarGraph {
 
   // DPR 监听：matchMedia 的 resolution query 一次性失效，变化后按新 DPR 重挂
   private watchDpr(): void {
+    // jsdom 等非完整浏览器环境没有 matchMedia —— 跳过监听，渲染本身不受影响
+    if (typeof matchMedia !== 'function') return;
     const q = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
     q.addEventListener(
       'change',

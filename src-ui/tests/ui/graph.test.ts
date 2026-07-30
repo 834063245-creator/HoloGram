@@ -188,8 +188,20 @@ vi.mock('three', () => {
       setAttribute(name: string, attr: any) {
         this.attributes[name] = attr;
       }
+      setIndex(_arr: any) {
+        return this;
+      }
     },
     BufferAttribute: class {
+      array: Float32Array;
+      itemSize: number;
+      needsUpdate = false;
+      constructor(arr: Float32Array, itemSize: number) {
+        this.array = arr;
+        this.itemSize = itemSize;
+      }
+    },
+    InstancedBufferAttribute: class {
       array: Float32Array;
       itemSize: number;
       needsUpdate = false;

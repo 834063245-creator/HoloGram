@@ -168,6 +168,7 @@ describe('P3 reverse: 新加 coding 工具没加 hook 常量 → 炸', () => {
     'read_constraints', // 配置文件
     'bash_output', // 后台输出查询
     'bash_kill', // 后台管理
+    'bash_wait', // 后台任务等待 — 只读，不碰文件
     'monitor', // shell 轮询 — 只读，不碰文件
     'web_search', // 网络搜索
     'web_fetch', // 网页抓取
