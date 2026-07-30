@@ -1723,9 +1723,12 @@ ${resumeNote}
       let start = regionEnd;
       while (start < msgs.length && msgs[start].role === 'tool') start++;
       const region = msgs.slice(head, start);
+      // Accumulated compression: if a previous compaction left a summary,
+      // include it so the LLM merges rather than re-summarizes from scratch.
+      const priorSummary = extractCompactedContext(msgs, head);
       let summary: string | null = null;
       try {
-        summary = await this.summarizeRegion(signal, region);
+        summary = await this.summarizeRegion(signal, region, priorSummary);
       } catch (e: any) {
         log.warn('agent', `summarizeRegion failed (${e?.message || e}), falling back to truncation`);
       }
@@ -1870,8 +1873,10 @@ ${resumeNote}
     let start = regionEnd;
     while (start < msgs.length && msgs[start].role === 'tool') start++;
     const region = msgs.slice(head, start);
+    // Accumulated compression: merge previous summary if present
+    const priorSummary = extractCompactedContext(msgs, head);
     const abortCtrl = new AbortController();
-    this.summarizeRegion(abortCtrl.signal, region)
+    this.summarizeRegion(abortCtrl.signal, region, priorSummary)
       .then((summary) => {
         if (genAtStart !== this._execState.sessionVersion) {
           this.compactRunning = false;
@@ -1948,9 +1953,18 @@ ${resumeNote}
       });
   }
 
-  /** Call the provider (no tools) to summarize a message region. */
-  private async summarizeRegion(signal: AbortSignal, msgs: Message[]): Promise<string> {
-    const summaryPrompt = `你是对话压缩器。把以下编码 Agent 的对话历史浓缩为一份简报。Agent 只会保留你的摘要（原始消息会被丢弃），因此必须能从摘要中恢复任务。
+  /** Call the provider (no tools) to summarize a message region.
+   *  @param priorSummary content from a previous `<compacted-context>` block to
+   *    merge with the new region (accumulated compression), or null if this is the
+   *    first compaction. */
+  private async summarizeRegion(signal: AbortSignal, msgs: Message[], priorSummary: string | null = null): Promise<string> {
+    // When merging, instruct the LLM to treat the prior summary as established
+    // background and only overwrite when new evidence contradicts it.
+    const mergeInstruction = priorSummary
+      ? `\n以下是在本次压缩之前生成的会话背景简报。新消息可能覆盖或补充其中的内容——合并时以新消息为准，未变的旧事实直接保留：\n\n<previous-summary>\n${priorSummary}\n</previous-summary>`
+      : '';
+
+    const summaryPrompt = `你是对话压缩器。把以下编码 Agent 的对话历史浓缩为一份简报。Agent 只会保留你的摘要（原始消息会被丢弃），因此必须能从摘要中恢复任务。${mergeInstruction}
 
 按这些标题写（没有内容的标题可以省略）：
 
@@ -2449,6 +2463,25 @@ function finishReasonMessage(u?: Usage): string | undefined {
     default:
       return undefined;
   }
+}
+
+/** Check if session messages[head] is a previous compaction summary.
+ *  Returns its text content (without the XML wrapper) so the next compaction
+ *  can merge it with new messages instead of re-summarizing from scratch. */
+function extractCompactedContext(msgs: Message[], head: number): string | null {
+  if (head >= msgs.length) return null;
+  const content = msgs[head]?.content;
+  if (typeof content !== 'string') return null;
+  const startTag = '<compacted-context>';
+  const endTag = '</compacted-context>';
+  const openIdx = content.indexOf(startTag);
+  if (openIdx === -1) return null;
+  const bodyStart = openIdx + startTag.length;
+  const bodyEnd = content.indexOf(endTag, bodyStart);
+  if (bodyEnd === -1) return null;
+  // Skip past the opening line break after the tag
+  const body = content.slice(bodyStart, bodyEnd).trimStart();
+  return body || null;
 }
 
 function renderTranscript(msgs: Message[]): string {
