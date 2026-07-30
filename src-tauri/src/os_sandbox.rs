@@ -267,18 +267,26 @@ pub mod imp {
     // ── FFI declarations ──
 
     extern "system" {
-        // Job Object
+                // Job Object
         fn CreateJobObjectW(attrs: *mut std::ffi::c_void, name: *const u16) -> isize;
         fn SetInformationJobObject(
             job: isize, info_class: i32, info: *const std::ffi::c_void, info_len: u32,
         ) -> i32;
         fn AssignProcessToJobObject(job: isize, process: isize) -> i32;
+        // Pipe creation
+        fn CreatePipe(
+            read: *mut isize, write: *mut isize,
+            attrs: *mut std::ffi::c_void, size: u32,
+        ) -> i32;
+        fn SetHandleInformation(handle: isize, mask: u32, flags: u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
     }
 
     // ── Constants ──
 
     const DETACHED_PROCESS: u32 = 0x00000008;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const HANDLE_FLAG_INHERIT: u32 = 1;
 
     // Job Object limits
     const JOB_OBJECT_LIMIT_DIE_ON_JOB_CLOSE: u32 = 0x00002000;
@@ -469,20 +477,72 @@ pub mod imp {
     // ── Sandboxed spawn (Job Object only) ──
 
     /// Spawn a shell command and assign it to the Job Object.
+    /// Uses non-inheritable stdout/stderr pipes so grandchild processes
+    /// (e.g. cargo test binaries spawned by bash) cannot hold the pipe
+    /// open after the immediate child exits.
     pub fn spawn(cmdline: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
+        use std::os::windows::io::FromRawHandle;
+
         let (program, args) = split_cmdline(cmdline);
+
+        // Create stdout/stderr pipes with child ends marked non-inheritable.
+        // This prevents subprocesses (cargo → test binaries) from holding
+        // the pipe handles open, which would cause read_to_end to block forever.
+        let (stdout_read, stdout_write) = create_non_inheritable_pipe()?;
+        let (stderr_read, stderr_write) = create_non_inheritable_pipe()?;
+
         let mut c = std::process::Command::new(&program);
         for a in &args {
             c.arg(a);
         }
         c.current_dir(cwd)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(stdout_write)
+            .stderr(stderr_write)
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
-        let child = c.spawn()?;
+        let mut child = c.spawn()?;
+
+        // Replace child's stdout/stderr with our reader handles.
+        // Command::spawn leaves stdout/stderr as None when custom Stdio is used.
+        child.stdout = Some(unsafe {
+            std::process::ChildStdout::from_raw_handle(stdout_read)
+        });
+        child.stderr = Some(unsafe {
+            std::process::ChildStderr::from_raw_handle(stderr_read)
+        });
+
         job::assign(&child);
         Ok(super::SandboxedChild { inner: child })
+    }
+
+    /// Create a pipe where the child (write) end is marked non-inheritable.
+    /// Returns (parent_read_handle, child_write_as_stdio).
+    fn create_non_inheritable_pipe() -> io::Result<(isize, std::process::Stdio)> {
+        let mut read: isize = 0;
+        let mut write: isize = 0;
+        let ret = unsafe {
+            CreatePipe(&mut read, &mut write, std::ptr::null_mut(), 0)
+        };
+        if ret == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Mark child's write handle as non-inheritable.
+        // read (parent) handle stays inheritable so Rust can manage it.
+        let ret = unsafe {
+            SetHandleInformation(write, HANDLE_FLAG_INHERIT, 0)
+        };
+        if ret == 0 {
+            unsafe {
+                CloseHandle(read);
+                CloseHandle(write);
+            }
+            return Err(io::Error::last_os_error());
+        }
+        // Convert write handle to Stdio — consumed by Command::stdout/stderr
+        let child_stdio = unsafe {
+            std::process::Stdio::from_raw_handle(write)
+        };
+        Ok((read, child_stdio))
     }
 
     // ── Command-line helpers ──
