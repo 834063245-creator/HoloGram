@@ -1083,14 +1083,6 @@ export const ChatMessagesApp: React.FC<{
   // ── Virtual list setup ──
   // Pretext provides estimated heights; measureElement corrects after render.
   const containerWidthRef = useRef(300);
-  useEffect(() => {
-    if (!scrollEl) return;
-    const update = () => { containerWidthRef.current = scrollEl.clientWidth; };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(scrollEl);
-    return () => ro.disconnect();
-  }, [scrollEl]);
 
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -1100,15 +1092,37 @@ export const ChatMessagesApp: React.FC<{
     return msgs[i] ? estimateMessageHeight(msgs[i], containerWidthRef.current) : 60;
   }, []);
 
+  // Key measurements by message id, not index — otherwise session switches and
+  // history truncation (edit/resend) reattach stale heights to the wrong messages.
+  const getItemKey = useCallback((i: number) => messagesRef.current[i]?._id ?? i, []);
+
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => scrollEl,
     estimateSize,
+    getItemKey,
     overscan: 4,
     gap: getMessageGap(),
   });
   const virtualizerRef = useRef(virtualizer);
   virtualizerRef.current = virtualizer;
+
+  // Track container width for text-wrap estimation, and force the virtualizer
+  // to re-estimate when it actually changes — estimates are width-dependent.
+  useEffect(() => {
+    if (!scrollEl) return;
+    let lastWidth = scrollEl.clientWidth;
+    containerWidthRef.current = lastWidth;
+    const ro = new ResizeObserver(() => {
+      const w = scrollEl.clientWidth;
+      if (w === lastWidth) return;
+      lastWidth = w;
+      containerWidthRef.current = w;
+      virtualizerRef.current.measure();
+    });
+    ro.observe(scrollEl);
+    return () => ro.disconnect();
+  }, [scrollEl]);
 
   // Reset stick-to-bottom when switching sessions — don't inherit the
   // scroll position (and stickRef state) from the previous session.

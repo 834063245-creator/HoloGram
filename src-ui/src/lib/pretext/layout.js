@@ -343,6 +343,16 @@ function measureAnalysis(analysis, font, includeSegments, wordBreak, letterSpaci
             consumedEndSegmentIndex: widths.length,
         });
     }
+    else if (analysis.len > 0 && analysis.kinds[analysis.len - 1] === 'hard-break') {
+        // CSS pre-wrap creates an empty line box after a trailing newline
+        // ("a\n" lays out as 2 lines). Emit one more empty chunk so the
+        // line count matches the DOM.
+        chunks.push({
+            startSegmentIndex: widths.length,
+            endSegmentIndex: widths.length,
+            consumedEndSegmentIndex: widths.length,
+        });
+    }
     const segLevels = segStarts === null ? null : computeSegmentLevels(analysis.normalized, segStarts);
     if (segments !== null) {
         return {

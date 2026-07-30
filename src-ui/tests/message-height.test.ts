@@ -48,6 +48,7 @@ describe('estimateMessageHeight', () => {
   });
 
   it('estimates assistant message with tool part', () => {
+    // Done tools render collapsed (output is display:none) → header only.
     const msg = makeAssistantMessage([
       {
         type: 'tool',
@@ -61,7 +62,8 @@ describe('estimateMessageHeight', () => {
       },
     ]);
     const h = estimateMessageHeight(msg, 300);
-    expect(h).toBeGreaterThan(40); // header + output estimate
+    // 36 (header) + 20 (bubble padding) + 22 (actions row) = 78
+    expect(h).toBe(78);
   });
 
   it('estimates assistant message with reasoning part', () => {
@@ -119,7 +121,9 @@ describe('estimateMessageHeight', () => {
     expect(hFinalised).toBeGreaterThanOrEqual(hStreaming);
   });
 
-  it('subagent part with running status recurses into child parts', () => {
+  it('subagent part estimates collapsed (header only) even while running', () => {
+    // Sub-agent cards are default-collapsed regardless of status (36f7d6e);
+    // children only render when the user expands the card.
     const msg = makeAssistantMessage([
       {
         type: 'subagent',
@@ -134,7 +138,8 @@ describe('estimateMessageHeight', () => {
       },
     ]);
     const h = estimateMessageHeight(msg, 300);
-    expect(h).toBeGreaterThan(36); // header + child parts
+    // 36 (header) + 20 (bubble padding) + 22 (actions row) = 78
+    expect(h).toBe(78);
   });
 
   it('subagent part with done status returns header only', () => {
@@ -156,6 +161,7 @@ describe('estimateMessageHeight', () => {
   });
 
   it('handles tool part with error', () => {
+    // Error details render inside the collapsed card → still header only.
     const msg = makeAssistantMessage([
       {
         type: 'tool',
@@ -169,7 +175,37 @@ describe('estimateMessageHeight', () => {
       },
     ]);
     const h = estimateMessageHeight(msg, 300);
-    expect(h).toBeGreaterThan(40);
+    expect(h).toBe(78);
+  });
+
+  it('reasoning estimates collapsed once the message is done', () => {
+    // While streaming the block is expanded (measured); after done it
+    // auto-collapses to the 32px header.
+    const done: AssistantMessage = {
+      role: 'assistant',
+      _id: 'a2',
+      parts: [{ type: 'reasoning', text: 'long reasoning '.repeat(50) }],
+      status: 'done',
+      respondingTo: 'u1',
+    };
+    const h = estimateMessageHeight(done, 300);
+    // 32 (collapsed header) + 20 (bubble padding) + 22 (actions row) = 74
+    expect(h).toBe(74);
+  });
+
+  it('estimates plan parts from content + card chrome', () => {
+    const msg = makeAssistantMessage([
+      {
+        type: 'plan',
+        planId: 'pl1',
+        planFilePath: '/tmp/plan.md',
+        content: '# Plan\n\nDo the thing',
+        status: 'pending',
+      },
+    ]);
+    const h = estimateMessageHeight(msg, 300);
+    // Chrome (64) + measured content + padding/actions — must not be 0-height
+    expect(h).toBeGreaterThan(64 + 20 + 22);
   });
 });
 

@@ -9,9 +9,10 @@ import { prepare, layout, clearCache, type PreparedText } from '../lib/pretext/l
 // ── Font constants (must match chat.css) ──
 
 // .msg-bubble: font-size = calc(11px * var(--font-scale)), line-height: 1.6
+// (assistant markdown text overrides to 1.7 via .msg-markdown).
 // --font-scale defaults to 1 (tokens.css). We read it at measurement time
 // in case the user changed it.
-function fontScale(): number {
+export function fontScale(): number {
   if (typeof document !== 'undefined') {
     const v = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();
     const n = Number.parseFloat(v);
@@ -20,25 +21,26 @@ function fontScale(): number {
   return 1;
 }
 
-// Body font for user + assistant text parts
+// Body font for user + assistant text parts.
+// NOTE: no Math.round — CSS keeps fractional px (e.g. 12.65px at scale 1.15)
+// and canvas accepts fractional sizes; rounding skews every measured width.
 export function bodyFont(): string {
-  const s = Math.round(11 * fontScale());
-  return `${s}px "LXGW WenKai", "Noto Sans SC", system-ui, sans-serif`;
+  return `${11 * fontScale()}px "LXGW WenKai", "Noto Sans SC", system-ui, sans-serif`;
 }
 
-// Body line-height: CSS uses 1.6 for .msg-bubble
-export function bodyLineHeight(): number {
-  return Math.round(11 * fontScale() * 1.6);
+// Body line-height: .msg-bubble uses 1.6, .msg-markdown (assistant text) 1.7.
+// Fractional too — Blink lays out at 17.6px, not 18px.
+export function bodyLineHeight(mult = 1.6): number {
+  return 11 * fontScale() * mult;
 }
 
 // Mono font for code blocks (streaming tail + tool output)
 export function monoFont(): string {
-  const s = Math.round(9 * fontScale());
-  return `${s}px "JetBrains Mono", "Cascadia Code", monospace`;
+  return `${9 * fontScale()}px "JetBrains Mono", "Cascadia Code", monospace`;
 }
 
-export function monoLineHeight(): number {
-  return Math.round(9 * fontScale() * 1.5);
+export function monoLineHeight(mult = 1.5): number {
+  return 9 * fontScale() * mult;
 }
 
 // ── prepare() cache ──
@@ -52,7 +54,10 @@ export function getPrepared(text: string, font: string): PreparedText {
   const key = `${font}::${text}`;
   let p = prepareCache.get(key);
   if (p === undefined) {
-    p = prepare(text, font);
+    // whiteSpace must mirror the DOM: .msg-text is pre-wrap, so \n is a hard
+    // line break — the library default 'normal' would collapse it to a space
+    // and undercount lines for any multi-line message.
+    p = prepare(text, font, { whiteSpace: 'pre-wrap' });
     prepareCache.set(key, p);
     // Cap cache size — evict oldest entries
     if (prepareCache.size > 500) {
