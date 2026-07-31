@@ -40,7 +40,10 @@ const LSP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// 通过 LSP Content-Length 帧协议读写 JSON-RPC 消息。
 struct LspProcess {
     process: Child,
-    stdin: ChildStdin,
+    /// Arc<Mutex> 包装：读响应线程也需要写回复
+    /// （服务器发来的 workspace/configuration 等请求必须回 null，
+    ///   否则服务器阻塞、后续所有查询排队超时）。
+    stdin: Arc<Mutex<ChildStdin>>,
     reader: Option<BufReader<std::process::ChildStdout>>,
     #[allow(dead_code)]
     stderr: Option<std::process::ChildStderr>,
@@ -49,6 +52,21 @@ struct LspProcess {
 }
 
 impl LspProcess {
+    /// 以 LSP Content-Length 帧协议写一条完整消息。
+    /// 静态版本供读线程（无 &self）回复服务器请求使用。
+    fn write_message_static(stdin: &Arc<Mutex<ChildStdin>>, body: &str) -> Result<(), String> {
+        let mut stdin = stdin.lock().map_err(|e| format!("stdin lock: {}", e))?;
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        stdin.write_all(header.as_bytes()).map_err(|e| format!("write: {}", e))?;
+        stdin.write_all(body.as_bytes()).map_err(|e| format!("write body: {}", e))?;
+        stdin.flush().map_err(|e| format!("flush: {}", e))?;
+        Ok(())
+    }
+
+    fn write_message(&self, body: &str) -> Result<(), String> {
+        Self::write_message_static(&self.stdin, body)
+    }
+
     /// 发送 JSON-RPC 请求并等待响应。
     ///
     /// LSP 服务器会在请求/响应周期之间异步发送诊断和日志通知——
@@ -66,16 +84,14 @@ impl LspProcess {
             "params": params,
         });
         let body = serde_json::to_string(&request).map_err(|e| e.to_string())?;
-        // LSP 帧协议：Content-Length 头 + 空行 + JSON body
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.stdin.write_all(header.as_bytes()).map_err(|e| format!("write: {}", e))?;
-        self.stdin.write_all(body.as_bytes()).map_err(|e| format!("write body: {}", e))?;
-        self.stdin.flush().map_err(|e| format!("flush: {}", e))?;
+        self.write_message(&body)?;
 
         // 在独立线程中读取响应以实现超时控制
         // LSP 服务器会异步发送诊断/日志通知——跳过这些，等待匹配 id 的响应
         let mut reader = self.reader.take()
             .ok_or("LSP reader lost (previous call timed out) — server will be recreated")?;
+        // 读线程需要写回复（服务器发来的请求），克隆 stdin 句柄
+        let stdin_for_thread = self.stdin.clone();
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -87,6 +103,21 @@ impl LspProcess {
                                 break Err(format!("LSP error: {}", err));
                             }
                             break Ok(response);
+                        }
+                        // 服务器发来的请求（有 id + method 字段，如
+                        // workspace/configuration、client/registerCapability）——
+                        // 必须回复 null 空结果，否则服务器阻塞等待，
+                        // 我们后续的查询全部排队超时。
+                        if let Some(req_id) = resp_id {
+                            if response.get("method").and_then(|m| m.as_str()).is_some() {
+                                let reply = json!({"jsonrpc": "2.0", "id": req_id, "result": null});
+                                if let Ok(reply_body) = serde_json::to_string(&reply) {
+                                    if let Err(e) = Self::write_message_static(&stdin_for_thread, &reply_body) {
+                                        tracing::debug!(err = %e, "[lsp_manager] failed to reply to server request");
+                                    }
+                                }
+                                continue;
+                            }
                         }
                         // 通知或过期响应 → 跳过
                     }
@@ -119,11 +150,7 @@ impl LspProcess {
     fn send_notification(&mut self, method: &str, params: Value) -> Result<(), String> {
         let notif = json!({"jsonrpc": "2.0", "method": method, "params": params});
         let body = serde_json::to_string(&notif).map_err(|e| e.to_string())?;
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.stdin.write_all(header.as_bytes()).map_err(|e| format!("write: {}", e))?;
-        self.stdin.write_all(body.as_bytes()).map_err(|e| format!("write body: {}", e))?;
-        self.stdin.flush().map_err(|e| format!("flush: {}", e))?;
-        Ok(())
+        self.write_message(&body)
     }
 
     /// 读取单条 JSON-RPC 消息并返回 (id, body)。
@@ -312,8 +339,8 @@ impl LspProcess {
 impl Drop for LspProcess {
     fn drop(&mut self) {
         // 尝试优雅关闭：发送 shutdown 请求后 kill 进程
-        let _ = self.stdin.write_all(
-            json!({"jsonrpc":"2.0","method":"shutdown","params":null}).to_string().as_bytes(),
+        let _ = self.write_message(
+            json!({"jsonrpc":"2.0","method":"shutdown","params":null}).to_string().as_ref(),
         );
         let _ = self.process.kill();
     }
@@ -848,7 +875,7 @@ impl LspManager {
 
         let mut process = LspProcess {
             process: child,
-            stdin,
+            stdin: Arc::new(Mutex::new(stdin)),
             reader: Some(BufReader::new(stdout)),
             stderr,
             next_id: 0,
@@ -1223,7 +1250,7 @@ mod tests {
 
         LspProcess {
             process: child,
-            stdin,
+            stdin: Arc::new(Mutex::new(stdin)),
             reader: Some(BufReader::new(stdout)),
             stderr: None,
             next_id: 0,
