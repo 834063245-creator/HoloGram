@@ -1816,7 +1816,7 @@ pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
     let _include_decl = args.get("includeDeclaration").and_then(|v| v.as_bool()).unwrap_or(false);
 
     // 尝试原生 LSP
-    match crate::lsp_manager::LspManager::find_references(&path_str, &source, line, column, &ext) {
+    let lsp_err: Option<String> = match crate::lsp_manager::LspManager::find_references(&path_str, &source, line, column, &ext) {
         Ok(locs) if !locs.is_empty() => {
             return ToolResponse::Success(json!({
                 "file": path_str, "line": line, "column": column,
@@ -1829,8 +1829,9 @@ pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
                 "count": locs.len(),
             }));
         }
-        _ => {}
-    }
+        Ok(_) => None, // 无引用 — 正常
+        Err(e) => Some(e), // 记录错误供诊断
+    };
 
     // 回退：使用图查找入边引用
     match engine::engine_read_graph(|g| {
@@ -1843,14 +1844,18 @@ pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
                 "kind": format!("{:?}", e.kind),
             }))
             .collect();
-        json!({
+        let mut out = json!({
             "file": path_str, "line": line, "column": column,
             "backend": "graph",
             "native_lsp_available": crate::lsp_manager::LspManager::is_available(&ext),
             "note": "Graph-based fallback — use native LSP for precise symbol references. Provide line+column for precise resolution.",
             "references": refs,
             "count": refs.len(),
-        })
+        });
+        if let Some(e) = &lsp_err {
+            out["lsp_error"] = json!(e);
+        }
+        out
     }) {
         Ok(v) => ToolResponse::Success(v),
         Err(e) => ToolResponse::Degraded {

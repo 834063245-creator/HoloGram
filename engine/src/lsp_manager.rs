@@ -32,7 +32,12 @@ use serde_json::{json, Value};
 // ═══════════════════════════════════════════════════════════════
 
 /// 默认 LSP 请求超时时间。
-const LSP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// ponytail: 曾为 30s。typescript-language-server 在这台机器上
+/// 初始化后 references 请求 30s 不响应（服务器侧环境问题），
+/// 导致工具调用卡死 30s 才 fallback。降到 5s 快速失败 ——
+/// LSP 可用时 5s 足够（本地语言服务器响应毫秒级），
+/// 不可用时避免长时间阻塞用户。
+const LSP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// 单个 LSP 服务器进程的句柄。
 ///
