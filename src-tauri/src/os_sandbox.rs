@@ -698,6 +698,108 @@ pub mod imp {
                 Shell::Cmd => {}
             }
         }
+
+        /// 大输出管道对照实验：同一命令 `seq 1 5000`（约 25KB 输出），
+        /// 分别走手工管道（spawn_shell / CreatePipe）和标准库 Stdio::piped()。
+        /// 用于定位"大输出后台任务卡死"根因 —— 手工管道 vs 标准库实现。
+        /// 只输出诊断信息，不 assert（避免测试本身卡死 / 平台差异误报）。
+        #[test]
+        #[cfg(windows)]
+        fn test_compare_handmade_pipe_vs_std_piped_large_output() {
+            use std::sync::mpsc;
+            use std::time::{Duration, Instant};
+
+            let bash_path = match detect_shell() {
+                Shell::Bash(ref p) => p.clone(),
+                Shell::Cmd => {
+                    eprintln!("[pipe-compare] no bash detected, skip");
+                    return;
+                }
+            };
+
+            // ── 方式 A: 手工管道（spawn_shell → imp::spawn → CreatePipe） ──
+            let mut child_a = super::super::spawn_shell("seq 1 5000", ".").expect("spawn_shell failed");
+            let mut reader_a = child_a.take_stdout().expect("take_stdout failed");
+            let (tx_a, rx_a) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut v = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut reader_a, &mut v);
+                let _ = tx_a.send(v.len());
+            });
+            let a_start = Instant::now();
+            let a_bytes = rx_a.recv_timeout(Duration::from_secs(5));
+            let a_elapsed = a_start.elapsed();
+            child_a.kill_tree().ok();
+
+            // ── 方式 B: 标准库 Stdio::piped() ──
+            let mut child_b = std::process::Command::new(&bash_path)
+                .arg("-c")
+                .arg("seq 1 5000")
+                .current_dir(".")
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("std spawn failed");
+            let mut reader_b = child_b.stdout.take().expect("std stdout failed");
+            let (tx_b, rx_b) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut v = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut reader_b, &mut v);
+                let _ = tx_b.send(v.len());
+            });
+            let b_start = Instant::now();
+            let b_bytes = rx_b.recv_timeout(Duration::from_secs(5));
+            let b_elapsed = b_start.elapsed();
+            let _ = child_b.kill();
+
+            eprintln!("[pipe-compare] handmade: {:?} bytes in {:?} (Err=超时卡住)", a_bytes, a_elapsed);
+            eprintln!("[pipe-compare] std-piped: {:?} bytes in {:?} (Err=超时卡住)", b_bytes, b_elapsed);
+        }
+
+        /// 完整后台链路复现：spawn_bg → drain 线程 → read_bg_output / wait_bg。
+        /// 复现 Agent 跑 `seq 1 5000`（大输出后台任务）的卡死现场。
+        /// 只输出诊断，不 assert（避免测试卡死）。
+        #[test]
+        #[cfg(windows)]
+        fn test_repro_background_large_output_chain() {
+            use std::time::{Duration, Instant};
+
+            // spawn_bg 需要 os_sandbox::init() 的 Job Object? 不需要 — spawn_bg 内部调 spawn_shell
+            let id = match crate::utils::spawn_bg("seq 1 5000", ".") {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!("[bg-repro] spawn_bg failed: {e}");
+                    return;
+                }
+            };
+            eprintln!("[bg-repro] spawned job {id}");
+
+            // 等 2 秒让任务跑完（seq 5000 行应 <1s）
+            std::thread::sleep(Duration::from_secs(2));
+
+            // read_bg_output — 之前卡死的地方
+            let t0 = Instant::now();
+            let out = crate::utils::read_bg_output(id);
+            let read_elapsed = t0.elapsed();
+            match &out {
+                Ok(s) => {
+                    let lines = s.lines().count();
+                    let has_marker = s.contains("1040") || s.contains("5000");
+                    eprintln!("[bg-repro] read_bg_output OK in {read_elapsed:?}, {} lines, has_5k={}", lines, s.contains("5000"));
+                    eprintln!("[bg-repro] last lines: {:?}", s.lines().rev().take(3).collect::<Vec<_>>());
+                    let _ = has_marker;
+                }
+                Err(e) => eprintln!("[bg-repro] read_bg_output Err: {e}"),
+            }
+
+            // 如果还在运行,试 wait_bg 等 5 秒
+            if let Ok(s) = &out {
+                if s.contains("任务运行中") {
+                    let t1 = Instant::now();
+                    let w = crate::utils::wait_bg(id, 5000);
+                    eprintln!("[bg-repro] wait_bg in {:?}: {:?}", t1.elapsed(), w.as_ref().map(|x| x.lines().count()));
+                }
+            }
+        }
     }
 }
 

@@ -131,9 +131,41 @@ pub(crate) fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
 
 /// 将已启动的 SandboxedChild 注册为后台任务。
 /// 用于前台超时路径，将超时命令转为后台任务。
+///
+/// 必须 take 管道并用 drain 线程排空到 shared Arc:
+///  1) std 管道是阻塞模式且缓冲极小(Windows 匿名管道默认 4KB),后台任务
+///     (cargo build/test 等)输出一多就塞满管道 → bash 写阻塞 → 命令假死;
+///  2) read_bg_output 的 shared 分支只读 Arc 内存,永不阻塞;若 shared=None
+///     会走阻塞读管道分支,任务运行中无输出时永久卡死并占住 BG_JOBS 锁,
+///     连锁导致 bash_output/bash_wait 全部无限等待。
 pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str) -> Result<u32, String> {
     let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let now = std::time::Instant::now();
+    let mut child = child;
+
+    // 排空 stdout/stderr 到 shared Arc — drain 线程自己阻塞无妨,
+    // 读方(wait_bg/read_bg_output/kill_bg)只碰 Arc,永远不会卡。
+    // 用 read_to_end 一次读完:循环 read(&mut chunk) 在 Windows 管道上
+    // 会在 4KB 缓冲边界卡住(复现测试证实),read_to_end 200ms 读完 23KB 可靠。
+    let stdout_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
+    let stderr_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
+    if let Some(mut reader) = child.take_stdout() {
+        let buf = std::sync::Arc::clone(&stdout_buf);
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut reader, &mut v);
+            buf.lock().unwrap().extend_from_slice(&v);
+        });
+    }
+    if let Some(mut reader) = child.take_stderr() {
+        let buf = std::sync::Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut reader, &mut v);
+            buf.lock().unwrap().extend_from_slice(&v);
+        });
+    }
+
     let job = BgJob {
         child,
         stdout_buf: Vec::new(),
@@ -141,7 +173,7 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
         start_time: now,
         label: label.to_string(),
         last_output_time: now,
-        shared: None,
+        shared: Some(BgSharedOutput { stdout: stdout_buf, stderr: stderr_buf }),
     };
     BG_JOBS.lock().unwrap().insert(id, job);
     spawn_monitor(id, label.to_string());
