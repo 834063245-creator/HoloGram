@@ -246,11 +246,28 @@ fn process_query(
             let is_func = func_kinds.contains(&kind);
             let is_class = class_kinds.contains(&kind);
             let scope_name = if is_func || is_class {
-                let name = node
+                let mut name = node
                     .child_by_field_name("name")
                     .and_then(|n| n.utf8_text(source_bytes).ok())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| format!("<anon@{}>", node.start_position().row + 1));
+                // 匿名箭头函数/函数表达式：若被 variable_declarator 包装
+                // （const f = () => {...}），继承其名字，避免 <anon@N> scope
+                // 截胡内部调用归属（factory 内调用被挂到外层父函数）。
+                if !node.child_by_field_name("name").is_some()
+                    && (kind == "arrow_function" || kind == "function_expression")
+                {
+                    if let Some(parent) = node.parent() {
+                        if parent.kind() == "variable_declarator" {
+                            if let Some(pname) = parent
+                                .child_by_field_name("name")
+                                .and_then(|n| n.utf8_text(source_bytes).ok())
+                            {
+                                name = pname.to_string();
+                            }
+                        }
+                    }
+                }
                 let qualified = format!("{}.{}", parent_scope, name);
                 scopes.push(Scope {
                     name: qualified.clone(),
@@ -702,6 +719,22 @@ fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<Str
             .child_by_field_name("field")
             .and_then(|f| f.utf8_text(source).ok())
             .map(|s| s.to_string()),
+        "optional_chain" => {
+            // TS/JS 可选链：a?.b.c() → 解包到内部表达式再递归提取
+            // （a?.b() 的 function 字段是 optional_chain 而非 member_expression，
+            //   否则会落到兜底分支返回整段文本导致跨文件解析失败）。
+            let inner = func.child_by_field_name("expression");
+            let inner = inner.or_else(|| {
+                let mut cursor = func.walk();
+                let found = func.children(&mut cursor)
+                    .find(|c| c.kind() == "member_expression");
+                found
+            });
+            match inner {
+                Some(inner) => extract_func_field_name(inner, source),
+                None => func.utf8_text(source).ok().map(|s| s.to_string()),
+            }
+        }
         "attribute" => {
             // Python：obj.method() → 从 attribute.object.method 提取 "method"
             let attr = func
@@ -1258,6 +1291,49 @@ mod tests {
         let calls: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Calls) && e.target == "obj.method").collect();
         assert!(!calls.is_empty(), "member expression call should extract object.property, got {:?}",
             edges.iter().filter(|e| matches!(e.kind, EdgeKind::Calls)).map(|e| &e.target).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_ts_optional_chain_call() {
+        // ponytail: a?.b() 的 function 字段是 optional_chain 而非 member_expression，
+        // 需解包提取方法名（否则返回整段文本、跨文件解析失败）。
+        let a = QueryStructureAdapter::new_js_ts();
+        let src = "function bar() { agentRef.current?.spawnSubAgent(); }";
+        let (_nodes, edges, _) = a.analyze("test.ts", src);
+        let calls: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Calls)).collect();
+        let targets: Vec<&str> = calls.iter().map(|e| e.target.as_str()).collect();
+        assert!(
+            targets.iter().any(|t| t.contains("spawnSubAgent")),
+            "optional chain call should extract method name, got {:?}",
+            targets
+        );
+    }
+
+    #[test]
+    fn test_ts_nested_arrow_scope_call() {
+        // ponytail: 嵌套箭头函数（const factory = async () => {...}）内的调用
+        // 应归属到 factory scope。曾因 arrow_function 无 name 字段生成 <anon@N>
+        // scope 截胡，导致内部调用挂到外层父函数、source 解析失败整条边丢失。
+        let a = QueryStructureAdapter::new_js_ts();
+        let src = "class A {\n  m() {\n    const factory = async () => {\n      loadSettings();\n    };\n  }\n}";
+        let (nodes, edges, _) = a.analyze("test.ts", src);
+        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"factory"), "factory node should exist, got {:?}", names);
+        let calls: Vec<_> = edges.iter()
+            .filter(|e| matches!(e.kind, EdgeKind::Calls) && e.target == "loadSettings")
+            .collect();
+        assert!(!calls.is_empty(), "should have call to loadSettings");
+        let srcs: Vec<&str> = calls.iter().map(|e| e.source.as_str()).collect();
+        assert!(
+            srcs.iter().any(|s| s.contains("A.m.factory")),
+            "call should be attributed to A.m.factory, got {:?}",
+            srcs
+        );
+        assert!(
+            !srcs.iter().any(|s| s.ends_with("A.m")),
+            "call must NOT be attributed to outer A.m, got {:?}",
+            srcs
+        );
     }
 
     #[test]
