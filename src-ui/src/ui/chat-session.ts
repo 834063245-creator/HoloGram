@@ -533,6 +533,11 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   // ── 加载会话数据（优先文件，回退 localStorage）──
   let data: any = null;
   // 1) 尝试磁盘文件
+  try {
+    data = await readSessionJSON(sessionFile(projectPath, lastId));
+  } catch {
+    /* 文件缺失 — 尝试 localStorage */
+  }
 
   // 2) localStorage 回退（若 beforeunload 保存未完成，可能比文件更新）
   if (typeof localStorage !== 'undefined') {
