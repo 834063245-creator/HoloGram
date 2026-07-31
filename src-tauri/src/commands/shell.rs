@@ -56,43 +56,60 @@ pub(crate) async fn exec_command(
         let app_stderr = app.clone();
         let so_clone = Arc::clone(&shared_out);
 
-        // 在后台线程中排空 stdout，写入事件 + 共享 Arc
-        // 必须用 read_to_end:循环 read(&mut buf) 在 Windows 匿名管道上
-        // 会在 4KB 缓冲边界卡死(复现测试证实),导致 bash/cargo 写端阻塞、
-        // 子进程永不退出、shell:done 永不发出 → Agent loop 无限等待。
-        // read_to_end 可靠读完整个管道(200ms 读完 23KB),读完再批量 emit。
+        // 在后台线程中排空 stdout，逐块 emit 到事件 + 累积到共享 Arc。
+        // 必须用 read_vectored:裸 read() 在此手工管道上第二次调用会永久阻塞
+        // (复现测试证实,卡 Windows 管道 4KB 边界 → bash/cargo 写端阻塞 →
+        // 子进程永不退出 → shell:done 永不发出 → Agent loop 无限等待)。
+        // read_to_end 能读完但憋到 EOF,长命令期间一个字节都不 emit → 前端假卡。
+        // read_vectored 逐块可靠(191ms/23KB 实测),每块实时 emit,两者兼得。
         let stdout_thread = stdout_reader.map(|mut reader| {
             std::thread::spawn(move || {
-                let mut v = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut reader, &mut v);
-                let chunk = String::from_utf8_lossy(&v).to_string();
-                if !chunk.is_empty() {
+                use std::io::{IoSliceMut, Read};
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = {
+                        let mut iov = [IoSliceMut::new(&mut buf)];
+                        match reader.read_vectored(&mut iov) {
+                            Ok(0) => break,
+                            Ok(n) => n,
+                            Err(_) => break,
+                        }
+                    };
+                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
                     let _ = app_stdout.emit("shell:output", serde_json::json!({
                         "streamId": sid_stdout,
                         "kind": "stdout",
                         "chunk": chunk,
                     }));
+                    so_clone.lock().unwrap().extend_from_slice(&buf[..n]);
                 }
-                so_clone.lock().unwrap().extend_from_slice(&v);
             })
         });
 
-        // 在后台线程中排空 stderr（同上，read_to_end 避免 4KB 边界卡死）
+        // 在后台线程中排空 stderr（同上，read_vectored 逐块实时 emit）
         let stream_id_stderr = stream_id.clone();
         let se_clone = Arc::clone(&shared_err);
         let stderr_thread = stderr_reader.map(|mut reader| {
             std::thread::spawn(move || {
-                let mut v = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut reader, &mut v);
-                let chunk = String::from_utf8_lossy(&v).to_string();
-                if !chunk.is_empty() {
+                use std::io::{IoSliceMut, Read};
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = {
+                        let mut iov = [IoSliceMut::new(&mut buf)];
+                        match reader.read_vectored(&mut iov) {
+                            Ok(0) => break,
+                            Ok(n) => n,
+                            Err(_) => break,
+                        }
+                    };
+                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
                     let _ = app_stderr.emit("shell:output", serde_json::json!({
                         "streamId": stream_id_stderr,
                         "kind": "stderr",
                         "chunk": chunk,
                     }));
+                    se_clone.lock().unwrap().extend_from_slice(&buf[..n]);
                 }
-                se_clone.lock().unwrap().extend_from_slice(&v);
             })
         });
 

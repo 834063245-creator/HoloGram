@@ -145,24 +145,45 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
 
     // 排空 stdout/stderr 到 shared Arc — drain 线程自己阻塞无妨,
     // 读方(wait_bg/read_bg_output/kill_bg)只碰 Arc,永远不会卡。
-    // 用 read_to_end 一次读完:循环 read(&mut chunk) 在 Windows 管道上
-    // 会在 4KB 缓冲边界卡住(复现测试证实),read_to_end 200ms 读完 23KB 可靠。
+    // 必须用 read_vectored 循环:裸 read() 在此手工管道上第二次调用会永久阻塞
+    // (复现测试证实,卡 Windows 管道 4KB 边界);read_to_end 能读完但憋到 EOF,
+    // 长任务运行中 bash_output 读不到增量。read_vectored 逐块可靠(191ms/23KB 实测)。
     let stdout_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
     let stderr_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
     if let Some(mut reader) = child.take_stdout() {
         let buf = std::sync::Arc::clone(&stdout_buf);
         std::thread::spawn(move || {
-            let mut v = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut reader, &mut v);
-            buf.lock().unwrap().extend_from_slice(&v);
+            use std::io::{IoSliceMut, Read};
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = {
+                    let mut iov = [IoSliceMut::new(&mut chunk)];
+                    match reader.read_vectored(&mut iov) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => break,
+                    }
+                };
+                buf.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
         });
     }
     if let Some(mut reader) = child.take_stderr() {
         let buf = std::sync::Arc::clone(&stderr_buf);
         std::thread::spawn(move || {
-            let mut v = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut reader, &mut v);
-            buf.lock().unwrap().extend_from_slice(&v);
+            use std::io::{IoSliceMut, Read};
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = {
+                    let mut iov = [IoSliceMut::new(&mut chunk)];
+                    match reader.read_vectored(&mut iov) {
+                        Ok(0) => break,
+                        Ok(n) => n,
+                        Err(_) => break,
+                    }
+                };
+                buf.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
         });
     }
 

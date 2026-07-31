@@ -800,6 +800,106 @@ pub mod imp {
                 }
             }
         }
+
+        /// 循环 read 诊断：区分 Err 与 Ok(0)，Err 不退出线程。
+        /// 判定"循环 read 卡 4KB"真凶是否 = 旧代码的 `Err(_) => break`。
+        /// 若 Err 不退出能读完 5000 行 → 元凶是 Err 中断线程,而非循环本身。
+        #[test]
+        #[cfg(windows)]
+        fn test_loop_read_err_does_not_kill_drain() {
+            use std::io::Read;
+            use std::sync::mpsc;
+            use std::time::{Duration, Instant};
+
+            let mut child = super::super::spawn_shell("seq 1 5000", ".")
+                .expect("spawn_shell failed");
+            let mut reader = child.take_stdout().expect("take_stdout failed");
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut total = 0usize;
+                let mut err_count = 0usize;
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match reader.read(&mut chunk) {
+                        Ok(0) => break, // EOF — 正常结束
+                        Ok(n) => {
+                            total += n;
+                            // 打印关键节点:首次读、4KB 边界、之后每 2KB
+                            if total <= 4096 || total % 2048 < 4096 {
+                                eprintln!("[loop-read] read n={n}, total={total}");
+                            }
+                        }
+                        Err(e) => {
+                            // 关键诊断：Err 不退出,继续读
+                            err_count += 1;
+                            eprintln!("[loop-read] read Err #{err_count}: {e:?}");
+                            if err_count > 5 { break; } // 保险丝,防无限刷屏
+                        }
+                    }
+                }
+                let _ = tx.send((total, err_count));
+            });
+            let t0 = Instant::now();
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok((total, err_count)) => {
+                    eprintln!("[loop-read] DONE in {:?}: total={total} bytes, err_count={err_count} (期望 total≈23893, err_count=0)", t0.elapsed());
+                }
+                Err(_) => {
+                    eprintln!("[loop-read] TIMEOUT 5s — 循环 read 卡住了! child.kill_tree");
+                    child.kill_tree().ok();
+                }
+            }
+        }
+
+        /// 决定实验：read_vectored 能否边读边 emit 且不卡 4KB 边界。
+        /// read_to_end 内部走 read_buf/read_vectored 路径(证据:读满 23893 字节);
+        /// read() 第二次调用永久阻塞(证据:上一条测试)。流式实时输出需要
+        /// 逐块读取 — 若 read_vectored 可行,则流式路径用它替代 read。
+        #[test]
+        #[cfg(windows)]
+        fn test_read_vectored_loop_for_streaming() {
+            use std::io::{IoSliceMut, Read};
+            use std::sync::mpsc;
+            use std::time::{Duration, Instant};
+
+            let mut child = super::super::spawn_shell("seq 1 5000", ".")
+                .expect("spawn_shell failed");
+            let mut reader = child.take_stdout().expect("take_stdout failed");
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut total = 0usize;
+                let mut err_count = 0usize;
+                let mut chunk = [0u8; 4096];
+                let mut iov = [IoSliceMut::new(&mut chunk)];
+                loop {
+                    match reader.read_vectored(&mut iov) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            total += n;
+                            if total <= 4096 || total % 2048 < 4096 {
+                                eprintln!("[vec-read] read_vectored n={n}, total={total}");
+                            }
+                        }
+                        Err(e) => {
+                            err_count += 1;
+                            eprintln!("[vec-read] read_vectored Err #{err_count}: {e:?}");
+                            if err_count > 5 { break; }
+                        }
+                    }
+                }
+                let _ = tx.send((total, err_count));
+            });
+            let t0 = Instant::now();
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok((total, err_count)) => {
+                    eprintln!("[vec-read] DONE in {:?}: total={total} bytes, err_count={err_count}", t0.elapsed());
+                }
+                Err(_) => {
+                    eprintln!("[vec-read] TIMEOUT 5s — read_vectored 也卡住! child.kill_tree");
+                    child.kill_tree().ok();
+                }
+            }
+        }
     }
 }
 
