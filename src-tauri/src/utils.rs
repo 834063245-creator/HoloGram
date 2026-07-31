@@ -299,7 +299,9 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
 pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
     let mut jobs = BG_JOBS.lock().unwrap();
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
-    job.child.kill().map_err(|e| format!("无法终止任务: {e}"))?;
+    // 必须 kill_tree:kill() 只杀顶层 bash/cmd,残留的 cargo/rustc 孙进程会继续
+    // 占用 target/ 文件锁,导致后续所有 cargo 命令无限等待锁 → "cargo test 卡死"。
+    job.child.kill_tree().map_err(|e| format!("无法终止任务: {e}"))?;
     let (stdout, stderr) = if let Some(ref shared) = job.shared {
         let so = shared.stdout.lock().unwrap();
         let se = shared.stderr.lock().unwrap();

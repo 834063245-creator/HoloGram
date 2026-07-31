@@ -327,9 +327,12 @@ function enqueueShellOp<T>(fn: () => Promise<T>): Promise<T> {
   return p;
 }
 
-// ── Coding tools ──
+  // ── Coding tools ──
   const _shellCleanups = new Map<string, Array<() => void>>();
   const SHELL_TIMEOUT = 600_000;
+  // 后台任务等待总上限:后台 job 若卡死(如 cargo 等待 target 文件锁)可能无限期运行,
+  // 无总上限时下面的 for(;;) 循环永远 pending,Agent 会话表现为"无限等待 shell 结果"。
+  const BG_WAIT_TIMEOUT = 30 * 60 * 1000;
   const codingExec: ToolExecutor = async (name, args, onProgress) => {
     if (name === 'run_shell' && args.runInBackground) {
       // 命令名必须是 exec_command(run_shell 不是 Tauri 命令),args 已含 runInBackground: true
@@ -338,13 +341,17 @@ function enqueueShellOp<T>(fn: () => Promise<T>): Promise<T> {
       if (!m) return raw; // 启动失败 — 把 Rust 返回的消息直接给 agent
       const jobId = m[1];
       let last = '';
+      const bgDeadline = Date.now() + BG_WAIT_TIMEOUT;
       for (;;) {
         try {
           last = await agentInvoke<string>('bash_wait', { job_id: jobId, timeout_ms: 60_000 });
         } catch (e: any) {
           const msg = String(e?.message || e);
           if (msg.includes('等待超时')) {
-            // 任务仍在跑 — 继续等
+            // 任务仍在跑 — 检查总超时,超时则放弃等待并把控制权交还 Agent
+            if (Date.now() >= bgDeadline) {
+              return `[exit -1] 后台任务已等待 ${BG_WAIT_TIMEOUT / 1000}s 仍未完成,已放弃等待(可能卡在文件锁或等待输入)。当前输出:\n${last}\n可用 bash_output(${jobId}) 查看进度, bash_kill(${jobId}) 终止任务。`;
+            }
             if (onProgress) onProgress(`[后台任务运行中, job_id: ${jobId}]`);
             continue;
           }
