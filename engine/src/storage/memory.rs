@@ -406,6 +406,11 @@ impl MemoryIndex {
             if let Some(node) = self.nodes.get_mut(&self.node_by_idx[i]) {
                 node.in_degree = in_buckets[i].len() as u32;
                 node.out_degree = out_buckets[i].len() as u32;
+                // 剔除 defines 边（kind_u8=3）的入度，用于 find_unused
+                node.non_defines_in_degree = in_buckets[i]
+                    .iter()
+                    .filter(|(_, kind, _, _)| *kind != 3)
+                    .count() as u32;
             }
         }
     }

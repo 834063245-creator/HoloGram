@@ -50,11 +50,15 @@ pub struct Node {
     pub snippet: Option<String>,
     /// 任意元数据
     pub properties: serde_json::Value,
-    /// 预计算的度数（修复 O(V×E) 社区标签性能问题）
+        /// 预计算的度数（修复 O(V×E) 社区标签性能问题）
     #[serde(default)]
     pub out_degree: u32,
     #[serde(default)]
     pub in_degree: u32,
+    /// 剔除 defines 边后的入度。find_unused 用此字段判断，
+    /// 避免"唯一入边是自身文件 defines 边"的假阳性。
+    #[serde(default)]
+    pub non_defines_in_degree: u32,
     /// 预计算的 3D 位置（可选，用于 Unity）
     pub position: Option<[f32; 3]>,
     /// 社区 ID（由社区检测分配）
@@ -72,6 +76,7 @@ impl Node {
             properties: serde_json::Value::Object(Default::default()),
             out_degree: 0,
             in_degree: 0,
+            non_defines_in_degree: 0,
             position: None,
             community_id: None,
         }

@@ -1506,17 +1506,16 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
     let kind_label = kind_str.to_string();
     let kinds: Vec<&str> = kind_str.split(',').map(|s| s.trim()).collect();
     ToolResponse::Success(with_store(|idx| {
-        // ponytail：in_degree 统计所有边类型（defines+calls+imports+inherits）。
-        // 每个函数都有 ≥1 条来自父模块的 defines 边，所以 in_degree==0
-        // 永远匹配不到函数 —— 只匹配孤儿符号。in_degree≤1 能捕获那些
-        // 唯一入边是自身 defines 的函数（无人调用/导入它们）。
+        // ponytail：non_defines_in_degree 剔除 defines 边（每个函数
+        // 都有一条来自父模块的 defines 边），只统计真正的
+        // calls/imports/inherits 入度。== 0 意味着没有任何人调用/导入此函数。
         // 排除项：入口点（框架/CLI）、mock/stub（测试连接）、
         // 框架基类（ORM/Pydantic/CDK —— 通过元类魔法实例化）、
         // 和生命周期方法（React/Vue/Android —— 由框架运行时调用）。
         let mut candidates: Vec<&Node> = idx
             .nodes_iter()
             .filter(|n| {
-                n.in_degree <= 1
+                n.non_defines_in_degree == 0
                     && kinds.iter().any(|k| n.kind.as_str() == *k)
                     && !is_entry_point(n)
                     && !is_mock_or_stub(&n.name)
@@ -1537,6 +1536,8 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
                 "kind": n.kind.as_str(),
                 "location": n.location,
                 "out_degree": n.out_degree,
+                "in_degree": n.in_degree,
+                "non_defines_in_degree": n.non_defines_in_degree,
                 "community_id": n.community_id,
             })).collect::<Vec<_>>(),
         })

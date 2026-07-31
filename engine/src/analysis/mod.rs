@@ -17,6 +17,7 @@ pub mod dynamic_dispatch_react;
 pub mod dynamic_dispatch_vue;
 pub mod di_reflection;
 pub mod policy_check;
+pub mod bridge_rpc;
 
 pub mod dataflow_synthesis;
 pub mod dataflow_engine;

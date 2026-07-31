@@ -298,6 +298,7 @@ impl IncrementalUpdater {
                     }
                     updated.out_degree = old_node.out_degree;
                     updated.in_degree = old_node.in_degree;
+                    updated.non_defines_in_degree = old_node.non_defines_in_degree;
                 }
                 updated_nodes.push(updated);
                 matched_old.insert(old_id.clone());

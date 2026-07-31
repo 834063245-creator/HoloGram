@@ -475,7 +475,7 @@ fn all_schemas() -> &'static [ToolSchema] {
         },
         ToolSchema {
             name: "detect_cycles",
-            description: "Find all circular dependencies in the graph. Filter by mode: all cycles, data-only (persistent data loops), or llm (AI/LLM feedback loops). \"有没有循环依赖？\" → call this. Use before large refactors to understand what can't be untangled easily.",
+            description: "Find all circular dependencies in the graph. Each cycle has a `category`: pure_code (normal coupling, harmless), data_persistent (involves storage/IO), or llm_involved (AI feedback loops). Use mode: all, data, or llm. Ignore pure_code cycles — they are natural mutual dependencies, not bugs. \"有没有循环依赖？\" → call this. Use before large refactors to understand what can't be untangled easily.",
             params: &[p!("mode", "string", "Filter: all, data, or llm (default all)")],
             required: &[],
             read_only: true,
@@ -603,7 +603,7 @@ fn all_schemas() -> &'static [ToolSchema] {
         // ── 死代码检测 ──
         ToolSchema {
             name: "find_unused",
-            description: "Find dead code candidates — symbols with zero incoming references (nobody depends on them). Sorted by outgoing references descending (most impactful first). \"有没有没用到的代码？\" → this. Always review results before deleting — some low-fan-in symbols are intentional (entry points, tests).",
+            description: "Find dead code candidates — symbols with zero non-defines incoming references. Excludes the mandatory \"defines\" edge each symbol gets from its parent file. Results with non_defines_in_degree>0 have real callers (via bus.emit/Tauri invoke/etc) and are false positives — ignore them. Sorted by outgoing references descending. \"有没有没用到的代码？\" → this. Always review results before deleting — some low-fan-in symbols are intentional (entry points, tests).",
             params: &[
                 p!("limit", "integer", "Max results (default 20, max 200)"),
                 p!("kind_filter", "string", "Node kinds to include, comma-separated. Default: \"function,class\". Options: symbol, function, class, module, interface, medium, temporal."),

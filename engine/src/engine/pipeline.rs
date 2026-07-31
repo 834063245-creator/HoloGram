@@ -16,6 +16,7 @@ use crate::analysis::di_reflection::{
 use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
 use crate::analysis::dynamic_dispatch_react::synthesize_react_edges;
 use crate::analysis::dynamic_dispatch_vue::synthesize_vue_edges;
+use crate::analysis::bridge_rpc::synthesize_bridge_calls;
 use crate::analysis::flows::detect_all_flows;
 use crate::analysis::framework_routes::detect_framework_routes;
 use crate::community::detect_communities_and_hierarchy;
@@ -156,6 +157,18 @@ impl Engine {
             name: "Vue Synthesis".into(),
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", vue_edges),
+        });
+
+        // 5.3. Bridge/RPC 调用合成（TS rpc() → Rust #[tauri::command]）
+        set_progress("Bridge/RPC合成", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let bridge_edges = synthesize_bridge_calls(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
+        eprintln!("[engine] stage: bridge-rpc done in {:.1}s ({} edges)",
+            stage_start.elapsed().as_secs_f64(), bridge_edges);
+        stage_timings.push(StageTiming {
+            name: "Bridge / RPC".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} edges", bridge_edges),
         });
 
         // 5.5. DI / 反射检测
