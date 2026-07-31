@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use super::{Edge, Graph};
+use super::{Edge, EdgeKind, Graph};
 use crate::engine::GRAMMAR_LOADER;
 
 /// 源码文件扩展名，从 GRAMMAR_LOADER 动态派生。
@@ -91,10 +91,16 @@ impl CrossFileResolver {
         let mut diag_by_kind: HashMap<String, usize> = HashMap::new();
 
         for (eid, edge) in &graph.edges {
+            let is_usage = edge.kind == EdgeKind::Usage;
             // ponytail: 仅解析跨文件边。文件内边（Usage、Writes、
             // 同文件 Calls）的 target 是裸名而非 node ID — 它们
             // 原样有效，不能被作为孤儿边清理。
-            if !edge.cross_file {
+            // 例外：Usage 边也尝试解析 — 裸名可能引用其他文件导出的
+            // 符号（如 panel-def.ts 的 `component: AgentsPanel`）。
+            // 解析成功则建立真实引用（消除 find_unused 误报）；
+            // 失败则保留裸名原样（局部变量等文件内引用不受影响，
+            // 且不会进孤儿清理——清理只针对 cross_file=true 的边）。
+            if !edge.cross_file && !is_usage {
                 continue;
             }
             // 尝试解析 source（如果不在图中）。
@@ -625,6 +631,68 @@ mod tests {
         let e = g.get_edge("e1_resolved").unwrap();
         assert_eq!(e.source, "lib.fn_a");
         assert_eq!(e.target, "lib.fn_b");
+    }
+
+    #[test]
+    fn test_resolve_usage_bare_name_cross_file() {
+        // ponytail: React 组件通过裸名引用（panel-def.ts 的
+        // `component: AgentsPanel`）→ Usage 边 target 是裸名。
+        // 以前 Usage 边不参与解析（!cross_file 直接跳过），
+        // 导致跨文件裸名引用永远连不到函数节点、find_unused 误报。
+        // 现在 Usage 边也尝试解析 target，命中唯一同语言候选。
+        let mut g = Graph::new();
+        let mut comp = Node::new(
+            "D:.HoloGramHG.src-ui.src.ui.react.AgentsPanel.tsx.AgentsPanel",
+            "AgentsPanel",
+            NodeKind::Function,
+        );
+        comp.location = Some("D:/HoloGramHG/src-ui/src/ui/react/AgentsPanel.tsx:153".into());
+        g.add_node(comp);
+        let mut def = Node::new(
+            "D:.HoloGramHG.src-ui.src.app.panels.panel-def.ts",
+            "D:/HoloGramHG/src-ui/src/app/panels/panel-def.ts",
+            NodeKind::File,
+        );
+        def.location = Some("D:/HoloGramHG/src-ui/src/app/panels/panel-def.ts".into());
+        g.add_node(def);
+
+        // 文件内 Usage 边：panel-def.ts → 裸名 "AgentsPanel"（cross_file=false）
+        let mut e = Edge::new(
+            "use_1_1",
+            "D:.HoloGramHG.src-ui.src.app.panels.panel-def.ts",
+            "AgentsPanel",
+            EdgeKind::Usage,
+        );
+        e.cross_file = false;
+        g.add_edge_unchecked(e);
+
+        let _resolved = CrossFileResolver::resolve(&mut g);
+        // 裸名应被解析到完整节点 ID
+        let e = g.get_edge("use_1_1_resolved");
+        assert!(
+            e.is_some(),
+            "usage edge with bare target should be resolved to full node ID"
+        );
+        if let Some(e) = e {
+            assert_eq!(e.target, "D:.HoloGramHG.src-ui.src.ui.react.AgentsPanel.tsx.AgentsPanel");
+        }
+    }
+
+    #[test]
+    fn test_resolve_usage_bare_name_local_var_kept() {
+        // ponytail: 解析失败的 Usage 边（局部变量、无匹配节点）
+        // 必须原样保留，不能被孤儿清理删掉。
+        let mut g = Graph::new();
+        g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        let mut e = Edge::new("use_1_1", "a", "someLocalVar", EdgeKind::Usage);
+        e.cross_file = false;
+        g.add_edge_unchecked(e);
+
+        let _resolved = CrossFileResolver::resolve(&mut g);
+        assert!(
+            g.get_edge("use_1_1").is_some(),
+            "unresolved usage edge must be kept as-is"
+        );
     }
 
     #[test]

@@ -690,11 +690,18 @@ fn resolve_fn(
         // 内部调用 source 解析失败整条边被删。
         if kind == "arrow_function" || kind == "function_expression" {
             if let Some(parent) = node.parent() {
+                // ponytail: variable_declarator 本身也会被 @fn 捕获并在下方
+                // variable_declarator 分支建节点（const X = () => {} 建
+                // module.X）。若此处再继承名字建一个 module.X.X，会出现
+                // 双节点：调用方连到壳 module.X，真函数体 module.X.X 成孤儿
+                // 被 find_unused 误报死代码。故 variable_declarator 包装
+                // 的匿名函数此处直接跳过（节点由 declarator 分支负责）。
+                // pair 包装（{ subAgentSpawner: () => {} }）无兜底节点，
+                // 仍需继承名建节点。
+                if parent.kind() == "variable_declarator" {
+                    return (None, None);
+                }
                 let inherited = match parent.kind() {
-                    "variable_declarator" => parent
-                        .child_by_field_name("name")
-                        .and_then(|n| n.utf8_text(source).ok())
-                        .map(|s| s.to_string()),
                     "pair" => parent
                         .child_by_field_name("key")
                         .and_then(|n| n.utf8_text(source).ok())
@@ -1297,6 +1304,16 @@ mod tests {
         assert!(names.contains(&"fetchData"), "var-assigned arrow should be found, got {:?}", names);
         let defs: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Defines) && e.target.contains("fetchData")).collect();
         assert!(!defs.is_empty(), "should have Defines edge for fetchData");
+        // ponytail: 防双节点回归 — variable_declarator 与包装的 arrow_function
+        // 都建节点会出现 module.fetchData + module.fetchData.fetchData，
+        // 后者成孤儿被 find_unused 误报死代码。只允许一个 fetchData 节点。
+        let fetch_nodes: Vec<_> = nodes.iter().filter(|n| n.name == "fetchData").collect();
+        assert_eq!(
+            fetch_nodes.len(),
+            1,
+            "const X = () => {{}} must produce exactly ONE node, got {:#?}",
+            fetch_nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
