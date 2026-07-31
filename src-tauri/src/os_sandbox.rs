@@ -396,13 +396,29 @@ pub mod imp {
     }
 
     /// 冒烟测试：启动 `bash -c "exit 0"` 验证 bash 是否实际可用。
+    /// 必须带超时:若 bash 启动后卡住(如 BASH_ENV 指向卡住的初始化脚本、
+    /// 杀毒拦截、bash 状态损坏),wait() 会永久阻塞。而 detect_shell() 是
+    /// OnceLock::get_or_init,冒烟测试卡住 = 整个 shell 子系统全局锁死,
+    /// 之后所有 shell 命令(前台/后台)全部无限等待。
     fn smoke_test_bash(bash_path: &str) -> bool {
         let cmdline = format!("\"{}\" -c {}", bash_path, super::quote_cmd("exit 0"));
         match spawn(&cmdline, ".") {
-            Ok(mut child) => match child.wait() {
-                Ok(status) => status.success(),
-                Err(_) => false,
-            },
+            Ok(mut child) => {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => return status.success(),
+                        Ok(None) => {
+                            if std::time::Instant::now() >= deadline {
+                                let _ = child.kill();
+                                return false;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(_) => return false,
+                    }
+                }
+            }
             Err(_) => false,
         }
     }
