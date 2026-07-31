@@ -902,8 +902,25 @@ impl LspManager {
     ///
     /// 返回 Ok(server_arc) 或 Err(原因)。
     fn get_or_warm_server(ext: &str) -> Result<Arc<Mutex<Option<LspProcess>>>, String> {
+        // 池中已有条目：仅当进程存活（Some）才复用。
+        // with_process 失败会把进程置 None 但 Arc 留在池中 ——
+        // 若不检查存活，get_server 恒返回 Some，导致永久
+        // "server not running" 死壳、LSP 永远无法自愈。
         if let Some(arc) = Self::get_server(ext) {
-            return Ok(arc);
+            let alive = arc.lock().map(|g| g.is_some()).unwrap_or(false);
+            if alive {
+                return Ok(arc);
+            }
+            // 死壳：从池中移除，走下方重建路径
+            let mgr = Self::global();
+            let cmd = SERVER_CONFIGS
+                .iter()
+                .find(|c| c.extensions.contains(&ext))
+                .map(|c| c.command);
+            if let Some(cmd) = cmd {
+                tracing::warn!(ext, "[lsp_manager] stale dead server removed, rebuilding");
+                mgr.pool.write().unwrap().remove(cmd);
+            }
         }
         tracing::info!(ext, "[lsp_manager] server not in pool, attempting lazy warm");
         if !Self::try_warm_one(ext) {

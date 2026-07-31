@@ -1505,15 +1505,11 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
         .unwrap_or("function,class");
     let kind_label = kind_str.to_string();
     let kinds: Vec<&str> = kind_str.split(',').map(|s| s.trim()).collect();
-    ToolResponse::Success(with_store(|idx| {
-        // ponytail：non_defines_in_degree 剔除 defines 边（每个函数
-        // 都有一条来自父模块的 defines 边），只统计真正的
-        // calls/imports/inherits 入度。== 0 意味着没有任何人调用/导入此函数。
-        // 排除项：入口点（框架/CLI）、mock/stub（测试连接）、
-        // 框架基类（ORM/Pydantic/CDK —— 通过元类魔法实例化）、
-        // 和生命周期方法（React/Vue/Android —— 由框架运行时调用）。
-        let mut candidates: Vec<&Node> = idx
-            .nodes_iter()
+
+    // ponytail：先在读锁内收集候选（轻量快照），锁外做 LSP 验证。
+    // LSP references 可能触发 server warm（耗时数百 ms），不能持图锁。
+    let mut candidates: Vec<Value> = match engine::engine_read(|idx| {
+        idx.nodes_iter()
             .filter(|n| {
                 n.non_defines_in_degree == 0
                     && kinds.iter().any(|k| n.kind.as_str() == *k)
@@ -1522,15 +1518,7 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
                     && !is_framework_base(&n.name)
                     && !is_lifecycle_method(&n.name)
             })
-            .collect();
-        candidates.sort_by_key(|n| std::cmp::Reverse(n.out_degree));
-        let total = candidates.len();
-        candidates.truncate(limit);
-        json!({
-            "total_unused": total,
-            "limit": limit,
-            "kind_filter": kind_label,
-            "unused": candidates.iter().map(|n| json!({
+            .map(|n| json!({
                 "id": n.id,
                 "name": n.name,
                 "kind": n.kind.as_str(),
@@ -1539,9 +1527,116 @@ pub(crate) fn handler_unused(args: &Value) -> ToolResponse {
                 "in_degree": n.in_degree,
                 "non_defines_in_degree": n.non_defines_in_degree,
                 "community_id": n.community_id,
-            })).collect::<Vec<_>>(),
-        })
+            }))
+            .collect()
+    }) {
+        Ok(v) => v,
+        Err(e) => return ToolResponse::Degraded {
+            guidance: format!("cannot access graph: {}", e),
+            fallback: "Ensure the project has been analyzed first".into(),
+            details: json!({}),
+        },
+    };
+
+    // LSP 验证：对能定位到源码位置的候选查 references，
+    // 有非定义引用（如 React JSX/对象属性使用）则不是死代码。
+    // 这修复名字匹配失败导致的误报 —— 图上看不到引用，但
+    // 类型系统（LSP）能确认它被使用。
+    //
+    // 防护：只验证 out_degree 最高的前 LSP_VERIFY_LIMIT 个候选
+    // （最可疑的优先），避免批量 open_file+references 把 LSP server
+    // 打崩；且任一次查询失败即停止（server 不可用时反复重试只会
+    // 浪费时间），失败的候选按原判断保留。
+    const LSP_VERIFY_LIMIT: usize = 50;
+    candidates.sort_by_key(|n| std::cmp::Reverse(n["out_degree"].as_u64().unwrap_or(0)));
+    let verify_count = candidates.len().min(LSP_VERIFY_LIMIT);
+    let mut lsp_verified_removed = 0usize;
+    let mut verified: Vec<Value> = Vec::with_capacity(candidates.len());
+    for (i, cand) in candidates.iter().enumerate() {
+        if i < verify_count {
+            let loc = cand["location"].as_str().unwrap_or("");
+            let name = cand["name"].as_str().unwrap_or("");
+            match lsp_has_real_reference(loc, name) {
+                LspCheck::HasReference => {
+                    lsp_verified_removed += 1;
+                    continue;
+                }
+                LspCheck::NoReference => {}
+                LspCheck::Unavailable => {
+                    // LSP 挂了——停止验证，剩余候选全部保留
+                    verified.push(cand.clone());
+                    verified.extend(candidates[i + 1..].iter().cloned());
+                    break;
+                }
+            }
+        }
+        verified.push(cand.clone());
+    }
+
+    verified.sort_by_key(|n| std::cmp::Reverse(n["out_degree"].as_u64().unwrap_or(0)));
+    let total = verified.len();
+    verified.truncate(limit);
+    ToolResponse::Success(json!({
+        "total_unused": total,
+        "limit": limit,
+        "kind_filter": kind_label,
+        "lsp_verified_removed": lsp_verified_removed,
+        "unused": verified,
     }))
+}
+
+/// LSP 引用检查结果。
+enum LspCheck {
+    /// 有真实引用（应移出死代码列表）
+    HasReference,
+    /// 无引用（确认死代码）
+    NoReference,
+    /// LSP 不可用 / 无法定位（保持原判断）
+    Unavailable,
+}
+
+/// 用 LSP references 验证符号是否有真实引用（非定义点）。
+/// 无法定位位置 / 无 LSP 可用 / LSP 查询失败时返回 Unavailable。
+fn lsp_has_real_reference(location: &str, name: &str) -> LspCheck {
+    if location.is_empty() || name.is_empty() {
+        return LspCheck::Unavailable;
+    }
+    // location 格式: "D:/path/to/file.ts:153"（路径 + :行号）。
+    // rsplit_once(':') 只拆最后一个冒号，drive letter（D:）不受影响。
+    let (path, line_str) = match location.rsplit_once(':') {
+        Some(pair) => pair,
+        None => return LspCheck::Unavailable,
+    };
+    // Node.location 行号是 1-based；LSP 需要 0-based。
+    let line: u32 = match line_str.parse::<u32>() {
+        Ok(l) if l > 0 => l - 1,
+        _ => return LspCheck::Unavailable,
+    };
+    let ext = path.rsplit('.').next().unwrap_or("");
+    if ext.is_empty() {
+        return LspCheck::Unavailable;
+    }
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return LspCheck::Unavailable,
+    };
+    // 定位符号名在该行的列（LSP 需要精确位置）。
+    // 用行内首次出现；若该行无符号名则无法定位，跳过验证。
+    let line_text = match source.lines().nth(line as usize) {
+        Some(l) => l,
+        None => return LspCheck::Unavailable,
+    };
+    let column = match line_text.find(name) {
+        Some(c) => c as u32,
+        None => return LspCheck::Unavailable,
+    };
+    // find_references 内部 includeDeclaration=false（不含定义本身），
+    // 非空结果 = 有真实使用点。
+    match crate::lsp_manager::LspManager::find_references(path, &source, line, column, ext) {
+        Ok(locs) if !locs.is_empty() => LspCheck::HasReference,
+        Ok(_) => LspCheck::NoReference,
+        Err(_) => LspCheck::Unavailable,
+    }
 }
 
 /// 通过原生 LSP 按需进行类型感知的调用解析。
