@@ -90,7 +90,7 @@ pub fn synthesize_bridge_calls(
             // 在 Rust 命令中查找匹配的
             if let Some(rust_nid) = rust_commands.get(&cmd) {
                 // 将该文件中的所有 caller 连接到此 Rust 命令
-                for (caller_id, caller_name) in &caller_nodes {
+                for (caller_id, _caller_name) in &caller_nodes {
                     // 跳过 Rust 函数自身（避免 Rust → Rust 自引用）
                     if caller_id == rust_nid { continue; }
                     graph.add_edge_unchecked(Edge::synthesized(

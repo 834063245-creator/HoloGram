@@ -681,10 +681,23 @@ fn resolve_fn(
 /// attribute（obj.method → "method"）和普通 identifier。
 fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<String> {
     match func.kind() {
-        "member_expression" => func
-            .child_by_field_name("property")
-            .and_then(|p| p.utf8_text(source).ok())
-            .map(|s| s.to_string()),
+        // ponytail: 返回完整 object.property（而非仅 property），
+        // 使跨文件静态方法调用（如 Workspace.open、bus.emit）在 resolver
+        // 中能用 best_qualified_match 后缀匹配消歧。与下方 Python
+        // attribute 分支行为一致。resolver 策略 6 会渐进剥离接收者前缀。
+        "member_expression" => {
+            let obj = func
+                .child_by_field_name("object")
+                .and_then(|o| o.utf8_text(source).ok());
+            let prop = func
+                .child_by_field_name("property")
+                .and_then(|p| p.utf8_text(source).ok());
+            match (obj, prop) {
+                (Some(o), Some(p)) if !o.is_empty() => Some(format!("{}.{}", o, p)),
+                (_, Some(p)) => Some(p),
+                _ => func.utf8_text(source).ok().map(|s| s.to_string()),
+            }
+        }
         "field_expression" => func
             .child_by_field_name("field")
             .and_then(|f| f.utf8_text(source).ok())
@@ -1010,8 +1023,12 @@ fn is_builtin_for_ext(name: &str, ext: &str) -> bool {
 
 /// call 边中需跳过的噪声名称。
 fn is_skip_name(name: &str) -> bool {
+    // ponytail: 点分调用（obj.method）按首段判断 — console.log → "console"。
+    // member_expression 提取完整名后，内置对象调用（console.log、JSON.parse、
+    // Object.assign…）必须像裸名一样被跳过，否则会产生虚假调用边。
+    let head = name.split('.').next().unwrap_or(name);
     matches!(
-        name,
+        head,
         "console" | "Error" | "TypeError" | "SyntaxError" | "ReferenceError"
             | "setTimeout" | "setInterval" | "clearTimeout" | "clearInterval"
             | "fetch" | "JSON" | "Math" | "Object" | "Array" | "Promise"
@@ -1236,8 +1253,10 @@ mod tests {
         let a = QueryStructureAdapter::new_js_ts();
         let src = "function bar() { obj.method(); }";
         let (_nodes, edges, _) = a.analyze("test.ts", src);
-        let calls: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Calls) && e.target == "method").collect();
-        assert!(!calls.is_empty(), "member expression call should extract property name, got {:?}",
+        // ponytail: member_expression 现在提取完整 object.property，
+        // 以便 resolver 用 best_qualified_match 消歧跨文件静态方法调用。
+        let calls: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Calls) && e.target == "obj.method").collect();
+        assert!(!calls.is_empty(), "member expression call should extract object.property, got {:?}",
             edges.iter().filter(|e| matches!(e.kind, EdgeKind::Calls)).map(|e| &e.target).collect::<Vec<_>>());
     }
 

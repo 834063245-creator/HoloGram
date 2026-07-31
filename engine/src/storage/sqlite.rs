@@ -125,7 +125,8 @@ impl SqliteDb {
                     position_x  REAL,
                     position_y  REAL,
                     position_z  REAL,
-                    community_id INTEGER
+                    community_id INTEGER,
+                    non_defines_in_degree INTEGER DEFAULT 0
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
@@ -223,6 +224,12 @@ impl SqliteDb {
             [],
         );
 
+        // 迁移：为 nodes 表添加 non_defines_in_degree 列
+        let _ = self.conn.execute(
+            "ALTER TABLE nodes ADD COLUMN non_defines_in_degree INTEGER DEFAULT 0",
+            [],
+        );
+
         Ok(())
     }
 
@@ -231,7 +238,7 @@ impl SqliteDb {
     pub fn load_all_nodes(&self) -> Result<Vec<Node>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id FROM nodes")
+            .prepare("SELECT id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id, non_defines_in_degree FROM nodes")
             .map_err(|e| format!("prepare nodes: {}", e))?;
         let rows = stmt
             .query_map([], |row| {
@@ -269,6 +276,7 @@ impl SqliteDb {
                     in_degree: row.get::<_, i64>(6).unwrap_or(0) as u32,
                     position,
                     community_id: row.get::<_, Option<i64>>(10).unwrap_or(None).map(|v| v as usize),
+                    non_defines_in_degree: row.get::<_, i64>(11).unwrap_or(0) as u32,
                 })
             })
             .map_err(|e| format!("query nodes: {}", e))?;
@@ -333,17 +341,17 @@ impl SqliteDb {
             .map_err(|e| format!("drop fts triggers: {}", e))?;
 
         // ── 分块插入节点 ──
-        const NODE_CHUNK: usize = 80; // 11 列 × 80 = 880 参数，安全在 999 以内
-        let node_sql = "INSERT INTO nodes (id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id) VALUES ";
+        const NODE_CHUNK: usize = 66; // 12 列 × 66 = 792 参数，安全在 999 以内
+        let node_sql = "INSERT INTO nodes (id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id, non_defines_in_degree) VALUES ";
         for chunk in nodes.chunks(NODE_CHUNK) {
             let mut sql = String::with_capacity(node_sql.len() + chunk.len() * 80);
             sql.push_str(node_sql);
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(chunk.len() * 11);
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(chunk.len() * 12);
             for (i, node) in chunk.iter().enumerate() {
                 if i > 0 { sql.push_str(", "); }
-                let b = 1 + i * 11;
-                sql.push_str(&format!("(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
-                    b, b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10));
+                let b = 1 + i * 12;
+                sql.push_str(&format!("(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+                    b, b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8, b+9, b+10, b+11));
                 let (px, py, pz) = match node.position {
                     Some([x, y, z]) => (Some(x as f64), Some(y as f64), Some(z as f64)),
                     None => (None, None, None),
@@ -360,6 +368,7 @@ impl SqliteDb {
                 params.push(Box::new(py));
                 params.push(Box::new(pz));
                 params.push(Box::new(node.community_id.map(|v| v as i64)));
+                params.push(Box::new(node.non_defines_in_degree as i64));
             }
             let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
             tx.execute(&sql, param_refs.as_slice())
@@ -426,14 +435,15 @@ impl SqliteDb {
             };
             let props = serde_json::to_string(&node.properties).unwrap_or_else(|_| "{}".into());
             tx.execute(
-                "INSERT INTO nodes (id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                "INSERT INTO nodes (id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id, non_defines_in_degree)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name, kind=excluded.kind, location=excluded.location,
                     properties=excluded.properties, out_degree=excluded.out_degree,
                     in_degree=excluded.in_degree, position_x=excluded.position_x,
                     position_y=excluded.position_y, position_z=excluded.position_z,
-                    community_id=excluded.community_id",
+                    community_id=excluded.community_id,
+                    non_defines_in_degree=excluded.non_defines_in_degree",
                 params![
                     node.id,
                     node.name,
@@ -446,6 +456,7 @@ impl SqliteDb {
                     py,
                     pz,
                     node.community_id.map(|v| v as i64),
+                    node.non_defines_in_degree as i64,
                 ],
             )
             .map_err(|e| format!("insert node {}: {}", node.id, e))?;
