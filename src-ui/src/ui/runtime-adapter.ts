@@ -49,10 +49,9 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
       // 按所有权路由，而非按活动标签页：找到其注册 agent 实际持有
       // 此会话数组的会话（sessionReplaced 传递 `this.session` —
       // 与 getSession() 返回的引用相同）。
-      // 以前这会无条件重建活动会话的 store，所以后台会话压缩
-      // （或新标签页变活动前触发的 history-load setSession）会用
-      // 另一个会话的内容覆盖前台标签页的消息 — 每个标签页最终
-      // 显示相同的聊天。
+      // 触发来源只有主动动作：setSession（恢复/加载）、retractTurn。
+      // 压缩（context compaction）不再触发此事件 — 压缩只影响
+      // 发送载荷，session 始终是完整历史，UI 与存档永不因压缩改变。
       const { sessions } = getChatStore(storeId).sess.getState();
       for (const s of sessions) {
         const agent = agentSessionState.getAgent(storeId, s.id);

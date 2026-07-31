@@ -218,6 +218,12 @@ export class Agent {
   private _compactionConfigPath: string | null = null;
   private _compactionTrackerPath: string | null = null;
 
+  // ── 压缩折叠状态（根治: session = 完整历史，压缩只影响发送载荷）──
+  // session 永不被压缩动作替换 — UI 渲染与磁盘存档始终完整。
+  // 压缩 = 生成摘要 + 记录折叠点；payloadMessages() 据此构造发送载荷。
+  private _compactSummary: string | null = null;
+  private _compactTailStart = -1;
+
   constructor(prov: Provider, tools: ToolRegistry, systemPrompt: string, opts: AgentOptions = {}) {
     this.prov = prov;
     this.tools = tools;
@@ -302,6 +308,9 @@ export class Agent {
 
   setSession(msgs: Message[]): void {
     this.session = msgs;
+    // 会话被替换（恢复/加载）→ 折叠状态失效，从完整历史重新开始
+    this._compactSummary = null;
+    this._compactTailStart = -1;
     this._execState.bumpVersion();
     this._ui.sessionReplaced?.(this.session);
   }
@@ -415,7 +424,7 @@ export class Agent {
   /** 检查是否有足够数据，若有则计算并持久化最优参数。
    *  每次压缩后调用。不抛异常 — best-effort 后台调优。 */
   private async tryAutoTune(): Promise<void> {
-    const result = maybeTune(this.compactionTracker, this.compactRatio, this.recentKeep, this.pricing);
+    const result = maybeTune(this.compactionTracker, this.compactRatio, this.recentKeep, this.pricing, this.contextWindow);
     if (!result?.changed) return;
 
     const { config } = result;
@@ -701,6 +710,9 @@ export class Agent {
   newSession(): void {
     const sys = this.session.length > 0 && this.session[0].role === 'system' ? this.session[0] : null;
     this.session = sys ? [sys] : [];
+    // 新会话 → 折叠状态失效
+    this._compactSummary = null;
+    this._compactTailStart = -1;
     this._execState.bumpVersion();
     this.cacheHitTotal = 0;
     this.cacheMissTotal = 0;
@@ -1112,7 +1124,8 @@ ${resumeNote}
 
       // ── 预检上下文窗口 ──
       // 在发送到 API 前检查 — 捕获上轮结束时（maybeCompact() 在 0.55 触发）
-      // 与危险区（0.88）之间的间隙。没有这个检查，大量工具结果 + 注入
+      // 与危险区（0.88）之间的间隙。估算基于发送载荷（折叠视图），
+      // 与真实 API 压力一致。没有这个检查，大量工具结果 + 注入
       // 会在下一轮导致 400 错误。
       if (this.contextWindow > 0) {
         const preFlight = this.tokenCountWithEstimation();
@@ -1325,20 +1338,26 @@ ${resumeNote}
 
       // 响应式压缩: 如果错误是 "prompt too long"，压缩并重试，
       // 无论错误是否通常可重试。
-      if (this.isContextLengthError(lastErr) && !this.compactStuck && !this.compactRunning) {
-        log.info('agent', 'reactive compact triggered by context-length error');
-        // 自动调整 contextWindow: 模型实际无法处理当前窗口大小，
-        // 所以降低到错误触发点（留余量）。
-        const atTokens = this.tokenCountWithEstimation();
-        if (atTokens > 0 && atTokens < this.contextWindow) {
-          const adjusted = Math.max(atTokens - 10000, 50000); // 10K margin, floor 50K
-          log.info('agent', 'auto-lowering contextWindow', { from: this.contextWindow, to: adjusted, erroredAt: atTokens });
-          this.contextWindow = adjusted;
-        }
+      // 根治: 只有载荷确实接近窗口（>60%）时才响应式压缩 —
+      // 错误文本匹配会误判（"400"+"token" 字样即可命中），
+      // 低水位下不引发任何动作；也不再自动调低 contextWindow
+      // （单次错误不能证明窗口大小，永久砍小会让压缩在荒谬
+      // 的阈值反复触发，日志 2026-07-28 已实锤该恶性循环）。
+      const errAt = this.tokenCountWithEstimation();
+      if (
+        this.isContextLengthError(lastErr) &&
+        !this.compactStuck &&
+        !this.compactRunning &&
+        errAt > this.contextWindow * 0.6
+      ) {
+        log.info('agent', 'reactive compact triggered by context-length error', {
+          estimated: errAt,
+          ratio: (errAt / this.contextWindow).toFixed(2),
+        });
         this._sink({ kind: EventKind.Notice, level: 'warn', text: '上下文过长，自动压缩后重试…' });
         try {
           await this.compactNow(signal);
-          // compactNow 替换了 this.session — 跳过退避，立即重试
+          // compactNow 更新折叠状态（载荷变小）— 跳过退避，立即重试
           continue;
         } catch {
           // compactNow 失败 — 转入正常重试/中止逻辑
@@ -1398,11 +1417,13 @@ ${resumeNote}
   }> {
     // 将临时提醒作为 user 消息追加到末尾 — 它们
     // 本轮对 LLM 可见但不持久化到 this.session。
+    // 载荷 = 完整历史的折叠视图（若已压缩）+ 临时提醒。
     const transientMsgs: Message[] = this._transientReminders.map((content) => ({
       role: 'user' as const,
       content,
     }));
-    const fullSession = transientMsgs.length > 0 ? [...this.session, ...transientMsgs] : this.session;
+    const payload = this.payloadMessages();
+    const fullSession = transientMsgs.length > 0 ? [...payload, ...transientMsgs] : payload;
 
     const gen = this.prov.stream(signal, {
       messages: sanitizeToolPairing(fullSession),
@@ -1556,9 +1577,11 @@ ${resumeNote}
   /** 使用 cl100k_base tokenizer 精确计算 token 数。
    *  替代旧的 chars/2.5 启发式（误差 30-60%）。
    *  Cl100k_base 匹配 GPT-4、DeepSeek 和大多数 OpenAI 兼容模型。
-   *  Anthropic 的 tokenizer 略有差异（< 8% 误差），对压缩安全。 */
+   *  Anthropic 的 tokenizer 略有差异（< 8% 误差），对压缩安全。
+   *  按发送载荷（payloadMessages 折叠视图）计数 — 触发判定必须
+   *  与真实 API 压力一致，而非完整历史大小。 */
   private tokenCountWithEstimation(): number {
-    let total = countMessages(this.session);
+    let total = countMessages(this.payloadMessages());
     // 计算临时提醒 token — 发送给 LLM 但不在会话中
     total += countTexts(this._transientReminders);
     // 计算工具 schema token — 每次请求都发送
@@ -1573,12 +1596,14 @@ ${resumeNote}
     try {
       const T = this.tools.schemas();
       const schemaTokens = countToolSchemas(T);
+      // 统计发送载荷（折叠视图）而非完整历史 — 反映真实 API 成本
+      const payload = this.payloadMessages();
 
       let sysTokens = 0, userTokens = 0, reminderTokens = 0, assistantTokens = 0, toolTokens = 0;
       let reminderCount = 0, inboxInjCount = 0;
       let sysMsgCount = 0, userMsgCount = 0, assistantMsgCount = 0, toolMsgCount = 0;
 
-      for (const m of this.session) {
+      for (const m of payload) {
         const tok = countMessage(m);
         if (m.role === 'system') { sysTokens += tok; sysMsgCount++; }
         else if (m.role === 'user') {
@@ -1595,7 +1620,8 @@ ${resumeNote}
       const estimatedTotal = sysTokens + userTokens + reminderTokens + transientTokens + assistantTokens + toolTokens + schemaTokens;
 
       const diag = {
-        turn_session_msgs: this.session.length,
+        turn_session_msgs: payload.length,
+        history_msgs: this.session.length,
         // ── 成本中心 ──
         system_prompt: { tokens: sysTokens, msgs: sysMsgCount },
         user_real:    { tokens: userTokens, msgs: userMsgCount },
@@ -1642,22 +1668,68 @@ ${resumeNote}
     if (event.outcome === 'summary') this.tryAutoTune();
   }
 
-  /** 手动压缩触发器（来自 /compact 命令）。返回摘要文本或错误。 */
+  // ── 折叠视图（根治核心）──
+
+  /** session 头部偏移: 若第一条是 system prompt 则为 1，否则 0。 */
+  private _foldHead(): number {
+    return this.session.length > 0 && this.session[0].role === 'system' ? 1 : 0;
+  }
+
+  /** 发送给 LLM 的载荷 — 完整历史 + 折叠（若已有压缩记录）。
+   *  根治: session 永远是完整历史（UI/存档读取），压缩只影响这里。 */
+  private payloadMessages(): Message[] {
+    if (!this._compactSummary || this._compactTailStart < 0) return this.session;
+    const head = this._foldHead();
+    const tailStart = Math.min(Math.max(this._compactTailStart, head), this.session.length);
+    const summaryMsg: Message = {
+      role: 'user',
+      content:
+        '<compacted-context>\n以下是对前面讨论的总结（原始消息仍完整保留在会话历史中）:\n\n' +
+        this._compactSummary +
+        '\n</compacted-context>',
+    };
+    return [...this.session.slice(0, head), summaryMsg, ...this.session.slice(tailStart)];
+  }
+
+  /** 计算本次要折叠的中间区域。返回 null = 无可折叠内容（stuck）。
+   *  区域 = session[foldPoint..tailStart]，foldPoint 是上次折叠点
+   *  （首次压缩 = system 之后），tailStart 前保留最近 N 条消息 —
+   *  每次压缩只处理"上次折叠后新增的消息"，摘要成本可控且累积正确。
+   *  不拆分 tool-call 组: 若尾部以孤立的 tool 结果开始，将其拉入区域。 */
+  private computeCompactRegion(): { region: Message[]; tailStart: number; priorSummary: string | null } | null {
+    const msgs = this.session;
+    const head = this._foldHead();
+    const tailCount = Math.max(4, this.recentKeep);
+    const foldPoint = this._compactTailStart >= 0 ? Math.max(this._compactTailStart, head) : head;
+    const regionEnd = msgs.length - tailCount;
+    if (regionEnd - foldPoint <= 0) return null; // 无可折叠内容
+    let tailStart = regionEnd;
+    while (tailStart < msgs.length && msgs[tailStart].role === 'tool') tailStart++;
+    const region = msgs.slice(foldPoint, tailStart);
+    if (region.length === 0) return null;
+    return { region, tailStart, priorSummary: this._compactSummary };
+  }
+
+  /** 应用折叠状态: 记录摘要 + 折叠点。session（完整历史）不变。 */
+  private _applyCompactState(tailStart: number, summary: string): void {
+    this._compactSummary = summary;
+    this._compactTailStart = tailStart;
+    // session 可能已被 retract 缩短或替换 — 修正折叠点
+    const head = this._foldHead();
+    if (this._compactTailStart < head) this._compactTailStart = head;
+    if (this._compactTailStart > this.session.length) this._compactTailStart = this.session.length;
+  }
+
+  /** 手动压缩触发器（来自 /compact 命令）。返回摘要文本或错误。
+   *  根治: 压缩只生成摘要并记录折叠点 — 不触碰 this.session（完整历史），
+   *  不触发 sessionReplaced，不写盘 — UI 渲染与磁盘存档永远完整。 */
   async compactNow(signal: AbortSignal): Promise<string> {
     if (this.compactRunning) throw new Error('compaction already in progress');
     this.compactRunning = true;
     try {
-      const msgs = this.session;
-      const head = msgs.length > 0 && msgs[0].role === 'system' ? 1 : 0;
-      // 原文保留最近 N 条消息（尾部），压缩中间部分。
-      // 对未钳制的区域大小做守卫 — 旧的 `Math.max(head + 4, …)`
-      // 钳制使 `start - head < 4` 不可达，导致即使 2 条消息的会话
-      // 也被"压缩"（用户自己的消息被替换为其摘要）。
-      const tailCount = Math.max(4, this.recentKeep);
-      const regionEnd = msgs.length - tailCount;
-      if (regionEnd - head <= 0) {
-        // 头尾之间无内容 — 压缩在此无能为力。
-        // 标记为 stuck 以使响应式路径停止重试压缩，
+      const regionInfo = this.computeCompactRegion();
+      if (!regionInfo) {
+        // 头尾之间无内容可折叠 — 标记 stuck 使响应式路径停止重试，
         // 让真实错误浮现而非循环。
         this.compactStuck = true;
         this.recordCompactionEvent({
@@ -1666,7 +1738,7 @@ ${resumeNote}
           regionTokensEst: 0,
           summaryInputTokens: 0,
           summaryOutputTokens: 0,
-          tailMsgCount: msgs.length - head,
+          tailMsgCount: Math.max(0, this.session.length - this._foldHead()),
           preTokens: this.tokenCountWithEstimation(),
           postTokens: this.tokenCountWithEstimation(),
           outcome: 'stuck',
@@ -1678,131 +1750,58 @@ ${resumeNote}
         });
         return 'stuck';
       }
-      if (regionEnd - head < 4) {
-        // ponytail: 消息不足以摘要但上下文太长 → 强制截断
-        // 不拆分 tool-call 组: 如果尾部会以孤立的 tool 结果开始，
-        // 将它们拉入被丢弃的区域。
-        let tailStart = Math.max(head, regionEnd);
-        while (tailStart < msgs.length && msgs[tailStart].role === 'tool') tailStart++;
-        const truncated: Message[] = [
-          ...msgs.slice(0, head),
-          {
-            role: 'user' as const,
-            content: '<truncated-context>\n前面的消息因上下文过长已被截断。\n</truncated-context>',
-          },
-          ...msgs.slice(tailStart),
-        ];
-        this.session = truncated;
-        this._execState.bumpVersion();
-        this._ui.sessionReplaced?.(this.session);
-        this.stormSig = '';
-        this.stormCount = 0;
-        this.compactStuck = false;
-        this.recordCompactionEvent({
-          ts: Date.now(),
-          regionMsgCount: 0,
-          regionTokensEst: 0,
-          summaryInputTokens: 0,
-          summaryOutputTokens: 0,
-          tailMsgCount: Math.min(tailCount, msgs.length - head),
-          preTokens: this.tokenCountWithEstimation(),
-          postTokens: countMessages(truncated),
-          outcome: 'stuck',
-        });
-        this._sink({
-          kind: EventKind.Notice,
-          level: 'info',
-          text: `上下文过长，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)`,
-        });
-        return 'truncated';
-      }
-      // 不在区域边界拆分 tool-call 组: 如果尾部会以孤立的
-      // tool 结果开始，将它们拉入被摘要的区域。
-      let start = regionEnd;
-      while (start < msgs.length && msgs[start].role === 'tool') start++;
-      const region = msgs.slice(head, start);
-      // 累积压缩: 如果上次压缩留有摘要，
-      // 包含它使 LLM 合并而非从头重新摘要。
-      const priorSummary = extractCompactedContext(region);
+      const { region, tailStart, priorSummary } = regionInfo;
       let summary: string | null = null;
       try {
         summary = await this.summarizeRegion(signal, region, priorSummary);
       } catch (e: any) {
-        log.warn('agent', `summarizeRegion failed (${e?.message || e}), falling back to truncation`);
+        log.warn('agent', `summarizeRegion failed (${e?.message || e})`);
       }
       if (!summary) {
-        // ponytail: 摘要失败，强制截断作为降级
-        let tailStart = Math.max(head, regionEnd);
-        while (tailStart < msgs.length && msgs[tailStart].role === 'tool') tailStart++;
-        const truncated: Message[] = [
-          ...msgs.slice(0, head),
-          {
-            role: 'user' as const,
-            content: '<truncated-context>\n前面的消息因压缩失败已被截断。\n</truncated-context>',
-          },
-          ...msgs.slice(tailStart),
-        ];
-        this.session = truncated;
-        this._execState.bumpVersion();
-        this._ui.sessionReplaced?.(this.session);
-        this.stormSig = '';
-        this.stormCount = 0;
-        this.compactStuck = false;
+        // 摘要失败 = 放弃本次压缩。历史保持完整，仅继续增长。
+        // 根治: 绝不截断/删除历史消息。
         this.recordCompactionEvent({
           ts: Date.now(),
           regionMsgCount: region.length,
           regionTokensEst: countMessages(region),
           summaryInputTokens: 0,
           summaryOutputTokens: 0,
-          tailMsgCount: msgs.length - tailStart,
+          tailMsgCount: this.session.length - tailStart,
           preTokens: this.tokenCountWithEstimation(),
-          postTokens: countMessages(truncated),
-          outcome: 'truncated',
+          postTokens: this.tokenCountWithEstimation(),
+          outcome: 'stuck',
         });
         this._sink({
           kind: EventKind.Notice,
-          level: 'info',
-          text: `压缩失败，已截断旧消息 (保留最近 ${Math.min(tailCount, msgs.length - head)} 条)`,
+          level: 'warn',
+          text: '压缩失败，本次跳过（完整历史仍保留）。可继续对话或用 /new 开启新会话。',
         });
-        return 'truncated';
+        return 'stuck';
       }
 
-      const compacted: Message[] = [
-        ...msgs.slice(0, head),
-        {
-          role: 'user' as const,
-          content:
-            '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' +
-            summary +
-            '\n</compacted-context>',
-        },
-        ...msgs.slice(start),
-      ];
-      this.session = compacted;
-      this._execState.bumpVersion();
-      this._ui.sessionReplaced?.(this.session);
+      // 应用折叠状态 — session 不变，发送载荷变小
+      this._applyCompactState(tailStart, summary);
       this.stormSig = '';
       this.stormCount = 0;
       this.compactStuck = false;
 
       // ── 压缩模型埋点 ──
-      const preTokens = countMessages(msgs);
-      const postTokens = countMessages(compacted);
+      const preTokens = this.tokenCountWithEstimation();
       this.recordCompactionEvent({
         ts: Date.now(),
         regionMsgCount: region.length,
         regionTokensEst: countMessages(region),
         summaryInputTokens: countMessages(region), // 近似值
         summaryOutputTokens: countText(summary),
-        tailMsgCount: msgs.length - start,
+        tailMsgCount: this.session.length - tailStart,
         preTokens,
-        postTokens,
+        postTokens: this.tokenCountWithEstimation(),
         outcome: 'summary',
       });
       this._sink({
         kind: EventKind.Notice,
         level: 'info',
-        text: `上下文已压缩: ${region.length} 条消息 → 摘要 (保留了最近 ${msgs.length - start} 条)`,
+        text: `上下文已压缩: ${region.length} 条消息 → 摘要 (保留最近 ${this.session.length - tailStart} 条，完整历史仍保留)`,
       });
       return summary;
     } finally {
@@ -1813,9 +1812,9 @@ ${resumeNote}
   private maybeCompact(usage: Usage | undefined): void {
     if (this.contextWindow <= 0) return;
 
-    // 有 API 报告的 token 时优先使用，否则回退到基于字符的估算。
-    // 估算使压缩能在首次 API 调用返回前触发，
-    // 防止下一次请求出现 400 "prompt too long"。
+    // 有 API 报告的 token 时优先使用，否则回退到估算。
+    // 估算基于发送载荷（折叠视图），与真实 API 压力一致 —
+    // 压缩成功后载荷变小，比例自然回落，不会反复触发。
     const estimated = usage && usage.total_tokens > 0 ? usage.total_tokens : this.tokenCountWithEstimation();
     const ratio = estimated / this.contextWindow;
 
@@ -1830,7 +1829,7 @@ ${resumeNote}
     }
     this.compactRunning = true;
 
-    // 自动压缩: 本轮后在后台触发摘要
+    // 自动压缩: 本轮后在后台生成摘要并更新折叠状态
     this._sink({
       kind: EventKind.Notice,
       level: 'info',
@@ -1838,14 +1837,9 @@ ${resumeNote}
     });
 
     // 异步运行压缩（不阻塞当前轮次）
-    const msgs = this.session;
     const genAtStart = this._execState.bumpVersion();
-    const head = msgs.length > 0 && msgs[0].role === 'system' ? 1 : 0;
-    const tailCount = Math.max(4, this.recentKeep);
-    // 对未钳制的区域大小做守卫（见 compactNow）— 否则即使
-    // 2 条消息的会话在比例触发时也会被"压缩"。
-    const regionEnd = msgs.length - tailCount;
-    if (regionEnd - head < 4) {
+    const regionInfo = this.computeCompactRegion();
+    if (!regionInfo) {
       this.compactStuck = true;
       this.compactRunning = false;
       this.recordCompactionEvent({
@@ -1854,7 +1848,7 @@ ${resumeNote}
         regionTokensEst: 0,
         summaryInputTokens: 0,
         summaryOutputTokens: 0,
-        tailMsgCount: Math.max(0, msgs.length - head),
+        tailMsgCount: Math.max(0, this.session.length - this._foldHead()),
         preTokens: estimated,
         postTokens: estimated,
         outcome: 'stuck',
@@ -1867,14 +1861,8 @@ ${resumeNote}
       return;
     }
 
-    // 不在区域边界拆分 tool-call 组（见 compactNow）。
-    let start = regionEnd;
-    while (start < msgs.length && msgs[start].role === 'tool') start++;
-    const region = msgs.slice(head, start);
-    // 累积压缩: 合并前一次摘要（若存在）
-    const priorSummary = extractCompactedContext(region);
     const abortCtrl = new AbortController();
-    this.summarizeRegion(abortCtrl.signal, region, priorSummary)
+    this.summarizeRegion(abortCtrl.signal, regionInfo.region, regionInfo.priorSummary)
       .then((summary) => {
         if (genAtStart !== this._execState.sessionVersion) {
           this.compactRunning = false;
@@ -1884,24 +1872,12 @@ ${resumeNote}
           this.compactRunning = false;
           return;
         }
-        const compacted: Message[] = [
-          ...msgs.slice(0, head),
-          {
-            role: 'user' as const,
-            content:
-              '<compacted-context>\n以下是对前面讨论的总结（原始消息已压缩以节省上下文）:\n\n' +
-              summary +
-              '\n</compacted-context>',
-          },
-          ...msgs.slice(start),
-        ];
-        this.session = compacted;
-        this._execState.bumpVersion();
-        this._ui.sessionReplaced?.(this.session);
+        // 应用折叠 — session（完整历史）不变，载荷变小
+        this._applyCompactState(regionInfo.tailStart, summary);
         this.stormSig = '';
         this.stormCount = 0;
 
-        // 检查压缩是否足够 — 如果仍高于 95%，则已卡住
+        // 检查压缩是否足够 — 若折叠后载荷仍高于 95%，则已卡住
         const postEstimate = this.tokenCountWithEstimation();
         if (postEstimate / this.contextWindow > 0.95) {
           this.compactStuck = true;
@@ -1918,22 +1894,21 @@ ${resumeNote}
         this.compactRunning = false;
 
         // ── 压缩模型埋点 ──
-        const postTokens = countMessages(compacted);
         this.recordCompactionEvent({
           ts: Date.now(),
-          regionMsgCount: region.length,
-          regionTokensEst: countMessages(region),
-          summaryInputTokens: countMessages(region),
+          regionMsgCount: regionInfo.region.length,
+          regionTokensEst: countMessages(regionInfo.region),
+          summaryInputTokens: countMessages(regionInfo.region),
           summaryOutputTokens: countText(summary),
-          tailMsgCount: msgs.length - start,
+          tailMsgCount: this.session.length - regionInfo.tailStart,
           preTokens: estimated,
-          postTokens,
+          postTokens: postEstimate,
           outcome: 'summary',
         });
         this._sink({
           kind: EventKind.Notice,
           level: 'info',
-          text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
+          text: `自动压缩完成: ${regionInfo.region.length} 条消息 → 摘要（完整历史仍保留）`,
         });
       })
       .catch(() => {
@@ -2459,26 +2434,6 @@ function finishReasonMessage(u?: Usage): string | undefined {
     default:
       return undefined;
   }
-}
-
-/** 扫描压缩区域中上一次的 `<compacted-context>` 摘要。
- *  返回其文本内容（不含 XML 包裹），使下一次压缩
- *  能将其与新消息合并而非从头重新摘要。 */
-function extractCompactedContext(region: readonly Message[]): string | null {
-  const startTag = '<compacted-context>';
-  const endTag = '</compacted-context>';
-  for (const m of region) {
-    const content = m.content;
-    if (typeof content !== 'string') continue;
-    const openIdx = content.indexOf(startTag);
-    if (openIdx === -1) continue;
-    const bodyStart = openIdx + startTag.length;
-    const bodyEnd = content.indexOf(endTag, bodyStart);
-    if (bodyEnd === -1) continue;
-    const body = content.slice(bodyStart, bodyEnd).trimStart();
-    if (body) return body;
-  }
-  return null;
 }
 
 function renderTranscript(msgs: Message[]): string {

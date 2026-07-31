@@ -382,34 +382,35 @@ export interface CompactionConfig {
 
 const MIN_SAMPLES_FOR_TUNE = 5;
 
-/** 从追踪器数据计算最优参数。数据不足时返回 null。 */
-export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Pricing): CompactionConfig | null {
+/** 从追踪器数据计算最优参数。数据不足时返回 null。
+ *  ponytail: 只统计 outcome === 'summary' 的事件 — stuck/truncated
+ *  是失败样本（区域 0 token），混入会污染平均区域大小和压缩比。 */
+export function tuneCompactionParams(
+  tracker: CompactionTracker,
+  pricing?: Pricing,
+  contextWindow?: number,
+): CompactionConfig | null {
   const stats = tracker.getStats(pricing);
-  if (stats.events.length < MIN_SAMPLES_FOR_TUNE) return null;
+  const summaryEvents = stats.events.filter((e) => e.outcome === 'summary');
+  if (summaryEvents.length < MIN_SAMPLES_FOR_TUNE) return null;
 
-  // 所有事件的平均压缩比
+  // 所有 summary 事件的平均压缩比
   const avgCompressionRatio =
-    stats.events.reduce((sum, e) => {
+    summaryEvents.reduce((sum, e) => {
       if (e.regionTokensEst === 0) return sum;
       return sum + e.summaryOutputTokens / e.regionTokensEst;
-    }, 0) / stats.events.length;
+    }, 0) / summaryEvents.length;
 
-  // 压缩后的平均轮次
-  const _avgTurnsAfter =
-    stats.turnsAfterCompaction.length > 0
-      ? stats.turnsAfterCompaction.reduce((a, b) => a + b, 0) / stats.turnsAfterCompaction.length
-      : 0;
-
-  // 平均区域大小
-  const avgRegionMsgs = stats.events.reduce((sum, e) => sum + e.regionMsgCount, 0) / stats.events.length;
-  const avgRegionTokens = stats.events.reduce((sum, e) => sum + e.regionTokensEst, 0) / stats.events.length;
+  // 平均区域大小（仅 summary 事件）
+  const avgRegionMsgs = summaryEvents.reduce((sum, e) => sum + e.regionMsgCount, 0) / summaryEvents.length;
+  const avgRegionTokens = summaryEvents.reduce((sum, e) => sum + e.regionTokensEst, 0) / summaryEvents.length;
 
   // 平均消息 token 数
   const avgMsgTokens = avgRegionMsgs > 0 ? avgRegionTokens / avgRegionMsgs : 500;
 
   // 从观测到的重读/重复工具计算丢失因子
   const lossFactor = tracker.estimateLossFactor();
-  const avgLossPerEvent = stats.events.length > 0 ? lossFactor / stats.events.length : 0;
+  const avgLossPerEvent = summaryEvents.length > 0 ? lossFactor / summaryEvents.length : 0;
 
   // 平均轮次成本
   const avgTurnCost = tracker.estimateAvgTurnCost(avgRegionTokens, avgRegionTokens * 0.15, pricing);
@@ -417,15 +418,17 @@ export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Prici
   // 计算最优 recentKeep
   const { k: optimalK } = optimalRecentKeep(Math.round(avgRegionMsgs), avgMsgTokens, avgTurnCost, 0.3, pricing?.input);
 
-  // 根据预期会话长度计算最优 compactRatio
-  const { r: optimalR } = optimalCompactRatio(1_000_000, avgMsgTokens, stats.totalTurns, avgTurnCost);
-  // 限制到合理范围
-  const tunedR = Math.max(0.35, Math.min(0.75, optimalR));
+  // 根据预期会话长度计算最优 compactRatio — 用真实窗口而非硬编码 1M
+  const win = contextWindow && contextWindow > 0 ? contextWindow : 1_000_000;
+  const { r: optimalR } = optimalCompactRatio(win, avgMsgTokens, stats.totalTurns, avgTurnCost);
+  // 限制到合理范围 — 下限 0.5：压缩不再销毁历史，但过早压缩
+  // 仍浪费摘要成本，0.35 级别的阈值毫无必要。
+  const tunedR = Math.max(0.5, Math.min(0.75, optimalR));
 
   // 构建说明
   const parts: string[] = [];
   parts.push(
-    `${stats.events.length}次压缩, 平均压缩比 ${(avgCompressionRatio * 100).toFixed(1)}%, 每次平均信息丢失 ${avgLossPerEvent.toFixed(2)} 轮`,
+    `${summaryEvents.length}次压缩, 平均压缩比 ${(avgCompressionRatio * 100).toFixed(1)}%, 每次平均信息丢失 ${avgLossPerEvent.toFixed(2)} 轮`,
   );
   parts.push(`compactRatio: ${(optimalR * 100).toFixed(0)}% → 夹到 ${(tunedR * 100).toFixed(0)}%`);
   parts.push(`recentKeep: ${optimalK}`);
@@ -434,7 +437,7 @@ export function tuneCompactionParams(tracker: CompactionTracker, pricing?: Prici
     compactRatio: tunedR,
     recentKeep: optimalK,
     tunedAt: Date.now(),
-    sampleCount: stats.events.length,
+    sampleCount: summaryEvents.length,
     avgCompressionRatio,
     avgLossFactor: avgLossPerEvent,
     reasoning: parts.join(' | '),
@@ -447,8 +450,9 @@ export function maybeTune(
   currentR: number,
   currentK: number,
   pricing?: Pricing,
+  contextWindow?: number,
 ): { config: CompactionConfig; changed: boolean } | null {
-  const config = tuneCompactionParams(tracker, pricing);
+  const config = tuneCompactionParams(tracker, pricing, contextWindow);
   if (!config) return null;
   const changed = Math.abs(config.compactRatio - currentR) > 0.05 || config.recentKeep !== currentK;
   return { config, changed };
