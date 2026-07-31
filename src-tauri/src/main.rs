@@ -77,20 +77,26 @@ fn main() {
         .manage(workspace_state)
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                // Phase 1: Drain — 通过 ResourceLedger 优雅停止所有服务
+                // Phase 1: Drain — 后台线程执行，3s 超时保护避免 shutdown 阻塞导致僵尸进程
                 let app = window.app_handle();
-                if let Some(ledger) = app.try_state::<std::sync::Mutex<lifecycle::ResourceLedger>>() {
-                    let ledger = ledger.lock().unwrap();
-                    ledger.shutdown_all(std::time::Duration::from_secs(2));
-                }
-                // 同时停用工作区句柄（停止 watcher 线程）
-                if let Some(ws_state) = app.try_state::<WorkspaceState>() {
-                    if let Ok(mut guard) = ws_state.lock() {
-                        if let Some(handle) = guard.as_mut() {
-                            handle.deactivate();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let app_clone = app.clone();
+                std::thread::spawn(move || {
+                    if let Some(ledger) = app_clone.try_state::<std::sync::Mutex<lifecycle::ResourceLedger>>() {
+                        let ledger = ledger.lock().unwrap_or_else(|e| e.into_inner());
+                        ledger.shutdown_all(std::time::Duration::from_secs(2));
+                    }
+                    if let Some(ws_state) = app_clone.try_state::<WorkspaceState>() {
+                        if let Ok(mut guard) = ws_state.lock() {
+                            if let Some(handle) = guard.as_mut() {
+                                handle.deactivate();
+                            }
                         }
                     }
-                }
+                    let _ = tx.send(());
+                });
+                // 最多等 3 秒，超时直接强退
+                let _ = rx.recv_timeout(std::time::Duration::from_secs(3));
                 // Phase 2: Purge — 强制退出确保无僵尸进程
                 std::process::exit(0);
             }

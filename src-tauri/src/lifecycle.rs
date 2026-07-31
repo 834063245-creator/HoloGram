@@ -100,8 +100,22 @@ impl LifecycleService for BgJobsService {
         // 从中毒的 mutex 恢复（panic 的监控线程可能导致 mutex 中毒）。
         let mut jobs = crate::utils::BG_JOBS.lock().unwrap_or_else(|e| e.into_inner());
         for (_, job) in jobs.iter_mut() {
-            let _ = job.child.kill();
-            let _ = job.child.wait();
+            // kill_tree 递归杀子孙进程，避免孤儿进程继续占用资源
+            let _ = job.child.kill_tree();
+            // try_wait 轮询替代 wait()，防止子进程不响应时永久阻塞
+            let wait_start = std::time::Instant::now();
+            loop {
+                match job.child.try_wait() {
+                    Ok(Some(_)) => break,
+                    _ => {
+                        if wait_start.elapsed() >= Duration::from_millis(500) {
+                            eprintln!("[lifecycle] bg_job pid={} did not exit within 500ms, skipping wait", job.child.id());
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                }
+            }
         }
         jobs.clear();
         ShutdownStatus::Clean
