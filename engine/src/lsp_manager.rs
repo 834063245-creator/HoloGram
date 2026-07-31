@@ -187,7 +187,12 @@ impl LspProcess {
         let mut body_buf = vec![0u8; len];
         use std::io::Read;
         reader.get_mut().read_exact(&mut body_buf).map_err(|e| format!("read body: {}", e))?;
-        let msg: Value = serde_json::from_slice(&body_buf).map_err(|e| format!("parse: {}", e))?;
+        let msg: Value = serde_json::from_slice(&body_buf).map_err(|e| {
+            // 把原始字节带进错误消息 — 定位"服务器发了非 JSON 内容"
+            //（typescript-language-server 曾把日志/横幅混进 stdout）。
+            let raw = String::from_utf8_lossy(&body_buf[..len.min(200)]);
+            format!("parse: {} raw={:?}", e, raw)
+        })?;
         let id = msg.get("id").and_then(|v| v.as_u64());
         Ok((id, msg))
     }
