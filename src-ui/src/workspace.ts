@@ -665,7 +665,10 @@ export class Workspace {
         collaborationMode: ms.collaborationMode,
         pricing: defaultPricing(act.kind, act.model),
         temperature: agentOpts.temperature ?? 0.7,
-        contextWindow: agentOpts.contextWindow || Math.min(getModel(act.model)?.contextWindow ?? 200000, 200000),
+        // 从模型目录动态解析窗口（deepseek-v4 标 1M），查不到才 fallback 200K。
+        // 0b3e5bf 曾加 Math.min(..., 200000) 硬封顶 — 把动态结果压成 200K，
+        // 导致压缩在 110K 就触发；压缩已根治为只影响发送载荷，cap 无必要。
+        contextWindow: agentOpts.contextWindow || getModel(act.model)?.contextWindow || 200000,
         // max_tokens 不再开放给用户设置——provider 默认 32000，发送前按模型目录上限钳制
         maxTokens: 0,
         preRunHook: this.memoryManager
