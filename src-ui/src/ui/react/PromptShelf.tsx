@@ -79,14 +79,20 @@ const AskCard: React.FC<{
     onResolve(labels);
   }, [prompt.options, selected, onResolve]);
 
-  const cancel = useCallback(() => onResolve(null), [onResolve]);
-
-  // 键盘
-  useEffect(() => {
+  const cancel = useCallback(() => {
+    // 清掉待触发的自动确认，防取消后定时器泄漏到下一张卡
     if (advanceTimer.current !== null) {
-      const id = advanceTimer.current;
-      return () => window.clearTimeout(id);
+      window.clearTimeout(advanceTimer.current);
+      advanceTimer.current = null;
     }
+    onResolve(null);
+  }, [onResolve]);
+
+  // 卸载时清掉未触发的自动确认定时器（挂载即注册清理，兜底所有后续 set 的 timer）
+  useEffect(() => {
+    return () => {
+      if (advanceTimer.current !== null) window.clearTimeout(advanceTimer.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -96,6 +102,9 @@ const AskCard: React.FC<{
         cancel();
         return;
       }
+      // 焦点在输入框（自定义回答 / 聊天输入）时不触发数字快选，防误答
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('input, textarea, [contenteditable="true"]')) return;
       const idx = Number(e.key) - 1;
       if (Number.isInteger(idx) && idx >= 0 && idx < prompt.options.length) {
         e.preventDefault();
@@ -198,6 +207,9 @@ const PermCard: React.FC<{
 }> = ({ prompt, onResolve }) => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // 焦点在输入框（聊天输入等）时不触发快捷键，防打字误批准/误拒绝
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('input, textarea, [contenteditable="true"]')) return;
       if (e.key === 'Escape') {
         onResolve({ allow: false, remember: false });
         return;
@@ -266,75 +278,102 @@ export interface PromptShelfHandle {
 }
 
 // ── Shelf 组件（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
-// 句柄只创建一次（core 挂载时注册）；命令式读取一律走 ref 镜像，避免陈旧闭包。
+// FIFO 队列：同轮多个 ask_user / 权限请求排队展示，不再互相顶掉
+// （旧实现第二个提示会以 null 静默取消第一个 → 模型收到"用户取消"并重复追问，
+//   观感即"点击后卡死"）。每张卡激活时起 5 分钟超时兜底 —
+//   无操作自动按取消解析，从根上防工具 promise 永久挂起。
+
+/** 卡片激活后无操作的最长等待时间 — 超时按取消解析 */
+const CARD_TIMEOUT_MS = 5 * 60 * 1000;
+
+interface QueuedPrompt {
+  prompt: PromptData;
+  resolve: (v: unknown) => void;
+  /** 激活时启动的超时定时器；未激活的队列项为 null */
+  timer: number | null;
+}
+
+/** 超时默认值 — ask 取消（null），权限按拒绝。 */
+function timeoutValue(prompt: PromptData): unknown {
+  return prompt.type === 'permission' ? { allow: false, remember: false } : null;
+}
 
 export const PromptShelf = forwardRef<PromptShelfHandle>(function PromptShelf(_props, ref) {
   const [active, setActive] = useState<PromptData | null>(null);
-  const activeRef = useRef<PromptData | null>(null);
-  const resolverRef = useRef<((v: unknown) => void) | null>(null);
+  const queueRef = useRef<QueuedPrompt[]>([]);
 
-  /** 清除当前提示并以 null（取消）解析挂起的 Promise。
-   *  防止第二个提示取代第一个时 Promise 静默泄漏。 */
-  const dismissCurrent = useCallback(() => {
-    const prev = resolverRef.current;
-    activeRef.current = null;
-    resolverRef.current = null;
-    setActive(null);
-    prev?.(null);
+  /** 解析队头并激活下一张。稳定引用 — 超时定时器与卡片点击共用。 */
+  const resolveHead = useCallback((v: unknown) => {
+    const head = queueRef.current.shift();
+    if (head) {
+      if (head.timer !== null) window.clearTimeout(head.timer);
+      head.resolve(v);
+    }
+    const next = queueRef.current[0];
+    setActive(next?.prompt ?? null);
+    if (next) {
+      next.timer = window.setTimeout(() => resolveHead(timeoutValue(next.prompt)), CARD_TIMEOUT_MS);
+    }
   }, []);
 
-  const showAsk = useCallback(
-    (prompt: AskPrompt) =>
-      new Promise<string[] | null>((resolve) => {
-        dismissCurrent();
-        activeRef.current = prompt;
-        resolverRef.current = (v) => resolve(v as string[] | null);
-        setActive(prompt);
+  /** 入队；队列原本为空时立即激活队头。 */
+  const enqueue = useCallback(
+    (prompt: PromptData): Promise<unknown> =>
+      new Promise((resolve) => {
+        queueRef.current.push({ prompt, resolve, timer: null });
+        if (queueRef.current.length === 1) {
+          const head = queueRef.current[0];
+          head.timer = window.setTimeout(() => resolveHead(timeoutValue(head.prompt)), CARD_TIMEOUT_MS);
+          setActive(head.prompt);
+        }
       }),
-    [dismissCurrent],
+    [resolveHead],
+  );
+
+  const showAsk = useCallback(
+    (prompt: AskPrompt) => enqueue({ ...prompt, type: 'ask' }) as Promise<string[] | null>,
+    [enqueue],
   );
 
   const showPermission = useCallback(
     (prompt: PermissionPrompt) =>
-      new Promise<{ allow: boolean; remember: boolean }>((resolve) => {
-        dismissCurrent();
-        activeRef.current = prompt;
-        resolverRef.current = (v) => resolve(v as { allow: boolean; remember: boolean });
-        setActive(prompt);
-      }),
-    [dismissCurrent],
+      enqueue({ ...prompt, type: 'permission' }) as Promise<{ allow: boolean; remember: boolean }>,
+    [enqueue],
   );
 
-  const resolve = useCallback((v: unknown) => {
-    const r = resolverRef.current;
-    activeRef.current = null;
-    resolverRef.current = null;
+  /** 清空队列，全部按取消解析（ask → null，权限 → 拒绝）。运行停止或卸载时调用。 */
+  const dismissAll = useCallback(() => {
+    const q = queueRef.current;
+    queueRef.current = [];
     setActive(null);
-    r?.(v);
+    for (const item of q) {
+      if (item.timer !== null) window.clearTimeout(item.timer);
+      item.resolve(timeoutValue(item.prompt));
+    }
   }, []);
 
-  // 卸载时取消挂起的 Promise，防泄漏（旧 Controller.destroy 语义）
-  useEffect(() => dismissCurrent, [dismissCurrent]);
+  // 卸载时取消所有挂起的 Promise，防泄漏（旧 Controller.destroy 语义）
+  useEffect(() => dismissAll, [dismissAll]);
 
   useImperativeHandle(
     ref,
     () => ({
       get active() {
-        return activeRef.current;
+        return queueRef.current[0]?.prompt ?? null;
       },
       showAsk,
       showPermission,
-      dismiss: dismissCurrent,
+      dismiss: dismissAll,
     }),
-    [showAsk, showPermission, dismissCurrent],
+    [showAsk, showPermission, dismissAll],
   );
 
   return (
     <div className="prompt-shelf">
       {active?.type === 'ask' ? (
-        <AskCard prompt={active} onResolve={resolve} />
+        <AskCard prompt={active} onResolve={resolveHead} />
       ) : active?.type === 'permission' ? (
-        <PermCard prompt={active} onResolve={resolve} />
+        <PermCard prompt={active} onResolve={resolveHead} />
       ) : null}
     </div>
   );
