@@ -249,32 +249,45 @@ fn process_query(
                 let mut name = node
                     .child_by_field_name("name")
                     .and_then(|n| n.utf8_text(source_bytes).ok())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("<anon@{}>", node.start_position().row + 1));
-                // 匿名箭头函数/函数表达式：若被 variable_declarator 包装
-                // （const f = () => {...}），继承其名字，避免 <anon@N> scope
-                // 截胡内部调用归属（factory 内调用被挂到外层父函数）。
-                if !node.child_by_field_name("name").is_some()
-                    && (kind == "arrow_function" || kind == "function_expression")
-                {
+                    .map(|s| s.to_string());
+                let mut anonymous = name.is_none();
+                // 匿名箭头函数/函数表达式：尝试从 parent 继承名字 —
+                //   const f = () => {}            → variable_declarator
+                //   { subAgentSpawner: () => {} } → pair
+                // 避免 <anon@N> scope 截胡内部调用归属（factory 内调用
+                // 曾挂到外层父函数、source 解析失败整条边丢失）。
+                if anonymous && (kind == "arrow_function" || kind == "function_expression") {
                     if let Some(parent) = node.parent() {
-                        if parent.kind() == "variable_declarator" {
-                            if let Some(pname) = parent
+                        let inherited = match parent.kind() {
+                            "variable_declarator" => parent
                                 .child_by_field_name("name")
                                 .and_then(|n| n.utf8_text(source_bytes).ok())
-                            {
-                                name = pname.to_string();
-                            }
+                                .map(|s| s.to_string()),
+                            "pair" => parent
+                                .child_by_field_name("key")
+                                .and_then(|n| n.utf8_text(source_bytes).ok())
+                                .map(|s| s.to_string()),
+                            _ => None,
+                        };
+                        if let Some(iname) = inherited {
+                            name = Some(iname);
+                            anonymous = false;
                         }
                     }
                 }
-                let qualified = format!("{}.{}", parent_scope, name);
-                scopes.push(Scope {
-                    name: qualified.clone(),
-                    start: node.start_byte(),
-                    end: node.end_byte(),
-                });
-                qualified
+                if anonymous {
+                    // 匿名函数且无法命名：不创建 scope，内部调用归属外层
+                    parent_scope.clone()
+                } else {
+                    let name = name.unwrap_or_else(|| format!("<anon@{}>", node.start_position().row + 1));
+                    let qualified = format!("{}.{}", parent_scope, name);
+                    scopes.push(Scope {
+                        name: qualified.clone(),
+                        start: node.start_byte(),
+                        end: node.end_byte(),
+                    });
+                    qualified
+                }
             } else {
                 parent_scope.clone()
             };
@@ -670,7 +683,30 @@ fn resolve_fn(
         if name.is_some() {
             return (name, Some(node.end_byte()));
         }
-        // 匿名箭头函数/函数 — 跳过（回调，非命名符号）
+        // 匿名箭头函数/函数表达式：尝试从 parent 继承名字
+        // （const f = () => {} → variable_declarator；
+        //   { subAgentSpawner: () => {} } → pair）。
+        // 与 Phase 1 scope 构建保持一致，否则 scope 存在但节点缺失、
+        // 内部调用 source 解析失败整条边被删。
+        if kind == "arrow_function" || kind == "function_expression" {
+            if let Some(parent) = node.parent() {
+                let inherited = match parent.kind() {
+                    "variable_declarator" => parent
+                        .child_by_field_name("name")
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .map(|s| s.to_string()),
+                    "pair" => parent
+                        .child_by_field_name("key")
+                        .and_then(|n| n.utf8_text(source).ok())
+                        .map(|s| s.to_string()),
+                    _ => None,
+                };
+                if let Some(iname) = inherited {
+                    return (Some(iname), Some(node.end_byte()));
+                }
+            }
+        }
+        // 匿名回调 — 跳过（回调，非命名符号）
         return (None, None);
     }
     if kind == "variable_declarator" {
@@ -1332,6 +1368,32 @@ mod tests {
         assert!(
             !srcs.iter().any(|s| s.ends_with("A.m")),
             "call must NOT be attributed to outer A.m, got {:?}",
+            srcs
+        );
+    }
+
+    #[test]
+    fn test_ts_object_pair_arrow_scope_call() {
+        // ponytail: 对象字面量属性里的箭头函数（{ subAgentSpawner: async () => {...} }）
+        // 应从 pair.key 继承名字。曾生成 <anon@N> scope 导致内部调用
+        // （agentRef.current?.spawnSubAgent()）挂到不存在节点、整条边丢失。
+        let a = QueryStructureAdapter::new_js_ts();
+        let src = "class A {\n  m() {\n    build({\n      subAgentSpawner: async () => {\n        spawnSubAgent();\n      },\n    });\n  }\n}";
+        let (nodes, edges, _) = a.analyze("test.ts", src);
+        let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(
+            names.contains(&"subAgentSpawner"),
+            "subAgentSpawner node should exist, got {:?}",
+            names
+        );
+        let calls: Vec<_> = edges.iter()
+            .filter(|e| matches!(e.kind, EdgeKind::Calls) && e.target == "spawnSubAgent")
+            .collect();
+        assert!(!calls.is_empty(), "should have call to spawnSubAgent");
+        let srcs: Vec<&str> = calls.iter().map(|e| e.source.as_str()).collect();
+        assert!(
+            srcs.iter().any(|s| s.contains("A.m.subAgentSpawner")),
+            "call should be attributed to A.m.subAgentSpawner, got {:?}",
             srcs
         );
     }
