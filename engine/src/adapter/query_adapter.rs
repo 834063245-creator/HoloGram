@@ -694,7 +694,7 @@ fn extract_func_field_name(func: tree_sitter::Node, source: &[u8]) -> Option<Str
                 .and_then(|p| p.utf8_text(source).ok());
             match (obj, prop) {
                 (Some(o), Some(p)) if !o.is_empty() => Some(format!("{}.{}", o, p)),
-                (_, Some(p)) => Some(p),
+                (_, Some(p)) => Some(p.to_string()),
                 _ => func.utf8_text(source).ok().map(|s| s.to_string()),
             }
         }
