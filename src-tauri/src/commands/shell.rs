@@ -48,8 +48,16 @@ pub(crate) async fn exec_command(
 
         // 共享输出缓冲区 — 管道被 take 后，转后台时 bg job 从这里读。
         use std::sync::{Arc, Mutex};
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let shared_out: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let shared_err: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // 输出线程完成计数(0=none, 1=stdout, 2=stderr, 3=both)。
+        // join 不能无超时阻塞:bash 退出后孙进程(cargo→rustc/test 子进程)
+        // 可能短暂持有管道写端句柄,read_vectored 阻塞等待 → 线程不退出 →
+        // join 无限拖住 shell:done → 前端"任务已结束但卡片卡在执行中"。
+        // 用计数 + 有界等待替代 join,超时直接发 done。
+        let drain_done: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 
         let app_stdout = app.clone();
         let sid_stdout = stream_id.clone();
@@ -62,7 +70,8 @@ pub(crate) async fn exec_command(
         // 子进程永不退出 → shell:done 永不发出 → Agent loop 无限等待)。
         // read_to_end 能读完但憋到 EOF,长命令期间一个字节都不 emit → 前端假卡。
         // read_vectored 逐块可靠(191ms/23KB 实测),每块实时 emit,两者兼得。
-        let stdout_thread = stdout_reader.map(|mut reader| {
+        stdout_reader.map(|mut reader| {
+            let dd = Arc::clone(&drain_done);
             std::thread::spawn(move || {
                 use std::io::{IoSliceMut, Read};
                 let mut buf = [0u8; 4096];
@@ -83,13 +92,15 @@ pub(crate) async fn exec_command(
                     }));
                     so_clone.lock().unwrap().extend_from_slice(&buf[..n]);
                 }
+                dd.fetch_add(1, Ordering::SeqCst);
             })
         });
 
         // 在后台线程中排空 stderr（同上，read_vectored 逐块实时 emit）
         let stream_id_stderr = stream_id.clone();
         let se_clone = Arc::clone(&shared_err);
-        let stderr_thread = stderr_reader.map(|mut reader| {
+        stderr_reader.map(|mut reader| {
+            let dd = Arc::clone(&drain_done);
             std::thread::spawn(move || {
                 use std::io::{IoSliceMut, Read};
                 let mut buf = [0u8; 4096];
@@ -110,6 +121,7 @@ pub(crate) async fn exec_command(
                     }));
                     se_clone.lock().unwrap().extend_from_slice(&buf[..n]);
                 }
+                dd.fetch_add(1, Ordering::SeqCst);
             })
         });
 
@@ -118,13 +130,21 @@ pub(crate) async fn exec_command(
         let sid_done = stream_id.clone();
         let timeout_ms_val = timeout_ms.unwrap_or(300_000);
         let cmd_for_bg = command.clone();
+        let drain_flag = Arc::clone(&drain_done);
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             loop {
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        if let Some(t) = stdout_thread { let _ = t.join(); }
-                        if let Some(t) = stderr_thread { let _ = t.join(); }
+                        // 有界等待输出线程收尾(最多 3s):孙进程短暂持管时
+                        // read_vectored 阻塞,但 shell:done 不能因此延迟。
+                        // 超时则放弃 — 输出线程在后台自行退出(写端最终关闭)。
+                        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                        while drain_flag.load(Ordering::SeqCst) < 2
+                            && std::time::Instant::now() < deadline
+                        {
+                            thread::sleep(Duration::from_millis(20));
+                        }
                         let _ = app_done.emit("shell:done", serde_json::json!({
                             "streamId": sid_done,
                             "exitCode": status.code().unwrap_or(-1),
