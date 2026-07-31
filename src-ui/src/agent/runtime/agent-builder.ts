@@ -314,38 +314,63 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
     });
   }
 
-  // ── Coding tools ──
+  // ── Shell 互斥队列 ──
+// 流式 exec_command 同时只跑一个。两个 shell 命令并发(如 cargo test 指定集 + 全量):
+//  1) 旧实现会全局卸载所有 shell listener → 先启动的收不到 shell:done → 卡到 600s 兜底;
+//  2) 两个 cargo 抢同一 target/ 目录锁 → 互相等待 → 双双 hang。
+// 仿照 isolation-queue.ts 的 promise 链模式,后到的命令排队等待。
+
+let _shellQueue: Promise<unknown> = Promise.resolve();
+function enqueueShellOp<T>(fn: () => Promise<T>): Promise<T> {
+  const p = _shellQueue.then(fn, fn);
+  _shellQueue = p.catch(() => {});
+  return p;
+}
+
+// ── Coding tools ──
   const _shellCleanups = new Map<string, Array<() => void>>();
   const SHELL_TIMEOUT = 600_000;
   const codingExec: ToolExecutor = async (name, args, onProgress) => {
     if (name === 'run_shell' && args.runInBackground) {
-      const taskId = await agentInvoke<string>('run_shell', args);
-      let done = false;
-      while (!done) {
-        await new Promise((r) => setTimeout(r, 300));
+      // 命令名必须是 exec_command(run_shell 不是 Tauri 命令),args 已含 runInBackground: true
+      const raw = await agentInvoke<string>('exec_command', args);
+      const m = /ID:\s*(\d+)/.exec(raw);
+      if (!m) return raw; // 启动失败 — 把 Rust 返回的消息直接给 agent
+      const jobId = m[1];
+      let last = '';
+      for (;;) {
         try {
-          const st: any = await agentInvoke<any>('bash_output', { taskId });
-          if (st.output && onProgress) onProgress(st.output);
-          if (st.done) { done = true; return st.output || '(无输出)'; }
-        } catch { done = true; return '(后台任务已结束)'; }
+          last = await agentInvoke<string>('bash_wait', { job_id: jobId, timeout_ms: 60_000 });
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+          if (msg.includes('等待超时')) {
+            // 任务仍在跑 — 继续等
+            if (onProgress) onProgress(`[后台任务运行中, job_id: ${jobId}]`);
+            continue;
+          }
+          // 任务已被清理(完成或 kill)— 带最后已知输出返回
+          return last ? `[后台任务结束]\n${last}` : `后台任务查询失败: ${msg}`;
+        }
+        if (last.includes('[任务已完成')) return last;
+        if (onProgress) onProgress(last); // 每 60s 报一次进度
       }
-      return '';
     }
     if (name === 'exec_command' && onProgress && !args.runInBackground) {
-      const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      for (const fns of _shellCleanups.values()) for (const fn of fns) fn();
-      _shellCleanups.clear();
-      return new Promise<string>((resolve) => {
-        void (async () => {
-          let fullOutput = ''; let timer: ReturnType<typeof setTimeout> | null = null; let settled = false;
-          const cleanup = () => { if (timer) { clearTimeout(timer); timer = null; } const fns = _shellCleanups.get(streamId); if (fns) { for (const fn of fns) fn(); _shellCleanups.delete(streamId); } };
-          const resolveOnce = (v: string) => { if (settled) return; settled = true; cleanup(); resolve(v); };
-          const unOut = await listen<{ streamId: string; chunk: string }>('shell:output', (e) => { if (e.payload.streamId !== streamId) return; fullOutput += e.payload.chunk; onProgress(e.payload.chunk); });
-          const unDone = await listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (e) => { if (e.payload.streamId !== streamId) return; if (e.payload.error) resolveOnce(`[exit ${e.payload.exitCode}]\n${e.payload.error}`); else if (e.payload.exitCode !== 0) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}`); else resolveOnce(fullOutput || '(无输出)'); });
-          _shellCleanups.set(streamId, [unOut, unDone]);
-          timer = setTimeout(() => resolveOnce(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)`), SHELL_TIMEOUT);
-          try { await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }); } catch (e: any) { resolveOnce(`错误: ${e}`); }
-        })();
+      // 互斥队列:同时只跑一个流式 shell 命令,避免并发 cargo 互杀 listener / 抢 target 锁
+      return enqueueShellOp(() => {
+        const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        return new Promise<string>((resolve) => {
+          void (async () => {
+            let fullOutput = ''; let timer: ReturnType<typeof setTimeout> | null = null; let settled = false;
+            const cleanup = () => { if (timer) { clearTimeout(timer); timer = null; } const fns = _shellCleanups.get(streamId); if (fns) { for (const fn of fns) fn(); _shellCleanups.delete(streamId); } };
+            const resolveOnce = (v: string) => { if (settled) return; settled = true; cleanup(); resolve(v); };
+            const unOut = await listen<{ streamId: string; chunk: string }>('shell:output', (e) => { if (e.payload.streamId !== streamId) return; fullOutput += e.payload.chunk; onProgress(e.payload.chunk); });
+            const unDone = await listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (e) => { if (e.payload.streamId !== streamId) return; if (e.payload.error) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}\n${e.payload.error}`); else if (e.payload.exitCode !== 0) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}`); else resolveOnce(fullOutput || '(无输出)'); });
+            _shellCleanups.set(streamId, [unOut, unDone]);
+            timer = setTimeout(() => resolveOnce(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)\n${fullOutput}`), SHELL_TIMEOUT);
+            try { await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }); } catch (e: any) { resolveOnce(`错误: ${e}`); }
+          })();
+        });
       });
     }
     // ── Timeout wrapper for search/list tools — prevent stuck Tauri invokes ──

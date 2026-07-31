@@ -153,7 +153,7 @@ impl AgentIsolation {
         }
 
         // git diff --stat HEAD
-        let stat = run_git(wt, &["diff", "--stat", "HEAD"])?;;
+        let stat = run_git(wt, &["diff", "--stat", "HEAD"])?;
         let full = run_git(wt, &["diff", "HEAD"])?;
 
         if stat.trim().is_empty() {

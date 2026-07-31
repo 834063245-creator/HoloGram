@@ -109,6 +109,24 @@ impl SandboxedChild {
         self.inner.kill()
     }
 
+    /// 终止整个进程树。Windows 用 taskkill /F /T 递归终止
+    /// (bash/cmd → cargo → rustc/test 多层子进程),其他平台 kill 直接子进程。
+    /// 只 kill 直接子进程会留下僵尸孙进程,继续占用 target 锁或管道。
+    pub fn kill_tree(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        {
+            let pid = self.inner.id();
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .output();
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            self.inner.kill()
+        }
+    }
+
     pub fn take_stdout(&mut self) -> Option<Box<dyn Read + Send + Unpin>> {
         self.inner.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send + Unpin>)
     }

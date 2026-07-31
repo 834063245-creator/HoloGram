@@ -45,11 +45,18 @@ pub(crate) async fn exec_command(
     if let Some(stream_id) = stream_tool_id.clone() {
         let stdout_reader = child.take_stdout();
         let stderr_reader = child.take_stderr();
+
+        // 共享输出缓冲区 — 管道被 take 后，转后台时 bg job 从这里读。
+        use std::sync::{Arc, Mutex};
+        let shared_out: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let shared_err: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
         let app_stdout = app.clone();
         let sid_stdout = stream_id.clone();
         let app_stderr = app.clone();
+        let so_clone = Arc::clone(&shared_out);
 
-        // 在后台线程中排空 stdout，发送数据块
+        // 在后台线程中排空 stdout，写入事件 + 共享 Arc
         let stdout_thread = stdout_reader.map(|mut reader| {
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
@@ -63,6 +70,7 @@ pub(crate) async fn exec_command(
                                 "kind": "stdout",
                                 "chunk": chunk,
                             }));
+                            so_clone.lock().unwrap().extend_from_slice(&buf[..n]);
                         }
                         Err(_) => break,
                     }
@@ -72,6 +80,7 @@ pub(crate) async fn exec_command(
 
         // 在后台线程中排空 stderr
         let stream_id_stderr = stream_id.clone();
+        let se_clone = Arc::clone(&shared_err);
         let stderr_thread = stderr_reader.map(|mut reader| {
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
@@ -85,6 +94,7 @@ pub(crate) async fn exec_command(
                                 "kind": "stderr",
                                 "chunk": chunk,
                             }));
+                            se_clone.lock().unwrap().extend_from_slice(&buf[..n]);
                         }
                         Err(_) => break,
                     }
@@ -92,7 +102,7 @@ pub(crate) async fn exec_command(
             })
         });
 
-        // 在后台等待子进程，发送完成事件
+        // 在后台等待子进程，发送完成事件 / 超时转后台
         let app_done = app.clone();
         let sid_done = stream_id.clone();
         let timeout_ms_val = timeout_ms.unwrap_or(300_000);
@@ -102,7 +112,6 @@ pub(crate) async fn exec_command(
             loop {
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        // 等待排空线程完成
                         if let Some(t) = stdout_thread { let _ = t.join(); }
                         if let Some(t) = stderr_thread { let _ = t.join(); }
                         let _ = app_done.emit("shell:done", serde_json::json!({
@@ -113,9 +122,14 @@ pub(crate) async fn exec_command(
                     }
                     Ok(None) => {
                         if start.elapsed() >= Duration::from_millis(timeout_ms_val) {
-                            // 转为后台任务而非终止
+                            // 转后台:管道被 take 了但输出已通过共享 Arc 保存,
+                            // bg job 从 shared_out/shared_err 读取,不受管道所有权影响。
                             let label: String = cmd_for_bg.chars().take(80).collect();
-                            match crate::utils::spawn_bg_from_child(child, &label) {
+                            let shared = crate::utils::BgSharedOutput {
+                                stdout: Arc::clone(&shared_out),
+                                stderr: Arc::clone(&shared_err),
+                            };
+                            match crate::utils::spawn_bg_from_child_shared(child, &label, shared) {
                                 Ok(job_id) => {
                                     let msg = format!(
                                         "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止。",
@@ -183,10 +197,12 @@ pub(crate) async fn exec_command(
         match child.try_wait() {
             Ok(Some(status)) => {
                 let stdout = stdout_drainer
+                    .as_ref()
                     .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
                     .map(|v| String::from_utf8_lossy(&v).to_string())
                     .unwrap_or_default();
                 let stderr = stderr_drainer
+                    .as_ref()
                     .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
                     .map(|v| String::from_utf8_lossy(&v).to_string())
                     .unwrap_or_default();
@@ -209,15 +225,25 @@ pub(crate) async fn exec_command(
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    // 转为后台任务而非终止
-                    let label: String = command.chars().take(80).collect();
-                    let job_id = crate::utils::spawn_bg_from_child(child, &label)?;
-                    let msg = format!(
-                        "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止。",
-                        timeout_ms.unwrap_or(300_000), job_id, job_id, job_id, job_id
-                    );
-                    crate::utils::push_bg_note(&msg);
-                    return Ok(msg);
+                    // 终止进程树而非转后台 — 非流式路径的 stdout 已被 take 走,
+                    // 转后台后同样收不回输出,agent 只会反复重跑。终止并带回已收集的输出。
+                    child.kill_tree().ok();
+                    let stdout = stdout_drainer
+                        .as_ref()
+                        .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
+                        .map(|v| String::from_utf8_lossy(&v).to_string())
+                        .unwrap_or_default();
+                    let stderr = stderr_drainer
+                        .as_ref()
+                        .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
+                        .map(|v| String::from_utf8_lossy(&v).to_string())
+                        .unwrap_or_default();
+                    return Ok(format!(
+                        "[exit code: -1] 命令超时 ({}ms)，已终止。可拆小命令或增大 timeoutMs 后重试。\n{}{}",
+                        timeout_ms.unwrap_or(300_000),
+                        stdout,
+                        stderr
+                    ));
                 }
                 thread::sleep(Duration::from_millis(50));
             }

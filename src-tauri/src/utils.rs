@@ -26,6 +26,17 @@ use engine::routing::preflight::save_baseline;
 // 后台任务系统 — 超时 + 后台 + 输出 + 终止
 // ═══════════════════════════════════════════════════════
 
+/// 共享输出缓冲区 — 用于流式→后台转换。
+/// 流式 exec_command 的 stdout/stderr 被独立线程持有
+/// (child.take_stdout 已移走管道)，线程写入此 Arc 的同时
+/// 也发出 Tauri shell:output 事件。转后台时 bg job 从这里读，
+/// 而非 child.stdout_reader()(后者返回 None)。
+#[derive(Clone)]
+pub(crate) struct BgSharedOutput {
+    pub stdout: Arc<Mutex<Vec<u8>>>,
+    pub stderr: Arc<Mutex<Vec<u8>>>,
+}
+
 pub(crate) struct BgJob {
     pub(crate) child: os_sandbox::SandboxedChild,
     stdout_buf: Vec<u8>,
@@ -34,6 +45,8 @@ pub(crate) struct BgJob {
     #[allow(dead_code)] // 存储供未来任务列表功能使用
     label: String,
     last_output_time: std::time::Instant,
+    /// 流式→后台转换：输出管道由独立线程持有，从此 Arc 读取。
+    shared: Option<BgSharedOutput>,
 }
 
 pub(crate) static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
@@ -128,6 +141,31 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
         start_time: now,
         label: label.to_string(),
         last_output_time: now,
+        shared: None,
+    };
+    BG_JOBS.lock().unwrap().insert(id, job);
+    spawn_monitor(id, label.to_string());
+    Ok(id)
+}
+
+/// 将已启动的 SandboxedChild 注册为后台任务，附共享输出缓冲区。
+/// 用于流式 exec_command 超时路径：stdout/stderr 管道已被独立线程
+/// take 走，bg job 从 shared.stdout / shared.stderr Arc 读取输出。
+pub(crate) fn spawn_bg_from_child_shared(
+    child: os_sandbox::SandboxedChild,
+    label: &str,
+    shared: BgSharedOutput,
+) -> Result<u32, String> {
+    let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let now = std::time::Instant::now();
+    let job = BgJob {
+        child,
+        stdout_buf: Vec::new(),
+        stderr_buf: Vec::new(),
+        start_time: now,
+        label: label.to_string(),
+        last_output_time: now,
+        shared: Some(shared),
     };
     BG_JOBS.lock().unwrap().insert(id, job);
     spawn_monitor(id, label.to_string());
@@ -137,46 +175,60 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
 pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
     let mut jobs = BG_JOBS.lock().unwrap();
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
-    // 非阻塞地读取可用输出
-    let mut new_output = false;
-    if let Some(stdout) = job.child.stdout_reader() {
-        let mut buf = [0u8; 4096];
-        loop {
-            match stdout.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => { job.stdout_buf.extend_from_slice(&buf[..n]); new_output = true; }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => break,
+
+    // ── 流式→后台路径: 从共享 Arc 读取(管道被独立线程持有) ──
+    let (stdout_str, stderr_str, new_output) = if let Some(ref shared) = job.shared {
+        let so = shared.stdout.lock().unwrap();
+        let se = shared.stderr.lock().unwrap();
+        let has_new = so.len() > job.stdout_buf.len() || se.len() > job.stderr_buf.len();
+        let s = String::from_utf8_lossy(&so).to_string();
+        let t = String::from_utf8_lossy(&se).to_string();
+        job.stdout_buf = so.clone();
+        job.stderr_buf = se.clone();
+        (s, t, has_new)
+    } else {
+        // ── 常规后台路径: 从 child stdout/stderr 管道读取 ──
+        let mut new_output = false;
+        if let Some(stdout) = job.child.stdout_reader() {
+            let mut buf = [0u8; 4096];
+            loop {
+                match stdout.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => { job.stdout_buf.extend_from_slice(&buf[..n]); new_output = true; }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(_) => break,
+                }
             }
         }
-    }
-    if let Some(stderr) = job.child.stderr_reader() {
-        let mut buf = [0u8; 4096];
-        loop {
-            match stderr.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => { job.stderr_buf.extend_from_slice(&buf[..n]); new_output = true; }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => break,
+        if let Some(stderr) = job.child.stderr_reader() {
+            let mut buf = [0u8; 4096];
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => { job.stderr_buf.extend_from_slice(&buf[..n]); new_output = true; }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(_) => break,
+                }
             }
         }
-    }
+        let s = String::from_utf8_lossy(&job.stdout_buf).to_string();
+        let t = String::from_utf8_lossy(&job.stderr_buf).to_string();
+        (s, t, new_output)
+    };
+
     if new_output {
         job.last_output_time = std::time::Instant::now();
     }
     let elapsed = job.start_time.elapsed().as_secs();
-    let stdout = String::from_utf8_lossy(&job.stdout_buf).to_string();
-    let stderr = String::from_utf8_lossy(&job.stderr_buf).to_string();
-    // 检查进程是否已退出
     let status = job.child.try_wait().map_err(|e| format!("检查进程状态失败: {e}"))?;
     let info = if let Some(ec) = status {
         let msg = format!("[任务已完成, exit code: {}, 耗时: {}s]\n", ec, elapsed);
-        jobs.remove(&id); // 清理
+        jobs.remove(&id);
         msg
     } else {
         format!("[任务运行中, 已运行: {}s]\n", elapsed)
     };
-    Ok(format!("{info}{stdout}{stderr}"))
+    Ok(format!("{info}{stdout_str}{stderr_str}"))
 }
 
 /// 阻塞等待后台任务完成（或超时）。返回完整输出和退出码。
@@ -188,36 +240,46 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
         let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
         match job.child.try_wait() {
             Ok(Some(status)) => {
-                // 读取剩余输出
-                if let Some(stdout) = job.child.stdout_reader() {
-                    let mut buf = [0u8; 4096];
-                    loop {
-                        match stdout.read(&mut buf) {
-                            Ok(0) => break,
-                            Ok(n) => { job.stdout_buf.extend_from_slice(&buf[..n]); }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(_) => break,
+                let (stdout_str, stderr_str) = if let Some(ref shared) = job.shared {
+                    // 流式→后台路径: 读取共享 Arc(管道被独立线程持有)
+                    let so = shared.stdout.lock().unwrap();
+                    let se = shared.stderr.lock().unwrap();
+                    let s = String::from_utf8_lossy(&so).to_string();
+                    let t = String::from_utf8_lossy(&se).to_string();
+                    (s, t)
+                } else {
+                    // 常规后台路径: 读取 child 管道剩余输出
+                    if let Some(stdout) = job.child.stdout_reader() {
+                        let mut buf = [0u8; 4096];
+                        loop {
+                            match stdout.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(n) => { job.stdout_buf.extend_from_slice(&buf[..n]); }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                Err(_) => break,
+                            }
                         }
                     }
-                }
-                if let Some(stderr) = job.child.stderr_reader() {
-                    let mut buf = [0u8; 4096];
-                    loop {
-                        match stderr.read(&mut buf) {
-                            Ok(0) => break,
-                            Ok(n) => { job.stderr_buf.extend_from_slice(&buf[..n]); }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                            Err(_) => break,
+                    if let Some(stderr) = job.child.stderr_reader() {
+                        let mut buf = [0u8; 4096];
+                        loop {
+                            match stderr.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(n) => { job.stderr_buf.extend_from_slice(&buf[..n]); }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                                Err(_) => break,
+                            }
                         }
                     }
-                }
+                    let s = String::from_utf8_lossy(&job.stdout_buf).to_string();
+                    let t = String::from_utf8_lossy(&job.stderr_buf).to_string();
+                    (s, t)
+                };
                 let elapsed = job.start_time.elapsed().as_secs();
                 let ec = status.code().unwrap_or(-1);
-                let stdout = String::from_utf8_lossy(&job.stdout_buf).to_string();
-                let stderr = String::from_utf8_lossy(&job.stderr_buf).to_string();
                 jobs.remove(&id);
                 let header = format!("[任务已完成, exit code: {}, 耗时: {}s]\n", ec, elapsed);
-                return Ok(format!("{header}{stdout}{stderr}"));
+                return Ok(format!("{header}{stdout_str}{stderr_str}"));
             }
             Ok(None) => {
                 drop(jobs);
@@ -238,8 +300,15 @@ pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
     let mut jobs = BG_JOBS.lock().unwrap();
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
     job.child.kill().map_err(|e| format!("无法终止任务: {e}"))?;
-    let stdout = String::from_utf8_lossy(&job.stdout_buf).to_string();
-    let stderr = String::from_utf8_lossy(&job.stderr_buf).to_string();
+    let (stdout, stderr) = if let Some(ref shared) = job.shared {
+        let so = shared.stdout.lock().unwrap();
+        let se = shared.stderr.lock().unwrap();
+        (String::from_utf8_lossy(&so).to_string(),
+         String::from_utf8_lossy(&se).to_string())
+    } else {
+        (String::from_utf8_lossy(&job.stdout_buf).to_string(),
+         String::from_utf8_lossy(&job.stderr_buf).to_string())
+    };
     jobs.remove(&id);
     Ok(format!("[任务已终止]\n{stdout}{stderr}"))
 }
