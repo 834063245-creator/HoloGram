@@ -1268,7 +1268,13 @@ ${resumeNote}
       for (let i = 0; i < calls.length; i++) {
         const call = calls[i];
         const r = resultsByCallId.get(call.id);
-        let content = r?.output || `error: tool "${call.name}" did not produce a result`;
+        // r 存在但 output 为空 = 工具执行成功但无输出(如 git add 成功、git diff 无差异)。
+        // 空字符串是 falsy,若用 `r?.output || error` 会把成功误判成"工具没结果",
+        // 导致 Agent 看到 "did not produce a result" 而困惑/重试。
+        // 仅当 r 不存在(流式重试丢失、未分发)才算真正失败。
+        let content = r
+          ? r.output || `(工具 ${call.name} 执行成功，无输出)`
+          : `error: tool "${call.name}" did not produce a result`;
         if (stormNudge && i === 0) content += stormNudge;
         this.session.push({
           role: 'tool',
