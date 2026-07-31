@@ -57,48 +57,42 @@ pub(crate) async fn exec_command(
         let so_clone = Arc::clone(&shared_out);
 
         // 在后台线程中排空 stdout，写入事件 + 共享 Arc
+        // 必须用 read_to_end:循环 read(&mut buf) 在 Windows 匿名管道上
+        // 会在 4KB 缓冲边界卡死(复现测试证实),导致 bash/cargo 写端阻塞、
+        // 子进程永不退出、shell:done 永不发出 → Agent loop 无限等待。
+        // read_to_end 可靠读完整个管道(200ms 读完 23KB),读完再批量 emit。
         let stdout_thread = stdout_reader.map(|mut reader| {
             std::thread::spawn(move || {
-                let mut buf = [0u8; 4096];
-                loop {
-                    match std::io::Read::read(&mut reader, &mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                            let _ = app_stdout.emit("shell:output", serde_json::json!({
-                                "streamId": sid_stdout,
-                                "kind": "stdout",
-                                "chunk": chunk,
-                            }));
-                            so_clone.lock().unwrap().extend_from_slice(&buf[..n]);
-                        }
-                        Err(_) => break,
-                    }
+                let mut v = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut reader, &mut v);
+                let chunk = String::from_utf8_lossy(&v).to_string();
+                if !chunk.is_empty() {
+                    let _ = app_stdout.emit("shell:output", serde_json::json!({
+                        "streamId": sid_stdout,
+                        "kind": "stdout",
+                        "chunk": chunk,
+                    }));
                 }
+                so_clone.lock().unwrap().extend_from_slice(&v);
             })
         });
 
-        // 在后台线程中排空 stderr
+        // 在后台线程中排空 stderr（同上，read_to_end 避免 4KB 边界卡死）
         let stream_id_stderr = stream_id.clone();
         let se_clone = Arc::clone(&shared_err);
         let stderr_thread = stderr_reader.map(|mut reader| {
             std::thread::spawn(move || {
-                let mut buf = [0u8; 4096];
-                loop {
-                    match std::io::Read::read(&mut reader, &mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                            let _ = app_stderr.emit("shell:output", serde_json::json!({
-                                "streamId": stream_id_stderr,
-                                "kind": "stderr",
-                                "chunk": chunk,
-                            }));
-                            se_clone.lock().unwrap().extend_from_slice(&buf[..n]);
-                        }
-                        Err(_) => break,
-                    }
+                let mut v = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut reader, &mut v);
+                let chunk = String::from_utf8_lossy(&v).to_string();
+                if !chunk.is_empty() {
+                    let _ = app_stderr.emit("shell:output", serde_json::json!({
+                        "streamId": stream_id_stderr,
+                        "kind": "stderr",
+                        "chunk": chunk,
+                    }));
                 }
+                se_clone.lock().unwrap().extend_from_slice(&v);
             })
         });
 
