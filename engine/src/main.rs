@@ -1142,6 +1142,9 @@ mod tests {
 
     #[test]
     fn test_handle_query_no_graph() {
+        // 必须持锁:clear_graph() 清空全局图,无锁会与持锁的
+        // test_handle_query_neighbors 等并发互踩 → 偶发 flaky 失败。
+        let _lock = lock_bin();
         clear_graph();
         let resp = handle_query("neighbors:a", "neighbors:");
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
