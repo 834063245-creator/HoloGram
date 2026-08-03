@@ -59,7 +59,13 @@ impl AgentIsolation {
     pub fn create_worktree(main_repo_path: &Path, agent_id: &str) -> Result<Self, String> {
         validate_agent_id(agent_id)?;
 
-        let slug = format!("agent-{}", agent_id);
+        // 前端 isolationId 格式即 agent-{ts}-{rand}（已带前缀）—
+        // 直接拼接会得到 agent-agent-xxx 双前缀路径。已带前缀则不重复拼。
+        let slug = if agent_id.starts_with("agent-") || agent_id.starts_with("subagent-") {
+            agent_id.to_string()
+        } else {
+            format!("agent-{}", agent_id)
+        };
         let worktree_dir = main_repo_path
             .join(".hologram")
             .join("worktrees")
@@ -167,6 +173,42 @@ impl AgentIsolation {
         }
     }
 
+    /// 只读 diff 检查（不删除 worktree）。
+    ///
+    /// 与 cleanup() 的区别：
+    ///   1. 从不移除 worktree —— 删除只发生在显式 discard() / merge 成功路径；
+    ///   2. 包含 untracked 新文件 —— git diff HEAD 默认不显示未跟踪文件，
+    ///      若子 Agent 只新建文件（未 git add），cleanup() 会误判"无变更"
+    ///      并移除 worktree，导致后续 agent_isolation_merge 报"工作树目录不存在"。
+    pub fn diff_readonly(&self) -> Result<CleanupResult, String> {
+        if self.kind == IsolationKind::None {
+            return Ok(CleanupResult::NoChanges);
+        }
+        let wt = self.worktree_path.as_ref().ok_or("工作树路径不存在")?;
+        if !wt.exists() {
+            return Err("工作树目录不存在".into());
+        }
+
+        let stat = run_git(wt, &["diff", "--stat", "HEAD"])?;
+        let full = run_git(wt, &["diff", "HEAD"])?;
+        // untracked 新文件清单（git diff 不显示，必须单独收集）
+        let untracked = run_git(wt, &["ls-files", "--others", "--exclude-standard"])?;
+
+        if stat.trim().is_empty() && untracked.trim().is_empty() {
+            return Ok(CleanupResult::NoChanges);
+        }
+
+        let diff = if !untracked.trim().is_empty() {
+            format!("{stat}\n\n{full}\n\n[未跟踪文件]\n{untracked}")
+        } else {
+            format!("{stat}\n\n{full}")
+        };
+        Ok(CleanupResult::HasChanges {
+            diff,
+            worktree_path: wt.clone(),
+        })
+    }
+
     /// 通过 cherry-pick 将 worktree 变更合并回主仓库。
     /// 成功后移除 worktree。
     pub fn merge_to_main(&self) -> Result<String, String> {
@@ -184,9 +226,11 @@ impl AgentIsolation {
             Ok(h) => h,
             Err(_) => {
                 // HEAD 解析失败 — 降级：尝试 git diff 抢救变更
+                // （git diff 不含 untracked — 一并收集，避免误判"无变更"）
                 let diff = run_git(wt, &["diff"]).unwrap_or_default();
                 let stat = run_git(wt, &["diff", "--stat"]).unwrap_or_default();
-                if diff.trim().is_empty() {
+                let untracked = run_git(wt, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
+                if diff.trim().is_empty() && untracked.trim().is_empty() {
                     // 无变更可抢救 — 清理
                     let _ = remove_worktree(&self.main_repo_path, wt);
                     return Ok("没有变更需要合并".into());
@@ -202,7 +246,10 @@ impl AgentIsolation {
         if head == self.original_head {
             // 无提交 — 但可能有未暂存的变更。尝试提交它们。
             let diff_stat = run_git(wt, &["diff", "--stat", "HEAD"])?;
-            if diff_stat.trim().is_empty() {
+            // untracked 新文件 git diff 不可见 — 必须单独收集，
+            // 否则子 Agent 只新建文件时误判"无变更"并返回 Ok（假阳性合并）。
+            let untracked = run_git(wt, &["ls-files", "--others", "--exclude-standard"])?;
+            if diff_stat.trim().is_empty() && untracked.trim().is_empty() {
                 remove_worktree(&self.main_repo_path, wt)?;
                 return Ok("没有变更需要合并".into());
             }
@@ -543,6 +590,163 @@ mod tests {
         let result = run_git(&tmp, &["diff", "--stat", "HEAD"]);
         assert!(result.is_ok(), "git diff (exit 1 with changes) should NOT be an error: {:?}", result);
         assert!(!result.unwrap().is_empty(), "should have diff output");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 回归：untracked 新文件必须被 diff_readonly 检测为"有变更"，
+    /// 且 worktree 必须保留（旧 cleanup() 会误判"无变更"并移除 worktree，
+    /// 导致子 Agent 只新建文件时后续 merge 报"工作树目录不存在"）。
+    #[test]
+    fn test_diff_readonly_detects_untracked_and_keeps_worktree() {
+        let tmp = std::env::temp_dir().join("hologram_test_diff_readonly");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // 初始化 git 仓库 + 首个 commit
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).arg("init").arg("--quiet").status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["config", "user.email", "t@t"]).status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["config", "user.name", "t"]).status().unwrap();
+        std::fs::write(tmp.join("base.txt"), "base").unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["add", "-A"]).status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["commit", "-m", "init", "--quiet"]).status().unwrap();
+
+        // 创建真实 worktree
+        let iso = AgentIsolation::create_worktree(&tmp, "agent-test-untracked").expect("worktree create");
+        let wt = iso.worktree_path.as_ref().unwrap().clone();
+
+        // 子 Agent 新建 untracked 文件（git diff HEAD 不可见）
+        std::fs::write(wt.join("new_file.ts"), "export const x = 1;").unwrap();
+        // 再改一个已跟踪文件（对照组）
+        std::fs::write(wt.join("base.txt"), "base-v2").unwrap();
+
+        let result = iso.diff_readonly().expect("diff_readonly should succeed");
+        match result {
+            CleanupResult::HasChanges { diff, .. } => {
+                assert!(diff.contains("[未跟踪文件]"), "diff must list untracked files, got: {diff}");
+                assert!(diff.contains("new_file.ts"), "untracked file name must appear, got: {diff}");
+                assert!(diff.contains("base.txt"), "tracked change must appear, got: {diff}");
+            }
+            CleanupResult::NoChanges => panic!("untracked new file must be detected as changes"),
+        }
+
+        // worktree 必须保留（diff_readonly 永不删除）
+        assert!(wt.exists(), "diff_readonly must NOT remove the worktree");
+        assert!(iso.worktree_path.as_ref().unwrap().join("new_file.ts").exists());
+
+        // 清理：显式 discard
+        iso.discard().ok();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 纯 untracked 场景（无任何已跟踪文件变更）也必须判定为有变更。
+    #[test]
+    fn test_diff_readonly_untracked_only() {
+        let tmp = std::env::temp_dir().join("hologram_test_diff_untracked_only");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).arg("init").arg("--quiet").status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["config", "user.email", "t@t"]).status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["config", "user.name", "t"]).status().unwrap();
+        std::fs::write(tmp.join("base.txt"), "base").unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["add", "-A"]).status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["commit", "-m", "init", "--quiet"]).status().unwrap();
+
+        let iso = AgentIsolation::create_worktree(&tmp, "agent-test-untracked-only").expect("worktree create");
+        let wt = iso.worktree_path.as_ref().unwrap().clone();
+
+        // 只新建文件（触发旧 bug 的精确场景）
+        std::fs::write(wt.join("only_new.py"), "# migration\n").unwrap();
+
+        let result = iso.diff_readonly().expect("diff_readonly should succeed");
+        assert!(matches!(result, CleanupResult::HasChanges { .. }),
+            "untracked-only worktree must be HasChanges, got: {:?}", result);
+        assert!(wt.exists(), "worktree must be kept");
+
+        iso.discard().ok();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 回归：merge_to_main 必须把 untracked 新文件合并进主仓。
+    /// 旧实现用 git diff HEAD 判变更（untracked 不可见）→ 误判"无变更"→
+    /// remove_worktree + 返回 Ok("没有变更需要合并") — 假阳性合并，
+    /// 子 Agent 只新建文件时 merge 报"成功"但文件从不落地。
+    #[test]
+    fn test_merge_to_main_includes_untracked_files() {
+        let tmp = std::env::temp_dir().join("hologram_test_merge_untracked");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).arg("init").arg("--quiet").status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["config", "user.email", "t@t"]).status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["config", "user.name", "t"]).status().unwrap();
+        std::fs::write(tmp.join("base.txt"), "base").unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["add", "-A"]).status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["commit", "-m", "init", "--quiet"]).status().unwrap();
+
+        let iso = AgentIsolation::create_worktree(&tmp, "agent-test-merge-untracked").expect("worktree create");
+        let wt = iso.worktree_path.as_ref().unwrap().clone();
+
+        // 子 Agent 新建 untracked 文件（旧实现的假阳性场景）
+        std::fs::write(wt.join("new_file.ts"), "export const x = 1;").unwrap();
+
+        let result = iso.merge_to_main().expect("merge should succeed");
+        assert!(!result.contains("没有变更"), "merge must NOT report no-changes, got: {result}");
+
+        // 文件必须落地主仓库
+        let merged = tmp.join("new_file.ts");
+        assert!(merged.exists(), "untracked file must land in main repo");
+        assert_eq!(
+            std::fs::read_to_string(&merged).unwrap(),
+            "export const x = 1;",
+            "file content must be preserved"
+        );
+        // worktree 应已被清理（merge 成功路径）
+        assert!(!wt.exists(), "worktree should be removed after successful merge");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 回归：merge_to_main 对"只有 untracked"的 worktree 也必须合并，
+    /// 不能误判无变更（精确复现 B1/B2 场景）。
+    #[test]
+    fn test_merge_to_main_untracked_only() {
+        let tmp = std::env::temp_dir().join("hologram_test_merge_untracked_only");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).arg("init").arg("--quiet").status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["config", "user.email", "t@t"]).status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["config", "user.name", "t"]).status().unwrap();
+        std::fs::write(tmp.join("base.txt"), "base").unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["add", "-A"]).status().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&tmp).args(["commit", "-m", "init", "--quiet"]).status().unwrap();
+
+        let iso = AgentIsolation::create_worktree(&tmp, "agent-test-merge-uo").expect("worktree create");
+        let wt = iso.worktree_path.as_ref().unwrap().clone();
+        std::fs::write(wt.join("only_new.py"), "# migration\n").unwrap();
+
+        let result = iso.merge_to_main().expect("merge should succeed");
+        assert!(!result.contains("没有变更"), "merge must NOT report no-changes, got: {result}");
+        assert!(tmp.join("only_new.py").exists(), "untracked-only file must land in main repo");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

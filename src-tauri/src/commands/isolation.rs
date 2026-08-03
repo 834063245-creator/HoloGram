@@ -54,7 +54,10 @@ pub(crate) fn agent_isolation_diff(
         return Err("当前未使用工作树隔离".into());
     }
 
-    match isolation.cleanup()? {
+    // 纯只读检查（diff_readonly 从不删除 worktree）。
+    // 修复：cleanup() 用 git diff HEAD 判断变更，untracked 新文件不可见 →
+    // 子 Agent 只新建文件时误判"无变更"并移除 worktree → 后续 merge 失败。
+    match isolation.diff_readonly()? {
         crate::agent_isolation::CleanupResult::NoChanges => Ok(
             serde_json::json!({"has_changes": false, "diff": ""}).to_string(),
         ),
