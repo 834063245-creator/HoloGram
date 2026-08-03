@@ -54,15 +54,20 @@ export function formatDiffResult(body: string, argsJson?: string): string {
     const totalLines = diffLines.length;
     const collapsed = totalLines > MAX_LINES;
 
-    let html = headerHtml;
-    const linesToShow = collapsed ? diffLines.slice(0, MAX_LINES) : diffLines;
-    const visibleLines = collapsed
-      ? linesToShow.map((d) => `<div class="diff-line ${d.kind}">${d.prefix}${escapeHtml(d.text)}</div>`).join('')
-      : diffLines.map((d) => `<div class="diff-line ${d.kind}">${d.prefix}${escapeHtml(d.text)}</div>`).join('');
+    // 渲染全部行；折叠时超出 MAX_LINES 的行以 inline style 隐藏。
+    // 「展开全部」按钮由 ChatMessages 的委托点击处理器揭示 —
+    // 不能依赖 inline onclick（CSP 可禁用；旧实现引用的 DOM 节点也不存在）。
+    const linesHtml = diffLines
+      .map((d, i) => {
+        const hidden = collapsed && i >= MAX_LINES ? ' style="display:none"' : '';
+        return `<div class="diff-line ${d.kind}"${hidden}>${d.prefix}${escapeHtml(d.text)}</div>`;
+      })
+      .join('');
 
-    html += `<div class="diff-lines${collapsed ? ' diff-folded' : ''}">${visibleLines}</div>`;
+    let html = headerHtml;
+    html += `<div class="diff-lines">${linesHtml}</div>`;
     if (collapsed) {
-      html += `<button class="diff-collapsed" onclick="this.previousElementSibling.classList.remove('diff-folded');this.previousElementSibling.querySelectorAll('.diff-line').forEach(d=>d.style.display='');this.remove();">展开全部 (${totalLines} 行)</button>`;
+      html += `<button class="diff-collapsed">展开全部 (${totalLines} 行)</button>`;
     }
     return html;
   }
@@ -70,18 +75,18 @@ export function formatDiffResult(body: string, argsJson?: string): string {
   // 兜底：显示完整 body，检测 + / - 行
   const lines = body.split('\n');
   if (lines.length > MAX_LINES) {
-    const visible = lines
-      .slice(0, MAX_LINES)
-      .map((l) => {
-        if (l.startsWith('+')) return `<div class="diff-line diff-added">${escapeHtml(l)}</div>`;
-        if (l.startsWith('-')) return `<div class="diff-line diff-removed">${escapeHtml(l)}</div>`;
-        return `<div class="diff-line">${escapeHtml(l)}</div>`;
+    const linesHtml = lines
+      .map((l, i) => {
+        const hidden = i >= MAX_LINES ? ' style="display:none"' : '';
+        if (l.startsWith('+')) return `<div class="diff-line diff-added"${hidden}>${escapeHtml(l)}</div>`;
+        if (l.startsWith('-')) return `<div class="diff-line diff-removed"${hidden}>${escapeHtml(l)}</div>`;
+        return `<div class="diff-line"${hidden}>${escapeHtml(l)}</div>`;
       })
       .join('');
     return (
       headerHtml +
-      visible +
-      `<button class="diff-collapsed" onclick="this.previousElementSibling.querySelectorAll('.diff-line').forEach(d=>d.style.display='');const next=this.nextElementSibling;if(next)next.style.display='';this.remove();">展开全部 (${lines.length} 行)</button>`
+      `<div class="diff-lines">${linesHtml}</div>` +
+      `<button class="diff-collapsed">展开全部 (${lines.length} 行)</button>`
     );
   }
   return headerHtml + `<pre><code>${escapeHtml(body)}</code></pre>`;

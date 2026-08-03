@@ -130,3 +130,38 @@ describe('#12 splitStreamingBlocks \\r\\n normalization', () => {
     expect(boundaries).toEqual(['a', 'b', 'c']);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// 折叠回归 — formatDiffResult 的「展开全部」必须能展开：
+// 全部行都渲染进 DOM（超出的 inline 隐藏），按钮不带 inline onclick
+// ═══════════════════════════════════════════════════════════════════
+
+describe('formatDiffResult fold renders all lines', () => {
+  it('real-diff branch: lines beyond MAX_LINES stay in DOM hidden, no inline onclick', async () => {
+    const { formatDiffResult } = await import('../src/ui/chat-utils');
+    const oldStr = Array.from({ length: 60 }, (_, i) => `old-${i}`).join('\n');
+    const newStr = Array.from({ length: 60 }, (_, i) => `new-${i}`).join('\n');
+    const html = formatDiffResult('irrelevant body', JSON.stringify({ oldString: oldStr, newString: newStr }));
+
+    // 60 行 diff 全部渲染（旧实现只渲染前 40 行，按钮永远展不开）
+    expect(html.match(/class="diff-line /g)?.length).toBe(120);
+    // 超出 40 行的部分以 inline style 隐藏
+    const hidden = html.match(/style="display:none"/g);
+    expect(hidden?.length).toBe(120 - 40);
+    // 按钮存在但不依赖 inline onclick（由 ChatMessages 委托处理）
+    expect(html).toContain('展开全部');
+    expect(html).not.toContain('onclick');
+  });
+
+  it('fallback branch: same contract', async () => {
+    const { formatDiffResult } = await import('../src/ui/chat-utils');
+    const body = Array.from({ length: 50 }, (_, i) => `+line-${i}`).join('\n');
+    const html = formatDiffResult(body);
+
+    expect(html.match(/class="diff-line[ "]/g)?.length).toBe(50);
+    const hidden = html.match(/style="display:none"/g);
+    expect(hidden?.length).toBe(50 - 40);
+    expect(html).toContain('展开全部 (50 行)');
+    expect(html).not.toContain('onclick');
+  });
+});

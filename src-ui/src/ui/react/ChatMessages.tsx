@@ -343,6 +343,21 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
 
 // ── 工具卡片 ──
 
+/**
+ * 委托处理工具结果内「展开全部」(.diff-collapsed) 按钮。
+ * 结果 HTML 经 dangerouslySetInnerHTML 注入，inline onclick 不可靠
+ * （CSP 可禁用），因此在 React 层统一揭示隐藏行并移除按钮。
+ */
+function handleToolResultClick(e: React.MouseEvent<HTMLDivElement>): void {
+  const btn = (e.target as HTMLElement).closest?.('.diff-collapsed');
+  if (!btn) return;
+  e.stopPropagation();
+  btn.parentElement?.querySelectorAll<HTMLElement>('.diff-line').forEach((el) => {
+    el.style.display = '';
+  });
+  btn.remove();
+}
+
 // ponytail: 未用 React.memo 包装 — part-mutator 就地修改 ToolCallPart
 // (tr.status = 'error')，因此对象引用不变。React.memo
 // 会在工具状态转换时阻止重新渲染（如 pending→running→done/error）。
@@ -386,7 +401,11 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
         <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
       </div>
       {isExpanded && part.output && (
-        <div className="msg-tool-result" dangerouslySetInnerHTML={{ __html: formatToolResult(part.name, part.output, part.truncated ?? false, part.args) }} />
+        <div
+          className="msg-tool-result"
+          onClick={handleToolResultClick}
+          dangerouslySetInnerHTML={{ __html: formatToolResult(part.name, part.output, part.truncated ?? false, part.args) }}
+        />
       )}
       {isExpanded && !part.output && part.status === 'running' && (
         renderToolContentPreview(part) || (
