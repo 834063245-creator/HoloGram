@@ -11,11 +11,23 @@
 import type { TaskBoard } from '../task-board';
 import type { Tool, ToolExecutor } from '../tool';
 import { enqueueIsolationOp } from '../isolation-queue';
+import { runGraphGate, runCompileTest } from './merge-gate';
+
+// ── Merge 门禁配置 ──
+// v1：图检查默认开（merge-then-verify，轮询 hologram_run_check）；
+// 编译测试默认关（worktree 冷构建可达分钟级，时间盒限制）。
+// 测试旁路：(window as any).__HOLOGRAM_MERGE_GATE__ = { graph: false } 可临时关闭。
+const MERGE_GATE = { graph: true, compileTest: false, maxCheckWaitMs: 60_000, compileTimeoutMs: 600_000 };
+function effectiveGate(): typeof MERGE_GATE {
+  const override = (globalThis as any).__HOLOGRAM_MERGE_GATE__;
+  return override ? { ...MERGE_GATE, ...override } : MERGE_GATE;
+}
 
 export function createMergeTool(
   board: TaskBoard,
   getAgentId: () => string,
   exec: ToolExecutor,
+  opts: { projectPath: string },
 ): Tool {
   return {
     name: () => 'agent_merge',
@@ -55,6 +67,9 @@ export function createMergeTool(
       const mergedDetails: string[] = [];
       const conflictDetails: string[] = [];
 
+      const gate = effectiveGate();
+      const gateOpts = { projectPath: opts.projectPath, exec };
+
       for (const entry of children) {
         if (!entry.isolationId) {
           // 无 worktree（fresh 模式）— 直接标记完成
@@ -63,11 +78,48 @@ export function createMergeTool(
           mergedDetails.push(`${entry.agentId} (${entry.description}) — 无 worktree，跳过`);
           continue;
         }
+        // 门禁处理开始 — 顺延全部未合并条目的 TTL，防止 LifecycleManager 30min 巡检
+        // 在门禁（图检查秒级/编译分钟级）中途误 discard worktree
+        for (const pending of children) {
+          if (pending.status === 'completed' && pending.isolationId) board.touch(pending.agentId);
+        }
         try {
+          // ① 可选编译测试（worktree 内，merge 前 — 唯一有意义的 pre-merge 检查）
+          if (gate.compileTest) {
+            const ct = await runCompileTest(entry, gateOpts);
+            if (!ct.passed) {
+              // 编译测试失败：不 merge，discard worktree（diff 已保全在 board complete() 时）
+              await enqueueIsolationOp(async () => {
+                await exec('agent_isolation_discard', { agent_id: entry.isolationId }).catch(() => {});
+              });
+              board.fail(entry.agentId, '[门禁] ' + ct.report);
+              conflicts++;
+              conflictDetails.push(`${entry.agentId} (${entry.description}): ${ct.report}`);
+              continue;
+            }
+          }
+
+          // ② merge（cherry-pick 进主仓）
           await enqueueIsolationOp(async () => {
             await exec('agent_isolation_merge', { agent_id: entry.isolationId });
             await exec('agent_isolation_discard', { agent_id: entry.isolationId }).catch(() => {});
           });
+
+          // ③ merge-then-verify：图检查（watcher 已增量分析主仓，轮询 run_check 直到非 quiet）
+          // 门禁定位：信息报告，不是裁决 — L5 红线是启发式有噪音，
+          // 失败只标记 + 报告，改动保留在主仓（commit 在历史），主 Agent 决定修复/revert/接受。
+          if (gate.graph) {
+            const gateResult = await runGraphGate(entry, gateOpts);
+            if (!gateResult.passed) {
+              board.fail(entry.agentId, '[门禁] ' + gateResult.report);
+              conflicts++;
+              conflictDetails.push(
+                `${entry.agentId} (${entry.description}): 门禁未通过，改动已保留在主仓，请审阅后决定修复 / git revert / 接受\n${gateResult.report}`,
+              );
+              continue;
+            }
+          }
+
           board.markMerged(entry.agentId);
           merged++;
           mergedDetails.push(`${entry.agentId} (${entry.description}) — ✅ 已合并`);

@@ -192,6 +192,14 @@ export class TaskBoard {
     this._scheduleFlush();
   }
 
+  /** 顺延 TTL：门禁处理期间刷新 finishedAt，防止 LifecycleManager 30min 巡检误 discard worktree */
+  touch(agentId: string): void {
+    const entry = this.entries.get(agentId);
+    if (!entry) return;
+    entry.finishedAt = Date.now();
+    this._scheduleFlush();
+  }
+
   /** 父 Agent 查询全部子 Agent 状态 */
   getChildren(parentAgentId: string): BoardEntry[] {
     return Array.from(this.entries.values()).filter((e) => e.parentAgentId === parentAgentId);
@@ -252,6 +260,9 @@ export class TaskBoardProxy {
   }
   markMerged(agentId: string): void {
     this._target.markMerged(agentId);
+  }
+  touch(agentId: string): void {
+    this._target.touch(agentId);
   }
   unregister(agentId: string): void {
     this._target.unregister(agentId);

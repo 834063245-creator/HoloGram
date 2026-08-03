@@ -476,7 +476,7 @@ export class AgentRuntime implements RuntimePort {
 
     // 注册 agent_merge 工具 — 允许父 Agent 合并已完成的异步子 Agent worktree
     if (config.collaborationMode !== 'plan' && config.subAgentPool) {
-      effR.register(createMergeTool(taskProxy as any, () => newAgent.id, isolationExec));
+      effR.register(createMergeTool(taskProxy as any, () => newAgent.id, isolationExec, { projectPath: config.projectPath }));
       effR.register(createAgentKillTool(config.subAgentPool, isolationExec));
     }
 
