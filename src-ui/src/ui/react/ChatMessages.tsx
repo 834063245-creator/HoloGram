@@ -1091,6 +1091,13 @@ export const ChatMessagesApp: React.FC<{
   const stickRef = useRef(true);
   const autoScrollRaf = useRef<number | null>(null);
   const lastMsgCount = useRef(0);
+  // 初始挂载/会话切换后的「贴底待落地」标记。
+  // 为什么需要：冷启动时面板是 display:none（pill/input 模式），
+  // scrollToIndex 被 0 高度容器钳位成无效操作；且虚拟列表首轮用
+  // 估算高度，measureElement 修正后实际底部会移位。挂起期间在
+  // totalSize/可见性变化时反复断言贴底，直到真正抵达底部
+  // （或用户主动上滚取消）。
+  const pendingBottomRef = useRef(true);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   // 解析实际可滚动元素（外部指定或自身）
@@ -1125,16 +1132,22 @@ export const ChatMessagesApp: React.FC<{
 
   // 跟踪容器宽度用于文本换行估算，并在实际变化时强制虚拟列表
   // 重新估算 — 估算值依赖于宽度。
+  // 同时监听容器从 display:none 变为可见（冷启动面板从
+  // pill/input 展开）：可见且贴底挂起时立即断言滚到底部。
   useEffect(() => {
     if (!scrollEl) return;
     let lastWidth = scrollEl.clientWidth;
     containerWidthRef.current = lastWidth;
     const ro = new ResizeObserver(() => {
       const w = scrollEl.clientWidth;
-      if (w === lastWidth) return;
-      lastWidth = w;
-      containerWidthRef.current = w;
-      virtualizerRef.current.measure();
+      if (w !== lastWidth) {
+        lastWidth = w;
+        containerWidthRef.current = w;
+        virtualizerRef.current.measure();
+      }
+      if (pendingBottomRef.current && scrollEl.clientHeight > 0 && messagesRef.current.length > 0) {
+        virtualizerRef.current.scrollToIndex(messagesRef.current.length - 1, { align: 'end' });
+      }
     });
     ro.observe(scrollEl);
     return () => ro.disconnect();
@@ -1147,6 +1160,7 @@ export const ChatMessagesApp: React.FC<{
   // 以避免上一会话流式时的延迟 rAF "跳跃"。
   useEffect(() => {
     stickRef.current = true;
+    pendingBottomRef.current = true;
     lastMsgCount.current = messages.length;
     if (scrollEl) {
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' });
@@ -1195,6 +1209,34 @@ export const ChatMessagesApp: React.FC<{
     });
   }, [messages]);
 
+  // 贴底挂起的收敛 effect — totalSize 随 measureElement 的测量修正
+  // 而变化，每次变化都重新断言滚到底部；真正落地（nearBottom）后
+  // 才解除挂起。覆盖两类失效场景：
+  //   1. 冷启动面板 display:none 时的 scrollToIndex 被 0 高度钳位；
+  //   2. 首轮估算高度与实测不符，scrollToIndex 落点偏离真实底部。
+  const totalSize = virtualizer.getTotalSize();
+  useEffect(() => {
+    if (!pendingBottomRef.current) return;
+    const el = scrollEl;
+    if (!el || messages.length === 0) return;
+    if (el.clientHeight === 0) return; // display:none — 等 ResizeObserver 唤醒
+    virtualizerRef.current.scrollToIndex(messages.length - 1, { align: 'end' });
+    // 双 rAF 校验：等 measureElement 的测量修正完成一轮提交后再判 —
+    // 真到底就解除挂起；否则保持挂起，后续 totalSize 变化会再次
+    // 触发本 effect 拉回底部（每次重跑也会取消上一轮的校验帧）。
+    let inner: number | null = null;
+    const raf = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        if (isNearBottom(el)) pendingBottomRef.current = false;
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      if (inner !== null) cancelAnimationFrame(inner);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalSize, messages.length, scrollEl]);
+
   useEffect(() => {
     return () => {
       if (autoScrollRaf.current !== null) cancelAnimationFrame(autoScrollRaf.current);
@@ -1214,6 +1256,7 @@ export const ChatMessagesApp: React.FC<{
       // 忽略 ctrl+wheel（缩放）、水平滚动、向下滚动
       if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.deltaY >= 0) return;
       stickRef.current = false;
+      pendingBottomRef.current = false; // 用户主动上滚 — 取消贴底断言
     };
 
     const onScroll = () => {
@@ -1224,8 +1267,9 @@ export const ChatMessagesApp: React.FC<{
       if (scrollingDown && isNearBottom(el)) {
         stickRef.current = true;
       } else if (!scrollingDown && !isNearBottom(el)) {
-        // 向上滚动离开底部 → 脱钩（覆盖滚动条拖动等不产生 wheel 的用户操作）
-        stickRef.current = false;
+        // 向上滚动离开底部 → 脱钩（覆盖滚动条拖动等不产生 wheel 的用户操作）。
+        // 贴底挂起期间豁免 — 测量修正产生的补偿性上滚是程序性的，不算用户意图。
+        if (!pendingBottomRef.current) stickRef.current = false;
       }
     };
 
