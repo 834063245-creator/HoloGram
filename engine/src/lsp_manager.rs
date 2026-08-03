@@ -161,32 +161,44 @@ impl LspProcess {
     /// 读取单条 JSON-RPC 消息并返回 (id, body)。
     ///
     /// 设为 static 方法以便在超时线程中调用而无需借用 self。
-    /// 解析 LSP 帧协议：逐行读取 header 直到空行，然后按 Content-Length 读取 body。
+    /// 解析 LSP 帧协议：扫描 "Content-Length: N\r\n\r\n" 定界，
+    /// 然后精确读取 N 字节 body。
+    ///
+    /// ponytail: 曾用 read_line 逐行读 header，但服务器可能一次
+    /// write 粘连多条消息（帧+帧），且 JSON body 内可能含 \n，
+    /// read_line 行边界会错位 → body 读进帧头（曾出现 body 开头是
+    /// "Content-Length: 185\r\n\r\n{...}" 的 parse 错误）。
+    /// 改按字节流扫描定界符，帧边界精确。
     fn read_one_message(reader: &mut BufReader<std::process::ChildStdout>) -> Result<(Option<u64>, Value), String> {
+        use std::io::Read;
+        // 扫描 header 直到 "\r\n\r\n"，收集 Content-Length。
+        let mut header = Vec::with_capacity(256);
         let mut content_length: Option<usize> = None;
         loop {
-            let mut line = String::new();
-            let n = reader.read_line(&mut line).map_err(|e| format!("read: {}", e))?;
-            if n == 0 {
-                // EOF —— 服务器未发送 header 就退出了
+            let mut byte = [0u8; 1];
+            reader.read_exact(&mut byte).map_err(|e| format!("read header: {}", e))?;
+            header.push(byte[0]);
+            // 检测 "\r\n\r\n" 结尾（header 结束）
+            let hlen = header.len();
+            if hlen >= 4 && &header[hlen - 4..] == b"\r\n\r\n" {
                 break;
             }
-            let trimmed = line.trim();
-            // 跳过启动横幅、杂散日志等噪声
-            if trimmed.is_empty() {
-                if content_length.is_some() { break; }
-                continue;
+            // 防御：header 过长（>8KB）说明协议错乱，避免无限读
+            if hlen > 8192 {
+                return Err(format!("header too long ({} bytes)", hlen));
             }
-            // 匹配 "Content-Length: N"，容忍空白字符差异
-            let lower = trimmed.to_lowercase();
+        }
+        // 从 header 中解析 Content-Length（大小写不敏感、容忍空格）
+        let header_text = String::from_utf8_lossy(&header);
+        for line in header_text.split("\r\n") {
+            let lower = line.trim().to_lowercase();
             if let Some(val) = lower.strip_prefix("content-length:") {
                 content_length = val.trim().parse().ok();
             }
         }
-        let len = content_length.ok_or("missing Content-Length")?;
+        let len = content_length.ok_or_else(|| format!("missing Content-Length in header: {:?}", header_text))?;
         let mut body_buf = vec![0u8; len];
-        use std::io::Read;
-        reader.get_mut().read_exact(&mut body_buf).map_err(|e| format!("read body: {}", e))?;
+        reader.read_exact(&mut body_buf).map_err(|e| format!("read body: {}", e))?;
         let msg: Value = serde_json::from_slice(&body_buf).map_err(|e| {
             // 把原始字节带进错误消息 — 定位"服务器发了非 JSON 内容"
             //（typescript-language-server 曾把日志/横幅混进 stdout）。
@@ -1269,6 +1281,45 @@ mod tests {
     }
 
     // ── 超时测试 ──
+
+    #[test]
+    fn test_read_one_message_parses_coalesced_frames() {
+        // ponytail: 服务器一次 write 粘连多条消息（帧+帧），
+        // 曾导致 read_line 行边界错位、body 读进帧头。
+        // 验证新解析器能精确拆帧。
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        // 用一个子进程模拟服务器：输出两条粘连的 LSP 帧
+        let mut child = Command::new("python")
+            .args(["-c", r#"
+import sys, json, time
+def frame(obj):
+    body = json.dumps(obj).encode()
+    sys.stdout.buffer.write(b'Content-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body)
+    sys.stdout.buffer.flush()
+# 两条消息粘连在同一个 write 里
+frame({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})
+frame({"jsonrpc":"2.0","id":2,"result":[{"uri":"file:///x.ts","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}]})
+time.sleep(0.2)
+"#])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn python");
+        let stdout = child.stdout.take().unwrap();
+        let mut reader = BufReader::new(stdout);
+
+        // 第一条帧
+        let (id1, msg1) = LspProcess::read_one_message(&mut reader).expect("frame 1");
+        assert_eq!(id1, Some(1));
+        assert!(msg1.get("result").is_some(), "frame1 result missing");
+
+        // 第二条帧 — 粘连场景下第二条必须能精确解析
+        let (id2, msg2) = LspProcess::read_one_message(&mut reader).expect("frame 2");
+        assert_eq!(id2, Some(2));
+        let result = msg2.get("result").unwrap();
+        assert!(result.is_array(), "frame2 should be an array, got {:?}", result);
+        let _ = child.wait();
+    }
 
     #[test]
     fn test_send_request_timeout() {
