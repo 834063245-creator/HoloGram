@@ -1,46 +1,93 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// wait — 等待工具。
+// wait — 事件驱动等待工具。
 //
-// 解决"轮询刷屏"问题：Agent 等子 Agent / 后台任务 / 构建完成时，
-// 之前只能反复调 agent_status / bash_output 轮询（每次都是一次工具调用，
-// 刷屏 + 耗 token）。wait 让 Agent 一次性阻塞指定时长，
-// 醒来后做【一次】状态检查即可。
+// 正确语义 = bash_wait 的"等目标完成"，不是"睡 N 秒"：
+//   - 传 agentId → 阻塞到该子 Agent 完成（内部轮询 pool 状态，500ms 粒度，
+//     不消耗 LLM 轮次；完成后立即返回最终状态，LLM 不需要猜时长）
+//   - 不传 agentId → 兜底固定时长 sleep（仅用于无事件可等的场景：
+//     watcher 增量分析、文件出现等）
+//
+// 背景：之前 Agent 等子 Agent 用 agent_status 轮询循环（工具调用刷屏）。
+// 第一版 wait 做成了固定 sleep（LLM 猜秒数，猜错白等/等不够）——同样不对。
+// 事件驱动 + 超时兜底才是"等"，bash_wait 已验证这个模式。
 
 import type { Tool } from '../tool';
+import type { SubAgentPool } from '../coordinator';
+import { SubAgentStatus } from '../coordinator';
 
 const MAX_WAIT_MS = 600_000; // 10 分钟上限，对齐 SHELL_TIMEOUT
+const POLL_INTERVAL_MS = 500;
 
-export function createWaitTool(): Tool {
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+function statusLabel(status: SubAgentStatus): string {
+  switch (status) {
+    case SubAgentStatus.Completed: return '✅ 已完成';
+    case SubAgentStatus.Failed: return '❌ 失败';
+    case SubAgentStatus.Stopped: return '⏹️ 已停止';
+    default: return '运行中';
+  }
+}
+
+export function createWaitTool(pool?: SubAgentPool): Tool {
   return {
     name: () => 'wait',
     description: () =>
-      'Block for a specified duration, then return immediately. ' +
-      'Use this INSTEAD of polling loops (repeated agent_status / bash_output calls in a loop — that spams tool calls). ' +
-      'Pattern: call wait → then make ONE status check. ' +
-      'For unknown wait durations, prefer shorter waits (10-30s) and re-check, ' +
-      'or estimate generously for known operations (e.g. cargo build ~60s). ' +
+      'Block until a target completes, then return immediately — event-driven, NOT a fixed sleep. ' +
+      'Pass agentId to wait for that sub-agent to finish: returns its final status the moment it completes (no polling loops, no guessing durations). ' +
+      'For background shell jobs use bash_wait (dedicated tool). ' +
+      'Omit agentId and pass durationMs ONLY as a fallback for non-event waits (watcher re-analysis, file appearance). ' +
       'Max 10 minutes per call.',
     parameters: () => ({
       type: 'object',
       properties: {
+        agentId: {
+          type: 'string',
+          description: 'Sub-agent ID to wait for (from agent_spawn result or agent_status). Waits until it completes/fails/stops.',
+        },
         durationMs: {
           type: 'integer',
-          description: 'Milliseconds to wait (1000 = 1s). Max 600000 (10 min).',
+          description: 'Fallback sleep when agentId is omitted (1000 = 1s, max 600000). Prefer agentId/bash_wait.',
           default: 10_000,
+        },
+        timeoutMs: {
+          type: 'integer',
+          description: 'Max wait in ms (default 600000 = 10 min).',
         },
       },
       required: [],
     }),
     readOnly: () => true,
     execute: async (args) => {
-      const requested = Number(args.durationMs);
-      const ms = Math.min(Math.max(Number.isFinite(requested) ? requested : 10_000, 0), MAX_WAIT_MS);
       const start = Date.now();
-      await new Promise((r) => setTimeout(r, ms));
-      const waited = ((Date.now() - start) / 1000).toFixed(1);
-      return `已等待 ${waited}s。现在检查你要等的目标状态（子 Agent / 后台任务 / 构建结果）。`;
+      const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || MAX_WAIT_MS, 0), MAX_WAIT_MS);
+      const agentId = args.agentId as string | undefined;
+
+      // ── 事件驱动：等子 Agent 完成 ──
+      if (agentId && pool) {
+        for (;;) {
+          const handle = pool.getHandle(agentId);
+          if (!handle) {
+            return `未找到子 Agent ${agentId}（可能已清理或 id 错误）。可用 agent_status 查看当前子 Agent。`;
+          }
+          if (handle.status !== SubAgentStatus.Running) {
+            const waited = ((Date.now() - start) / 1000).toFixed(1);
+            const extra = handle.result ? `\n结果: ${handle.result.slice(0, 500)}` : '';
+            return `子 Agent ${agentId} ${statusLabel(handle.status)}（等待 ${waited}s）。${extra}`;
+          }
+          if (Date.now() - start >= timeoutMs) {
+            return `⏱ 等待子 Agent ${agentId} 超时（${timeoutMs / 1000}s），仍在运行。可用 agent_status 查看进度，或 agent_kill 终止。`;
+          }
+          await sleep(POLL_INTERVAL_MS);
+        }
+      }
+
+      // ── 兜底：无 agentId → 固定时长 sleep（仅限无事件可等的场景）──
+      const durationMs = Math.min(Math.max(Number(args.durationMs) || 10_000, 0), MAX_WAIT_MS);
+      await sleep(durationMs);
+      return `已等待 ${(durationMs / 1000).toFixed(1)}s。现在检查目标状态（优先使用 wait agentId / bash_wait 等事件驱动方式）。`;
     },
   };
 }

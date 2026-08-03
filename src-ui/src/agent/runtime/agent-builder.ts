@@ -446,8 +446,9 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
     registry.register(createAgentStatusTool(subAgentPool));
   }
 
-  // ── wait 工具 — 替代轮询循环（agent_status/bash_output 反复刷屏）──
-  registry.register(createWaitTool());
+  // ── wait 工具 — 替代轮询循环（agent_status/bash_output 反复刷屏）。
+  // 事件驱动：传 agentId 阻塞到子 Agent 完成；无 pool 时退化为兜底 sleep ──
+  registry.register(createWaitTool(subAgentPool));
 
   return registry;
 }
