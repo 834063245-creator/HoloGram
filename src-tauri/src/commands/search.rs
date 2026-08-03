@@ -290,7 +290,11 @@ pub(crate) async fn glob(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let dir = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
+    // 默认搜索目录 = 当前工作区根（而非应用安装目录 project_root()），理由同 exec_command。
+    let dir = match path {
+        Some(p) => p,
+        None => crate::utils::workspace_path(&state)?,
+    };
     let root = crate::utils::resolve_read_dispatch(&dir, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
 
     // 展开花括号表达式 ({a,b,c}) — glob crate 不支持它们。

@@ -303,7 +303,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
           },
           path: {
             type: 'string',
-            description: 'Directory to search in. Defaults to the project root.',
+            description: 'Directory to search in. Defaults to the current workspace root.',
           },
         },
         required: ['pattern'],
@@ -316,7 +316,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
     {
       name: () => 'run_shell',
       description: () =>
-        'Execute a shell command and return stdout + stderr. Default timeout 5 min (max 10 min). For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress, bash_wait to wait for completion, or bash_kill to stop. Commands run in the project directory by default. IMPORTANT: Do NOT use run_shell for file search, code search, or git operations — use glob (file patterns), search_content (text search), list_directory (directory listing), and the dedicated git_* tools (git_status, git_diff, git_stage, git_commit, git_push, git_pull, git_log, git_checkout, git_create_branch, etc.) instead. run_shell is ONLY for building and testing commands (npm test, cargo build, pytest, etc.).',
+        'Execute a shell command and return stdout + stderr. Default timeout 5 min (max 10 min). For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress, bash_wait to wait for completion, or bash_kill to stop. Commands run in the current workspace root by default. IMPORTANT: Do NOT use run_shell for file search, code search, or git operations — use glob (file patterns), search_content (text search), list_directory (directory listing), and the dedicated git_* tools (git_status, git_diff, git_stage, git_commit, git_push, git_pull, git_log, git_checkout, git_create_branch, etc.) instead. run_shell is ONLY for building and testing commands (npm test, cargo build, pytest, etc.).',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -326,7 +326,7 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
           },
           cwd: {
             type: 'string',
-            description: 'Optional working directory for the command. Defaults to the HoloGram project root.',
+            description: 'Optional working directory for the command. Defaults to the current workspace root.',
           },
           timeoutMs: {
             type: 'integer',

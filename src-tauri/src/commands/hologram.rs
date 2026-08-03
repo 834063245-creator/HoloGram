@@ -24,7 +24,11 @@ pub(crate) async fn hologram_run_check(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     crate::utils::check_mcp_permission("hologram_run_check", &state)?;
-    let target = path.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
+    // 默认 target = 当前工作区根（而非应用安装目录 project_root()），理由同 exec_command。
+    let target = match path {
+        Some(p) => p,
+        None => crate::utils::workspace_path(&state)?,
+    };
     // 在派生阻塞任务前提取并清除 changed_files。
     // 提前清除可防止检查期间新变更到达时的竞态。
     let changed_files: Vec<String> = state.lock().unwrap().as_ref()

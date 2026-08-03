@@ -19,7 +19,12 @@ pub(crate) async fn exec_command(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let dir = cwd.unwrap_or_else(|| crate::utils::project_root().to_string_lossy().to_string());
+    // 默认 cwd = 当前工作区根（而非应用安装目录 project_root()）——
+    // 否则切换工作区后 Agent 省略 cwd 时，命令会在 HoloGram 自身目录执行。
+    let dir = match cwd {
+        Some(c) => c,
+        None => crate::utils::workspace_path(&state)?,
+    };
 
     let is_bg = run_in_background.unwrap_or(false);
     let physical_dir = if is_bg {
