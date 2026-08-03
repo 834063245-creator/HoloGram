@@ -73,13 +73,16 @@ fn collect_gitignore_dirs(root: &Path) -> HashSet<String> {
                     if trimmed.contains('*') || trimmed.contains('?') || trimmed.contains('[') {
                         continue;
                     }
-                    // 去掉前导 /（锚定路径）和尾部 /（目录标记），
+                    // 去掉前导 /（锚定路径），识别尾部 /（目录标记），
                     // 然后取最后一个路径分量。
-                    let name = trimmed.trim_start_matches('/').trim_end_matches('/');
+                    let name = trimmed.trim_start_matches('/');
+                    let is_dir_marker = name.ends_with('/');   // 尾部 / = 明确目录标记
+                    let name = name.trim_end_matches('/');
                     if let Some(last) = name.rsplit('/').next() {
-                        if !last.is_empty() && !last.contains('.') {
+                        if !last.is_empty() && (!last.contains('.') || is_dir_marker) {
                             // 跳过文件模式（带扩展名的名称如 "*.exe" 已被
-                            // glob 检查过滤；"Thumbs.db" 是单个文件，不是目录）
+                            // glob 检查过滤；"Thumbs.db" 是单个文件，不是目录；
+                            // 但 "llama.cpp/" 以 / 结尾，名字含点也是目录）
                             dirs.insert(last.to_string());
                         }
                     }
@@ -205,6 +208,33 @@ mod tests {
 
         assert!(names.contains(&"app.ts".to_string()), "src/app.ts should be found");
         assert!(!names.contains(&"bundle.js".to_string()), "dist/ should be excluded by nested .gitignore");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_gitignore_dir_with_dot_in_name() {
+        let tmp = std::env::temp_dir().join("hologram_test_gitignore_dots");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("llama.cpp")).unwrap();
+        fs::create_dir_all(tmp.join("my.app")).unwrap();
+        fs::create_dir_all(tmp.join("src")).unwrap();
+        // "Thumbs.db" 无尾部 /、含点 — 视为文件模式，不应排除同名目录
+        fs::create_dir_all(tmp.join("Thumbs.db")).unwrap();
+
+        fs::write(tmp.join(".gitignore"), "llama.cpp/\nmy.app/\nThumbs.db\n").unwrap();
+        fs::write(tmp.join("src").join("main.py"), "x=1").unwrap();
+        fs::write(tmp.join("llama.cpp").join("sub.py"), "y=2").unwrap();
+        fs::write(tmp.join("my.app").join("gui.py"), "z=3").unwrap();
+        fs::write(tmp.join("Thumbs.db").join("data.py"), "w=4").unwrap();
+
+        let files = discover_files(&tmp, &["py"]);
+        let names: Vec<String> = files.iter().map(|p| p.file_name().unwrap().to_str().unwrap().to_string()).collect();
+
+        assert!(names.contains(&"main.py".to_string()), "src/main.py should be found");
+        assert!(!names.contains(&"sub.py".to_string()), "llama.cpp/ 应被 .gitignore 排除（名字含点但有尾部 /）");
+        assert!(!names.contains(&"gui.py".to_string()), "my.app/ 应被 .gitignore 排除（名字含点但有尾部 /）");
+        assert!(names.contains(&"data.py".to_string()), "Thumbs.db 无尾部 / 视为文件模式，同名目录不应被排除");
 
         let _ = fs::remove_dir_all(&tmp);
     }
