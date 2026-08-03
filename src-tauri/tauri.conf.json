@@ -26,7 +26,12 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
-    "resources": ["../grammars/*.dll"],
+    "resources": [
+      "../grammars/*.dll",
+      "onnxruntime.dll",
+      "models/all-MiniLM-L6-v2/model.onnx",
+      "models/all-MiniLM-L6-v2/vocab.txt"
+    ],
     "windows": {
       "wix": {
         "language": "zh-CN",

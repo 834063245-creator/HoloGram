@@ -1,17 +1,81 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// N-gram 哈希嵌入器 —— 纯 Rust，零依赖、零模型、零下载。
-// 通过字符 3-gram 哈希将文本转换为固定维度向量。
-// 捕获词法相似性："handlePayment" ≈ "process_payment" → 都包含 "pay"、"men"、"ent"。
-// ponytail：不如神经网络嵌入效果好，但即时且免维护。
+// 嵌入调度 + n-gram 哈希兜底嵌入器。
+// embed() 优先走 MiniLM（minilm.rs，语义嵌入）；模型/DLL 不可用时
+// 回退字符 3-gram 哈希（ngram_embed，零依赖、即时）。
+// n-gram 捕获词法相似性："handlePayment" ≈ "process_payment"。
+// 当前激活后端见 backend_id()；vector_hits 过滤阈值见 score_threshold()。
 
 /// 固定嵌入维度。
 pub const EMBED_DIM: usize = 384;
 
+/// 嵌入文本 → DIM 维向量。
+/// 优先 MiniLM（语义嵌入）；模型/DLL 不可用时回退 n-gram 哈希。
+pub fn embed(text: &str) -> Vec<f32> {
+    match super::minilm::global() {
+        Ok(m) => match m.embed(text) {
+            Ok(v) => {
+                set_backend(BACKEND_MINILM);
+                return v;
+            }
+            Err(e) => {
+                tracing::warn!("[vector] MiniLM 推理失败，回退 n-gram: {e}");
+            }
+        },
+        Err(e) => {
+            log_fallback_once(&e);
+        }
+    }
+    set_backend(BACKEND_NGRAM);
+    ngram_embed(text)
+}
+
+fn log_fallback_once(reason: &str) {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!("[vector] MiniLM 不可用，使用 n-gram 哈希嵌入: {reason}");
+    }
+}
+
+const BACKEND_UNKNOWN: u8 = 0;
+const BACKEND_MINILM: u8 = 1;
+const BACKEND_NGRAM: u8 = 2;
+static BACKEND: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(BACKEND_UNKNOWN);
+
+fn set_backend(b: u8) { BACKEND.store(b, std::sync::atomic::Ordering::Relaxed); }
+
+/// 惰性确定后端（首次调用时探测 MiniLM 可用性）。
+fn resolve_backend() -> u8 {
+    let b = BACKEND.load(std::sync::atomic::Ordering::Relaxed);
+    if b != BACKEND_UNKNOWN { return b; }
+    let resolved = if super::minilm::global().is_ok() { BACKEND_MINILM } else { BACKEND_NGRAM };
+    set_backend(resolved);
+    resolved
+}
+
+/// 当前激活的嵌入后端标识（写入 slots.json，用于索引兼容性校验）。
+pub fn backend_id() -> &'static str {
+    match resolve_backend() {
+        BACKEND_MINILM => super::minilm::BACKEND_ID,
+        _ => "ngram-hash",
+    }
+}
+
+/// vector_hits 的最低相似度阈值（按后端区分）。
+/// 实测（HoloGram 真实索引）：MiniLM 相关命中 0.36–0.57，无关 <0.34 → 0.35 分界清晰；
+/// n-gram 分数压缩在 0.3–0.49 窄带，放宽但意义有限。
+pub fn score_threshold() -> f32 {
+    match resolve_backend() {
+        BACKEND_MINILM => 0.35,
+        _ => 0.45,
+    }
+}
+
 /// 通过 3-gram 哈希将文本嵌入为 DIM 维稠密向量。
 /// 每个 3-gram 哈希到一个维度；向量经过归一化。
-pub fn embed(text: &str) -> Vec<f32> {
+/// ponytail：MiniLM 不可用时的兜底方案。
+pub fn ngram_embed(text: &str) -> Vec<f32> {
     let mut vec = vec![0.0f32; EMBED_DIM];
     let text = text.to_lowercase();
     let chars: Vec<char> = text.chars().collect();

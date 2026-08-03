@@ -599,6 +599,8 @@ pub(crate) fn handler_search(args: &Value) -> ToolResponse {
 
 /// 将向量（语义）搜索结果附加到输出（如果可用）。
 /// ponytail：即发即忘 —— 如果向量索引未构建，静默跳过。
+/// 过滤策略：低于后端阈值丢弃、与主结果去重、最多 5 条。
+/// （HNSW 永远返回 top-k 个最近邻，不过滤会把无关噪音塞给 Agent。）
 pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
     let root = project_root();
     if root.as_os_str().is_empty() { return; }
@@ -616,19 +618,31 @@ pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
     if slot_data.is_empty() { return; }
 
     let q_vec = crate::vector::embed(query);
-    let results = match idx.search(&q_vec, limit) {
+    // 多取候选：阈值过滤与去重会淘汰一部分
+    let fetch = (limit * 2).max(20);
+    let results = match idx.search(&q_vec, fetch) {
         Ok(r) => r,
         Err(_) => return,
     };
 
-    let mut hits: Vec<(String, f32)> = Vec::with_capacity(results.keys.len());
-    for (slot_key, distance) in results.keys.iter().zip(results.distances.iter()) {
-        let slot = *slot_key as usize;
-        if slot < slot_data.len() {
+    let threshold = crate::vector::score_threshold();
+    let max_hits = 5usize.min(limit.max(1));
+
+    // 与主结果集去重（FTS/linear 已覆盖的节点不再重复出现）
+    let existing: std::collections::HashSet<&str> = out["results"].as_array()
+        .map(|a| a.iter().filter_map(|v| v["id"].as_str()).collect())
+        .unwrap_or_default();
+
+    // usearch 按距离升序返回 → 相似度降序
+    let raw: Vec<(String, f32)> = results.keys.iter().zip(results.distances.iter())
+        .filter_map(|(slot_key, distance)| {
+            let slot = *slot_key as usize;
+            if slot >= slot_data.len() { return None; }
             let similarity = 1.0 - (*distance).min(2.0).max(0.0);
-            hits.push((slot_data[slot].clone(), similarity));
-        }
-    }
+            Some((slot_data[slot].clone(), similarity))
+        })
+        .collect();
+    let hits = crate::vector::filter_hits(&raw, threshold, max_hits, &existing);
     if hits.is_empty() { return; }
 
     let top = &hits[0];
@@ -639,11 +653,13 @@ pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
     let vec_results: Vec<Value> = hits.into_iter()
         .map(|(node_id, score)| json!({"node_id": node_id, "vector_score": (score * 100.0).round() as u32}))
         .collect();
+    let count = vec_results.len();
     out["vector_hits"] = json!(vec_results);
+    out["vector_backend"] = json!(crate::vector::backend_id());
     if let Some(obj) = out.as_object_mut() {
         // 不计入 count —— vector_hits 是独立字段。
         // count 仅反映主（FTS5/linear）结果集。
-        obj.insert("vector_count".into(), json!(vec_results.len()));
+        obj.insert("vector_count".into(), json!(count));
     }
 }
 
@@ -1280,8 +1296,11 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
             let is_watching = engine::with_engine(|eng| eng.is_watching()).unwrap_or(false);
             let vi_path = project_root().join(".hologram").join("vectors.usearch");
             let vi_exists = vi_path.exists();
+            // 走进程级缓存（mtime 失效）——不再每次 status 调用都从磁盘全量加载索引
             let vi_count = if vi_exists {
-                crate::vector::CodeVectorIndex::new(&vi_path).load().unwrap_or(0)
+                crate::vector::get_or_load_index(&project_root())
+                    .map(|(_, slots)| slots.read().unwrap().len())
+                    .unwrap_or(0)
             } else { 0 };
             ToolResponse::Success(json!({
                 "phase": phase,
@@ -1290,7 +1309,7 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
                 "edges": edges,
                 "has_aux_indexes": has_aux,
                 "is_watching": is_watching,
-                "vector_index": { "exists": vi_exists, "vectors": vi_count },
+                "vector_index": { "exists": vi_exists, "vectors": vi_count, "backend": crate::vector::backend_id() },
                 "lsp": lsp_data,
             }))
         }

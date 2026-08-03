@@ -236,26 +236,55 @@ pub(crate) async fn search_code(
 
         let mut output_val = output;
         if !is_regex {
-            let vector_path = std::path::Path::new(&root).join(".hologram").join("vectors.usearch");
-            let vi = hologram_engine::vector::CodeVectorIndex::new(&vector_path);
-            if vi.exists_on_disk() {
-                if let Ok(n) = vi.load() {
-                    if n > 0 {
-                        if let Ok(hits) = vi.search(&pattern, 10) {
-                            if !hits.is_empty() {
-                                let vec_results: Vec<serde_json::Value> = hits.into_iter()
-                                    .map(|(id, score)| serde_json::json!({"node_id": id, "score": (score * 100.0).round() as u32}))
-                                    .collect();
-                                output_val["vector_hits"] = serde_json::json!(vec_results);
-                            }
-                        }
-                    }
-                }
-            }
+            append_vector_hits(&mut output_val, &root, &pattern);
         }
 
         Ok(output_val.to_string())
     }).await.map_err(|e| format!("搜索任务失败: {e}"))?
+}
+
+/// 将向量（语义）搜索命中附加到输出。
+/// 走引擎的进程级缓存索引（mtime 失效自动重载），不再每次从磁盘全量加载 8.8MB。
+/// 与引擎 search_symbols 同一套过滤策略：低于后端阈值丢弃、最多 5 条。
+fn append_vector_hits(output_val: &mut serde_json::Value, root: &std::path::Path, pattern: &str) {
+    use hologram_engine::vector;
+    let (index, slots) = match vector::get_or_load_index(root) {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+    let idx = index.read().unwrap();
+    let idx = match idx.as_ref() {
+        Some(i) => i,
+        None => return,
+    };
+    let slot_data = slots.read().unwrap();
+    if slot_data.is_empty() { return; }
+
+    let q_vec = vector::embed(pattern);
+    let results = match idx.search(&q_vec, 20) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    let threshold = vector::score_threshold();
+    // usearch 按距离升序返回 → 相似度降序
+    let raw: Vec<(String, f32)> = results.keys.iter().zip(results.distances.iter())
+        .filter_map(|(slot_key, distance)| {
+            let slot = *slot_key as usize;
+            if slot >= slot_data.len() { return None; }
+            let similarity = 1.0 - (*distance).min(2.0).max(0.0);
+            Some((slot_data[slot].clone(), similarity))
+        })
+        .collect();
+    // grep 结果与向量命中不同 id 空间，existing 传空集
+    let hits = vector::filter_hits(&raw, threshold, 5, &std::collections::HashSet::new());
+    if hits.is_empty() { return; }
+
+    let vec_results: Vec<serde_json::Value> = hits.into_iter()
+        .map(|(id, score)| serde_json::json!({"node_id": id, "score": (score * 100.0).round() as u32}))
+        .collect();
+    output_val["vector_hits"] = serde_json::json!(vec_results);
+    output_val["vector_backend"] = serde_json::json!(vector::backend_id());
 }
 
 #[tauri::command]

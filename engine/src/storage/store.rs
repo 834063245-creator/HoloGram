@@ -176,6 +176,11 @@ impl GraphStore {
         let vector_path = project_root.join(".hologram").join("vectors.usearch");
 
         let handle = std::thread::spawn(move || {
+            // 并发守卫：与全量重建互斥，避免同时写同一索引文件
+            if !crate::vector::try_begin_build() {
+                tracing::info!("[vector] 已有重建在进行，跳过本轮增量重建");
+                return;
+            }
             let mut nodes = nodes;
             // 为缺少 snippet 的节点提取片段（增量添加的）
             for node in &mut nodes {
@@ -196,9 +201,18 @@ impl GraphStore {
 
             let vi = crate::vector::CodeVectorIndex::new(&vector_path);
             match vi.build(&nodes) {
-                Ok(n) => tracing::info!("[vector] 增量重建: {} 个向量", n),
-                Err(e) => tracing::warn!("[vector] 增量重建失败: {}", e),
+                Ok(n) if n > 0 => match vi.save() {
+                    Ok(()) => {
+                        tracing::info!("[vector] 增量重建: {} 个向量", n);
+                        // 让搜索侧缓存失效，下次搜索加载新索引
+                        crate::vector::invalidate_cache();
+                    }
+                    Err(e) => tracing::warn!("[vector] 增量重建保存失败: {e}"),
+                },
+                Ok(_) => {}
+                Err(e) => tracing::warn!("[vector] 增量重建失败: {e}"),
             }
+            crate::vector::end_build();
         });
 
         *guard = Some(handle);

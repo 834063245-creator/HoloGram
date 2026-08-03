@@ -45,8 +45,8 @@ hologram_graph_files.json
 *.so
 *.dylib
 
-# Embedding model binary (80MB) — user downloads locally
-src-tauri/models/*.onnx
+# Embedding model binary (90MB) — user downloads locally
+src-tauri/models/**/*.onnx
 
 # ONNX Runtime DLL — bundled for Tauri resources
 # ponytail: ! rule above allows this specific path

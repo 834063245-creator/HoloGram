@@ -348,19 +348,25 @@ impl Engine {
         let vector_nodes: Vec<crate::graph::Node> = result.graph.nodes.values().cloned().collect();
         let vector_path = project_root.join(".hologram").join("vectors.usearch");
         std::thread::spawn(move || {
+            // 并发守卫：与增量重建互斥，避免两个线程同时写同一索引文件
+            if !crate::vector::try_begin_build() {
+                tracing::info!("[vector] 已有重建在进行，跳过本轮全量重建");
+                return;
+            }
             let vi = crate::vector::CodeVectorIndex::new(&vector_path);
             match vi.build(&vector_nodes) {
-                Ok(n) => {
-                    if n > 0 {
-                        if let Err(e) = vi.save() {
-                            tracing::warn!("[vector] save failed: {e}");
-                        } else {
-                            tracing::info!("[vector] index built: {} vectors saved to {}", n, vector_path.display());
-                        }
+                Ok(n) if n > 0 => match vi.save() {
+                    Ok(()) => {
+                        tracing::info!("[vector] index built: {} vectors saved to {}", n, vector_path.display());
+                        // 让搜索侧缓存失效，下次搜索加载新索引
+                        crate::vector::invalidate_cache();
                     }
-                }
+                    Err(e) => tracing::warn!("[vector] save failed: {e}"),
+                },
+                Ok(_) => {}
                 Err(e) => tracing::warn!("[vector] build skipped: {e}"),
             }
+            crate::vector::end_build();
         });
 
         // 8. 写入 GraphStore（MemoryIndex + SQLite）
