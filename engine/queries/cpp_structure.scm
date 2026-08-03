@@ -1,8 +1,7 @@
-;; C Structure Queries
-;; ponytail: class_specifier 仅存在于 C++ 语法，放在 cpp_structure.scm。
-;; 此文件必须只用 tree-sitter-c 已有的节点类型。
+;; C++ Structure Queries
 
 (function_definition) @fn
+(class_specifier) @class
 (struct_specifier) @class
 (union_specifier) @class
 (enum_specifier) @class

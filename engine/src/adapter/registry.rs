@@ -55,11 +55,19 @@ impl AdapterRegistry {
             &["class_declaration", "interface_declaration", "enum_declaration"],
         ));
 
-        // C/C++
+        // C — 查询只能用 tree-sitter-c 已有的节点类型（无 class_specifier）
         registry.register(QueryStructureAdapter::new_generic(
-            vec!["c".into(), "h".into(), "cpp".into(), "hpp".into(),
-                 "cc".into(), "hh".into(), "cxx".into(), "hxx".into()],
+            vec!["c".into(), "h".into()],
             include_str!("../../queries/c_structure.scm"),
+            &["function_definition"],
+            &["struct_specifier", "union_specifier"],
+        ));
+
+        // C++
+        registry.register(QueryStructureAdapter::new_generic(
+            vec!["cpp".into(), "hpp".into(), "cc".into(), "hh".into(),
+                 "cxx".into(), "hxx".into()],
+            include_str!("../../queries/cpp_structure.scm"),
             &["function_definition", "lambda_expression"],
             &["class_specifier", "struct_specifier", "union_specifier"],
         ));
