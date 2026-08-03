@@ -90,9 +90,47 @@ pub(crate) async fn search_code(
             "lock", "map", "min.js", "min.css",
         ];
 
+        // glob_filter 是相对于搜索根的路径模式。转成正则，
+        // * 不跨目录（[^/]*），** 跨目录（.*），**/ 可选前缀。
         let glob_re: Option<regex::Regex> = gfilter.and_then(|gf| {
-            let pat = gf.replace(".", "\\.").replace("*", ".*").replace("?", ".");
-            regex::Regex::new(&format!("^{}$", pat)).ok()
+            let gf = gf.replace('\\', "/");
+            let mut re = String::from("^");
+            let chars: Vec<char> = gf.chars().collect();
+            let mut i = 0;
+            while i < chars.len() {
+                match chars[i] {
+                    '*' => {
+                        if i + 1 < chars.len() && chars[i + 1] == '*' {
+                            if i + 2 < chars.len() && chars[i + 2] == '/' {
+                                re.push_str("(?:.*/)?");
+                                i += 3;
+                            } else {
+                                re.push_str(".*");
+                                i += 2;
+                            }
+                        } else {
+                            re.push_str("[^/]*");
+                            i += 1;
+                        }
+                    }
+                    '?' => { re.push_str("[^/]"); i += 1; }
+                    '.' => { re.push_str("\\."); i += 1; }
+                    '\\' => { re.push_str("\\\\"); i += 1; }
+                    '+' => { re.push_str("\\+"); i += 1; }
+                    '(' => { re.push_str("\\("); i += 1; }
+                    ')' => { re.push_str("\\)"); i += 1; }
+                    '[' => { re.push_str("\\["); i += 1; }
+                    ']' => { re.push_str("\\]"); i += 1; }
+                    '{' => { re.push_str("\\{"); i += 1; }
+                    '}' => { re.push_str("\\}"); i += 1; }
+                    '^' => { re.push_str("\\^"); i += 1; }
+                    '$' => { re.push_str("\\$"); i += 1; }
+                    '|' => { re.push_str("\\|"); i += 1; }
+                    c => { re.push(c); i += 1; }
+                }
+            }
+            re.push('$');
+            regex::Regex::new(&re).ok()
         });
 
         // ── 扫描预算：防止在巨大目录树中无限遍历 ──
@@ -101,6 +139,10 @@ pub(crate) async fn search_code(
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TIME_BUDGET_SECS);
         let mut scanned_files: usize = 0;
         let mut truncated_by_budget = false;
+
+        // 相对路径匹配用：去掉 root 前缀
+        let root_str = root.to_string_lossy().replace('\\', "/");
+        let root_str = root_str.trim_end_matches('/').to_string();
 
         for entry in walkdir::WalkDir::new(&root)
             .into_iter()
@@ -137,7 +179,11 @@ pub(crate) async fn search_code(
             }
             let fp_str = fp.to_string_lossy().to_string();
             if let Some(ref re) = &glob_re {
-                if !re.is_match(&fp_str) { continue; }
+                // glob_filter 是相对模式 → 对 strip 掉 root 的相对路径匹配
+                let rel = fp_str.replace('\\', "/");
+                let rel = rel.strip_prefix(&root_str).unwrap_or(&rel);
+                let rel = rel.trim_start_matches('/');
+                if !re.is_match(rel) { continue; }
             }
 
             let content = match std::fs::read_to_string(fp) {
@@ -426,5 +472,101 @@ mod tests {
     fn test_expand_braces_at_start() {
         let result = expand_braces("{a,b}.ts");
         assert_eq!(result, vec!["a.ts", "b.ts"]);
+    }
+
+    /// 测试 glob→regex 转换函数（独立于 search_code，不依赖文件系统）。
+    fn glob_to_regex(gf: &str) -> Option<regex::Regex> {
+        let gf = gf.replace('\\', "/");
+        let mut re = String::from("^");
+        let chars: Vec<char> = gf.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '*' => {
+                    if i + 1 < chars.len() && chars[i + 1] == '*' {
+                        if i + 2 < chars.len() && chars[i + 2] == '/' {
+                            re.push_str("(?:.*/)?");
+                            i += 3;
+                        } else {
+                            re.push_str(".*");
+                            i += 2;
+                        }
+                    } else {
+                        re.push_str("[^/]*");
+                        i += 1;
+                    }
+                }
+                '?' => { re.push_str("[^/]"); i += 1; }
+                '.' => { re.push_str("\\."); i += 1; }
+                '\\' => { re.push_str("\\\\"); i += 1; }
+                '+' => { re.push_str("\\+"); i += 1; }
+                '(' => { re.push_str("\\("); i += 1; }
+                ')' => { re.push_str("\\)"); i += 1; }
+                '[' => { re.push_str("\\["); i += 1; }
+                ']' => { re.push_str("\\]"); i += 1; }
+                '{' => { re.push_str("\\{"); i += 1; }
+                '}' => { re.push_str("\\}"); i += 1; }
+                '^' => { re.push_str("\\^"); i += 1; }
+                '$' => { re.push_str("\\$"); i += 1; }
+                '|' => { re.push_str("\\|"); i += 1; }
+                c => { re.push(c); i += 1; }
+            }
+        }
+        re.push('$');
+        regex::Regex::new(&re).ok()
+    }
+
+    #[test]
+    fn test_glob_to_regex_simple_filename() {
+        let re = glob_to_regex("config.py").expect("glob_to_regex failed");
+        // 匹配搜索根下的 config.py
+        assert!(re.is_match("config.py"));
+        // 不匹配子目录中的同名文件（要用 **/config.py 才跨目录）
+        assert!(!re.is_match("src/config.py"));
+        // 不应匹配旧行为的完整绝对路径
+        assert!(!re.is_match("D:/x/config.py"));
+    }
+
+    #[test]
+    fn test_glob_to_regex_wildcard() {
+        let re = glob_to_regex("core/*.py").expect("glob_to_regex failed");
+        assert!(re.is_match("core/main.py"));
+        assert!(re.is_match("core/utils.py"));
+        // * 不跨目录
+        assert!(!re.is_match("core/sub/main.py"));
+    }
+
+    #[test]
+    fn test_glob_to_regex_double_star() {
+        let re = glob_to_regex("**/*.rs").expect("glob_to_regex failed");
+        assert!(re.is_match("main.rs"));
+        assert!(re.is_match("src/main.rs"));
+        assert!(re.is_match("src/engine/core/mod.rs"));
+    }
+
+    #[test]
+    fn test_glob_to_regex_double_star_slash_prefix() {
+        let re = glob_to_regex("**/test_*.py").expect("glob_to_regex failed");
+        assert!(re.is_match("test_foo.py"));
+        assert!(re.is_match("tests/test_foo.py"));
+        assert!(re.is_match("a/b/tests/test_foo.py"));
+    }
+
+    #[test]
+    fn test_glob_to_regex_question_mark() {
+        let re = glob_to_regex("file?.txt").expect("glob_to_regex failed");
+        assert!(re.is_match("file1.txt"));
+        assert!(re.is_match("fileA.txt"));
+        assert!(!re.is_match("file10.txt")); // ? 只匹配一个字符
+        assert!(!re.is_match("file.txt"));   // 至少要一个字符
+    }
+
+    #[test]
+    fn test_glob_to_regex_special_chars_escaped() {
+        // + ( ) [ ] { } ^ $ | 都应被转义为字面字符
+        let re = glob_to_regex("a+b(c)[d]{e}^f$g|h.txt").expect("glob_to_regex failed");
+        // 如果转义正确，正则不会 panic，且能字面匹配
+        assert!(re.is_match("a+b(c)[d]{e}^f$g|h.txt"));
+        assert!(!re.is_match("aXb(c)[d]{e}^f$g|h.txt")); // 加号不是量词
     }
 }
