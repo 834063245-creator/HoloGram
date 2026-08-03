@@ -26,6 +26,9 @@ import {
 } from './compaction-model';
 import { countMessage, countMessages, countText, countTexts, countToolSchemas } from './token-counter';
 import { type ExecStateInstance, createExecState, execState } from './execution-state';
+import { createProvider } from '../provider';
+import { getAllModels } from '../provider/catalog';
+import { loadSettings } from '../settings';
 import type { GoalManager, GoalRecord } from './goal-manager';
 import { HookRegistry, type PreflightHookRegistry } from './hooks';
 import { log } from './logger';
@@ -114,7 +117,16 @@ export class Agent {
   private contextWindow: number;
   private compactRatio: number;
   private recentKeep: number;
+  // 真卡死闩锁 — 仅在"折叠后载荷仍 >95% 窗口"时置位（此时压缩确实
+  // 无能为力，只有 /new 能解决）。瞬时失败不再使用它 — 见下方退避门控。
   private compactStuck = false;
+  // 压缩退避门控: session 长度未涨到此值不重试。空区域（对话太短）和
+  // 失败后都通过它延迟重试 — 增长足够后自动恢复，无永久闩锁。
+  private compactRetryAfterLen = 0;
+  // 连续失败计数 — 决定退避步长与是否升级用户告警
+  private compactFailCount = 0;
+  // 缓存的摘要模型选择（null = 未计算）— 运行时自动选出，无用户配置
+  private _summaryProv: { prov: Provider; window: number } | null = null;
 
   // 子 Agent 深度追踪: 0 = 根，1 = 第一次 fork，2 = 孙 Agent，以此类推
   private _subagentDepth = 0;
@@ -720,6 +732,8 @@ export class Agent {
     this.stormSig = '';
     this.stormCount = 0;
     this.compactStuck = false;
+    this.compactRetryAfterLen = 0;
+    this.compactFailCount = 0;
     this.compactionTracker.reset();
     this._transientReminders = [];
     this._sink({ kind: EventKind.Notice, level: 'info', text: '已开启新会话' });
@@ -1354,6 +1368,7 @@ ${resumeNote}
         this.isContextLengthError(lastErr) &&
         !this.compactStuck &&
         !this.compactRunning &&
+        this.session.length >= this.compactRetryAfterLen &&
         errAt > this.contextWindow * 0.6
       ) {
         log.info('agent', 'reactive compact triggered by context-length error', {
@@ -1735,9 +1750,9 @@ ${resumeNote}
     try {
       const regionInfo = this.computeCompactRegion();
       if (!regionInfo) {
-        // 头尾之间无内容可折叠 — 标记 stuck 使响应式路径停止重试，
-        // 让真实错误浮现而非循环。
-        this.compactStuck = true;
+        // 头尾之间无内容可折叠 — 不再永久闩锁（对话增长后自然可折叠），
+        // 仅设置增长门槛，避免响应式路径在空区域上空转。
+        this.compactRetryAfterLen = this.session.length + Math.max(4, this.recentKeep);
         this.recordCompactionEvent({
           ts: Date.now(),
           regionMsgCount: 0,
@@ -1757,13 +1772,13 @@ ${resumeNote}
         return 'stuck';
       }
       const { region, tailStart, priorSummary } = regionInfo;
-      let summary: string | null = null;
+      let result: { text: string; degraded: boolean } | null = null;
       try {
-        summary = await this.summarizeRegion(signal, region, priorSummary);
+        result = await this.summarizeRegion(signal, region, priorSummary);
       } catch (e: any) {
         log.warn('agent', `summarizeRegion failed (${e?.message || e})`);
       }
-      if (!summary) {
+      if (!result || !result.text) {
         // 摘要失败 = 放弃本次压缩。历史保持完整，仅继续增长。
         // 根治: 绝不截断/删除历史消息。
         this.recordCompactionEvent({
@@ -1784,12 +1799,15 @@ ${resumeNote}
         });
         return 'stuck';
       }
+      const summary = result.text;
 
       // 应用折叠状态 — session 不变，发送载荷变小
       this._applyCompactState(tailStart, summary);
       this.stormSig = '';
       this.stormCount = 0;
       this.compactStuck = false;
+      this.compactRetryAfterLen = 0;
+      this.compactFailCount = 0;
 
       // ── 压缩模型埋点 ──
       const preTokens = this.tokenCountWithEstimation();
@@ -1802,7 +1820,7 @@ ${resumeNote}
         tailMsgCount: this.session.length - tailStart,
         preTokens,
         postTokens: this.tokenCountWithEstimation(),
-        outcome: 'summary',
+        outcome: result.degraded ? 'digest' : 'summary',
       });
       this._sink({
         kind: EventKind.Notice,
@@ -1826,6 +1844,7 @@ ${resumeNote}
 
     if (ratio < this.compactRatio) {
       this.compactStuck = false;
+      this.compactFailCount = 0;
       return;
     }
     if (this.compactStuck) return;
@@ -1833,6 +1852,9 @@ ${resumeNote}
       this._sink({ kind: EventKind.Notice, level: 'info', text: '压缩已在运行中，跳过重复触发' });
       return;
     }
+    // 退避门控: 空区域（对话太短）或失败后，session 未增长足够不重试。
+    // 瞬时错误随对话增长自动自愈 — 没有永久闩锁。
+    if (this.session.length < this.compactRetryAfterLen) return;
     this.compactRunning = true;
 
     // 自动压缩: 本轮后在后台生成摘要并更新折叠状态
@@ -1846,30 +1868,20 @@ ${resumeNote}
     const genAtStart = this._execState.bumpVersion();
     const regionInfo = this.computeCompactRegion();
     if (!regionInfo) {
-      this.compactStuck = true;
+      // 无可折叠内容 — 不闩锁、不告警、不记录失败事件。
+      // 对话继续增长后自然出现可折叠区域，设增长门槛后静默跳过。
+      this.compactRetryAfterLen = this.session.length + Math.max(4, this.recentKeep);
       this.compactRunning = false;
-      this.recordCompactionEvent({
-        ts: Date.now(),
-        regionMsgCount: 0,
-        regionTokensEst: 0,
-        summaryInputTokens: 0,
-        summaryOutputTokens: 0,
-        tailMsgCount: Math.max(0, this.session.length - this._foldHead()),
-        preTokens: estimated,
-        postTokens: estimated,
-        outcome: 'stuck',
-      });
-      this._sink({
-        kind: EventKind.Notice,
-        level: 'warn',
-        text: `上下文窗口 ${(ratio * 100).toFixed(0)}% 已满但对话太短无法压缩。建议用 /new 开启新会话。`,
+      log.debug('agent', 'compact skipped: nothing to fold yet', {
+        sessionLen: this.session.length,
+        retryAfterLen: this.compactRetryAfterLen,
       });
       return;
     }
 
     const abortCtrl = new AbortController();
     this.summarizeRegion(abortCtrl.signal, regionInfo.region, regionInfo.priorSummary)
-      .then((summary) => {
+      .then(({ text: summary, degraded }) => {
         if (genAtStart !== this._execState.sessionVersion) {
           this.compactRunning = false;
           return;
@@ -1882,8 +1894,12 @@ ${resumeNote}
         this._applyCompactState(regionInfo.tailStart, summary);
         this.stormSig = '';
         this.stormCount = 0;
+        this.compactRetryAfterLen = 0;
+        this.compactFailCount = 0;
 
         // 检查压缩是否足够 — 若折叠后载荷仍高于 95%，则已卡住
+        // （尾部保留的消息本身就占满窗口 — 压缩确实无能为力，
+        //  这是唯一合法的"卡死"，只有 /new 能解决）
         const postEstimate = this.tokenCountWithEstimation();
         if (postEstimate / this.contextWindow > 0.95) {
           this.compactStuck = true;
@@ -1909,7 +1925,7 @@ ${resumeNote}
           tailMsgCount: this.session.length - regionInfo.tailStart,
           preTokens: estimated,
           postTokens: postEstimate,
-          outcome: 'summary',
+          outcome: degraded ? 'digest' : 'summary',
         });
         this._sink({
           kind: EventKind.Notice,
@@ -1917,79 +1933,182 @@ ${resumeNote}
           text: `自动压缩完成: ${regionInfo.region.length} 条消息 → 摘要（完整历史仍保留）`,
         });
       })
-      .catch(() => {
+      .catch((e: any) => {
         if (genAtStart !== this._execState.sessionVersion) {
           this.compactRunning = false;
           return;
         } // 会话已替换，丢弃
-        this.compactStuck = true;
+        // 失败不闩锁 — 退避重试：失败越多等越久（每级多等 4 条消息，封顶 16 条）。
+        // summarizeRegion 内部已有机械摘要兜底，能走到这里的基本只剩
+        // 用户中止与极端异常 — 静默退避，仅在逼近窗口上限且连续失败时升级。
+        this.compactFailCount++;
         this.compactRunning = false;
-        this._sink({
-          kind: EventKind.Notice,
-          level: 'warn',
-          text: '自动压缩失败。建议用 /new 开启新会话或手动 /compact。',
-        });
+        this.compactRetryAfterLen = this.session.length + Math.min(this.compactFailCount, 4) * 4;
+        log.warn('agent', `auto-compact failed (${e?.message || e}), backoff #${this.compactFailCount}`);
+        if (this.compactFailCount >= 3 && estimated / this.contextWindow >= 0.9) {
+          this._sink({
+            kind: EventKind.Notice,
+            level: 'warn',
+            text: '上下文已接近窗口上限，且自动压缩连续多次失败。建议用 /new 开启新会话。',
+          });
+        }
       });
   }
 
-  /** 调用 provider（无工具）对消息区域进行摘要。
+  /** 对消息区域生成摘要 — map-reduce 分块管线。
+   *
+   *  硬保证（不存在"塞爆"这个状态）：
+   *    每次 LLM 调用的输入 ≤ prompt(≤SUMMARY_PROMPT_BUDGET) + chunkCap，
+   *    输出 ≤ SUMMARY_OUTPUT_BUDGET，两者之和严格小于摘要模型窗口；
+   *    窗口连最低可行条件都不满足的模型直接走机械摘要，不调 LLM。
+   *
+   *  降级阶梯（任何环节失败只降质量，管线永不闩死）：
+   *    LLM 全量摘要 > 部分块机械提取 > 纯机械提取。
+   *
    *  @param priorSummary 来自上次 `<compacted-context>` 块的内容，用于
-   *    与新区域合并（累积压缩），若为首次压缩则为 null。 */
-  private async summarizeRegion(signal: AbortSignal, msgs: Message[], priorSummary: string | null = null): Promise<string> {
-    // 合并时，指示 LLM 将前一次摘要视为既有背景，
-    // 仅当新证据与之矛盾时才覆盖。
-    const mergeInstruction = priorSummary
-      ? `\n以下是在本次压缩之前生成的会话背景简报。新消息可能覆盖或补充其中的内容——合并时以新消息为准，未变的旧事实直接保留：\n\n<previous-summary>\n${priorSummary}\n</previous-summary>`
-      : '';
+   *    与新区域合并（累积压缩），若为首次压缩则为 null。
+   *  @returns text = 摘要文本；degraded = 是否有环节降级为机械提取 */
+  private async summarizeRegion(
+    signal: AbortSignal,
+    msgs: Message[],
+    priorSummary: string | null = null,
+  ): Promise<{ text: string; degraded: boolean }> {
+    // priorSummary 防御性截断 — 理论上每轮 LLM 输出 ≤ 摘要预算不会无限涨，
+    // 但手工编辑/旧版本数据可能异常，超限时保留头部
+    if (priorSummary && countText(priorSummary) > SUMMARY_PROMPT_BUDGET - 1000) {
+      priorSummary = priorSummary.slice(0, (SUMMARY_PROMPT_BUDGET - 1000) * 4);
+    }
 
-    const summaryPrompt = `你是对话压缩器。把以下编码 Agent 的对话历史浓缩为一份简报。Agent 只会保留你的摘要（原始消息会被丢弃），因此必须能从摘要中恢复任务。
+    const { window } = this.summaryProvider();
+    const inputBudget = window - SUMMARY_OUTPUT_BUDGET - SUMMARY_PROMPT_BUDGET;
+    if (inputBudget < SUMMARY_MIN_INPUT) {
+      log.warn('agent', `summary model window too small (${window}) — 走机械摘要`);
+      return { text: digestMessages(msgs), degraded: true };
+    }
+    const chunkCap = Math.floor(inputBudget * 0.8);
+    const chunks = chunkMessages(msgs, chunkCap);
 
-按这些标题写（没有内容的标题可以省略）：
+    // 单块 — 与旧行为一致：一次调用，priorSummary 直接嵌入 prompt
+    if (chunks.length <= 1) {
+      try {
+        const text = await this.callSummaryLLM(signal, buildSummaryPrompt(priorSummary), renderTranscript(msgs));
+        if (!text) throw new Error('empty summary');
+        return { text, degraded: false };
+      } catch (e: any) {
+        if (signal.aborted) throw e; // 用户中止 — 不兜底，直接传播
+        log.warn('agent', `summarize LLM failed (${e?.message || e}) — 降级为机械摘要`);
+        return { text: digestMessages(msgs), degraded: true };
+      }
+    }
 
-## 目标
-用户的需求和意图，尽量用用户的措辞。包含明确的约束和偏好。
+    // 多块 — map-reduce。块数超上限时最老的块直接机械消化，
+    // LLM 预算只花在最新内容上（成本与时延封顶）。
+    const partials: string[] = [];
+    let degraded = false;
+    let startIdx = 0;
+    if (chunks.length > SUMMARY_MAX_LLM_CHUNKS) {
+      const oldMsgs = chunks.slice(0, chunks.length - SUMMARY_MAX_LLM_CHUNKS).flat();
+      partials.push('## 早期历史（机械提取）\n' + digestMessages(oldMsgs));
+      startIdx = chunks.length - SUMMARY_MAX_LLM_CHUNKS;
+      degraded = true;
+    }
+    for (let i = startIdx; i < chunks.length; i++) {
+      try {
+        const text = await this.callSummaryLLM(
+          signal,
+          buildSummaryPrompt(null, { index: i + 1, total: chunks.length }),
+          renderTranscript(chunks[i]),
+        );
+        if (!text) throw new Error('empty summary');
+        partials.push(text);
+      } catch (e: any) {
+        if (signal.aborted) throw e;
+        log.warn('agent', `chunk ${i + 1}/${chunks.length} summary failed (${e?.message || e}) — 该块机械提取`);
+        partials.push(digestMessages(chunks[i]));
+        degraded = true;
+      }
+    }
+    // mergePartials 只报告合并阶段的降级 — 块阶段的降级必须透传
+    const merged = await this.mergePartials(signal, priorSummary, partials, chunkCap);
+    return { text: merged.text, degraded: degraded || merged.degraded };
+  }
 
-## 决策与理由
-已做出的关键选择及原因——避免被推翻或重复争论。
+  /** 缓存的摘要模型选择。 */
+  private summaryProvider(): { prov: Provider; window: number } {
+    if (!this._summaryProv) this._summaryProv = this.selectSummaryProvider();
+    return this._summaryProv;
+  }
 
-## 文件与代码
-读取或修改过的文件，包含具体事实：签名、位置、数据形状、应用的具体编辑。
+  /** 运行时自动选择摘要模型 — 无用户配置项。
+   *  规则：已配置 key 覆盖的模型中，窗口 ≥ SUMMARY_MIN_WINDOW 且
+   *  输入价严格低于主模型者，取价格最低（窗口大者破平）。
+   *  主模型自己参与竞选 — 没有严格占优的候选时维持现状。
+   *  只可能在"窗口不小、价格更低"时偏离主模型，永远不会让事情变糟。 */
+  private selectSummaryProvider(): { prov: Provider; window: number } {
+    const fallback = { prov: this.prov, window: this.contextWindow };
+    try {
+      const s = loadSettings();
+      const active = s.providers.find((p) => p.name === s.activeProvider);
+      if (!active) return fallback;
+      const all = getAllModels();
+      const main = all.find((m) => m.id === active.model);
+      const mainWindow = main && main.contextWindow > 0 ? main.contextWindow : this.contextWindow;
+      const mainCost = main?.cost?.input ?? Infinity;
+      const keyed = new Map(s.providers.filter((p) => p.apiKey?.trim()).map((p) => [p.name, p]));
+      const winner = all
+        .filter(
+          (m) =>
+            m.id !== active.model &&
+            keyed.has(m.provider) &&
+            m.contextWindow >= SUMMARY_MIN_WINDOW &&
+            (m.cost?.input ?? 0) > 0 &&
+            (m.cost?.input ?? Infinity) < mainCost,
+        )
+        .sort((a, b) => a.cost.input - b.cost.input || b.contextWindow - a.contextWindow)[0];
+      if (!winner) return { prov: this.prov, window: mainWindow };
+      const ps = keyed.get(winner.provider)!;
+      const prov = createProvider({ ...ps, model: winner.id, thinking: '' }, { disableThinking: true });
+      log.info('agent', 'summary model auto-selected', {
+        model: winner.id,
+        window: winner.contextWindow,
+        costIn: winner.cost.input,
+        mainModel: active.model,
+      });
+      return { prov, window: winner.contextWindow };
+    } catch (e: any) {
+      log.warn('agent', `summary model selection failed (${e?.message || e}) — 使用主模型`);
+      return fallback;
+    }
+  }
 
-## 命令与结果
-执行过的命令（构建、测试、git）及结果——哪些通过、哪些失败、错误信息。
-
-## 错误与修复
-遇到的问题及解决方式（或未解决），避免走重复的弯路。
-
-## 待办与下一步
-仍在进行中或未开始的工作，以及最具体的下一个行动。
-
-规则：简洁——用要点和片段而非散文。准确保留标识符、路径和数字。不编造任何不存在于消息中的内容。${mergeInstruction}`;
-
-    const transcript = renderTranscript(msgs);
-
-    // ponytail: 超时守卫 — 摘要调用 LLM API；没有超时，
-    // 挂起的连接会在压缩期间无限期冻结 Agent。我们使用
-    // 独立的 AbortController 设 30s 截止时间，并链接到调用方的 signal。
-    const SUMMARIZE_TIMEOUT_MS = 30_000;
+  /** 单次摘要 LLM 调用 — 60s 空闲超时守卫（挂起判定），
+   *  流仍在产出就让它跑完。max_tokens 固定为输出预算，
+   *  配合 chunkCap 构成"永不塞爆"的输入/输出硬上界。 */
+  private async callSummaryLLM(signal: AbortSignal, systemPrompt: string, userText: string): Promise<string> {
+    const { prov } = this.summaryProvider();
+    const SUMMARIZE_IDLE_TIMEOUT_MS = 60_000;
     const timeoutCtrl = new AbortController();
-    const timeoutId = setTimeout(() => timeoutCtrl.abort(), SUMMARIZE_TIMEOUT_MS);
+    const onIdleTimeout = () => timeoutCtrl.abort();
+    let timeoutId = setTimeout(onIdleTimeout, SUMMARIZE_IDLE_TIMEOUT_MS);
     const onExternalAbort = () => timeoutCtrl.abort();
     signal.addEventListener('abort', onExternalAbort, { once: true });
 
     try {
-      const gen = this.prov.stream(timeoutCtrl.signal, {
+      const gen = prov.stream(timeoutCtrl.signal, {
         messages: [
-          { role: 'system', content: summaryPrompt },
-          { role: 'user', content: transcript },
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userText },
         ],
         tools: [], // 摘要不需要工具
         temperature: 0.3, // 低温用于事实性摘要
-        max_tokens: 0,
+        max_tokens: SUMMARY_OUTPUT_BUDGET,
       });
 
       let text = '';
       for await (const chunk of gen) {
+        // 流仍在产出 — 重置空闲计时
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(onIdleTimeout, SUMMARIZE_IDLE_TIMEOUT_MS);
         if (chunk.type === ChunkType.Text && chunk.text) {
           text += chunk.text;
         }
@@ -1998,13 +2117,51 @@ ${resumeNote}
       return text.trim();
     } catch (e: any) {
       if (timeoutCtrl.signal.aborted && !signal.aborted) {
-        log.warn('agent', 'summarizeRegion timed out after 30s — falling back to truncation');
+        log.warn('agent', 'summary LLM call stalled (60s no output) — 该次调用放弃');
       }
       throw e;
     } finally {
       clearTimeout(timeoutId);
       signal.removeEventListener('abort', onExternalAbort);
     }
+  }
+
+  /** 滚动合并分段摘要（含 priorSummary）— 每轮把尽量多段塞进
+   *  budgetTokens 内合并为一，直到只剩一段。合并调用失败时
+   *  降级为直接拼接（结构化文本拼接本身就是及格的简报）。 */
+  private async mergePartials(
+    signal: AbortSignal,
+    priorSummary: string | null,
+    partials: string[],
+    budgetTokens: number,
+  ): Promise<{ text: string; degraded: boolean }> {
+    let texts = [
+      ...(priorSummary ? [`<previous-summary>\n${priorSummary}\n</previous-summary>`] : []),
+      ...partials,
+    ];
+    let degraded = false;
+    while (texts.length > 1) {
+      const group = [texts[0], texts[1]];
+      let rest = texts.slice(2);
+      while (rest.length && countText(group.join('\n\n---\n\n') + '\n\n---\n\n' + rest[0]) <= budgetTokens) {
+        group.push(rest[0]);
+        rest = rest.slice(1);
+      }
+      try {
+        const merged = await this.callSummaryLLM(signal, buildMergePrompt(), group.join('\n\n---\n\n'));
+        if (!merged) throw new Error('empty merge');
+        texts = [merged, ...rest];
+      } catch (e: any) {
+        if (signal.aborted) throw e;
+        log.warn('agent', `merge round failed (${e?.message || e}) — 降级为拼接`);
+        texts = [group.join('\n\n---\n\n'), ...rest];
+        degraded = true;
+      }
+    }
+    let final = texts[0] ?? '';
+    // 防御性封顶 — 拼接路径下摘要可能超长
+    if (countText(final) > 8192) final = final.slice(0, 32768) + '\n…(过长摘要已截断)';
+    return { text: final, degraded };
   }
 
   private toolReadOnly(name: string): boolean {
@@ -2471,4 +2628,230 @@ function renderTranscript(msgs: Message[]): string {
     }
   }
   return lines.join('\n');
+}
+// ══════════════════════════════════════════════════════
+// 上下文压缩 — 分块 / 机械摘要 / prompt 构建
+// ══════════════════════════════════════════════════════
+
+/** 摘要调用的输出预算（token）— 固定上界。配合 chunkCap 保证
+ *  每次调用 输入+输出 严格小于摘要模型窗口（"永不塞爆"的硬上界）。 */
+const SUMMARY_OUTPUT_BUDGET = 2048;
+/** prompt 预算：摘要指令 + 合并指令 + priorSummary 预留。 */
+const SUMMARY_PROMPT_BUDGET = 4000;
+/** 摘要模型最低窗口 — 低于此值切块会碎到失去意义，直接无参选资格。 */
+const SUMMARY_MIN_WINDOW = 64_000;
+/** 单次调用至少要的输入预算 — 不足说明窗口不可行，走纯机械摘要。 */
+const SUMMARY_MIN_INPUT = 4000;
+/** LLM 处理的最多块数 — 超出时最老的块走机械提取（成本/时延封顶）。 */
+const SUMMARY_MAX_LLM_CHUNKS = 8;
+
+/** 摘要 prompt — 单块时 priorSummary 直接嵌入（与旧行为一致）；
+ *  分块时告知 LLM 这是第几段，只总结本段。 */
+function buildSummaryPrompt(priorSummary: string | null, chunkInfo?: { index: number; total: number }): string {
+  const mergeInstruction = priorSummary
+    ? `\n以下是在本次压缩之前生成的会话背景简报。新消息可能覆盖或补充其中的内容——合并时以新消息为准，未变的旧事实直接保留：\n\n<previous-summary>\n${priorSummary}\n</previous-summary>`
+    : '';
+  const chunkInstruction = chunkInfo
+    ? `\n注意：以下是完整历史的第 ${chunkInfo.index}/${chunkInfo.total} 段（按时间顺序）。只总结本段内容，不要推测其他分段。`
+    : '';
+
+  return `你是对话压缩器。把以下编码 Agent 的对话历史浓缩为一份简报。Agent 只会保留你的摘要（原始消息会被丢弃），因此必须能从摘要中恢复任务。
+
+按这些标题写（没有内容的标题可以省略）：
+
+## 目标
+用户的需求和意图，尽量用用户的措辞。包含明确的约束和偏好。
+
+## 决策与理由
+已做出的关键选择及原因——避免被推翻或重复争论。
+
+## 文件与代码
+读取或修改过的文件，包含具体事实：签名、位置、数据形状、应用的具体编辑。
+
+## 命令与结果
+执行过的命令（构建、测试、git）及结果——哪些通过、哪些失败、错误信息。
+
+## 错误与修复
+遇到的问题及解决方式（或未解决），避免走重复的弯路。
+
+## 待办与下一步
+仍在进行中或未开始的工作，以及最具体的下一个行动。
+
+规则：简洁——用要点和片段而非散文。准确保留标识符、路径和数字。不编造任何不存在于消息中的内容。${chunkInstruction}${mergeInstruction}`;
+}
+
+/** 合并 prompt — 把多份分段简报（可能含 previous-summary）合并为一份。 */
+function buildMergePrompt(): string {
+  return `你是对话压缩器。以下是同一编码 Agent 会话历史的多份分段简报（按时间顺序排列，可能包含一份 <previous-summary> 背景简报）。把它们合并成一份连贯简报——Agent 将仅凭它恢复任务。
+
+按这些标题写（没有内容的标题可以省略）：
+
+## 目标
+用户的需求和意图，尽量用用户的措辞。包含明确的约束和偏好。
+
+## 决策与理由
+已做出的关键选择及原因——避免被推翻或重复争论。
+
+## 文件与代码
+读取或修改过的文件，包含具体事实：签名、位置、数据形状、应用的具体编辑。
+
+## 命令与结果
+执行过的命令（构建、测试、git）及结果——哪些通过、哪些失败、错误信息。
+
+## 错误与修复
+遇到的问题及解决方式（或未解决），避免走重复的弯路。
+
+## 待办与下一步
+仍在进行中或未开始的工作，以及最具体的下一个行动。
+
+规则：相同事实去重；事实冲突时以靠后的分段为准；未变的旧事实直接保留。简洁——用要点和片段而非散文。准确保留标识符、路径和数字。不编造任何不存在于输入中的内容。`;
+}
+
+/** 把消息区域按 token 上限切成块（map-reduce 的 map 输入）。
+ *  单条消息超限时先"炸开"为转录片段再切 — 任何消息形状
+ *  都能被装进 capTokens 内，这是"永不塞爆"的第一道保证。 */
+function chunkMessages(msgs: Message[], capTokens: number): Message[][] {
+  const exploded: Message[] = [];
+  for (const m of msgs) {
+    if (countMessage(m) <= capTokens) {
+      exploded.push(m);
+    } else {
+      exploded.push(...explodeTranscript(m, capTokens));
+    }
+  }
+  const chunks: Message[][] = [];
+  let cur: Message[] = [];
+  let curTokens = 0;
+  for (const m of exploded) {
+    const t = countMessage(m);
+    if (cur.length > 0 && curTokens + t > capTokens) {
+      chunks.push(cur);
+      cur = [];
+      curTokens = 0;
+    }
+    cur.push(m);
+    curTokens += t;
+  }
+  if (cur.length > 0) chunks.push(cur);
+  return chunks;
+}
+
+/** 把超限单条消息炸开为若干 ≤ capTokens 的转录片段消息。
+ *  按行累积（精确 countText）；单行仍超限时按字符硬切，
+ *  步长 capTokens/2 字符 — 任何语言都低于 token 上界。 */
+function explodeTranscript(m: Message, capTokens: number): Message[] {
+  const out: Message[] = [];
+  let cur = '';
+  const pushFrag = (text: string) => out.push({ role: 'user' as const, content: `[历史转录片段]\n${text}` });
+  for (const line of renderTranscript([m]).split('\n')) {
+    if (countText(line) > capTokens) {
+      if (cur) {
+        pushFrag(cur);
+        cur = '';
+      }
+      const step = Math.max(500, Math.floor(capTokens / 2));
+      for (let i = 0; i < line.length; i += step) pushFrag(line.slice(i, i + step));
+      continue;
+    }
+    if (cur && countText(cur + '\n' + line) > capTokens) {
+      pushFrag(cur);
+      cur = '';
+    }
+    cur = cur ? cur + '\n' + line : line;
+  }
+  if (cur) pushFrag(cur);
+  return out;
+}
+
+/** 机械摘要 — 不依赖任何 LLM/key/窗口的本地兜底。
+ *  从消息里机械提取结构化简报：用户目标、文件读写、命令与退出码、
+ *  错误、工具使用统计、最近助手结论。瞬时、零 token、永不超时。
+ *  质量低于 LLM 摘要，但保证压缩管线在任何失败下都能落地。 */
+function digestMessages(msgs: Message[]): string {
+  const filesRead = new Set<string>();
+  const filesWritten = new Set<string>();
+  const commands: string[] = [];
+  const errors: string[] = [];
+  const toolCounts = new Map<string, number>();
+  const callInfo = new Map<string, { name: string; args: Record<string, unknown> }>();
+  const SHELL_TOOLS = new Set(['run_shell', 'exec_command']);
+  let firstUser = '';
+  let lastUser = '';
+  let lastAssistant = '';
+
+  const trunc = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…' : s);
+  const firstLine = (s: string) => s.split('\n').find((l) => l.trim()) ?? '';
+
+  for (const m of msgs) {
+    if (m.role === 'user' && m.content && !m.content.startsWith('<compacted-context>')) {
+      if (!firstUser) firstUser = m.content;
+      lastUser = m.content;
+    }
+    if (m.role === 'assistant') {
+      if (m.content) lastAssistant = m.content;
+      for (const tc of m.tool_calls ?? []) {
+        toolCounts.set(tc.name, (toolCounts.get(tc.name) ?? 0) + 1);
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(tc.arguments || '{}');
+        } catch {}
+        callInfo.set(tc.id, { name: tc.name, args });
+        if (tc.name === 'read_file_content' || tc.name === 'read_file') {
+          const fp = parseFilePathArg(tc.arguments);
+          if (fp) filesRead.add(fp);
+        } else if (WRITE_TOOLS.has(tc.name)) {
+          const fp = extractFilePath(tc.name, args);
+          if (fp) filesWritten.add(fp);
+        } else if (SHELL_TOOLS.has(tc.name)) {
+          const cmd = String(args.command || args.cmd || '').trim();
+          // 相邻去重 — 重试场景下同一命令常连续出现
+          if (cmd && commands[commands.length - 1] !== cmd) commands.push(cmd);
+        }
+      }
+    }
+    if (m.role === 'tool') {
+      const info = m.tool_call_id ? callInfo.get(m.tool_call_id) : undefined;
+      const content = m.content || '';
+      if (info && SHELL_TOOLS.has(info.name)) {
+        const exitMatch = /\[exit (-?\d+)\]/.exec(content.slice(0, 40));
+        if (exitMatch && exitMatch[1] !== '0' && errors.length < 10) {
+          const cmd = String(info.args.command || info.args.cmd || '');
+          errors.push(`\`${trunc(cmd, 80)}\` → exit ${exitMatch[1]}: ${trunc(firstLine(content), 160)}`);
+        }
+      } else if (errors.length < 10 && /错误|失败|error[: ]|failed|panic/i.test(content.slice(0, 300))) {
+        errors.push(`${info?.name ?? 'tool'}: ${trunc(firstLine(content), 160)}`);
+      }
+    }
+  }
+
+  const sections: string[] = [];
+  if (firstUser) {
+    let goal = `## 目标（用户原话摘录）\n${trunc(firstUser, 400)}`;
+    if (lastUser && lastUser !== firstUser) goal += `\n\n最近要求: ${trunc(lastUser, 300)}`;
+    sections.push(goal);
+  }
+  if (filesRead.size > 0 || filesWritten.size > 0) {
+    const lines: string[] = ['## 文件操作'];
+    if (filesRead.size > 0) lines.push(`- 读取: ${[...filesRead].slice(0, 20).join(', ')}`);
+    if (filesWritten.size > 0) lines.push(`- 修改: ${[...filesWritten].slice(0, 20).join(', ')}`);
+    sections.push(lines.join('\n'));
+  }
+  if (commands.length > 0) {
+    sections.push(`## 命令执行\n${commands.slice(0, 15).map((c) => `- \`${trunc(c, 100)}\``).join('\n')}`);
+  }
+  if (errors.length > 0) {
+    sections.push(`## 错误\n${errors.map((e) => `- ${e}`).join('\n')}`);
+  }
+  if (toolCounts.size > 0) {
+    const top = [...toolCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, n]) => `${name} ×${n}`)
+      .join(', ');
+    sections.push(`## 工具使用\n${top}`);
+  }
+  if (lastAssistant) {
+    sections.push(`## 最近助手结论\n${trunc(lastAssistant, 600)}`);
+  }
+  return sections.length > 0 ? sections.join('\n\n') : '（无有效内容）';
 }

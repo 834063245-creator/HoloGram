@@ -42,8 +42,8 @@ export interface CompactionEvent {
   preTokens: number;
   /** 压缩后估算的会话 token 数 */
   postTokens: number;
-  /** 结果: 'summary' | 'truncated' | 'stuck' */
-  outcome: 'summary' | 'truncated' | 'stuck';
+  /** 结果: 'summary' = LLM 摘要 | 'digest' = 机械提取（LLM 降级） | 'truncated' | 'stuck' */
+  outcome: 'summary' | 'truncated' | 'stuck' | 'digest';
 }
 
 export interface CompactionSessionStats {
@@ -589,7 +589,7 @@ export function createCompactionTools(
             const turnsAfter = stats.turnsAfterCompaction[i] || 0;
             const ratio = e.regionTokensEst > 0 ? ((1 - e.postTokens / e.preTokens) * 100).toFixed(1) : '0';
             lines.push(
-              `### #${i + 1} ${e.outcome === 'summary' ? '✅ 总结' : e.outcome === 'truncated' ? '✂️ 截断' : '⏸️ 卡住'}`,
+              `### #${i + 1} ${e.outcome === 'summary' ? '✅ 总结' : e.outcome === 'digest' ? '📋 机械提取' : e.outcome === 'truncated' ? '✂️ 截断' : '⏸️ 卡住'}`,
             );
             lines.push(`- 压缩 ${e.regionMsgCount} 条消息 → 摘要 ${e.summaryOutputTokens.toLocaleString()} tokens`);
             lines.push(
