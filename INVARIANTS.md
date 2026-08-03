@@ -93,6 +93,31 @@ bus.clear() 在无 prefix 的根 bus 上调用才能清全部。
 
 ---
 
+## 6. 手写协议必须配协议级测试（LSP 帧解析）
+
+**文件**: `engine/src/lsp_manager.rs`（`read_one_message` 帧解析）
+
+```
+⚠️ LSP 客户端是手写的（stdio JSON-RPC 帧协议），不是现成库。
+Rust 生态有 lsp-server crate（tower-lsp 家族）专治这个，但本项目自研了。
+
+自研可以，但代价是每个协议坑都得自己踩一遍：
+- 服务器一次 write 会粘连多条消息（帧+帧）
+- JSON body 内可能含 \n，用 read_line 读 header 会行边界错位
+- 结果：body 读进帧头（"Content-Length: N\r\n\r\n{...}"）→ parse 错误
+  → 工具 fallback → 误判"LSP 不响应"，绕了四五轮才找到真根因
+
+守则：
+1. 手写协议类代码必须配协议级测试（模拟服务器发粘连帧/异常帧）
+2. 帧边界处理必须按字节流扫描定界符，不能用 read_line
+3. 解析失败时把原始字节带进错误消息（raw=...），否则没法诊断
+4. 教训：当"服务器不响应"反复出现，先怀疑客户端读帧，别信表象
+```
+
+**炸过**: 5822003（粘连帧根因修复）, 41256ba, c87f14b, e451428
+
+---
+
 ## 使用方式
 
 每个 Agent prompt 模板里加一行：
