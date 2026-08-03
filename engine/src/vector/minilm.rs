@@ -120,54 +120,103 @@ impl MiniLMEmbedder {
         Ok(Self { session: Mutex::new(session), tokenizer, input_names })
     }
 
+    /// 单次 run 的批量大小。CPU 上 batch 32 左右吞吐最优；再大则单次 run
+    /// 延迟变长（搜索等单条请求需等当前 batch 让出锁），内存占用也上升。
+    const INFER_BATCH: usize = 32;
+
     /// 嵌入文本 → 384 维单位向量。空文本返回零向量。
     pub fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
-        if text.trim().is_empty() { return Ok(vec![0.0f32; MINILM_DIM]); }
+        Ok(self.embed_batch(&[text])?.remove(0))
+    }
 
-        let (ids, mask, types) = self.tokenizer.encode(text);
-        let seq_len = ids.len();
-        let shape = vec![1i64, seq_len as i64];
-
-        let ids_t = Tensor::from_array((shape.clone(), ids)).map_err(|e| format!("tensor: {e}"))?;
-        let mask_t = Tensor::from_array((shape.clone(), mask.clone())).map_err(|e| format!("tensor: {e}"))?;
-
-        let mut session = self.session.lock().map_err(|e| format!("session lock: {e}"))?;
-        let outputs = if self.input_names.iter().any(|n| n == "token_type_ids") {
-            let types_t = Tensor::from_array((shape, types)).map_err(|e| format!("tensor: {e}"))?;
-            session.run(ort::inputs![
-                "input_ids" => ids_t,
-                "attention_mask" => mask_t,
-                "token_type_ids" => types_t,
-            ])
-        } else {
-            session.run(ort::inputs![
-                "input_ids" => ids_t,
-                "attention_mask" => mask_t,
-            ])
-        }.map_err(|e| format!("ONNX 推理失败: {e}"))?;
-
-        let (_oshape, hidden) = outputs["last_hidden_state"]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| format!("输出提取失败: {e}"))?;
-
-        // 掩码均值池化
-        let mut pooled = vec![0.0f32; MINILM_DIM];
-        let mask_sum: f32 = mask.iter().map(|&m| m as f32).sum();
-        if mask_sum < 1e-8 { return Ok(pooled); }
-        for i in 0..seq_len {
-            let w = mask[i] as f32 / mask_sum;
-            for d in 0..MINILM_DIM {
-                pooled[d] += w * hidden[i * MINILM_DIM + d];
+    /// 批量嵌入 —— 单线程顺序按 batch 投喂 session.run。
+    /// 刻意不用 par_iter：session 是 Mutex 保护的单例，多线程只会在锁上串行
+    /// （实测并行吞吐反而降至顺序的 0.63x），还会堵满 rayon 全局池饿死
+    /// 解析/dataflow 的并行任务。batch 维度由 ONNX 内部向量化，才是真并行。
+    /// 空文本返回零向量；返回顺序与输入一致。
+    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
+        let mut out: Vec<Vec<f32>> = vec![Vec::new(); texts.len()];
+        // 逐条分词（无锁纯计算）；空文本直接给零向量，不进推理
+        let mut encoded: Vec<Option<(Vec<i64>, Vec<i64>)>> = Vec::with_capacity(texts.len());
+        let mut todo: Vec<usize> = Vec::with_capacity(texts.len());
+        for (i, t) in texts.iter().enumerate() {
+            if t.trim().is_empty() {
+                out[i] = vec![0.0f32; MINILM_DIM];
+                encoded.push(None);
+            } else {
+                let (ids, mask, _types) = self.tokenizer.encode(t);
+                encoded.push(Some((ids, mask)));
+                todo.push(i);
             }
         }
 
-        // L2 归一化（sentence-transformers 行为，余弦 = 点积）
-        let norm: f32 = pooled.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 1e-8 {
-            for v in &mut pooled { *v /= norm; }
+        for chunk in todo.chunks(Self::INFER_BATCH) {
+            let batch = chunk.len();
+            let max_len = chunk.iter()
+                .map(|&i| encoded[i].as_ref().unwrap().0.len())
+                .max().unwrap_or(1);
+
+            // 右侧零填充对齐到 batch 内最大长度（mask 同步填 0，池化时忽略）
+            let mut ids = vec![0i64; batch * max_len];
+            let mut mask = vec![0i64; batch * max_len];
+            for (row, &i) in chunk.iter().enumerate() {
+                let (ri, rm) = encoded[i].as_ref().unwrap();
+                let n = ri.len();
+                ids[row * max_len..row * max_len + n].copy_from_slice(ri);
+                mask[row * max_len..row * max_len + n].copy_from_slice(rm);
+            }
+
+            let shape = vec![batch as i64, max_len as i64];
+            let ids_t = Tensor::from_array((shape.clone(), ids)).map_err(|e| format!("tensor: {e}"))?;
+            let mask_t = Tensor::from_array((shape.clone(), mask)).map_err(|e| format!("tensor: {e}"))?;
+
+            // 锁只覆盖单次 run：批量构建期间搜索请求最多等一个 batch 的时长
+            let mut session = self.session.lock().map_err(|e| format!("session lock: {e}"))?;
+            let outputs = if self.input_names.iter().any(|n| n == "token_type_ids") {
+                let types_t = Tensor::from_array((shape, vec![0i64; batch * max_len])).map_err(|e| format!("tensor: {e}"))?;
+                session.run(ort::inputs![
+                    "input_ids" => ids_t,
+                    "attention_mask" => mask_t,
+                    "token_type_ids" => types_t,
+                ])
+            } else {
+                session.run(ort::inputs![
+                    "input_ids" => ids_t,
+                    "attention_mask" => mask_t,
+                ])
+            }.map_err(|e| format!("ONNX 推理失败: {e}"))?;
+
+            let (_oshape, hidden) = outputs["last_hidden_state"]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| format!("输出提取失败: {e}"))?;
+
+            for (row, &i) in chunk.iter().enumerate() {
+                let seq_len = encoded[i].as_ref().unwrap().0.len();
+                let item = &hidden[row * max_len * MINILM_DIM..(row + 1) * max_len * MINILM_DIM];
+                out[i] = pool_normalize(item, seq_len);
+            }
         }
-        Ok(pooled)
+        Ok(out)
     }
+}
+
+/// 均值池化 + L2 归一化（sentence-transformers 行为，余弦 = 点积）。
+/// hidden 为单条样本的 [seq_len, MINILM_DIM] 切片；真实 token 的 mask 全为 1，
+/// 故掩码均值等价于前 seq_len 行的算术平均。
+fn pool_normalize(hidden: &[f32], seq_len: usize) -> Vec<f32> {
+    let mut pooled = vec![0.0f32; MINILM_DIM];
+    if seq_len == 0 { return pooled; }
+    let w = 1.0 / seq_len as f32;
+    for i in 0..seq_len {
+        for d in 0..MINILM_DIM {
+            pooled[d] += w * hidden[i * MINILM_DIM + d];
+        }
+    }
+    let norm: f32 = pooled.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-8 {
+        for v in &mut pooled { *v /= norm; }
+    }
+    pooled
 }
 
 #[cfg(test)]
@@ -196,6 +245,74 @@ mod tests {
         // MiniLM 应给出明显区分：金融语义相近 > 无关 UI 代码
         assert!(s_rel > 0.5, "相关对相似度过低: {s_rel:.3}");
         assert!(s_rel > s_unrel + 0.15, "区分度不足: rel={s_rel:.3} unrel={s_unrel:.3}");
+    }
+
+    /// batch 推理结果必须与单条一致（padding 不得影响均值池化），空文本 → 零向量
+    #[test]
+    fn test_batch_matches_single() {
+        let emb = match global() {
+            Ok(e) => e,
+            Err(e) => { eprintln!("跳过: {e}"); return; }
+        };
+        // 长度差异大 + 中文 + 空文本，充分触发 padding 路径
+        let texts = [
+            "fn handle_payment(amount: f64) -> Result<Receipt> { charge(amount) }",
+            "x",
+            "// 支付重试逻辑：指数退避\nasync fn retry_payment(order: &Order) -> Result<()> {\n    for attempt in 0..3 {\n        if charge(order).await.is_ok() { return Ok(()); }\n        sleep(backoff(attempt)).await;\n    }\n    Err(Error::PaymentFailed)\n}",
+            "",
+            "fn render_window() { draw_button(); minimize(); }",
+        ];
+        let batch = emb.embed_batch(&texts).unwrap();
+        assert_eq!(batch.len(), texts.len());
+        for (i, t) in texts.iter().enumerate() {
+            let single = emb.embed(t).unwrap();
+            if t.trim().is_empty() {
+                assert!(batch[i].iter().all(|&x| x == 0.0), "空文本应为零向量");
+                continue;
+            }
+            let cos = cosine(&single, &batch[i]);
+            assert!(cos > 0.999, "batch 与单条结果不一致 (text {i}): cos={cos:.6}");
+        }
+    }
+
+    /// 性能基准：单条延迟 / 顺序单条吞吐 / batch 推理吞吐（build() 的生产路径）
+    #[test]
+    #[ignore = "手动基准：cargo test bench_minilm -- --ignored --nocapture"]
+    fn bench_minilm_throughput() {
+        let emb = match global() {
+            Ok(e) => e,
+            Err(e) => { eprintln!("跳过: {e}"); return; }
+        };
+        let snippet = "// 支付重试逻辑：指数退避\nasync fn retry_payment(order: &Order) -> Result<()> {\n    for attempt in 0..3 {\n        if charge(order).await.is_ok() { return Ok(()); }\n        sleep(backoff(attempt)).await;\n    }\n    Err(Error::PaymentFailed)\n}";
+
+        // 预热
+        for _ in 0..3 { emb.embed(snippet).unwrap(); }
+
+        // 单条延迟
+        let t = std::time::Instant::now();
+        emb.embed(snippet).unwrap();
+        eprintln!("单条延迟: {:.1}ms", t.elapsed().as_secs_f64() * 1000.0);
+
+        // 顺序单条 100 次（旧 embed() 逐条路径的下界）
+        let n = 128;
+        let t = std::time::Instant::now();
+        for _ in 0..n { emb.embed(snippet).unwrap(); }
+        let seq_ms = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("顺序单条 {n} 次: {seq_ms:.0}ms ({:.1}ms/条, {:.0} 条/s)", seq_ms / n as f64, n as f64 / seq_ms * 1000.0);
+
+        // batch 推理（build() 的生产路径）
+        let texts: Vec<&str> = (0..n).map(|_| snippet).collect();
+        let t = std::time::Instant::now();
+        let _ = emb.embed_batch(&texts).unwrap();
+        let batch_ms = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("batch {n} 条: {batch_ms:.0}ms ({:.2}ms/条, {:.0} 条/s)", batch_ms / n as f64, n as f64 / batch_ms * 1000.0);
+        eprintln!("batch 相对顺序单条加速: {:.2}x", seq_ms / batch_ms);
+
+        // 外推全量索引构建耗时
+        let nodes = 5258usize;
+        eprintln!("外推 {nodes} 节点全量构建: 顺序单条 {:.0}s / batch {:.1}s",
+            nodes as f64 * seq_ms / n as f64 / 1000.0,
+            nodes as f64 * batch_ms / n as f64 / 1000.0);
     }
 
     /// 长代码片段 + 中文注释的实际路径

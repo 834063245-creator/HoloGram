@@ -31,6 +31,26 @@ pub fn embed(text: &str) -> Vec<f32> {
     ngram_embed(text)
 }
 
+/// 批量嵌入（索引构建专用）。优先 MiniLM 批推理；模型/DLL 不可用时逐条回退 n-gram。
+pub fn embed_batch(texts: &[&str]) -> Vec<Vec<f32>> {
+    match super::minilm::global() {
+        Ok(m) => match m.embed_batch(texts) {
+            Ok(v) => {
+                set_backend(BACKEND_MINILM);
+                return v;
+            }
+            Err(e) => {
+                tracing::warn!("[vector] MiniLM 批推理失败，回退 n-gram: {e}");
+            }
+        },
+        Err(e) => {
+            log_fallback_once(&e);
+        }
+    }
+    set_backend(BACKEND_NGRAM);
+    texts.iter().map(|t| ngram_embed(t)).collect()
+}
+
 fn log_fallback_once(reason: &str) {
     static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {

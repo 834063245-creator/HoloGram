@@ -11,7 +11,7 @@
 // 自动判废（load 返回 0），需重新分析重建。
 
 mod embed;
-pub use embed::{backend_id, embed, score_threshold};
+pub use embed::{backend_id, embed, embed_batch, score_threshold};
 
 mod minilm;
 mod wordpiece;
@@ -88,9 +88,47 @@ impl CodeVectorIndex {
         let total = snippets.len();
         info!("[vector] 正在嵌入 {} 个节点（{}, {} 维）...", total, embed::backend_id(), VECTOR_DIM);
 
-        // 并行嵌入（MiniLM 推理是 CPU 密集；顺序保持与 snippets 一致）
-        use rayon::prelude::*;
-        let vectors: Vec<Vec<f32>> = snippets.par_iter().map(|s| embed::embed(s)).collect();
+        // 进程级向量缓存：watcher 每次文件保存都会触发全量 build()，
+        // 未变更节点按 snippet 内容哈希直接命中，只有新增/变更节点真正走推理。
+        let hashes: Vec<u64> = snippets.iter().map(|s| snippet_hash(s)).collect();
+        let mut vectors: Vec<Option<Arc<Vec<f32>>>> = (0..total).map(|_| None).collect();
+        let mut misses: Vec<usize> = Vec::new();
+        {
+            let cache = VECTOR_CACHE.lock().map_err(|e| format!("vector cache lock: {e}"))?;
+            for (i, h) in hashes.iter().enumerate() {
+                match cache.get(h) {
+                    Some(v) => vectors[i] = Some(v.clone()),
+                    None => misses.push(i),
+                }
+            }
+        }
+
+        // 顺序 batch 推理（不再 par_iter：共享 session 的 Mutex 实测负加速 0.63x，
+        // 且堵满 rayon 全局池会饿死解析/dataflow 任务 —— 见 minilm.rs::embed_batch）
+        if !misses.is_empty() {
+            info!("[vector] {} 个节点待嵌入（{} 个命中缓存）", misses.len(), total - misses.len());
+            // 按长度排序分桶：batch 内 padding 对齐到最长样本，长度相近的样本同批
+            // 可显著减少填充浪费（文件头 5 行 vs 函数体 30 行混在一起时差 6 倍）
+            misses.sort_by_key(|&i| snippets[i].len());
+        }
+        let mut embedded: Vec<(u64, Arc<Vec<f32>>)> = Vec::new();
+        for (n_done, chunk) in misses.chunks(256).enumerate() {
+            let batch: Vec<&str> = chunk.iter().map(|&i| snippets[i].as_str()).collect();
+            let vecs = embed::embed_batch(&batch);
+            for (&i, v) in chunk.iter().zip(vecs) {
+                let v = Arc::new(v);
+                vectors[i] = Some(v.clone());
+                embedded.push((hashes[i], v));
+            }
+            let done = (n_done + 1) * 256;
+            if done % 1024 < 256 && done < misses.len() {
+                info!("[vector] embedded {}/{} nodes", done, misses.len());
+            }
+        }
+        if !embedded.is_empty() {
+            let mut cache = VECTOR_CACHE.lock().map_err(|e| format!("vector cache lock: {e}"))?;
+            for (h, v) in embedded { cache.insert(h, v); }
+        }
 
         let mut slot = 0usize;
         let mut slots = self.slots.write().unwrap();
@@ -101,14 +139,11 @@ impl CodeVectorIndex {
         slots.reserve(total);
 
         for (i, vec) in vectors.iter().enumerate() {
+            let vec = vec.as_ref().expect("所有 snippet 均已嵌入");
             index.add(slot as u64, vec)
                 .map_err(|e| format!("usearch add failed: {e}"))?;
             slots.push(node_ids[i].clone());
             slot += 1;
-
-            if i > 0 && i % 500 == 0 {
-                info!("[vector] indexed {}/{} nodes", i, total);
-            }
         }
 
         info!("[vector] 已索引 {} 个节点", slots.len());
@@ -215,6 +250,20 @@ impl CodeVectorIndex {
     }
 
     pub fn exists_on_disk(&self) -> bool { self.path.exists() }
+}
+
+// ── 进程级向量缓存：snippet 内容哈希 → 嵌入向量 ──
+// 增量重建（watcher 每次文件保存触发）都对全量节点调 build()；缓存让未变更
+// 节点免于重新推理，只有新增/变更节点真正走 MiniLM。5258 节点约占 8MB 内存。
+static VECTOR_CACHE: LazyLock<Mutex<std::collections::HashMap<u64, Arc<Vec<f32>>>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// snippet 内容哈希（向量缓存键）。只需同一进程内一致，DefaultHasher 足够。
+fn snippet_hash(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 // ── 进程级缓存：加载的向量索引在搜索间复用 ──
