@@ -59,8 +59,9 @@ export function createDiscoveryTools(
           since: args.since,
           limit: args.limit,
         });
-        if (args.key) {
-          entries = entries.filter((e) => e.key.includes(args.key));
+                const key = args.key;
+        if (key) {
+          entries = entries.filter((e) => e.key.includes(key));
         }
         if (entries.length === 0) return '(没有匹配的发现)';
         return entries

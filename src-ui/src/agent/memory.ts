@@ -745,8 +745,8 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         type: z
           .enum(['user', 'feedback', 'project', 'reference'])
           .describe('记忆类型: user=用户画像, feedback=用户反馈/要求, project=项目决策/进展, reference=外部参考'),
-        confidence: z
-          .enum(['reference', 'fact', 'background', 'suppressed'])
+                confidence: z
+          .enum(['fact', 'reference', 'background', 'suppressed'])
           .optional()
           .describe('置信度。Agent 自己最高只能给 reference。fact 只有用户明确要求时才能用。默认: reference'),
         content: z
