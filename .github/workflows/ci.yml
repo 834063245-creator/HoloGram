@@ -77,5 +77,18 @@ jobs:
         working-directory: src-ui
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+
+      # model.onnx（90MB）不入库（.gitignore），但 tauri.conf.json resources 要求路径存在。
+      # 从 HuggingFace 拉取并校验哈希，与本地开发机文件一致。
+      - name: Download MiniLM ONNX model
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          f=models/all-MiniLM-L6-v2/model.onnx
+          curl -fL --retry 3 -o "$f" \
+            https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
+          echo "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452 *$f" | sha256sum -c -
+
       - run: cargo check --release
         working-directory: src-tauri
