@@ -186,16 +186,19 @@ hologram run list_flows .                       # 列出执行流（按安全敏
 ## 🖥️ 桌面应用（可选）
 
 <p align="center">
-  <img src="assets/screenshots/01.png" width="24%" />&nbsp;
-  <img src="assets/screenshots/02.png" width="24%" />&nbsp;
-  <img src="assets/screenshots/03.png" width="24%" />&nbsp;
-  <img src="assets/screenshots/04.png" width="24%" />
+  <img src="assets/screenshots/01.png" width="32%" />&nbsp;
+  <img src="assets/screenshots/02.png" width="32%" />&nbsp;
+  <img src="assets/screenshots/03.png" width="32%" />
 </p>
 <p align="center">
-  <img src="assets/screenshots/05.png" width="24%" />&nbsp;
-  <img src="assets/screenshots/06.png" width="24%" />&nbsp;
-  <img src="assets/screenshots/07.png" width="24%" />&nbsp;
-  <img src="assets/screenshots/08.png" width="24%" />
+  <img src="assets/screenshots/04.png" width="32%" />&nbsp;
+  <img src="assets/screenshots/05.png" width="32%" />&nbsp;
+  <img src="assets/screenshots/06.png" width="32%" />
+</p>
+<p align="center">
+  <img src="assets/screenshots/07.png" width="32%" />&nbsp;
+  <img src="assets/screenshots/08.png" width="32%" />&nbsp;
+  <img src="assets/screenshots/09.png" width="32%" />
 </p>
 
 | 特性 | 说明 |
