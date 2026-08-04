@@ -118,6 +118,87 @@ Rust 生态有 lsp-server crate（tower-lsp 家族）专治这个，但本项目
 
 ---
 
+## 7. 工具参数契约：camelCase↔snake_case 转换枢纽不能动
+
+**文件**: `src-ui/src/bridge.ts:84`（`rpc()`），`src-ui/src/agent/tool.ts`（`agentInvoke`）
+
+```
+⚠️ rpc() 的 (/([a-z])([A-Z])/g, '$1_$2') + toLowerCase 是全工具层唯一生效的
+camelCase→snake_case 转换。工具参数的完整链路是：
+
+  schema key（LLM 可见）→ execute 读取 → rpc() 转换 → Rust 参数名
+
+这条链任何一环改坏（改转换正则、改 schema key、"顺手统一"成 camelCase），
+都是静默失败：参数对不上，工具拿不到值，且不报错。
+```
+
+**炸过**: isAgent↔is_agent 事故——旧名 `_agent` 因 Tauri 默认 camelCase 重命名永远匹配不上 Rust 的 `is_agent` → `is_agent` 恒 false → agent 文件操作被沙箱静默硬拒且不弹 Ask。谁把 `isAgent` 改回 `_agent`，守护测试立刻挂。
+
+**守护**: `tests/agent-exec.test.ts`（isAgent 注入）、`tests/tool-param-contract.test.ts`（18 条 key 契约 + 全量工具 key 风格/歧义检测）
+
+---
+
+## 8. 工具定义必须走 defineTool（zod Schema-First），禁止手写 schema + as 解包
+
+**文件**: `src-ui/src/agent/tools/define-tool.ts`（工厂），`src-ui/src/agent/tools/`（所有工具）
+
+```
+⚠️ 新增/修改工具必须用 defineTool()：一个 zod schema 同时产出
+  - parameters() 的 JSON Schema（给 LLM）
+  - execute 前的运行时校验（参数错 → 抛"参数校验失败"）
+  - z.infer 类型（execute 参数类型化）
+
+禁止：
+  - parameters() 返回手写对象字面量
+  - execute 里 as 强转 / 手写解包 / 静默兜底（x || 默认值）
+```
+
+**为什么**: 字段名契约曾靠人肉三处同步（schema key ↔ execute key ↔ Rust camelCase），出过 isAgent 静默失败事故（见第 7 条）。zod 单一来源后，schema key 就是唯一事实。
+
+**守护**: `tests/define-tool.test.ts`（10 个工厂行为守护：JSON Schema 形状 / 校验报错 / default+coerce / meta key 透传）
+
+---
+
+## 9. meta key 必须 passthrough：_forceGate / _callId / _agent_id 不进 schema
+
+**文件**: `src-ui/src/agent/tools/define-tool.ts`（内部 `.passthrough()`），`src-ui/src/agent/streaming-executor.ts`（注入）
+
+```
+⚠️ 三个 meta key 是 streaming-executor 在 execute 前注入的 schema 外参数：
+  - _forceGate  架构门禁绕过（HIGH 风险写入时 LLM 传 true 才能执行）
+  - _callId     子 Agent 事件关联（agent_spawn 时注入）
+  - _agent_id   隔离工作树选择（告诉 Rust 用哪个 worktree）
+
+defineTool 内部统一 .passthrough() 透传。绝不能用 .strict()——
+否则门禁静默变成死路（LLM 传 _forceGate:true 被 strip 掉，HIGH 风险写入全被挡）。
+
+_forceGate 必须保留在 schema 声明（z.boolean().optional().describe(原描述)），
+LLM 才能看到并传它。_callId/_agent_id 不声明（内部注入，LLM 不该知道）。
+```
+
+**守护**: `tests/define-tool.test.ts`（meta key 透传用例）、`tests/streaming-executor-hooks.test.ts`（门禁行为）
+
+---
+
+## 10. JSON Schema 转换用 zod v4 内置 z.toJSONSchema，别用 zod-to-json-schema 库
+
+**文件**: `src-ui/src/agent/tools/define-tool.ts`（`toInputJsonSchema`）
+
+```
+⚠️ 用 zod v4 内置 z.toJSONSchema(schema, { target: 'draft-7', io: 'input' })。
+
+不要引入 zod-to-json-schema 第三方库——3.25.x 只支持 zod v3，
+与项目的 zod v4 不兼容：转换结果输出全空（只有 $schema，properties 全丢），
+且不报错，排查半天才发现是版本不匹配。
+
+io: 'input' 视图必须保留：让 defaulted 字段不进 required，
+避免"同时声明 default 又 required"的矛盾（LLM 看到必填但可不填 → 校验混乱）。
+```
+
+**炸过**: 本次迁移初踩坑（zod-to-json-schema 输出全空，改为内置 API 后正常）
+
+---
+
 ## 使用方式
 
 每个 Agent prompt 模板里加一行：
