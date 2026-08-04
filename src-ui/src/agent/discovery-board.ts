@@ -162,8 +162,8 @@ export class DiscoveryBoard {
 }
 
 /** 代理类，委托到可替换的目标 DiscoveryBoard。
- *  主 Agent（跨会话切换持久存在）用它
- *  动态路由到当前会话的 board。 */
+ *  每个 Agent 一个 — 会话 id 在 createAgent 后才分配，
+ *  由 bindSession 一次性换 target 完成静态绑定。 */
 export class DiscoveryBoardProxy {
   private _target: DiscoveryBoard;
 
@@ -171,7 +171,7 @@ export class DiscoveryBoardProxy {
     this._target = target;
   }
 
-  /** 切换底层 board — 活跃会话变更时调用 */
+  /** 切换底层 board — bindSession 静态绑定时调用 */
   setTarget(board: DiscoveryBoard): void {
     this._target = board;
   }

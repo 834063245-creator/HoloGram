@@ -143,6 +143,10 @@ export interface AgentHandle extends ChatAgentHandle {
    *  句柄即所有权 — 创建者持有句柄，生命周期结束时必须 dispose；
    *  调用后 Agent 从 runtime 注册表、MessageBus、LifecycleManager 中完全移除。 */
   dispose(): void;
+  /** 把 board proxies 静态绑定到指定会话（正常只调用一次，重复调用为重绑）。
+   *  聊天会话的数字 id 在 createAgent 之后才分配 — 会话层在登记句柄时调用，
+   *  此后该 Agent 的 board 写入不再随会话切换改变。 */
+  bindSession(sessionId: string): void;
 }
 
 // ── Agent 概况 ──
@@ -177,6 +181,7 @@ export interface RuntimePort {
   getDiscoveryBoard(sessionId?: string): import('../discovery-board').DiscoveryBoard;
   /** 销毁会话级 board 并删除持久化文件 */
   destroySessionBoards(sessionId: string): Promise<void>;
-  /** 切换当前活跃会话 — 主 Agent 的 board proxies 指向新会话 */
+  /** 切换当前活跃会话 — 仅触发该会话 board 的懒加载恢复（供面板查询），
+   *  不改写任何 Agent 的 board 绑定（由 AgentHandle.bindSession 静态绑定） */
   setCurrentSession(sessionId: string): void;
 }

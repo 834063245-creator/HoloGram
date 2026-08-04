@@ -33,8 +33,9 @@ export type AgentFactory = () => Promise<OwnedAgentHandle | null>;
 /** 会话持有的 Agent 句柄 — 必须可销毁。
  *  所有权契约：存入 setAgent 即转移所有权；removeAgent / clearPanelState /
  *  setAgent 覆盖时由本注册器负责 dispose，调用方无需（也不得）自行销毁。
- *  runtime 的 AgentHandle 天然满足此接口。 */
-export type OwnedAgentHandle = ChatAgentHandle & { dispose(): void };
+ *  runtime 的 AgentHandle 天然满足此接口。
+ *  bindSession 可选 — 会话层在登记句柄后调用，把 board 静态绑定到该会话。 */
+export type OwnedAgentHandle = ChatAgentHandle & { dispose(): void; bindSession?(sessionId: string): void };
 
 // ── Store 状态（可序列化）──
 

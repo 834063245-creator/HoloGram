@@ -121,6 +121,8 @@ export function resetSessionState(storeId: string, ag: OwnedAgentHandle): void {
   // 仅清除本面板的 agent 句柄和 exec 状态
   agentSessionState.clearPanelState(storeId);
   agentSessionState.setAgent(storeId, id, ag);
+  // 静态绑定该 Agent 的 board 到此会话 — 此后不再随会话切换重定向
+  ag.bindSession?.(String(id));
   agentSessionState.setExec(storeId, id, createExecState());
   getChatStore(storeId).sess.setState({
     sessions: [{ id, label }],
@@ -269,8 +271,9 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   if (newIdx >= newSessions.length) newIdx = newSessions.length - 1;
   if (newIdx < 0) newIdx = 0;
 
-  // 在销毁旧 board 之前将代理重定向到新活跃会话 —
-  // 防止孤立的 board 被刷新（恢复已删除的文件）
+  // 在销毁旧 board 之前将面板指向新活跃会话 —
+  // 已关闭会话的 Agent 已在上方 dispose（removeAgent），其 proxies 随句柄消亡；
+  // 静态绑定下不存在指向已销毁 board 的残留 proxy，destroy 不会复活文件。
   const runtime = ctx.getRuntime?.();
   const newSessionId = String(newSessions[newIdx].id);
   if (runtime) {
@@ -318,6 +321,8 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   const id = st.nextSessionId;
   const label = `会话 ${st.sessions.length + 1}`;
   agentSessionState.setAgent(ctx.storeId, id, newAgent);
+  // 静态绑定该 Agent 的 board 到新会话（id 在 factory 之后才确定）
+  newAgent.bindSession?.(String(id));
   agentSessionState.setExec(ctx.storeId, id, createExecState());
   getChatStore(ctx.storeId).sess.setState({
     sessions: [...st.sessions, { id, label }],
@@ -617,6 +622,8 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   const label = data.label || '已恢复的会话';
   agentSessionState.clearPanelState(ctx.storeId);
   agentSessionState.setAgent(ctx.storeId, data.id, newAgent);
+  // 静态绑定该 Agent 的 board 到恢复的会话
+  newAgent.bindSession?.(String(data.id));
   getChatStore(ctx.storeId).sess.setState({
     sessions: [{ id: data.id, label }],
     activeIdx: 0,
@@ -757,6 +764,8 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
 
   const sid = data.id || sessionId;
   agentSessionState.setAgent(ctx.storeId, sid, newAgent);
+  // 静态绑定该 Agent 的 board 到加载的会话
+  newAgent.bindSession?.(String(sid));
   getChatStore(ctx.storeId).sess.setState({
     sessions: [...st1.sessions, { id: sid, label }],
     activeIdx: st1.sessions.length,

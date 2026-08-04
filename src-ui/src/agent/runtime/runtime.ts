@@ -133,6 +133,11 @@ class AgentHandleImpl implements AgentHandle {
     return this._agent.setUiSessionId(sid);
   }
 
+  /** 绑定到指定会话的 board — 会话 id 在创建后才分配，由会话层在登记句柄时调用 */
+  bindSession(sessionId: string): void {
+    this._runtime._bindAgentSession(this._agent.id, sessionId);
+  }
+
   /** 销毁此 Agent — 句柄即所有权，幂等（重复调用为 no-op） */
   dispose(): void {
     this._runtime._disposeAgent(this._agent.id);
@@ -157,11 +162,8 @@ export class AgentRuntime implements RuntimePort {
   private _taskBoards = new Map<string, TaskBoard>();
   /** 会话级 DiscoveryBoard 实例 — 按 sessionId 隔离 */
   private _discoveryBoards = new Map<string, DiscoveryBoard>();
-  /** 主 Agent 的 board proxies — 用于会话切换时动态换 target */
-  private _mainTaskProxy: TaskBoardProxy | null = null;
-  private _mainDiscoveryProxy: DiscoveryBoardProxy | null = null;
-  /** 主 Agent ID — 用于 setCurrentSession 时更新 _agentSessions */
-  private _mainAgentId: string | null = null;
+  /** 每个 Agent 的 board proxies — bindSession 时重定向到其会话的 board */
+  private _agentProxies = new Map<string, { task: TaskBoardProxy; discovery: DiscoveryBoardProxy }>();
   /** 已 restore 的会话集合 — 避免重复 restore */
   private _restoredSessions = new Set<string>();
   /** 项目路径 — 用于持久化 */
@@ -249,7 +251,8 @@ export class AgentRuntime implements RuntimePort {
     }
   }
 
-  /** 切换当前活跃会话 — 主 Agent 的 board proxies 会指向新会话的 board */
+  /** 切换当前活跃会话 — 仅触发该会话 board 的懒加载恢复（供面板查询）。
+   *  不改写任何 Agent 的 board 绑定 — proxies 由 bindSession 静态绑定。 */
   setCurrentSession(sessionId: string): void {
     const tb = this._getOrCreateTaskBoard(sessionId);
     const db = this._getOrCreateDiscoveryBoard(sessionId);
@@ -259,12 +262,27 @@ export class AgentRuntime implements RuntimePort {
       void tb.restore();
       void db.restore();
     }
-    this._mainTaskProxy?.setTarget(tb);
-    this._mainDiscoveryProxy?.setTarget(db);
-    // 更新主 Agent 的会话映射，使子 Agent 继承活跃会话
-    if (this._mainAgentId) {
-      this._agentSessions.set(this._mainAgentId, sessionId);
+  }
+
+  /** 将 Agent 的 board proxies 绑定到指定会话 — 仅供内部使用（AgentHandle.bindSession）。
+   *  聊天会话的数字 id 在 createAgent 之后才分配，会话层在登记句柄时调用完成
+   *  静态绑定；此后该 Agent 的 board 写入终生落在此会话的板上，不再随会话切换改变。 */
+  _bindAgentSession(agentId: string, sessionId: string): void {
+    const proxies = this._agentProxies.get(agentId);
+    if (!proxies) return;
+    const tb = this._getOrCreateTaskBoard(sessionId);
+    const db = this._getOrCreateDiscoveryBoard(sessionId);
+    // 尚未恢复的会话进行懒加载恢复（与 setCurrentSession 同一语义）
+    if (!this._restoredSessions.has(sessionId)) {
+      this._restoredSessions.add(sessionId);
+      void tb.restore();
+      void db.restore();
     }
+    proxies.task.setTarget(tb);
+    proxies.discovery.setTarget(db);
+    // 更新会话映射 — 子 Agent 经 _agentSessions.get(parentId) 继承正确会话，
+    // _disposeAgent 据此清理正确会话的 board
+    this._agentSessions.set(agentId, sessionId);
   }
 
   /** 启动恢复 — 在 createAgent() 之前完成。
@@ -363,22 +381,18 @@ export class AgentRuntime implements RuntimePort {
 
     // 会话级 board — 按 sessionId 隔离，子 Agent 继承父会话
     // 有 parentId 的子 Agent 继承父会话 ID；否则使用 config.sessionId 或 'default'
+    // （会话主 Agent 的数字 id 创建后才分配，由会话层随后调 bindSession 重绑）
     const sessionId = config.sessionId
       ?? (config.parentId ? this._agentSessions.get(config.parentId) : undefined)
       ?? 'default';
     const taskBoard = this._getOrCreateTaskBoard(sessionId);
     const discoveryBoard = this._getOrCreateDiscoveryBoard(sessionId);
-    // Proxy 允许主 Agent（跨会话切换时持久存在）
-    // 动态路由到当前会话的 board。
+    // Proxy 静态绑定到该 Agent 所属会话的 board — 句柄即所有权，
+    // 一个 Agent 终生只属于一个会话，不再随会话切换动态重定向。
     const taskProxy = new TaskBoardProxy(taskBoard);
     const discoveryProxy = new DiscoveryBoardProxy(discoveryBoard);
+    this._agentProxies.set(agentId, { task: taskProxy, discovery: discoveryProxy });
     this._agentSessions.set(agentId, sessionId);
-    // 追踪主 Agent 的 proxies 用于会话切换
-    if (!config.parentId) {
-      this._mainTaskProxy = taskProxy;
-      this._mainDiscoveryProxy = discoveryProxy;
-      this._mainAgentId = agentId;
-    }
 
     // 1. 构建 system prompt（如果没预构建）
     let sysPrompt = config.systemPrompt;
@@ -617,6 +631,7 @@ export class AgentRuntime implements RuntimePort {
     this._lifecycleManagers.delete(id);
     this._bus.unregister(id);
     taskBoard?.unregister(id);
+    this._agentProxies.delete(id);
     this._agentSessions.delete(id);
     this.agents.delete(id);
     log.info('runtime', `agent destroyed: ${id}`);

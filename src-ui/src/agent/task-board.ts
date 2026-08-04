@@ -216,8 +216,8 @@ export class TaskBoard {
 }
 
 /** Proxy that delegates to a swappable target TaskBoard.
- *  Used by the main agent (which persists across session switches)
- *  to dynamically route to the current session's board. */
+ *  每个 Agent 一个 — 会话 id 在 createAgent 后才分配，
+ *  由 bindSession 一次性换 target 完成静态绑定。 */
 export class TaskBoardProxy {
   private _target: TaskBoard;
 
@@ -225,7 +225,8 @@ export class TaskBoardProxy {
     this._target = target;
   }
 
-  /** Swap the underlying board — called when the active session changes */
+  /** Swap the underlying board — called by bindSession to statically bind
+   *  this agent's session board */
   setTarget(board: TaskBoard): void {
     this._target = board;
   }
