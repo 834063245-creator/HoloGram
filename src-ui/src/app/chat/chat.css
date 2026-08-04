@@ -3322,3 +3322,246 @@ button.chat-history-entry {
 .chat-panel.chat-hud {
   overflow: hidden;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   计划审批卡片 · msg-plan-card（obs 视觉体系，与权限卡同族：
+   细描边 + 玻璃底 + mono 小标签；按钮组参照 prompt-shelf mini-btn）
+   ═══════════════════════════════════════════════════════════════ */
+.msg-plan-card {
+  margin: 8px 0;
+  padding: 11px 12px;
+  border: 1px solid var(--obs-line);
+  border-radius: 11px;
+  background: rgba(148, 166, 205, 0.04);
+}
+
+/* 已决定：按结果着色左边框 */
+.msg-plan-card--approved {
+  border-color: rgba(61, 165, 93, 0.3);
+}
+.msg-plan-card--rejected {
+  border-color: rgba(217, 68, 68, 0.3);
+}
+.msg-plan-card--revise {
+  border-color: rgba(216, 162, 74, 0.3);
+}
+
+.msg-plan-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.msg-plan-card__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--obs-blue);
+}
+
+.msg-plan-card--approved .msg-plan-card__icon { color: var(--obs-pass); }
+.msg-plan-card--rejected .msg-plan-card__icon { color: var(--obs-fail); }
+.msg-plan-card--revise .msg-plan-card__icon { color: var(--obs-warn); }
+
+.msg-plan-card__title {
+  font-family: var(--obs-font-mono);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: var(--obs-text);
+}
+
+.msg-plan-card__count {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-2);
+}
+
+.msg-plan-card__status {
+  margin-left: auto;
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  letter-spacing: 1px;
+  padding: 1px 7px;
+  border-radius: 3px;
+  background: rgba(148, 166, 205, 0.08);
+  color: var(--obs-text-2);
+}
+
+.msg-plan-card__status--pending {
+  background: rgba(100, 160, 255, 0.12);
+  color: var(--obs-blue);
+}
+.msg-plan-card__status--approved {
+  background: rgba(60, 200, 110, 0.1);
+  color: var(--obs-pass);
+}
+.msg-plan-card__status--rejected {
+  background: rgba(220, 70, 60, 0.12);
+  color: var(--obs-fail);
+}
+.msg-plan-card__status--revise {
+  background: rgba(240, 168, 72, 0.1);
+  color: var(--obs-warn);
+}
+
+.msg-plan-card__fold {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-2);
+  cursor: pointer;
+  transition: all var(--obs-snap);
+}
+
+.msg-plan-card__fold:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+  color: var(--obs-text);
+}
+
+.msg-plan-card__content {
+  max-height: 400px;
+  overflow: auto;
+  margin-bottom: 10px;
+}
+
+/* 方案选项 */
+.msg-plan-card__options {
+  margin-bottom: 10px;
+}
+
+.msg-plan-card__options-label {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--obs-text-2);
+  margin-bottom: 5px;
+}
+
+.msg-plan-card__option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  margin-bottom: 4px;
+  text-align: left;
+  font-family: var(--obs-font-body);
+  font-size: calc(12px * var(--font-scale));
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  color: var(--obs-text);
+  cursor: pointer;
+  transition: all var(--obs-snap);
+}
+
+.msg-plan-card__option:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(125, 179, 232, 0.3);
+}
+
+.msg-plan-card__option:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.msg-plan-card__option-label {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.msg-plan-card__option-desc {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-2);
+  min-width: 0;
+}
+
+/* 修改反馈输入 */
+.msg-plan-card__feedback {
+  margin-bottom: 10px;
+}
+
+.msg-plan-card__textarea {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--obs-text);
+  font-family: var(--obs-font-body);
+  font-size: calc(12px * var(--font-scale));
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--obs-snap);
+}
+
+.msg-plan-card__textarea:focus {
+  border-color: rgba(125, 179, 232, 0.3);
+}
+
+.msg-plan-card__feedback .msg-plan-card__btn {
+  margin-top: 6px;
+}
+
+.msg-plan-card__feedback .msg-plan-card__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 操作按钮组 — 参照 prompt-shelf mini-btn */
+.msg-plan-card__actions {
+  display: flex;
+  gap: 7px;
+}
+
+.msg-plan-card__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-family: var(--obs-font-mono);
+  font-size: calc(10.5px * var(--font-scale));
+  color: var(--obs-text-2);
+  background: transparent;
+  border: 1px solid var(--obs-line);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all var(--obs-snap);
+}
+
+.msg-plan-card__btn:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.08);
+}
+
+.msg-plan-card__btn--approve {
+  color: var(--obs-pass);
+  border-color: rgba(61, 165, 93, 0.3);
+  background: rgba(61, 165, 93, 0.08);
+}
+
+.msg-plan-card__btn--approve:hover {
+  color: var(--obs-pass);
+  background: rgba(61, 165, 93, 0.16);
+}
+
+.msg-plan-card__btn--reject {
+  color: var(--obs-fail);
+  border-color: rgba(217, 68, 68, 0.2);
+}
+
+.msg-plan-card__btn--reject:hover {
+  color: var(--obs-fail);
+  background: rgba(217, 68, 68, 0.1);
+}
+
+/* 已决定结论行 */
+.msg-plan-card__verdict {
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-2);
+}

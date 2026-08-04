@@ -110,8 +110,12 @@
 }
 .prompt-shelf__detail {
   margin-top: 6px;
-  min-height: calc(18px * var(--font-scale));
+  /* 固定两行高度（不是 min-height）— 悬停切换选项时描述行数变化
+     会改变卡片总高，卡片上缘随之下移导致鼠标落点漂移 → 振荡抽动 */
+  box-sizing: border-box;
+  height: calc(40px * var(--font-scale));
   padding: 5px 10px;
+  overflow: hidden;
   font-family: var(--obs-font-mono);
   font-size: calc(10px * var(--font-scale));
   color: var(--obs-text-2);

@@ -497,6 +497,14 @@ const SubReasoningBlock: React.FC<{
 };
 
 // ── 计划审批卡片 — 全宽 markdown 内容 + 批准/修改/拒绝 ──
+// 样式：chat.css 的 .msg-plan-card 系列（--obs-* 变量，与权限卡同一视觉体系）
+
+const PLAN_STATUS_META: Record<PlanPart['status'], { icon: string; label: string }> = {
+  pending: { icon: 'plan', label: '待审批' },
+  approved: { icon: 'check', label: '已批准' },
+  revise: { icon: 'edit', label: '要求修改' },
+  rejected: { icon: 'close', label: '已拒绝' },
+};
 
 const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeId }) => {
   const [feedbackText, setFeedbackText] = React.useState('');
@@ -525,58 +533,45 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
     }
   };
 
-  const statusIcon =
-    part.status === 'approved' ? '✅' : part.status === 'revise' ? '📝' : part.status === 'rejected' ? '❌' : '📋';
+  const meta = PLAN_STATUS_META[part.status] ?? PLAN_STATUS_META.pending;
   const isPending = part.status === 'pending';
 
   return (
-    <div className="msg-plan-card" style={{
-      border: '1px solid var(--border-color, #444)',
-      borderRadius: '8px',
-      padding: '12px 16px',
-      margin: '8px 0',
-      background: 'var(--bg-secondary, #1a1a2e)',
-    }}>
+    <div className={`msg-plan-card msg-plan-card--${part.status}`}>
       {/* 头部 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-        <span style={{ fontSize: '16px' }}>{statusIcon}</span>
-        <strong style={{ fontSize: '14px' }}>计划审批</strong>
+      <div className="msg-plan-card__head">
+        <span className="msg-plan-card__icon" dangerouslySetInnerHTML={{ __html: iconSvg(meta.icon, 13) }} />
+        <span className="msg-plan-card__title">计划审批</span>
         {part.options && part.options.length >= 2 && (
-          <span style={{ fontSize: '12px', color: 'var(--text-secondary, #888)' }}>（{part.options.length} 个方案）</span>
+          <span className="msg-plan-card__count">{part.options.length} 个方案</span>
         )}
-        <span style={{ marginLeft: 'auto', fontSize: '12px', color: 'var(--text-secondary, #888)', cursor: 'pointer' }} onClick={() => setCollapsed(!collapsed)}>
+        <span className={`msg-plan-card__status msg-plan-card__status--${part.status}`}>{meta.label}</span>
+        <button className="msg-plan-card__fold" onClick={() => setCollapsed(!collapsed)} type="button">
           {collapsed ? '展开' : '折叠'}
-        </span>
+        </button>
       </div>
 
       {/* 计划内容 — 完整 markdown */}
       {!collapsed && (
-        <div className="plan-card__content" style={{ maxHeight: '400px', overflow: 'auto', marginBottom: '12px' }}>
+        <div className="plan-card__content msg-plan-card__content">
           <MarkdownContent text={part.content} streaming={false} />
         </div>
       )}
 
       {/* 选项（多方案时显示） */}
       {!collapsed && part.options && part.options.length >= 2 && (
-        <div style={{ marginBottom: '12px' }}>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary, #888)', marginBottom: '6px' }}>选择方案：</div>
+        <div className="msg-plan-card__options">
+          <div className="msg-plan-card__options-label">选择方案</div>
           {part.options.map((opt) => (
             <button
               key={opt.label}
+              className="msg-plan-card__option"
               disabled={!isPending}
               onClick={() => respond('approved', opt.label)}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                padding: '8px 12px', marginBottom: '4px',
-                border: '1px solid var(--border-color, #444)',
-                borderRadius: '6px', background: 'transparent',
-                cursor: isPending ? 'pointer' : 'default',
-                opacity: isPending ? 1 : 0.6,
-                color: 'var(--text-primary, #eee)',
-              }}
+              type="button"
             >
-              <strong>{opt.label}</strong>
-              {opt.description && <span style={{ marginLeft: '8px', fontSize: '12px', color: 'var(--text-secondary, #888)' }}>{opt.description}</span>}
+              <span className="msg-plan-card__option-label">{opt.label}</span>
+              {opt.description && <span className="msg-plan-card__option-desc">{opt.description}</span>}
             </button>
           ))}
         </div>
@@ -584,30 +579,19 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
 
       {/* 反馈输入（用于修改） */}
       {showFeedback && isPending && (
-        <div style={{ marginBottom: '12px' }}>
+        <div className="msg-plan-card__feedback">
           <textarea
+            className="msg-plan-card__textarea"
             placeholder="输入修改意见…"
             value={feedbackText}
             onChange={(e) => setFeedbackText(e.target.value)}
             rows={3}
-            style={{
-              width: '100%', padding: '8px',
-              border: '1px solid var(--border-color, #444)',
-              borderRadius: '6px', background: 'var(--bg-primary, #111)',
-              color: 'var(--text-primary, #eee)',
-              resize: 'vertical', fontSize: '13px',
-            }}
           />
           <button
+            className="msg-plan-card__btn msg-plan-card__btn--approve"
             onClick={() => respond('revise')}
             disabled={!feedbackText.trim()}
-            style={{
-              marginTop: '4px', padding: '6px 16px',
-              border: '1px solid var(--border-color, #444)',
-              borderRadius: '6px', background: 'var(--accent, #4a9eff)',
-              color: '#fff', cursor: 'pointer',
-              opacity: feedbackText.trim() ? 1 : 0.5,
-            }}
+            type="button"
           >
             提交修改意见
           </button>
@@ -616,33 +600,27 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
 
       {/* 操作按钮 */}
       {isPending && !showFeedback && (
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div className="msg-plan-card__actions">
           {!part.options || part.options.length < 2 ? (
-            <button
-              onClick={() => respond('approved')}
-              style={{ padding: '6px 16px', border: '1px solid #2a5', borderRadius: '6px', background: 'rgba(40,120,60,0.3)', color: '#4a9', cursor: 'pointer' }}
-            >
-              ✅ 批准
+            <button className="msg-plan-card__btn msg-plan-card__btn--approve" onClick={() => respond('approved')} type="button">
+              <span dangerouslySetInnerHTML={{ __html: iconSvg('check', 12) }} />
+              批准
             </button>
           ) : null}
-          <button
-            onClick={() => setShowFeedback(true)}
-            style={{ padding: '6px 16px', border: '1px solid var(--border-color, #444)', borderRadius: '6px', background: 'transparent', color: 'var(--text-primary, #eee)', cursor: 'pointer' }}
-          >
-            📝 修改
+          <button className="msg-plan-card__btn" onClick={() => setShowFeedback(true)} type="button">
+            <span dangerouslySetInnerHTML={{ __html: iconSvg('edit', 12) }} />
+            修改
           </button>
-          <button
-            onClick={() => respond('rejected')}
-            style={{ padding: '6px 16px', border: '1px solid #a44', borderRadius: '6px', background: 'transparent', color: '#a66', cursor: 'pointer' }}
-          >
-            ❌ 拒绝
+          <button className="msg-plan-card__btn msg-plan-card__btn--reject" onClick={() => respond('rejected')} type="button">
+            <span dangerouslySetInnerHTML={{ __html: iconSvg('close', 12) }} />
+            拒绝
           </button>
         </div>
       )}
 
       {/* 已决定状态 */}
       {!isPending && (
-        <div style={{ fontSize: '12px', color: 'var(--text-secondary, #888)' }}>
+        <div className="msg-plan-card__verdict">
           {part.status === 'approved' && (part.selectedLabel ? `已批准：${part.selectedLabel}` : '已批准')}
           {part.status === 'revise' && `已要求修改${part.feedback ? `：${part.feedback.slice(0, 100)}` : ''}`}
           {part.status === 'rejected' && '已拒绝'}
