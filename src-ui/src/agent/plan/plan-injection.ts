@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Plan 模式去重上下文注入 — 参考 kimi-code 的变体算法
+// Plan 模式去重上下文注入
 //
 // 首次进入 → 全量提醒
 // 2 轮后 → 稀疏提醒

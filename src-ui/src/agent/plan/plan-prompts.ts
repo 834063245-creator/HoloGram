@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Plan 模式提醒文本 — 参考 kimi-code 的分层提醒，适配 HoloGram 的图引擎能力
+// Plan 模式提醒文本 — 分层提醒，适配 HoloGram 的图引擎能力
 
 function withPlanFileFooter(body: string, planFilePath: string | null): string {
   if (!planFilePath) return body;

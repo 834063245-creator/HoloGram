@@ -201,7 +201,7 @@ Tool Results → 注入会话 → 下一轮 LLM Stream
 
 ### 4.3 Plan 模式
 
-`agent/plan/` 实现 kimi-code 风格的分层提醒工作流：
+`agent/plan/` 实现分层提醒工作流：
 - 只读工具 + 写计划文件权限，`exit_plan_mode` 提交计划给用户审批（可带多方案 options）
 - 图引擎自动注入影响面数据（读文件时显示下游依赖和脆弱度）
 - 每 5 轮刷新完整工作流提醒
@@ -584,7 +584,7 @@ HoloGramHG/
 │   │   │   ├── memory.ts / aura-memory.ts / memory-bundle-client.ts  # 记忆三层
 │   │   │   ├── compaction-model.ts  # 上下文压缩成本模型
 │   │   │   ├── runtime/          # AgentRuntime + AgentBuilder (零 UI 依赖)
-│   │   │   ├── plan/             # Plan 模式 (kimi-code 风格)
+│   │   │   ├── plan/             # Plan 模式
 │   │   │   └── tools/            # coding/communication/discovery/merge/request/subagent
 │   │   ├── provider/           # LLM Provider 抽象 + catalog (6 模型目录 + 动态发现)
 │   │   ├── ui/                 # UI 层 (~75 文件: 图渲染/聊天/zustand stores/EventBus)

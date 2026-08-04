@@ -3,7 +3,6 @@
 
 // Plan 状态管理 — 跟踪 plan 模式的激活状态和计划文件路径
 //
-// 借鉴 kimi-code 的生命周期管理模式：
 //   - 持久化 { active, id } 到 session（可恢复）
 //   - planFilePath 从 id 派生，不持久化
 //   - enter 时只确定 id 和路径，不创建文件（LLM 第一次 Write 时创建）
@@ -79,7 +78,7 @@ export class PlanStateManager {
   }
 
   /** 从快照恢复 — 用于 session 恢复。
-   *  planFilePath 从 id 重新派生（不持久化路径，与 kimi-code 一致）。 */
+   *  planFilePath 从 id 重新派生（不持久化路径）。 */
   fromSnapshot(snapshot: PlanStateSnapshot | null, projectPath: string): void {
     this._projectPath = projectPath;
     if (snapshot && snapshot.active && snapshot.id) {
