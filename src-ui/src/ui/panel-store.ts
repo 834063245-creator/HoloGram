@@ -127,32 +127,12 @@ const scoped = createScopedStore('__hologram_panel_stores__', createPanelStoreIm
 
 export const getPanelStore = scoped.getStore;
 
-/** 从注册表中移除面板的 store。 */
+/** 从注册表中移除面板的 store。
+ *  （2026-08-04：生产暂未接线，但有单元测试保护 — disposePanelStores 的组成部分） */
 export function disposePanelStore(storeId: string): void {
   scoped.disposeStore(storeId);
 }
 
 // ── 非响应式访问器 ──
-
-function _store(storeId?: string) {
-  return scoped.getState(storeId);
-}
-
-export function getPanelMode(storeId?: string): PanelMode {
-  return _store(storeId).panelMode;
-}
-export function getActiveTab(storeId?: string): AgentTab {
-  return _store(storeId).activeTab;
-}
-export function getTotalTokensUsed(storeId?: string): number {
-  return _store(storeId).totalTokensUsed;
-}
-export function isHistoryOpen(storeId?: string): boolean {
-  return _store(storeId).historyOpen;
-}
-export function getToolFilter(storeId?: string): string {
-  return _store(storeId).toolFilter;
-}
-export function getContextFilter(storeId?: string): string {
-  return _store(storeId).contextFilter;
-}
+// （2026-08-04 清理：getPanelMode/getActiveTab/getTotalTokensUsed/isHistoryOpen/
+//   getToolFilter/getContextFilter 全工程零调用，已删）

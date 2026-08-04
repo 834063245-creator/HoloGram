@@ -56,36 +56,15 @@ const scoped = createScopedStore('__hologram_session_stores__', createSessionSto
 
 export const getSessionStore = scoped.getStore;
 
-/** 从注册表中移除面板的会话 store。 */
+/** 从注册表中移除面板的会话 store。
+ *  （2026-08-04：生产暂未接线，但有单元测试保护 — disposePanelStores 的组成部分） */
 export function disposeSessionStore(storeId: string): void {
   scoped.disposeStore(storeId);
 }
 
 // ── 非响应式访问器 ──
-
-function _store(storeId?: string) {
-  return scoped.getState(storeId);
-}
-
-export function getSessions(storeId?: string): ChatSessionMeta[] {
-  return _store(storeId).sessions;
-}
-export function getActiveIdx(storeId?: string): number {
-  return _store(storeId).activeIdx;
-}
-export function getActiveSessionId(storeId?: string): number | null {
-  const { sessions, activeIdx } = _store(storeId);
-  return sessions[activeIdx]?.id ?? null;
-}
-export function getSessionTokens(storeId?: string): Record<number, number> {
-  return _store(storeId).sessionTokens;
-}
-export function getNextSessionId(storeId?: string): number {
-  return _store(storeId).nextSessionId;
-}
-export function getMsgIdSeq(storeId?: string): number {
-  return _store(storeId).msgIdSeq;
-}
+// （2026-08-04 清理：getSessions/getActiveIdx/getActiveSessionId/getSessionTokens/
+//   getMsgIdSeq 全工程零调用，已删；nextMsgId/getNextSessionId 在用，保留）
 
 export function nextMsgId(storeId?: string): string {
   const store = getSessionStore(storeId);

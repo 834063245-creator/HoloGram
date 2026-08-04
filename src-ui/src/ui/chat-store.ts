@@ -10,18 +10,7 @@
 //
 // 每个都是真实的 Zustand store。getState() 返回实时内部状态。
 
-import {
-  getAttachedFiles,
-  getDraftText,
-  getInputHistory,
-  getInputHistoryIdx,
-  getInputStore,
-  getInputText,
-  type InputStoreApi,
-} from './input-store';
-import {
-  disposeInputStore,
-} from './input-store';
+import { disposeInputStore, getInputStore, type InputStoreApi } from './input-store';
 import {
   getExpandedReasoningSet as _msg_expandedReasoning,
   getUserScrolledUp as _msg_scrolledUp,
@@ -31,30 +20,8 @@ import {
   getMessagesStore,
   type MessagesStoreApi,
 } from './messages-store';
-
-import {
-  getActiveTab,
-  getContextFilter,
-  getPanelMode,
-  getPanelStore,
-  getToolFilter,
-  getTotalTokensUsed,
-  isHistoryOpen,
-  type PanelStoreApi,
-} from './panel-store';
-import { disposePanelStore } from './panel-store';
-import {
-  getActiveIdx,
-  getActiveSessionId,
-  getMsgIdSeq,
-  getNextSessionId,
-  getSessionStore,
-  getSessions,
-  getSessionTokens,
-  nextMsgId,
-  type SessionStoreApi,
-} from './session-store';
-import { disposeSessionStore } from './session-store';
+import { disposePanelStore, getPanelStore, type PanelStoreApi } from './panel-store';
+import { disposeSessionStore, getSessionStore, nextMsgId, type SessionStoreApi } from './session-store';
 
 // ── ChatStore 句柄 — 直接访问子 store ──
 
@@ -119,7 +86,8 @@ export function getExpandedReasoningSet(storeId?: string) {
 // ── 面板销毁 — 面板关闭时调用以防止内存泄漏 ──
 
 /** 销毁与面板关联的所有 store（messages、session、panel、input）。
- *  同时移除会话级消息 store（panelId:sessionId）。 */
+ *  同时移除会话级消息 store（panelId:sessionId）。
+ *  2026-08-04 复核：生产暂未接线，但有单元测试保护，保留。 */
 export function disposePanelStores(storeId: string): void {
   disposeMessagesStores(storeId);
   disposeSessionStore(storeId);

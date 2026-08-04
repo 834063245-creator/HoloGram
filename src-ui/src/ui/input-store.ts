@@ -58,29 +58,12 @@ const scoped = createScopedStore('__hologram_input_stores__', createInputStoreIm
 
 export const getInputStore = scoped.getStore;
 
-/** 从注册表中移除面板的输入存储。 */
+/** 从注册表中移除面板的输入存储。
+ *  （2026-08-04：生产暂未接线，但有单元测试保护 — disposePanelStores 的组成部分） */
 export function disposeInputStore(storeId: string): void {
   scoped.disposeStore(storeId);
 }
 
 // ── 非响应式访问器 ──
-
-function _store(storeId?: string) {
-  return scoped.getState(storeId);
-}
-
-export function getInputText(storeId?: string): string {
-  return _store(storeId).inputText;
-}
-export function getAttachedFiles(storeId?: string): Array<{ path: string; name: string; size: number }> {
-  return _store(storeId).attachedFiles;
-}
-export function getInputHistory(storeId?: string): string[] {
-  return _store(storeId).inputHistory;
-}
-export function getInputHistoryIdx(storeId?: string): number {
-  return _store(storeId).inputHistoryIdx;
-}
-export function getDraftText(storeId?: string): string {
-  return _store(storeId).draftText;
-}
+// （2026-08-04 清理：getInputText/getAttachedFiles/getInputHistory/getInputHistoryIdx/
+//   getDraftText 全工程零调用，已删）

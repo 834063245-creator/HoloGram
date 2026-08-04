@@ -58,50 +58,7 @@ function FV(): any {
  * @param graph - 图对象，包含 nodes（节点集合）和 edges（边集合）
  * @returns 边索引对数组，每个元素为 [sourceIndex, targetIndex] 的元组
  */
-function _buildEdgePairs(graph: any): Array<[number, number]> {
-  // 统一处理节点数据：支持数组或对象两种结构
-  const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes || {});
-  // 建立节点ID到数组索引的映射表，用于快速查找
-  const nodeIdx = new Map<string, number>();
-  nodes.forEach((n: any, i: number) => nodeIdx.set(n.id, i));
-  // 统一处理边数据：支持数组或对象两种结构
-  const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges || {});
-  // 存储转换后的索引边对
-  const pairs: Array<[number, number]> = [];
-  for (const e of edges) {
-    // 通过节点ID查找对应的数组索引
-    const s = nodeIdx.get(e.source),
-      t = nodeIdx.get(e.target);
-    // 仅当源节点和目标节点均存在时才保留该边
-    if (s !== undefined && t !== undefined) pairs.push([s, t]);
-  }
-  return pairs;
-}
-
-function _layoutViaWorker(nodeCount: number, pairs: Array<[number, number]>): Promise<Float32Array> {
-  return new Promise((resolve) => {
-    try {
-      const worker = new Worker(new URL('./ui/layout.worker.ts', import.meta.url), { type: 'module' });
-      const timeout = setTimeout(() => {
-        worker.terminate();
-        import('./ui/graph').then(() => resolve(new Float32Array(0))).catch(() => resolve(new Float32Array(0)));
-      }, 5000);
-      worker.onmessage = (e: MessageEvent) => {
-        clearTimeout(timeout);
-        worker.terminate();
-        resolve(e.data.pos as Float32Array);
-      };
-      worker.onerror = () => {
-        clearTimeout(timeout);
-        worker.terminate();
-        resolve(new Float32Array(0));
-      };
-      worker.postMessage({ nodes: nodeCount, pairs });
-    } catch {
-      resolve(new Float32Array(0));
-    }
-  });
-}
+// （2026-08-04 清理：_buildEdgePairs/_layoutViaWorker 全工程零调用，已删）
 
 // ── UI ──
 const welcome = document.getElementById('welcome')!;

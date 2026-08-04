@@ -98,7 +98,8 @@ const scoped = createScopedStore('__hologram_msg_stores__', createMessagesStoreI
 export const getMessagesStore = scoped.getStore;
 
 /** 移除所有 key 以给定前缀（如 panelId）开头的 store。
- *  也移除每会话 store（panelId:sessionId）。 */
+ *  也移除每会话 store（panelId:sessionId）。
+ *  （2026-08-04：生产暂未接线，但有单元测试保护 — disposePanelStores 的组成部分） */
 export function disposeMessagesStores(storeId: string): void {
   scoped.disposeStoresByPrefix(storeId);
 }
@@ -106,17 +107,14 @@ export function disposeMessagesStores(storeId: string): void {
 export const useMessagesStore = getMessagesStore();
 
 // ── 非响应式访问器 ──
+// （2026-08-04 清理：getMessages/setMessages/findStreamingAssistant/useMessagesStore
+//   全工程零调用，已删；bumpMessages/getStreamingAssistantId/getUserScrolledUp/
+//   getExpandedReasoningSet 被 chat-store 使用，保留）
 
 function _store(storeId?: string) {
   return scoped.getState(storeId);
 }
 
-export function getMessages(storeId?: string): ChatMessage[] {
-  return _store(storeId).messages;
-}
-export function setMessages(msgs: ChatMessage[], storeId?: string): void {
-  getMessagesStore(storeId).getState().setMessages(msgs);
-}
 export function bumpMessages(storeId?: string): void {
   getMessagesStore(storeId).getState().bump();
 }
@@ -128,15 +126,4 @@ export function getUserScrolledUp(storeId?: string): boolean {
 }
 export function getExpandedReasoningSet(storeId?: string): Set<number> {
   return new Set(_store(storeId).expandedReasoning);
-}
-
-export function findStreamingAssistant(storeId?: string): { msg: AssistantMessage; idx: number } | null {
-  const msgs = _store(storeId).messages;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.role === 'assistant' && (m as AssistantMessage).status === 'streaming') {
-      return { msg: m as AssistantMessage, idx: i };
-    }
-  }
-  return null;
 }

@@ -1136,7 +1136,6 @@ export class ChatCore {
     if (!userText) return;
     getChatStore(this.panelId).input.getState().setInputText('');
     const signal = this._activeExec().start();
-    Stream.addTurnSep(this._streamCtx());
     const agent = this.agent;
     if (!agent) return;
     const sessIdx = agent.getSession().length;

@@ -1,7 +1,7 @@
 # Agent 项目理解 — HoloGram
 
-> 生成：2026-06-18 · 更新：2026-07-25 · 供 Cursor/Claude 等 Agent 快速上手  
-> 详细架构见 [PROJECT.md](PROJECT.md)
+> 生成：2026-06-18 · 更新：2026-08-04 · 供 Cursor/Claude 等 Agent 快速上手  
+> 架构与现状见 `docs/`（architecture-refactor-spec.md / agents/frontend-refactor-handoff.md）；多 Agent 路线图见 docs/MULTI_AGENT_ROADMAP.md
 
 ## 一句话
 
@@ -16,13 +16,12 @@ HoloGramHG/
 ├── src-ui/          TypeScript 前端（Three.js + Agent + Monaco；观测台重构 P0–P6 + 视觉深化 P7 全系列已竣工）
 ├── tests/           遗留 Python 测试（引擎已 Rust 化，部分仍可用）
 ├── assets/          图标、UI 原型
-├── .cursor/rules/   Agent 持久化规则（4 个 .mdc）
-├── docs/agents/     交接文档（frontend-refactor-handoff.md = 前端重构事实来源）
-├── PROJECT.md       现状说明
-├── BUGS.md          活 bug 清单（用户写，Agent 修）
+├── docs/            架构与交接文档（agents/frontend-refactor-handoff.md = 前端重构事实来源）
 ├── CLAUDE.md        Agent 工作指令
 └── V4_CONSTRUCTION_PLAN.md  v4 施工方案（已竣工）
 ```
+
+> 注：PROJECT.md / BUGS.md 已移除（2026-07 归档删除），现状以 docs/ 与 docs/MULTI_AGENT_ROADMAP.md 为准。
 
 ### `.hologram/` 运行时目录结构
 
@@ -89,15 +88,6 @@ flowchart LR
 - **完成判定：** 模型调用 `goal_report(status, summary)` 工具上报(仅 goal 循环期间注册);`[GOAL_COMPLETE]` 文本标记仅为旧会话 fallback
 - **崩溃接管：** 启动时 `migrateLegacy()`(旧 `agents/main/goal.json` 导入)+ `adoptOrphans()`(遗留 active 记录转 paused)
 - **UI:** 聊天区上方状态条订阅 `goal:state` 事件;测试见 `tests/goal-manager.test.ts` 与 `tests/goal-persistence.test.ts`(含暂停→闲聊→恢复回归)
-
-## 持久化规则索引
-
-| 规则文件 | 作用域 |
-|----------|--------|
-| `.cursor/rules/hologram-overview.mdc` | 始终生效 — 产品/架构/用户 |
-| `.cursor/rules/hologram-engine.mdc` | `engine/**` |
-| `.cursor/rules/hologram-frontend.mdc` | `src-ui/**` |
-| `.cursor/rules/hologram-tauri.mdc` | `src-tauri/**` |
 
 ## 不要做的事
 

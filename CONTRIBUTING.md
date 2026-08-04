@@ -92,7 +92,7 @@ src-tauri/      Rust / Tauri 2 桌面壳
 
 - 阅读 [README](README.md)
 - 查看 [GitHub Discussions](https://github.com/834063245-creator/HoloGram/discussions)
-- [PROJECT.md](PROJECT.md) 是项目全景真相源
+- [docs/MULTI_AGENT_ROADMAP.md](docs/MULTI_AGENT_ROADMAP.md) 与 docs/ 是项目现状事实来源
 
 ---
 

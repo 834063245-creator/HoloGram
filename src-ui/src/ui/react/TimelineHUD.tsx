@@ -10,7 +10,6 @@ import { rpc } from '../../bridge';
 import { useShellStore } from '../../app/shell-store';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
-import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
 

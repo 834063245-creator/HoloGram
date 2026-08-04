@@ -438,10 +438,7 @@ export function appendUserBubble(
   const pair = ctx.getTurnPairs()[ctx.getTurnPairs().length - 1];
   if (pair) pair.userBubble = null;
 }
-
-export function addTurnSep(_ctx: StreamContext): void {
-  // 新消息模型下为空操作 — 视觉分隔由 CSS 处理。
-}
+// （2026-08-04 清理：addTurnSep 空操作导出已删 — 视觉分隔由 CSS 处理）
 
 // ═══════════════════════════════════════════════════════════
 // 轮次生命周期

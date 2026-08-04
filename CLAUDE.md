@@ -20,7 +20,7 @@
 
 代码依赖拓扑图生成器。Tauri 2 + Rust 引擎 + Three.js 3D 星图。Python 引擎 `src_python/` 已退役，所有活跃代码走 `engine/`。
 
-详情见 [PROJECT.md](PROJECT.md)。
+架构与路线图见 `docs/`（MULTI_AGENT_ROADMAP.md 为多 Agent 工作台）。
 
 ## Agent skills
 
