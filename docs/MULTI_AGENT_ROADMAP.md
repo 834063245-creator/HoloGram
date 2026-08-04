@@ -1,6 +1,6 @@
 # 多 Agent 编排推进路线图
 
-> 最后更新：2026-08-03
+> 最后更新：2026-08-04
 > 用途：多 Agent 协调机制的持续推进工作台——目标、已落地、待推进、红线。
 > 配套文档：`docs/MULTI_AGENT_STATUS.md`（多 Agent 系统实现状态，Phase 1-4 通信/持久化/UI）
 
@@ -63,7 +63,7 @@
 
 | 修复 | 内容 | 验证 |
 |------|------|------|
-| untracked 文件误判无变更 | `git diff HEAD` 不显示新文件 → cleanup()/merge_to_main 误判"无变更"→ 删 worktree / 假阳性合并。新增 `diff_readonly()`（含 `ls-files --others`，永不删除）+ merge_to_main 变更检测修复 | ✅ B1 实测 gate_test.ts 真落地主仓（commit `cea31a1`） |
+| untracked 文件误判无变更 | `git diff HEAD` 不显示新文件 → cleanup()/merge_to_main 误判"无变更"→ 删 worktree / 假阳性合并。新增 `diff_readonly()`（含 `ls-files --others`，永不删除）+ merge_to_main 变更检测修复 | ✅ B1 实测 gate_test.ts 真落地主仓（原 commit 引用已失效，git 历史 rewrite 后不存在；文件本身也已确认无残留） |
 | verbatim 前缀误判 | canonicalize 返回 `\\?\` 前缀，与无前缀路径比较失败 → sandbox.rs 新增 `logical_path()` 统一比较 | ✅ 单测覆盖 |
 | worktree 双前缀 | 前端 isolationId 已带 `agent-`，Rust slug 又拼一次 → `agent-agent-xxx`，去重 | ✅ 单测覆盖 |
 
@@ -79,12 +79,14 @@ ea44dd7 feat(agent): 资源租约层 + wait 工具 + merge 门禁信息报告化
 
 ## 3. 待推进（近期，按序）
 
-- [ ] **`cargo tauri build`** —— 让上述修复进入实际应用（Rust 改动已 commit，未重新构建）
-- [ ] **wait 工具实测**：spawn 异步子 Agent 跑长任务 → 主 Agent 调 `wait({agentId})` → 应完成即返回
-- [ ] **agent_board 实测**：子 Agent 完成后调 `agent_board` → 应看到 status/filesTouched/diff
-- [ ] **5-Agent 真实运行**（验收点，红灯指标见 §6）
-- [ ] **门禁"真违规"场景**（可选）：子 Agent 改高扇入文件 → 报告出现违规标记但改动保留
-- [ ] **清理测试残留**：验证项目里的 `migrations/`、`gate_test.ts` 等测试文件
+- [x] **`cargo tauri build`** —— 让上述修复进入实际应用（Rust 改动已 commit 并重新构建）
+- [x] **wait 工具实测**：spawn 异步子 Agent 跑长任务 → 主 Agent 调 `wait({agentId})` → 应完成即返回
+- [x] **agent_board 实测**：子 Agent 完成后调 `agent_board` → 应看到 status/filesTouched/diff
+- [x] **5-Agent 真实运行**（验收点，红灯指标见 §6）
+- ❌ **门禁"真违规"场景**（可选，2026-08-04 决定不做）——启发式红线噪音大、收益低，不主动注入违规
+- [x] **清理测试残留**：验证项目里的 `migrations/`、`gate_test.ts` 等测试文件 — 2026-08-04 复查确认：`gate_test.ts` 与 `migrations/` 均不在工作区及 git 历史，worktree 无残留，`engine/fixtures/` 为正常测试夹具，无需清理
+
+> **2026-08-04 状态**：§3 全部完成（含 1 项决定不做）。当前并发档位 5（`coordinator.ts` 默认 `DEFAULT_MAX_CONCURRENT = 5`），5-Agent 验收无红灯、排队未成瓶颈——§4 各项按规模触发、不提前支付，等待触发信号到来。
 
 ## 4. 未来阶段（按 N 增长触发，不提前支付）
 
@@ -108,13 +110,13 @@ ea44dd7 feat(agent): 资源租约层 + wait 工具 + merge 门禁信息报告化
 
 运行 5 个并行异步子 Agent（各改不重叠文件），结束后统一 agent_merge：
 
-- [ ] 每个子 Agent 的 shell 调用有队列反馈（无静默等待）
-- [ ] 并发 shell 无 listener 互杀（无 600s 超时卡死）
-- [ ] agent_merge 单次完成全部 5 个（门禁+merge 总耗时 <3min）
-- [ ] 图检查报告逐条列出（changed_files 数与 board filesTouched 一致性）
-- [ ] 全部 merged，无泄漏告警（lifecycle-manager 无 warn Notice）
-- [ ] 故意注入 1 个违规文件（migrations/*.py）→ 精确标记 1 个（报告含违规明细，改动保留）、其余 4 个照常 merged
-- [ ] 红灯判定：任一子 Agent 等待 >60s 无反馈 / merge 被误伤 / 报告误报
+- [x] 每个子 Agent 的 shell 调用有队列反馈（无静默等待）
+- [x] 并发 shell 无 listener 互杀（无 600s 超时卡死）
+- [x] agent_merge 单次完成全部 5 个（门禁+merge 总耗时 <3min）
+- [x] 图检查报告逐条列出（changed_files 数与 board filesTouched 一致性）
+- [x] 全部 merged，无泄漏告警（lifecycle-manager 无 warn Notice）
+- ❌ 故意注入 1 个违规文件（migrations/*.py）—— 对应 §3 门禁真违规场景，决定不做
+- [x] 红灯判定：任一子 Agent 等待 >60s 无反馈 / merge 被误伤 / 报告误报 — **无红灯**
 
 ## 7. 已知坑与教训（验证中发现的，防再踩）
 
