@@ -5,7 +5,7 @@
 //
 //   msg   → messages-store.ts  — 会话级消息、流式标志
 //   sess  → session-store.ts   — sessions[]、activeIdx、token、nextId
-//   panel → panel-store.ts     — panelMode、projectPath、toolSchemas、focus
+//   panel → panel-store.ts     — panelMode、toolSchemas、focus
 //   input → input-store.ts     — inputText、attachedFiles、inputHistory
 //
 // 每个都是真实的 Zustand store。getState() 返回实时内部状态。
@@ -37,7 +37,6 @@ import {
   getContextFilter,
   getPanelMode,
   getPanelStore,
-  getProjectPath,
   getToolFilter,
   getTotalTokensUsed,
   isHistoryOpen,

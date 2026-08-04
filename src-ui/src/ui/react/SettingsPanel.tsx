@@ -14,7 +14,7 @@ import { setLang } from '../../i18n';
 import { getCatalogProviders, getDefaultModel } from '../../provider/catalog';
 import type { ModelDescriptor } from '../../provider/types';
 import type { AppSettings } from '../../settings';
-import { addProvider, loadSettings, persistSecrets, removeProvider, removeSecret, saveSettings } from '../../settings';
+import { addProvider, loadSettings, persistSecrets, removeProvider, removeSecret, restoreSecrets, saveSettings } from '../../settings';
 import { createProvider } from '../../provider';
 import { mergeDynamicModels } from '../../provider/catalog';
 import { getActiveProvider } from '../../settings';
@@ -56,6 +56,19 @@ const SettingsPanelApp: React.FC<{
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [activeTab, setActiveTab] = useState<Tab>('provider');
   const [appVersion, setAppVersion] = useState('…');
+  // ⚡ 2026-08-04 状态治理：apiKey 权威在系统加密凭据 —
+  // localStorage 无明文，打开面板时异步回填密钥供表单展示。
+  useEffect(() => {
+    let alive = true;
+    restoreSecrets(loadSettings())
+      .then((s) => {
+        if (alive) setSettings(s);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   useEffect(() => {
     getVersion()
       .then(setAppVersion)
@@ -256,7 +269,7 @@ const SettingsPanelApp: React.FC<{
   }, [settings, onSave]);
 
   const handleRefreshModels = useCallback(async (): Promise<number> => {
-    const s = loadSettings();
+    const s = await restoreSecrets(loadSettings());
     const activeProvider = getActiveProvider(s);
     if (!activeProvider.apiKey?.trim()) return 0;
     const prov = createProvider(activeProvider);

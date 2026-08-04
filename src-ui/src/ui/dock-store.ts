@@ -14,8 +14,6 @@ export type DockPanelId = 'check' | 'constraints' | 'dataflow' | 'settings' | 'a
 interface DockState {
   /** 面板开合（dataflow/settings 由 DockPanel 条件挂载；其余常驻 + class 切换保过渡动画） */
   open: Record<DockPanelId, boolean>;
-  /** 当前工作区路径（constraints 共用；null = 无项目） */
-  projectPath: string | null;
   /** 简报面板当前展示的结果（runCheck 推入；查看历史会临时替换，与旧行为一致） */
   checkResult: CheckResult | null;
 
@@ -23,7 +21,6 @@ interface DockState {
   closePanel: (id: DockPanelId) => void;
   togglePanel: (id: DockPanelId) => void;
   isOpen: (id: DockPanelId) => boolean;
-  setProjectPath: (p: string | null) => void;
   /** 旧 CheckPanel.update() 语义：喂 agent 状态注入缓存 + 失败时自动展开面板 */
   setCheckResult: (r: CheckResult) => void;
   /** 旧 CheckPanel.showHistory() 实际行为：展示该历史结果并展开面板（时间戳从未被消费） */
@@ -32,14 +29,12 @@ interface DockState {
 
 export const useDockStore = create<DockState>((set, get) => ({
   open: { check: false, constraints: false, dataflow: false, settings: false, agents: false },
-  projectPath: null,
   checkResult: null,
 
   openPanel: (id) => set((st) => ({ open: { ...st.open, [id]: true } })),
   closePanel: (id) => set((st) => ({ open: { ...st.open, [id]: false } })),
   togglePanel: (id) => set((st) => ({ open: { ...st.open, [id]: !st.open[id] } })),
   isOpen: (id) => get().open[id],
-  setProjectPath: (p) => set({ projectPath: p }),
 
   setCheckResult: (r) => {
     // 将检查结果喂给状态注入缓存，使 Agent 能看到

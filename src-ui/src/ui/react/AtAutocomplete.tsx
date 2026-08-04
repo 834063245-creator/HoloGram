@@ -7,6 +7,7 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
+import { useShellStore } from '../../app/shell-store';
 import { getChatStore } from '../chat-store';
 
 // ── 类型 ──
@@ -105,7 +106,7 @@ export const AtAutocomplete = forwardRef<
       // 使用缓存的 glob 结果
       try {
         let cache = cacheRef.current;
-        const projectPath = getChatStore(panelId).panel.getState().projectPath || '.';
+        const projectPath = useShellStore.getState().projectPath || '.';
         if (!cache || Date.now() - cache.ts > CACHE_TTL || cache.path !== projectPath) {
           const data = await rpc<string>('glob', {
             pattern: '**/*.{ts,js,py,rs,html,css,vue,svelte,json,toml,yaml,yml,md}',

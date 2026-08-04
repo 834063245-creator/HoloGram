@@ -159,6 +159,7 @@ export class TaskBoard {
     entry.finishedAt = Date.now();
     this._evict();
     this._scheduleFlush();
+    void this.flush(); // 关键终态 — 立即落盘，缩短崩溃丢失窗口
   }
 
   /** 子 Agent 失败时调用 */
@@ -170,6 +171,7 @@ export class TaskBoard {
     entry.finishedAt = Date.now();
     this._evict();
     this._scheduleFlush();
+    void this.flush(); // 关键终态 — 立即落盘
   }
 
   /** 子 Agent 被中止时调用 */
@@ -180,6 +182,7 @@ export class TaskBoard {
     entry.finishedAt = Date.now();
     this._evict();
     this._scheduleFlush();
+    void this.flush(); // 关键终态 — 立即落盘
   }
 
   /** merge 成功后标记 */
@@ -190,6 +193,7 @@ export class TaskBoard {
     entry.finishedAt = entry.finishedAt ?? Date.now();
     this._evict();
     this._scheduleFlush();
+    void this.flush(); // 关键终态 — 立即落盘
   }
 
   /** 顺延 TTL：门禁处理期间刷新 finishedAt，防止 LifecycleManager 30min 巡检误 discard worktree */

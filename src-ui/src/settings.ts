@@ -91,11 +91,20 @@ export function loadSettings(): AppSettings {
 
 export function saveSettings(s: AppSettings): void {
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    // ⚡ 2026-08-04 状态治理：apiKey 不落 localStorage 明文。
+    // 唯一权威 = 系统加密凭据（persistSecrets / restoreSecrets）；
+    // localStorage 只存非敏感配置。provider 配置结构保留，仅抹空密钥字段。
+    const sanitized: AppSettings = {
+      ...s,
+      providers: s.providers.map((p) => (p.apiKey ? { ...p, apiKey: '' } : p)),
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
   }
 }
 
-/** 将 API Key 持久化到系统加密存储（DPAPI on Windows），防止 localStorage 被清丢 Key。 */
+/** 将 API Key 持久化到系统加密存储（DPAPI on Windows），防止 localStorage 被清丢 Key。
+ *  ⚡ 2026-08-04：apiKey 唯一权威在此 — 保存设置时同步写入凭据；
+ *  用户清空 key 时删除对应凭据，防止 restoreSecrets 复活旧密钥。 */
 export async function persistSecrets(s: AppSettings): Promise<void> {
   try {
     const { rpc } = await import('./bridge');
@@ -105,7 +114,13 @@ export async function persistSecrets(s: AppSettings): Promise<void> {
         try {
           await rpc('credential_store', { provider: p.name, key });
         } catch {
-          /* 非关键 — localStorage 中仍有 Key */
+          /* 非关键 — 凭据写入失败不影响本次会话 */
+        }
+      } else {
+        try {
+          await rpc('credential_delete', { provider: p.name });
+        } catch {
+          /* 无凭据或删除失败 — 忽略 */
         }
       }
     }
@@ -128,26 +143,23 @@ export async function removeSecret(providerName: string): Promise<void> {
 export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
   try {
     const { rpc } = await import('./bridge');
-    let changed = false;
     for (const p of s.providers) {
       if (!p.apiKey || p.apiKey.trim() === '') {
         try {
           const stored: string | null = await rpc('credential_get', { provider: p.name });
           if (stored?.trim()) {
             p.apiKey = stored.trim();
-            changed = true;
           }
         } catch {
           /* 无加密存储或解密失败 */
         }
       }
     }
-    if (changed) {
-      saveSettings(s);
-    }
   } catch {
     /* 动态导入失败 — 继续使用仅 localStorage 的设置 */
   }
+  // ⚡ 2026-08-04：不再 saveSettings 回写 — apiKey 权威在加密凭据，
+  // 不允许把恢复出的密钥落回 localStorage 明文。
   return s;
 }
 

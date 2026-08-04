@@ -33,6 +33,7 @@ import { useDockStore } from './ui/dock-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
 import { bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
+import type { GraphDiffJson } from './ui/graph-types';
 import { getDiagnosticsForFile } from './ui/lsp-client';
 import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
@@ -284,8 +285,22 @@ export class Workspace {
               return;
             }
             try {
-              const raw = await rpc<string>('get_full_graph');
-              ws.graphData = JSON.parse(raw);
+              // ⚡ 2026-08-04 状态治理：不再每次全量 get_full_graph。
+              // watcher 已算好 diff —— 用 diff 合并本地 graphData（数据层），
+              // 渲染层仍走 doGraphUpdate(diff) 增量。合并后校验 nodeCount，
+              // 与引擎汇总不一致（事件丢失/漂移）时兜底全量拉取。
+              if (summary.diff && ws.graphData) {
+                mergeGraphDiff(ws.graphData, summary.diff);
+                const nc = Array.isArray(ws.graphData.nodes)
+                  ? ws.graphData.nodes.length
+                  : Object.keys(ws.graphData.nodes || {}).length;
+                if (nc !== (summary.total_nodes ?? summary.node_count ?? nc)) {
+                  throw new Error(`nodeCount mismatch: local ${nc} vs engine ${summary.total_nodes}`);
+                }
+              } else {
+                const raw = await rpc<string>('get_full_graph');
+                ws.graphData = JSON.parse(raw);
+              }
               try {
                 const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
                 ws.fileGraphData = JSON.parse(
@@ -297,7 +312,15 @@ export class Workspace {
               ws.doGraphUpdate(starGraph, summary.diff);
               bus.emit('timeline:refresh');
             } catch {
-              /* get_full_graph 失败 */
+              // 合并失败 / nodeCount 漂移 → 全量兜底
+              try {
+                const raw = await rpc<string>('get_full_graph');
+                ws.graphData = JSON.parse(raw);
+                ws.doGraphUpdate(starGraph);
+                bus.emit('timeline:refresh');
+              } catch {
+                /* get_full_graph 也失败 — 保持现状 */
+              }
             }
           }
         } catch {
@@ -791,9 +814,7 @@ export class Workspace {
   // ═══════════════════════════════════════════════════════════════
   // doGraphUpdate — 处理来自 watcher 的图谱更新（diff 可用时增量更新）
   // ═══════════════════════════════════════════════════════════════
-
-  doGraphUpdate(starGraph: StarGraph, diff?: any): void {
-    if (!this.graphData) return;
+  doGraphUpdate(starGraph: StarGraph, diff?: any): void {    if (!this.graphData) return;
     const nodeCount = Array.isArray(this.graphData.nodes)
       ? this.graphData.nodes.length
       : Object.keys(this.graphData.nodes || {}).length;
@@ -824,6 +845,62 @@ export class Workspace {
       }
       this.runCheck();
     }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// mergeGraphDiff — 数据层增量合并（2026-08-04 状态治理）
+// ═══════════════════════════════════════════════════════════════
+// 将 watcher 的 diff 原地合并进本地 graphData（nodes/edges），
+// 使 graph-updated 不再需要全量 get_full_graph。
+// 支持 nodes/edges 的数组（引擎 serialize_cached_graph 输出）与
+// Record（id → 节点）两种形态；communiities/meta 不随 diff 变更，保持原样。
+// ⚠️ 原地修改 graphData — 调用方持有同一引用，无需重新赋值。
+function mergeGraphDiff(graphData: { nodes?: any; edges?: any }, diff: GraphDiffJson): void {
+  const removedIds = new Set(diff.removed_nodes.map((n) => n.id));
+  if (Array.isArray(graphData.nodes)) {
+    for (const n of diff.added_nodes) graphData.nodes.push(n);
+    for (const m of diff.modified_nodes) {
+      const n = graphData.nodes.find((x) => x.id === m.node_id);
+      if (n) {
+        n.name = m.name;
+        n.kind = m.new_kind;
+        n.type = m.new_kind;
+      }
+    }
+    if (removedIds.size > 0) {
+      let w = 0;
+      for (let i = 0; i < graphData.nodes.length; i++) {
+        if (!removedIds.has(graphData.nodes[i].id)) graphData.nodes[w++] = graphData.nodes[i];
+      }
+      graphData.nodes.length = w;
+    }
+  } else if (graphData.nodes && typeof graphData.nodes === 'object') {
+    for (const n of diff.added_nodes) graphData.nodes[n.id] = n;
+    for (const m of diff.modified_nodes) {
+      const n = graphData.nodes[m.node_id];
+      if (n) {
+        n.name = m.name;
+        n.kind = m.new_kind;
+        n.type = m.new_kind;
+      }
+    }
+    for (const id of removedIds) delete graphData.nodes[id];
+  }
+
+  const removedEdgeIds = new Set(diff.removed_edges.map((e) => e.id));
+  if (Array.isArray(graphData.edges)) {
+    for (const e of diff.added_edges) graphData.edges.push(e);
+    if (removedEdgeIds.size > 0) {
+      let w = 0;
+      for (let i = 0; i < graphData.edges.length; i++) {
+        if (!removedEdgeIds.has(graphData.edges[i].id)) graphData.edges[w++] = graphData.edges[i];
+      }
+      graphData.edges.length = w;
+    }
+  } else if (graphData.edges && typeof graphData.edges === 'object') {
+    for (const e of diff.added_edges) graphData.edges[e.id] = e;
+    for (const id of removedEdgeIds) delete graphData.edges[id];
   }
 }
 

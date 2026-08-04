@@ -392,6 +392,13 @@ pub fn resolve_ask(request_id: &str, allow: bool) {
     }
 }
 
+/// 移除一个待处理的 Ask 请求（超时/取消时调用），防止 Sender 只增不减地残留。
+pub fn remove_ask(request_id: &str) {
+    if let Ok(mut pending) = PENDING_ASKS.write() {
+        pending.remove(request_id);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Smoke tests — SPEC_PERMISSION_UNIFY §7 的 8 个场景
 // 跑法: cargo test --manifest-path src-tauri/Cargo.toml smoke

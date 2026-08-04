@@ -292,7 +292,6 @@ async function notifyAllPanels(ws: Workspace): Promise<void> {
   useShellStore.getState().setProjectPath(ws.path);
   useShellStore.getState().setView('graph');
   chatPanel.setProjectPath(ws.path);
-  useDockStore.getState().setProjectPath(ws.path);
   await loadFileViewer();
   FV().get().setProjectPath(ws.path);
   bus.emit('workspace:switched');
@@ -731,7 +730,6 @@ async function init(): Promise<void> {
       icon: 'constraints',
       run: () => {
         const dock = useDockStore.getState();
-        if (workspace?.path) dock.setProjectPath(workspace.path);
         if (dock.isOpen('check')) dock.closePanel('check');
         if (dock.isOpen('agents')) dock.closePanel('agents');
         dock.togglePanel('constraints');
@@ -874,7 +872,7 @@ async function init(): Promise<void> {
         // 图谱存在但无路径 — 无工作区渲染
         starGraph?.render(graph);
         pushStatus('⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目');
-        useDockStore.getState().setProjectPath(null);
+        useShellStore.getState().setProjectPath('');
         setLoading(false);
         await setupPlaceholderAgent();
         return;

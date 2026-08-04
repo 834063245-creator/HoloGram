@@ -140,7 +140,10 @@ export class GoalManager {
     await this.ensureDir();
     try {
       const raw = await rpc<string>('read_file_content', { filePath: this.indexPath() });
-      return JSON.parse(stripNums(raw)) as GoalRecord[];
+      // ⚠️ JSON.parse(null) 返回 null 而不抛错 — 必须显式校验数组，
+      // 否则损坏/空 index.json 会让调用方 `all.filter` 崩溃。
+      const parsed = JSON.parse(stripNums(raw)) as unknown;
+      return Array.isArray(parsed) ? (parsed as GoalRecord[]) : [];
     } catch {
       return [];
     }

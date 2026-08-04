@@ -368,6 +368,16 @@ pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
     Ok(format!("[任务已终止]\n{stdout}{stderr}"))
 }
 
+/// 终止全部后台任务（workspace 切换时调用）。
+/// 全部走 kill_tree — 防 cargo/rustc 孙进程残留占用 target/ 锁。
+pub(crate) fn kill_all_bg() {
+    let mut jobs = BG_JOBS.lock().unwrap();
+    for job in jobs.values_mut() {
+        let _ = job.child.kill_tree();
+    }
+    jobs.clear();
+}
+
 /// 查找 Rust 引擎可执行文件。
 /// 检查顺序：1) HOLOGRAM_ENGINE 环境变量  2) engine/target/release  3) engine/target/debug
 pub(crate) fn engine_binary() -> String {
@@ -537,11 +547,16 @@ pub(crate) async fn check_permission(
                     "behavior": s.behavior,
                 })).collect::<Vec<_>>(),
             }));
-            let rx = register_ask(request_id);
+            let rx = register_ask(request_id.clone());
             match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
                 Ok(Ok(true)) => Ok(()),
                 Ok(Ok(false)) | Ok(Err(_)) => Err("用户拒绝了此操作".into()),
-                Err(_) => Err("权限请求超时".into()),
+                Err(_) => {
+                    // ⚡ 2026-08-04 状态治理：超时后移除残留的 Sender，
+                    // 防止 PENDING_ASKS 只增不减地泄漏。
+                    crate::permissions::remove_ask(&request_id);
+                    Err("权限请求超时".into())
+                }
             }
         }
     }

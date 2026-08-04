@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useShellStore } from '../src/app/shell-store';
 
 // ── Mock bridge — all Tauri backend calls route through here ──
 const mockInvoke = vi.fn();
@@ -115,6 +116,10 @@ describe('ChatPanel session persistence', () => {
     mockInvoke.mockReset();
     // Default: all invoke calls resolve with empty
     mockInvoke.mockResolvedValue(null);
+    // Reset global single-instance stores (projectPath 已收口为 shell-store 全局单例 —
+    // 不重置会让前序测试的残留路径触发 ChatCore 构造期的 GoalManager 异步链，
+    // 在 await 边界插队消费 Once mock 队列)
+    useShellStore.setState({ projectPath: '' });
   });
 
   afterEach(() => {

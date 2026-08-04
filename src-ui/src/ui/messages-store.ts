@@ -5,6 +5,7 @@
 // 从 chat-store.ts 拆分（god store → 领域存储）。
 
 import { create } from 'zustand';
+import { createScopedStore } from './scoped-store';
 import type { AssistantMessage, ChatMessage, MessageId } from './message-model';
 
 interface MessagesStore {
@@ -92,39 +93,14 @@ function createMessagesStoreImpl() {
 // 曾因此出问题：6+ 次提交（1f7fc04 → c927dd2）修复 agent 添加
 // 全局状态而非每面板状态导致的跨面板流式泄露。
 
-const STORES_KEY = '__hologram_msg_stores__';
-const DEFAULT_ID = '__default__';
+const scoped = createScopedStore('__hologram_msg_stores__', createMessagesStoreImpl);
 
-function _storesMap(): Map<string, MessagesStoreApi> {
-  const w = window as any;
-  if (!w[STORES_KEY]) {
-    const m = new Map<string, MessagesStoreApi>();
-    m.set(DEFAULT_ID, createMessagesStoreImpl());
-    w[STORES_KEY] = m;
-  }
-  return w[STORES_KEY] as Map<string, MessagesStoreApi>;
-}
-
-export function getMessagesStore(storeId?: string): MessagesStoreApi {
-  const id = storeId || DEFAULT_ID;
-  const stores = _storesMap();
-  let s = stores.get(id);
-  if (!s) {
-    s = createMessagesStoreImpl();
-    stores.set(id, s);
-  }
-  return s;
-}
+export const getMessagesStore = scoped.getStore;
 
 /** 移除所有 key 以给定前缀（如 panelId）开头的 store。
  *  也移除每会话 store（panelId:sessionId）。 */
 export function disposeMessagesStores(storeId: string): void {
-  const stores = _storesMap();
-  for (const key of Array.from(stores.keys())) {
-    if (key === storeId || key.startsWith(`${storeId}:`)) {
-      stores.delete(key);
-    }
-  }
+  scoped.disposeStoresByPrefix(storeId);
 }
 
 export const useMessagesStore = getMessagesStore();
@@ -132,7 +108,7 @@ export const useMessagesStore = getMessagesStore();
 // ── 非响应式访问器 ──
 
 function _store(storeId?: string) {
-  return getMessagesStore(storeId).getState();
+  return scoped.getState(storeId);
 }
 
 export function getMessages(storeId?: string): ChatMessage[] {

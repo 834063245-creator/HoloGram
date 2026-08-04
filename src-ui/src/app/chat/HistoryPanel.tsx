@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
+import { useShellStore } from '../../app/shell-store';
 import * as Session from '../../ui/chat-session';
 import { getChatStore } from '../../ui/chat-store';
 import type { ChatCore } from './chat-core';
@@ -18,10 +19,10 @@ interface DiskSession {
 }
 
 export function HistoryPanel({ core }: { core: ChatCore }) {
-  const { panel, sess } = getChatStore(core.panelId);
+  const { sess } = getChatStore(core.panelId);
   const sessions = useStore(sess, (s) => s.sessions);
   const activeIdx = useStore(sess, (s) => s.activeIdx);
-  const projectPath = useStore(panel, (s) => s.projectPath);
+  const projectPath = useShellStore((s) => s.projectPath);
   const [disk, setDisk] = useState<DiskSession[] | null>(null);
 
   // 打开时加载磁盘存档（15s 超时，与旧版一致）

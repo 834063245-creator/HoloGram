@@ -8,6 +8,7 @@ import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { askAgent } from '../agent-visualizer';
+import { useShellStore } from '../../app/shell-store';
 import { useDockStore } from '../dock-store';
 import { iconHtml } from '../icons';
 
@@ -450,7 +451,7 @@ function getListEntry(data: ConstraintsData, key: string): string[] | null {
 
 export function ConstraintsPanel() {
   const open = useDockStore((s) => s.open.constraints);
-  const projectPath = useDockStore((s) => s.projectPath);
+  const projectPath = useShellStore((s) => s.projectPath);
   const closePanel = useDockStore((s) => s.closePanel);
 
   return (

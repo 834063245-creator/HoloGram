@@ -30,6 +30,7 @@ import {
 import * as Stream from '../../ui/chat-stream';
 import { type CommandDef, CommandRegistry, DEFAULT_COMMANDS } from '../../ui/command-registry';
 import { bus } from '../../ui/events';
+import { useShellStore } from '../../app/shell-store';
 import type { StarGraph } from '../../ui/graph';
 import { useAgentPanelStore } from '../../ui/agent-panel-store';
 import { type AssistantMessage, type ChatMessage, resetMsgIdCounter, type UserMessage } from '../../ui/message-model';
@@ -138,18 +139,21 @@ export class ChatCore {
     );
     // ── 追踪用户焦点 — 文件查看器 / 图谱选择 ──
     bus.on('highlight:file', (filePath: string) => {
-      getChatStore(this.panelId).panel.setState({ userFocusFile: filePath, userFocusNode: null });
+      const panel = getChatStore(this.panelId).panel.getState();
+      panel.setUserFocusFile(filePath);
+      panel.setUserFocusNode(null);
     });
     bus.on('navigate:file', (filePath: string) => {
-      getChatStore(this.panelId).panel.setState({ userFocusFile: filePath, userFocusNode: null });
+      const panel = getChatStore(this.panelId).panel.getState();
+      panel.setUserFocusFile(filePath);
+      panel.setUserFocusNode(null);
     });
     bus.on(
       'graph:node-clicked',
       (data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }) => {
-        getChatStore(this.panelId).panel.setState({
-          userFocusNode: { name: data.nodeName, location: data.location || undefined },
-          userFocusFile: null,
-        });
+        const panel = getChatStore(this.panelId).panel.getState();
+        panel.setUserFocusNode({ name: data.nodeName, location: data.location || undefined });
+        panel.setUserFocusFile(null);
       },
     );
     // 每次完整渲染后将可见节点名喂给 @ 自动补全
@@ -157,7 +161,7 @@ export class ChatCore {
       if (this.starGraph) this._atAutocomplete?.setNodeNames(this.starGraph.getNodeNames());
     });
     bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
-      getChatStore(this.panelId).panel.setState({ lastAgentDiag: d.text });
+      getChatStore(this.panelId).panel.getState().setLastAgentDiag(d.text);
     });
     // ── Goal strip：状态迁移驱动显隐；切换工作区后重载 ──
     bus.on('goal:state', (record: GoalRecord) => this._updateGoalRecord(record));
@@ -291,11 +295,15 @@ export class ChatCore {
     this.starGraph = g;
   }
   setProjectPath(p: string): void {
+    // projectPath 单一权威 = shell-store（2026-08-04 状态治理收口）。
     // 项目变更时清除用户焦点 — 过期的引用会误导 Agent。
-    if (p && p !== getChatStore(this.panelId).panel.getState().projectPath) {
-      getChatStore(this.panelId).panel.setState({ userFocusFile: null, userFocusNode: null });
+    const shell = useShellStore.getState();
+    if (p && p !== shell.projectPath) {
+      const panel = getChatStore(this.panelId).panel.getState();
+      panel.setUserFocusFile(null);
+      panel.setUserFocusNode(null);
     }
-    getChatStore(this.panelId).panel.setState({ projectPath: p });
+    shell.setProjectPath(p);
   }
 
   // ── 模式机（pill/input/panel/hud → panel-store，视图渲染）──
@@ -462,7 +470,7 @@ export class ChatCore {
       panel: this._stubPanel,
       sessionTabs: this._stubSessionTabs,
       tabBar: this._stubTabBar,
-      getProjectPath: () => getChatStore(storeId).panel.getState().projectPath,
+      getProjectPath: () => useShellStore.getState().projectPath,
       flushReasoning: () => {},
       flushText: () => {},
       clearPendingToolCards: () => {},
@@ -482,7 +490,7 @@ export class ChatCore {
       },
       getLastUsageText: () => getChatStore(storeId).panel.getState().lastUsageText,
       setLastUsageText: (s) => {
-        getChatStore(storeId).panel.setState({ lastUsageText: s });
+        getChatStore(storeId).panel.getState().setLastUsageText(s);
       },
       getLastAgentDiag: () => getChatStore(storeId).panel.getState().lastAgentDiag,
       clearInputHistory: () => {
@@ -532,7 +540,7 @@ export class ChatCore {
       getStarGraph: () => this.starGraph,
       updateFooter: () => this.updateFooter(),
       setLastUsageText: (s) => {
-        getChatStore(storeId).panel.setState({ lastUsageText: s });
+        getChatStore(storeId).panel.getState().setLastUsageText(s);
       },
       addNotice: (text, level) => this.addNotice(text, level as 'info' | 'warn' | 'error'),
       saveActiveSession: (p) => this.saveActiveSession(p),
@@ -554,7 +562,7 @@ export class ChatCore {
       _updateTokens: (n) => {
         getChatStore(storeId).panel.getState().setTotalTokensUsed(n);
       },
-      getProjectPath: () => getChatStore(storeId).panel.getState().projectPath,
+      getProjectPath: () => useShellStore.getState().projectPath,
       getRunning: () => this._activeExec().isRunning,
       getAbortCtrl: () =>
         this._activeExec().abortSignal ? ({ signal: this._activeExec().abortSignal } as AbortController) : null,
@@ -664,7 +672,7 @@ export class ChatCore {
 
   /** /goal status — 显示活体目标 + 最近历史。 */
   private async showGoalStatus(): Promise<void> {
-    const path = getChatStore(this.panelId).panel.getState().projectPath;
+    const path = useShellStore.getState().projectPath;
     if (!path) return;
     const mgr = new GoalManager(path, (r) => bus.emit('goal:state', r));
     const active = await mgr.getActive();
@@ -686,7 +694,7 @@ export class ChatCore {
 
   /** /goal cancel — 取消活体目标(运行中需先停止)。 */
   async cancelGoal(): Promise<void> {
-    const path = getChatStore(this.panelId).panel.getState().projectPath;
+    const path = useShellStore.getState().projectPath;
     if (!path) return;
     if (this._activeExec().isRunning) {
       this.addNotice('目标运行中 — 请先点击停止(或状态条上的暂停),再 /goal cancel', 'warn');
@@ -717,7 +725,7 @@ export class ChatCore {
     const signal = this._activeExec().start();
 
     // 为新轮次重置自动滚动
-    getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
+    getChatStore(this.panelId).msg.getState().setUserScrolledUp(false);
 
     if (opts.userText) {
       Session.getTurnPairs(this.panelId).push({
@@ -785,15 +793,20 @@ export class ChatCore {
   }
 
   private async _refreshGoalRecord(): Promise<void> {
-    const path = getChatStore(this.panelId).panel.getState().projectPath;
+    const path = useShellStore.getState().projectPath;
     if (!path) return;
-    const rec = await new GoalManager(path, (r) => bus.emit('goal:state', r)).getActive();
-    getChatStore(this.panelId).panel.getState().setGoalRecord(rec);
+    try {
+      const rec = await new GoalManager(path, (r) => bus.emit('goal:state', r)).getActive();
+      getChatStore(this.panelId).panel.getState().setGoalRecord(rec);
+    } catch (e) {
+      // fire-and-forget 路径：goal 状态条读取失败不应当让未处理的 rejection 外泄
+      console.error('[chat] _refreshGoalRecord failed:', e);
+    }
   }
 
   async sendMessage(): Promise<void> {
     // 为新轮次重置自动滚动
-    getChatStore(this.panelId).msg.setState({ userScrolledUp: false });
+    getChatStore(this.panelId).msg.getState().setUserScrolledUp(false);
 
     const text = getChatStore(this.panelId).input.getState().inputText.trim();
     if (!text) return;
@@ -860,7 +873,7 @@ export class ChatCore {
       this.agent.insertMessage(text);
       getChatStore(this.panelId).input.getState().setInputText('');
       getChatStore(this.panelId).input.getState().pushInputHistory(text);
-      getChatStore(this.panelId).input.setState({ draftText: '' });
+      getChatStore(this.panelId).input.getState().setDraftText('');
       if (getChatStore(this.panelId).panel.getState().panelMode === 'input') this.summonPanel();
       Session.getTurnPairs(this.panelId).push({
         userText: text,
@@ -896,7 +909,7 @@ export class ChatCore {
 
     // 推入输入历史
     getChatStore(this.panelId).input.getState().pushInputHistory(text);
-    getChatStore(this.panelId).input.setState({ draftText: '' });
+    getChatStore(this.panelId).input.getState().setDraftText('');
     getChatStore(this.panelId).input.getState().setInputText('');
 
     const signal = this._activeExec().start();
@@ -926,10 +939,10 @@ export class ChatCore {
         focusPrefix += ` (位于 ${focusNode.location})`;
       }
       focusPrefix += ']\n\n';
-      getChatStore(this.panelId).panel.setState({ userFocusNode: null });
+      getChatStore(this.panelId).panel.getState().setUserFocusNode(null);
     } else if (focusFile) {
       focusPrefix = `[用户当前正在查看文件 "${focusFile}"]\n\n`;
-      getChatStore(this.panelId).panel.setState({ userFocusFile: null });
+      getChatStore(this.panelId).panel.getState().setUserFocusFile(null);
     }
 
     // 附加文件 — 暴露路径以便 Agent 读取
@@ -1311,7 +1324,7 @@ export class ChatCore {
     getChatStore(this.panelId).panel.getState().bumpPillEventCount();
   }
   private _resetPillBadge(): void {
-    getChatStore(this.panelId).panel.setState({ pillEventCount: 0 });
+    getChatStore(this.panelId).panel.getState().setPillEventCount(0);
   }
 
   // ── Sink getter（兼容旧契约）──

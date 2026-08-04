@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
 import { createProvider } from '../../provider';
 import { ChunkType } from '../../provider/types';
-import { getActiveProvider, loadSettings, type ProviderSettings } from '../../settings';
+import { getActiveProvider, loadSettings, restoreSecrets, type ProviderSettings } from '../../settings';
 import { iconHtml } from '../icons';
 import { escapeAttr } from './helpers';
 import '../file-translator.css';
@@ -305,7 +305,7 @@ export const FileTranslatorApp: React.FC<{
 
   const startTranslation = useCallback(
     async (fp: string) => {
-      const settings = loadSettings();
+      const settings = await restoreSecrets(loadSettings());
       const provider = getActiveProvider(settings);
 
       if (!provider.apiKey) {

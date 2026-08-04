@@ -105,7 +105,10 @@ export class DiscoveryBoard {
         changed = true;
       }
     }
-    if (changed) this._scheduleFlush();
+    if (changed) {
+      this._scheduleFlush();
+      void this.flush(); // 关键终态（coordinator finish）— 立即落盘
+    }
   }
 
   /** 移除过期条目并强制执行容量上限。 */

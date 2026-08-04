@@ -48,10 +48,17 @@ pub struct WorkspaceHandle {
     watcher_thread: Option<JoinHandle<()>>,
 }
 
+/// 句柄被丢弃时兜底停用（防 activate 直接覆盖旧句柄导致 watcher 线程泄漏）。
+/// deactivate() 幂等：未启动 watcher 时快速返回。
+impl Drop for WorkspaceHandle {
+    fn drop(&mut self) {
+        self.deactivate();
+    }
+}
+
 impl WorkspaceHandle {
     /// 创建新的工作区句柄。不会激活它或启动监控器。
-    pub fn new(path: &str) -> Self {
-        let project_path = Path::new(path);
+    pub fn new(path: &str) -> Self {        let project_path = Path::new(path);
         Self {
             path: path.to_string(),
             permission_ctx: Arc::new(PermissionContext::new(project_path)),

@@ -7,6 +7,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { rpc } from '../../bridge';
+import { useShellStore } from '../../app/shell-store';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
 import { useDockStore } from '../dock-store';
@@ -59,7 +60,7 @@ function basename(path: string): string {
 }
 
 export function TimelineHUD() {
-  const projectPath = useDockStore((s) => s.projectPath);
+  const projectPath = useShellStore((s) => s.projectPath);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [hoveredId, setHoveredId] = useState<number | null>(null);

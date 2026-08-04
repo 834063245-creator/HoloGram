@@ -5,6 +5,7 @@
 // 从 chat-store.ts 拆分（god store → 领域存储）。
 
 import { create } from 'zustand';
+import { createScopedStore } from './scoped-store';
 import type { GoalRecord } from '../agent/goal-manager';
 import type { ToolSchema } from '../provider/types';
 
@@ -23,7 +24,6 @@ interface ToolHistoryEntry {
 interface PanelStore {
   panelMode: PanelMode;
   activeTab: AgentTab;
-  projectPath: string;
   toolSchemas: ToolSchema[];
   totalTokensUsed: number;
   toolUsage: Record<string, number>;
@@ -48,7 +48,6 @@ interface PanelStore {
   setCollaborationMode: (mode: CollaborationMode) => void;
   setPermissionMode: (mode: PermissionMode) => void;
   setActiveTab: (tab: AgentTab) => void;
-  setProjectPath: (path: string) => void;
   setToolSchemas: (schemas: ToolSchema[]) => void;
   setTotalTokensUsed: (n: number) => void;
   addToolUsage: (name: string, args: string) => void;
@@ -74,7 +73,6 @@ function createPanelStoreImpl() {
   return create<PanelStore>((set) => ({
     panelMode: 'pill' as PanelMode,
     activeTab: 'chat' as AgentTab,
-    projectPath: '',
     toolSchemas: [],
     totalTokensUsed: 0,
     toolUsage: {},
@@ -97,7 +95,6 @@ function createPanelStoreImpl() {
     setCollaborationMode: (collaborationMode) => set({ collaborationMode }),
     setPermissionMode: (permissionMode) => set({ permissionMode }),
     setActiveTab: (activeTab) => set({ activeTab }),
-    setProjectPath: (projectPath) => set({ projectPath }),
     setToolSchemas: (toolSchemas) => set({ toolSchemas }),
     setTotalTokensUsed: (totalTokensUsed) => set({ totalTokensUsed }),
     addToolUsage: (name, args) =>
@@ -126,41 +123,19 @@ function createPanelStoreImpl() {
 
 // ── 每面板注册表 ──
 
-// ponytail: 将 store Map 存在 window 上，这样 Vite HMR 不会清除它
-// （模块级变量在热重载时重新初始化，会破坏 React 订阅）。
-const PANEL_STORES_KEY = '__hologram_panel_stores__';
-const DEFAULT_ID = '__default__';
+const scoped = createScopedStore('__hologram_panel_stores__', createPanelStoreImpl);
 
-function _storesMap(): Map<string, PanelStoreApi> {
-  const w = window as any;
-  if (!w[PANEL_STORES_KEY]) {
-    const m = new Map<string, PanelStoreApi>();
-    m.set(DEFAULT_ID, createPanelStoreImpl());
-    w[PANEL_STORES_KEY] = m;
-  }
-  return w[PANEL_STORES_KEY] as Map<string, PanelStoreApi>;
-}
-
-export function getPanelStore(storeId?: string): PanelStoreApi {
-  const id = storeId || DEFAULT_ID;
-  const stores = _storesMap();
-  let s = stores.get(id);
-  if (!s) {
-    s = createPanelStoreImpl();
-    stores.set(id, s);
-  }
-  return s;
-}
+export const getPanelStore = scoped.getStore;
 
 /** 从注册表中移除面板的 store。 */
 export function disposePanelStore(storeId: string): void {
-  _storesMap().delete(storeId);
+  scoped.disposeStore(storeId);
 }
 
 // ── 非响应式访问器 ──
 
 function _store(storeId?: string) {
-  return getPanelStore(storeId).getState();
+  return scoped.getState(storeId);
 }
 
 export function getPanelMode(storeId?: string): PanelMode {
@@ -168,9 +143,6 @@ export function getPanelMode(storeId?: string): PanelMode {
 }
 export function getActiveTab(storeId?: string): AgentTab {
   return _store(storeId).activeTab;
-}
-export function getProjectPath(storeId?: string): string {
-  return _store(storeId).projectPath;
 }
 export function getTotalTokensUsed(storeId?: string): number {
   return _store(storeId).totalTokensUsed;

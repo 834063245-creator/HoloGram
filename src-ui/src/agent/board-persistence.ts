@@ -33,6 +33,8 @@ export class BoardPersistence {
   private _dirReady = false;
   private _destroyed = false;
   private _flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 串行写链 — 立即 flush 与防抖 flush 并发时按调用序落盘，后写者赢。 */
+  private _writeChain: Promise<void> = Promise.resolve();
 
   constructor(opts: BoardPersistenceOptions) {
     this._projectPath = opts.projectPath;
@@ -64,15 +66,20 @@ export class BoardPersistence {
     this._dirReady = true;
   }
 
-  /** 序列化 entries 并写入磁盘。尽力而为 — 永不抛异常。 */
+  /** 序列化 entries 并写入磁盘。尽力而为 — 永不抛异常。
+   *  写入经 _writeChain 串行化：并发 flush（立即 + 防抖）按调用序落盘，避免旧快照后写覆盖新数据。 */
   async flush(data: string): Promise<void> {
     if (!this._projectPath || this._destroyed) return;
-    try {
-      await this._ensureDir();
-      await rpc('write_file_content', { filePath: this._boardPath, content: data });
-    } catch {
-      /* 尽力而为 */
-    }
+    const snapshot = data;
+    this._writeChain = this._writeChain.then(async () => {
+      try {
+        await this._ensureDir();
+        await rpc('write_file_content', { filePath: this._boardPath, content: snapshot });
+      } catch {
+        /* 尽力而为 */
+      }
+    });
+    return this._writeChain;
   }
 
   /** 读取并返回原始文件内容。文件不存在或出错时返回 null。 */

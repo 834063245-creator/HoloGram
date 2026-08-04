@@ -9,6 +9,7 @@ import type React from 'react';
 import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 import { useStore } from 'zustand';
 import { loadSettings, saveSettings } from '../../settings';
+import { useShellStore } from '../../app/shell-store';
 import { getChatStore } from '../chat-store';
 import { iconHtml } from '../icons';
 import type { CollaborationMode, PermissionMode } from '../panel-store';
@@ -28,7 +29,7 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
 
   const totalTokensUsed = useStore(panelStore, (s) => s.totalTokensUsed);
   const lastUsageText = useStore(panelStore, (s) => s.lastUsageText);
-  const _projectPath = useStore(panelStore, (s) => s.projectPath);
+  const _projectPath = useShellStore((s) => s.projectPath);
 
   // 设置非响应式 — 读取一次，store 变化时重新渲染
   const settings = loadSettings();

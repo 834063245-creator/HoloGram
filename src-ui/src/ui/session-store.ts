@@ -5,6 +5,7 @@
 // 消息存于每会话 store：getMessagesStore(`${storeId}:${sessionId}`)
 
 import { create } from 'zustand';
+import { createScopedStore } from './scoped-store';
 
 export interface ChatSessionMeta {
   id: number;
@@ -51,41 +52,19 @@ function createSessionStoreImpl() {
 
 // ── 每面板注册表 ──
 
-// ponytail: 将 store Map 存在 window 上，这样 Vite HMR 不会清除它
-// （模块级变量在热重载时重新初始化，会破坏 React 订阅）。
-const SESSION_STORES_KEY = '__hologram_session_stores__';
-const DEFAULT_ID = '__default__';
+const scoped = createScopedStore('__hologram_session_stores__', createSessionStoreImpl);
 
-function _storesMap(): Map<string, SessionStoreApi> {
-  const w = window as any;
-  if (!w[SESSION_STORES_KEY]) {
-    const m = new Map<string, SessionStoreApi>();
-    m.set(DEFAULT_ID, createSessionStoreImpl());
-    w[SESSION_STORES_KEY] = m;
-  }
-  return w[SESSION_STORES_KEY] as Map<string, SessionStoreApi>;
-}
-
-export function getSessionStore(storeId?: string): SessionStoreApi {
-  const id = storeId || DEFAULT_ID;
-  const stores = _storesMap();
-  let s = stores.get(id);
-  if (!s) {
-    s = createSessionStoreImpl();
-    stores.set(id, s);
-  }
-  return s;
-}
+export const getSessionStore = scoped.getStore;
 
 /** 从注册表中移除面板的会话 store。 */
 export function disposeSessionStore(storeId: string): void {
-  _storesMap().delete(storeId);
+  scoped.disposeStore(storeId);
 }
 
 // ── 非响应式访问器 ──
 
 function _store(storeId?: string) {
-  return getSessionStore(storeId).getState();
+  return scoped.getState(storeId);
 }
 
 export function getSessions(storeId?: string): ChatSessionMeta[] {

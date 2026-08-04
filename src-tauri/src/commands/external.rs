@@ -33,6 +33,15 @@ pub(crate) async fn stop_mcp_server() -> Result<String, String> {
     Ok("MCP Server 已停止".into())
 }
 
+/// 停掉 MCP 引擎子进程（workspace 切换时调用）。
+/// try_lock 避免与其它持有 MCP_MANAGER 的命令死锁；拿不到锁则跳过
+/// （start 前 kill_inner 幂等，下次启动仍会清理）。
+pub(crate) fn stop_mcp() {
+    if let Ok(mut mgr) = MCP_MANAGER.try_lock() {
+        mgr.stop();
+    }
+}
+
 pub(crate) fn start_unity_event_server(app: tauri::AppHandle) {
     UNITY_EVENT_SHUTDOWN.store(false, Ordering::SeqCst);
     std::thread::spawn(move || {
