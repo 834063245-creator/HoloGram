@@ -7,7 +7,9 @@
 // mid-session and it's immediately available, no restart needed.
 
 import { rpc } from '../bridge';
+import { z } from 'zod';
 import type { Tool } from './tool';
+import { defineTool } from './tools/define-tool';
 
 export interface SkillDef {
   name: string;
@@ -106,33 +108,23 @@ export class SkillRegistry {
 
 /** Create the Skill tool backed by a registry that hot-loads on every call. */
 export function createSkillTool(registry: SkillRegistry): Tool {
-  return {
-    name: () => 'Skill',
-    description: () =>
+  return defineTool({
+    name: 'Skill',
+    description:
       'Execute a skill within the main conversation. Skills are predefined workflows stored ' +
       'as markdown files. Install a new skill mid-session — it is immediately available. ' +
       'Call without a skill name to list all available skills. ' +
       'User slash commands like /skill-name are automatically routed here.',
-    parameters: () => ({
-      type: 'object',
-      properties: {
-        skill: {
-          type: 'string',
-          description: 'Skill name (directory name under .hologram/skills/).',
-        },
-        args: {
-          type: 'string',
-          description: 'Optional argument string ($ARGUMENTS in skill body).',
-        },
-      },
-      required: ['skill'],
+    schema: z.object({
+      skill: z.string().trim().describe('Skill name (directory name under .hologram/skills/).'),
+      args: z.string().optional().describe('Optional argument string ($ARGUMENTS in skill body).'),
     }),
-    readOnly: () => true,
+    readOnly: true,
     execute: async (args) => {
       // Hot-load — ensures newly installed skills are visible immediately
       const skills = await registry.reload();
-      const name = (args.skill as string)?.trim();
-      const skillArgs = (args.args as string) || '';
+      const name = args.skill;
+      const skillArgs = args.args || '';
 
       if (!name) {
         return skills.length === 0
@@ -147,5 +139,5 @@ export function createSkillTool(registry: SkillRegistry): Tool {
 
       return skill.prompt.replace(/\$ARGUMENTS/g, skillArgs);
     },
-  };
+  });
 }

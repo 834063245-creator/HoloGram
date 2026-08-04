@@ -4,6 +4,7 @@
 // Agent 循环 — Run() → stream() → StreamingToolExecutor → 循环直到模型给出最终答案
 
 import { rpc } from '../bridge';
+import { z } from 'zod';
 import type { Message, Provider, ToolCall, Usage } from '../provider/types';
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import type { AgentRecord, AgentStore } from './agent-store';
@@ -36,6 +37,7 @@ import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry'
 import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
+import { defineTool } from './tools/define-tool';
 
 /** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
  *  原始 Tool 永远不会被修改 — 这点至关重要，因为父 Agent
@@ -851,27 +853,23 @@ export class Agent {
    *  完成判定的主通道：模型显式上报，不再只靠正文正则。普通对话拿不到这个工具。 */
   private _registerGoalReportTool(): { called: boolean; status: 'completed' | 'failed'; summary: string } {
     const report = { called: false, status: 'completed' as 'completed' | 'failed', summary: '' };
-    const goalReportTool: Tool = {
-      name: () => 'goal_report',
-      description: () =>
+    const goalReportTool: Tool = defineTool({
+      name: 'goal_report',
+      description:
         '目标模式专用：确认目标已达成、或确认无法达成时调用，调用后目标循环结束。' +
         'status=completed 时 summary 写完成摘要；status=failed 时 summary 写阻塞原因。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          status: { type: 'string', enum: ['completed', 'failed'] },
-          summary: { type: 'string' },
-        },
-        required: ['status', 'summary'],
+      schema: z.object({
+        status: z.enum(['completed', 'failed']),
+        summary: z.string(),
       }),
-      readOnly: () => true,
-      execute: async (args: Record<string, unknown>) => {
+      readOnly: true,
+      execute: async (args) => {
         report.called = true;
-        report.status = args.status === 'failed' ? 'failed' : 'completed';
-        report.summary = typeof args.summary === 'string' ? args.summary : '';
+        report.status = args.status;
+        report.summary = args.summary;
         return `目标状态已记录: ${report.status}`;
       },
-    };
+    });
     this.tools.register(goalReportTool);
     return report;
   }

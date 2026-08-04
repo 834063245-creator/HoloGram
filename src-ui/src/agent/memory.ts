@@ -14,9 +14,11 @@
 //   Agent 自己主动存的记忆最高只能给 reference。fact 级别只有用户通过 /remember 明确要求时才能使用。
 
 import { rpc } from '../bridge';
+import { z } from 'zod';
 import type { AuraRecord } from './aura-memory';
 import { auraCount, auraInit, auraRecall, auraShutdown, auraStore } from './aura-memory';
 import type { Tool } from './tool';
+import { defineTool } from './tools/define-tool';
 
 // ── Fact 保存授权（自消费哨兵） ──
 // /remember 命令设置此标志；下一次 hologram_memory_save 会消费它。
@@ -633,12 +635,12 @@ function scoreMemoryRelevance(mf: MemoryFile, graphNodes: string[]): number {
 /** 创建记忆操作的 Agent 工具。所有工具都基于指定的 MemoryManager。 */
 export function createMemoryTools(mm: MemoryManager): Tool[] {
   return [
-    {
-      name: () => 'hologram_memory_list',
-      description: () =>
+    defineTool({
+      name: 'hologram_memory_list',
+      description:
         '列出所有已保存的记忆及其置信度和所属范围（项目/全局）。保存新记忆前，先调用此工具检查是否已有类似记忆——已有则用 hologram_memory_save 更新而非新建。',
-      parameters: () => ({ type: 'object', properties: {} }),
-      readOnly: () => true,
+      schema: z.object({}),
+      readOnly: true,
       execute: async () => {
         const sections: string[] = [];
         // 先显示全局，再显示项目
@@ -658,30 +660,22 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         }
         return sections.length > 0 ? sections.join('\n') : '暂无已保存的记忆。';
       },
-    },
-    {
-      name: () => 'hologram_memory_read',
-      description: () =>
+    }),
+    defineTool({
+      name: 'hologram_memory_read',
+      description:
         '读取一条已保存记忆的完整内容。需要回忆具体事实、用户偏好或过往决策时使用。每次读取会记录回想次数。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            description: '记忆名称（不含 .md 扩展名），从 hologram_memory_list 获取',
-          },
-          scope: {
-            type: 'string',
-            enum: ['project', 'global'],
-            description: '记忆范围。project=当前项目，global=跨所有项目共享。默认从 list 中看到的范围推断。',
-          },
-        },
-        required: ['name'],
+      schema: z.object({
+        name: z.string().describe('记忆名称（不含 .md 扩展名），从 hologram_memory_list 获取'),
+        scope: z
+          .enum(['project', 'global'])
+          .optional()
+          .describe('记忆范围。project=当前项目，global=跨所有项目共享。默认从 list 中看到的范围推断。'),
       }),
-      readOnly: () => true,
+      readOnly: true,
       execute: async (args) => {
-        const name = args.name as string;
-        const scope = (args.scope as 'project' | 'global') || 'project';
+        const name = args.name;
+        const scope = args.scope || 'project';
         const mf = await mm.read(name, scope, true);
         if (!mf) return `未找到记忆 "${name}"。用 hologram_memory_list 查看所有记忆。`;
         const confLabels: Record<Confidence, string> = {
@@ -700,32 +694,23 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           mf.content,
         ].join('\n');
       },
-    },
-    {
-      name: () => 'hologram_memory_search',
-      description: () =>
+    }),
+    defineTool({
+      name: 'hologram_memory_search',
+      description:
         '语义搜索记忆库（AuraSDK SDR 引擎）。用自然语言描述你想要的上下文，返回最相关的记忆文本。\n' +
         '适合：不确定是否有相关记忆时先搜一下、需要跨记忆关联信息、当前问题需要历史决策上下文。\n' +
         '注意：搜索结果基于语义相似度，不一定精确匹配关键词。空结果 = 确实没有相关记忆。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description:
-              '自然语言查询，描述你需要什么信息。例如："用户之前对 UI 布局的偏好"、"为什么选了 React 而不是 Vue"',
-          },
-          topK: {
-            type: 'number',
-            description: '返回条数上限（默认 10）。',
-          },
-        },
-        required: ['query'],
+      schema: z.object({
+        query: z.string().describe(
+          '自然语言查询，描述你需要什么信息。例如："用户之前对 UI 布局的偏好"、"为什么选了 React 而不是 Vue"',
+        ),
+        topK: z.coerce.number().optional().describe('返回条数上限（默认 10）。'),
       }),
-      readOnly: () => true,
+      readOnly: true,
       execute: async (args) => {
-        const query = args.query as string;
-        const topK = (args.topK as number) || 10;
+        const query = args.query;
+        const topK = args.topK || 10;
         const records = await mm.auraSemanticRecall(query, topK);
         if (records.length === 0) {
           const count = await mm.auraRecordCount();
@@ -740,10 +725,10 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         });
         return `### 语义搜索: "${query}"\n找到 ${records.length} 条相关记忆:\n\n${lines.join('\n\n')}`;
       },
-    },
-    {
-      name: () => 'hologram_memory_save',
-      description: () =>
+    }),
+    defineTool({
+      name: 'hologram_memory_save',
+      description:
         '保存或更新一条记忆。保守使用——只记代码库查不到且未来会话忘了会出错的东西。\n\n' +
         '置信度级别:\n' +
         '- reference (默认) — Agent 自己发现的信息最高只能给此级别\n' +
@@ -754,50 +739,28 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         '- project (默认) — 仅当前项目可见，适合架构决策、项目约定\n' +
         '- global — 跨所有项目可见，适合用户偏好、编码风格、个性\n\n' +
         '先 hologram_memory_list 检查是否已有类似记忆——已有则更新而非新建。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            description: '简短的 kebab-case 名称（只含小写字母数字和连字符），如 "user-prefers-concise"',
-          },
-          description: {
-            type: 'string',
-            description: '一句话摘要，用于快速判断是否相关',
-          },
-          type: {
-            type: 'string',
-            enum: ['user', 'feedback', 'project', 'reference'],
-            description: '记忆类型: user=用户画像, feedback=用户反馈/要求, project=项目决策/进展, reference=外部参考',
-          },
-          confidence: {
-            type: 'string',
-            enum: ['fact', 'reference', 'background', 'suppressed'],
-            description: '置信度。Agent 自己最高只能给 reference。fact 只有用户明确要求时才能用。默认: reference',
-          },
-          content: {
-            type: 'string',
-            description: '记忆正文。对于 feedback/project 类型，应包含 **Why:** 和 **How to apply:** 段落。',
-          },
-          scope: {
-            type: 'string',
-            enum: ['project', 'global'],
-            description:
-              '记忆范围。project=仅当前项目，global=跨所有项目共享。用户偏好/编码风格 → global；架构决策/项目约定 → project。默认: project',
-          },
-        },
-        required: ['name', 'description', 'type', 'content'],
+      schema: z.object({
+        name: z.string().describe('简短的 kebab-case 名称（只含小写字母数字和连字符），如 "user-prefers-concise"'),
+        description: z.string().describe('一句话摘要，用于快速判断是否相关'),
+        type: z
+          .enum(['user', 'feedback', 'project', 'reference'])
+          .describe('记忆类型: user=用户画像, feedback=用户反馈/要求, project=项目决策/进展, reference=外部参考'),
+        confidence: z
+          .enum(['reference', 'fact', 'background', 'suppressed'])
+          .optional()
+          .describe('置信度。Agent 自己最高只能给 reference。fact 只有用户明确要求时才能用。默认: reference'),
+        content: z
+          .string()
+          .describe('记忆正文。对于 feedback/project 类型，应包含 **Why:** 和 **How to apply:** 段落。'),
+        scope: z
+          .enum(['project', 'global'])
+          .optional()
+          .describe(
+            '记忆范围。project=仅当前项目，global=跨所有项目共享。用户偏好/编码风格 → global；架构决策/项目约定 → project。默认: project',
+          ),
       }),
-      readOnly: () => false,
       execute: async (args) => {
-        const type = args.type as string;
-        if (!['user', 'feedback', 'project', 'reference'].includes(type)) {
-          return `错误: type 必须是 user/feedback/project/reference，收到了 "${type}"`;
-        }
-        let confidence = (args.confidence as Confidence) || 'reference';
-        if (!['fact', 'reference', 'background', 'suppressed'].includes(confidence)) {
-          confidence = 'reference';
-        }
+        let confidence = args.confidence || 'reference';
         let factDowngraded = false;
         const authorized = consumeFactAuthorization();
         if (confidence === 'fact') {
@@ -808,19 +771,12 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
             factDowngraded = true;
           }
         }
-        const scope = (args.scope as 'project' | 'global') || 'project';
-        await mm.save(
-          args.name as string,
-          args.description as string,
-          type as MemoryFile['type'],
-          args.content as string,
-          confidence,
-          scope,
-        );
+        const scope = args.scope || 'project';
+        await mm.save(args.name, args.description, args.type, args.content, confidence, scope);
         // H1: 通知 workspace 以扇出（UI 总线 + 活跃 Agent 注入）
         mm.onSaved?.({
-          name: args.name as string,
-          description: args.description as string,
+          name: args.name,
+          description: args.description,
           confidence,
           scope,
         });
@@ -828,34 +784,22 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         const scopeNote = scope === 'global' ? ' [全局]' : '';
         return `已保存记忆 "${args.name}" (${confidence})${scopeNote}。${downgradeNote}`;
       },
-    },
-    {
-      name: () => 'hologram_memory_delete',
-      description: () => '删除一条已保存的记忆。当用户要求忘记某条信息，或某条记忆已过时/错误时使用。',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            description: '要删除的记忆名称（不含 .md 扩展名）',
-          },
-          scope: {
-            type: 'string',
-            enum: ['project', 'global'],
-            description: '记忆范围。默认: project',
-          },
-        },
-        required: ['name'],
+    }),
+    defineTool({
+      name: 'hologram_memory_delete',
+      description: '删除一条已保存的记忆。当用户要求忘记某条信息，或某条记忆已过时/错误时使用。',
+      schema: z.object({
+        name: z.string().describe('要删除的记忆名称（不含 .md 扩展名）'),
+        scope: z.enum(['project', 'global']).optional().describe('记忆范围。默认: project'),
       }),
-      readOnly: () => false,
       execute: async (args) => {
-        const name = args.name as string;
-        const scope = (args.scope as 'project' | 'global') || 'project';
+        const name = args.name;
+        const scope = args.scope || 'project';
         const ok = await mm.delete(name, scope);
         return ok
           ? `已删除记忆 "${name}"。`
           : `未找到记忆 "${name}"，可能已被删除。用 hologram_memory_list 查看当前记忆列表。`;
       },
-    },
+    }),
   ];
 }

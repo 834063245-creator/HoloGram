@@ -5,7 +5,9 @@
 // Five tools: task_create, task_update, task_list, task_get, task_stop.
 // Pure TypeScript, no Tauri invoke needed. Tasks are session-scoped.
 
+import { z } from 'zod';
 import type { Tool } from './tool';
+import { defineTool } from './tools/define-tool';
 
 export interface Task {
   id: number;
@@ -55,112 +57,82 @@ export class TaskManager {
 
 export function createTaskTools(mgr: TaskManager): Tool[] {
   return [
-    {
-      name: () => 'task_create',
-      description: () =>
+    defineTool({
+      name: 'task_create',
+      description:
         'Create a new task to track a piece of work. Use for multi-step tasks where you need to track progress across turns. Returns the task ID.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: 'Short task title (3-8 words)' },
-          detail: { type: 'string', description: 'What needs to be done, in one sentence' },
-        },
-        required: ['title', 'detail'],
+      schema: z.object({
+        title: z.string().describe('Short task title (3-8 words)'),
+        detail: z.string().describe('What needs to be done, in one sentence'),
       }),
-      readOnly: () => false,
       execute: async (args) => {
-        const title = (args.title as string) || '未命名任务';
-        const detail = (args.detail as string) || '';
-        const t = mgr.create(title, detail);
+        const t = mgr.create(args.title, args.detail);
         return JSON.stringify({ id: t.id, title: t.title, status: t.status, detail: t.detail });
       },
-    },
-    {
-      name: () => 'task_update',
-      description: () =>
+    }),
+    defineTool({
+      name: 'task_update',
+      description:
         "Update a task's status or details. Status can be: pending, in_progress, completed, cancelled.",
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          id: { type: 'integer', description: 'Task ID to update' },
-          status: {
-            type: 'string',
-            enum: ['pending', 'in_progress', 'completed', 'cancelled'],
-            description: 'New status for the task',
-          },
-          title: { type: 'string', description: 'New title (optional)' },
-          detail: { type: 'string', description: 'Updated detail text (optional)' },
-        },
-        required: ['id'],
+      schema: z.object({
+        id: z.coerce.number().int().describe('Task ID to update'),
+        status: z
+          .enum(['pending', 'in_progress', 'completed', 'cancelled'])
+          .optional()
+          .describe('New status for the task'),
+        title: z.string().optional().describe('New title (optional)'),
+        detail: z.string().optional().describe('Updated detail text (optional)'),
       }),
-      readOnly: () => false,
       execute: async (args) => {
-        const id = args.id as number;
-        const t = mgr.update(id, {
-          title: args.title as string | undefined,
-          status: args.status as Task['status'] | undefined,
-          detail: args.detail as string | undefined,
+        const t = mgr.update(args.id, {
+          title: args.title,
+          status: args.status,
+          detail: args.detail,
         });
-        if (!t) return JSON.stringify({ error: `Task ${id} not found` });
+        if (!t) return JSON.stringify({ error: `Task ${args.id} not found` });
         return JSON.stringify({ id: t.id, title: t.title, status: t.status, detail: t.detail });
       },
-    },
-    {
-      name: () => 'task_list',
-      description: () => 'List all tracked tasks, optionally filtered by status. Returns tasks sorted newest-first.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          status: {
-            type: 'string',
-            enum: ['pending', 'in_progress', 'completed', 'cancelled'],
-            description: 'Optional status filter. Omit to list all.',
-          },
-        },
+    }),
+    defineTool({
+      name: 'task_list',
+      description: 'List all tracked tasks, optionally filtered by status. Returns tasks sorted newest-first.',
+      schema: z.object({
+        status: z
+          .enum(['pending', 'in_progress', 'completed', 'cancelled'])
+          .optional()
+          .describe('Optional status filter. Omit to list all.'),
       }),
-      readOnly: () => true,
+      readOnly: true,
       execute: async (args) => {
-        const filter = args.status as Task['status'] | undefined;
-        const tasks = mgr.list(filter);
+        const tasks = mgr.list(args.status);
         return JSON.stringify({ tasks, count: tasks.length });
       },
-    },
-    {
-      name: () => 'task_get',
-      description: () => 'Get full details of a single task by ID.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          id: { type: 'integer', description: 'Task ID to fetch' },
-        },
-        required: ['id'],
+    }),
+    defineTool({
+      name: 'task_get',
+      description: 'Get full details of a single task by ID.',
+      schema: z.object({
+        id: z.coerce.number().int().describe('Task ID to fetch'),
       }),
-      readOnly: () => true,
+      readOnly: true,
       execute: async (args) => {
-        const id = args.id as number;
-        const t = mgr.get(id);
-        if (!t) return JSON.stringify({ error: `Task ${id} not found` });
+        const t = mgr.get(args.id);
+        if (!t) return JSON.stringify({ error: `Task ${args.id} not found` });
         return JSON.stringify(t);
       },
-    },
-    {
-      name: () => 'task_stop',
-      description: () =>
+    }),
+    defineTool({
+      name: 'task_stop',
+      description:
         'Cancel/stop a task. The task record is kept (status set to cancelled) for audit. Use when a task is no longer needed or was superseded.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          id: { type: 'integer', description: 'Task ID to stop' },
-        },
-        required: ['id'],
+      schema: z.object({
+        id: z.coerce.number().int().describe('Task ID to stop'),
       }),
-      readOnly: () => false,
       execute: async (args) => {
-        const id = args.id as number;
-        const t = mgr.stop(id);
-        if (!t) return JSON.stringify({ error: `Task ${id} not found` });
+        const t = mgr.stop(args.id);
+        if (!t) return JSON.stringify({ error: `Task ${args.id} not found` });
         return JSON.stringify({ id: t.id, status: t.status });
       },
-    },
+    }),
   ];
 }

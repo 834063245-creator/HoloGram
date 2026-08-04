@@ -22,7 +22,9 @@
 
 import type { Pricing } from './agent-types';
 import { log } from './logger';
+import { z } from 'zod';
 import type { Tool } from './tool';
+import { defineTool } from './tools/define-tool';
 
 // ── 收集的指标 ──
 
@@ -519,13 +521,13 @@ export function createCompactionTools(
   loadConfig: () => Promise<CompactionConfig | null>,
 ): Tool[] {
   return [
-    {
-      name: () => 'hologram_compaction_stats',
-      description: () =>
+    defineTool({
+      name: 'hologram_compaction_stats',
+      description:
         '查看上下文压缩的运行状态和数据。包括：已记录的压缩次数、压缩比、信息丢失估计、自动调优状态、当前参数 vs 推荐参数。' +
         '用户问"压缩调得怎么样"或"压缩数据够不够"时调用。',
-      parameters: () => ({ type: 'object', properties: {} }),
-      readOnly: () => true,
+      schema: z.object({}),
+      readOnly: true,
       execute: async () => {
         const tracker = getTracker();
         const pricing = getPricing();
@@ -606,6 +608,6 @@ export function createCompactionTools(
 
         return lines.join('\n');
       },
-    },
+    }),
   ];
 }

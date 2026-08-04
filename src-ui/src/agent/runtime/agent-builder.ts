@@ -15,9 +15,11 @@
 import type { Tool, ToolExecutor } from '../tool';
 import { ToolRegistry, agentInvoke } from '../tool';
 import { rpc, listen } from '../../bridge';
+import { z } from 'zod';
 import type { Provider } from '../../provider/types';
 import { createCompactionTools } from '../compaction-model';
 import type { GraphContext } from '../hooks';
+import { defineTool } from '../tools/define-tool';
 import {
   buildFileNodeIndex,
   buildGraphSnapshot,
@@ -308,20 +310,33 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
     const schemas = await loadHologramSchemas();
     for (const tool of schemas.map((s) => mcpSchemaToTool(s, holoExec))) registry.register(tool);
 
-    registry.register({
-      name: () => 'dataflow_save',
-      description: () => '保存数据流追踪结果到 .hologram/dataflow/，供面板查看和后续查询。',
-      parameters: () => ({ type: 'object', properties: { query: { type: 'string' }, content: { type: 'string' } }, required: ['query', 'content'] }),
-      readOnly: () => false,
-      execute: async (args) => { const r = await agentInvoke('dataflow_save', args); deps.onDataflowSaved?.(); return r; },
-    });
-    registry.register({
-      name: () => 'dataflow_query',
-      description: () => '查询已保存的数据流追踪结果。',
-      parameters: () => ({ type: 'object', properties: { traceId: { type: 'string' }, list: { type: 'boolean' } } }),
-      readOnly: () => true,
-      execute: (args) => agentInvoke('dataflow_query', args),
-    });
+    registry.register(
+      defineTool({
+        name: 'dataflow_save',
+        description: '保存数据流追踪结果到 .hologram/dataflow/，供面板查看和后续查询。',
+        schema: z.object({
+          query: z.string(),
+          content: z.string(),
+        }),
+        execute: async (args) => {
+          const r = await agentInvoke('dataflow_save', args);
+          deps.onDataflowSaved?.();
+          return r;
+        },
+      }),
+    );
+    registry.register(
+      defineTool({
+        name: 'dataflow_query',
+        description: '查询已保存的数据流追踪结果。',
+        schema: z.object({
+          traceId: z.string().optional(),
+          list: z.boolean().optional(),
+        }),
+        readOnly: true,
+        execute: (args) => agentInvoke('dataflow_query', args),
+      }),
+    );
   }
 
   // ── Shell 互斥队列 ──
