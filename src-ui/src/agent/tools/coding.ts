@@ -7,8 +7,10 @@
 // Coding Tools — 文件 / Shell / 搜索 / Git / Web
 // ═══════════════════════════════════════════════════════
 
+import { z } from 'zod';
 import type { Provider } from '../../provider/types';
 import type { Tool, ToolExecutor } from '../tool';
+import { defineTool } from './define-tool';
 
 /** ask_user 工具的 UI 请求 — 由 workspace 注入的回调转发到 UI 总线。
  *  保持 agent 层不 import ui/ 模块。 */
@@ -96,31 +98,18 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
     },
 
     // ── 文件操作 ──
-    {
-      name: () => 'read_file_content',
-      description: () =>
+    defineTool({
+      name: 'read_file_content',
+      description:
         'Read the content of a file on disk. Returns text in cat -n format (6-digit line number + tab + content). Use offset and limit to read a specific range of lines (0-indexed). Use to inspect source code files when analyzing dependencies or investigating violations.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          filePath: {
-            type: 'string',
-            description: 'Absolute path to the file to read',
-          },
-          offset: {
-            type: 'integer',
-            description: 'Line number to start reading from (0-indexed, default: 0)',
-          },
-          limit: {
-            type: 'integer',
-            description: 'Maximum number of lines to return (default: all lines)',
-          },
-        },
-        required: ['filePath'],
+      schema: z.object({
+        filePath: z.string().describe('Absolute path to the file to read'),
+        offset: z.number().int().optional().describe('Line number to start reading from (0-indexed, default: 0)'),
+        limit: z.number().int().optional().describe('Maximum number of lines to return (default: all lines)'),
       }),
-      readOnly: () => true,
+      readOnly: true,
       execute: (args, onProgress) => exec('read_file_content', args, onProgress),
-    },
+    }),
     {
       name: () => 'write_file',
       description: () =>
@@ -453,28 +442,22 @@ export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?:
         }, onProgress);
       },
     },
-    {
-      name: () => 'git_log',
-      description: () =>
+    defineTool({
+      name: 'git_log',
+      description:
         'Show recent git commit history. Returns structured JSON with commit hash, message, author, and date for each commit.',
-      parameters: () => ({
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Absolute path to the git repository root',
-          },
-          count: {
-            type: 'integer',
-            description: 'Number of recent commits to show (default: 10)',
-            default: 10,
-          },
-        },
-        required: ['path'],
+      schema: z.object({
+        path: z.string().describe('Absolute path to the git repository root'),
+        count: z
+          .coerce.number()
+          .int()
+          .optional()
+          .default(10)
+          .describe('Number of recent commits to show (default: 10)'),
       }),
-      readOnly: () => true,
-      execute: (args, onProgress) => exec('git_log', { path: args.path, count: args.count || 10 }, onProgress),
-    },
+      readOnly: true,
+      execute: (args, onProgress) => exec('git_log', { path: args.path, count: args.count }, onProgress),
+    }),
     {
       name: () => 'git_stage',
       description: () => 'Stage files for commit. Use before git_commit to add changes to the staging area.',
