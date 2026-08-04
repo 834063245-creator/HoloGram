@@ -2,15 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 // AgentsPanel — 多 Agent 可观测性面板。
-// 三个区域：Agent 树 / TaskBoard 视图 / 消息流 + 告警。
-// 参照 CheckPanel.tsx 的结构。
+// 布局：状态总览条 + 标签页（拓扑 / 任务 / 动态）。
 
-import React, { useEffect, useState } from 'react';
-import { useDockStore } from '../dock-store';
-import { useAgentPanelStore, type AgentPanelEntry } from '../agent-panel-store';
-import type { AgentSummary } from '../../agent/runtime/types';
-import type { BoardEntry } from '../../agent/task-board';
+import type React from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { DiscoveryEntry } from '../../agent/discovery-board';
+import type { AgentStatus, AgentSummary } from '../../agent/runtime/types';
+import type { BoardEntry, BoardStatus } from '../../agent/task-board';
+import {
+  type AgentPanelEntry,
+  type LifecycleAlert,
+  type MessageFlowEntry,
+  useAgentPanelStore,
+} from '../agent-panel-store';
+import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
 import './AgentsPanel.css';
@@ -36,46 +41,73 @@ function buildAgentTree(agents: AgentSummary[]): AgentPanelEntry[] {
 
 function fmtRelTime(ts: number): string {
   const diff = Date.now() - ts;
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}min ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
+  if (diff < 10_000) return '刚刚';
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}s`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
+  return `${Math.floor(diff / 86_400_000)}d`;
+}
+
+function fmtDuration(ms: number): string {
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  if (m < 60) return `${m}m${s > 0 ? `${s}s` : ''}`;
+  return `${Math.floor(m / 60)}h${m % 60}m`;
 }
 
 function payloadSummary(payload: unknown): string {
-  if (typeof payload === 'string') return payload.slice(0, 80);
+  if (typeof payload === 'string') return payload.slice(0, 120);
   try {
-    return JSON.stringify(payload).slice(0, 80);
+    return JSON.stringify(payload).slice(0, 120);
   } catch {
-    return String(payload).slice(0, 80);
+    return String(payload).slice(0, 120);
   }
 }
 
-// ── Agent tree node ──
+const AGENT_STATUS_LABEL: Record<AgentStatus, string> = {
+  running: '运行中',
+  idle: '空闲',
+  paused: '已暂停',
+  completed: '已完成',
+  failed: '失败',
+  stopped: '已停止',
+};
 
-const AgentTreeNode: React.FC<{ node: AgentPanelEntry; depth: number }> = ({ node, depth }) => {
-  const [expanded, setExpanded] = useState(false);
+const BOARD_STATUS_LABEL: Record<BoardStatus, string> = {
+  running: '运行中',
+  completed: '已完成',
+  failed: '失败',
+  stopped: '已停止',
+  merged: '已合并',
+};
+
+// ── 拓扑：Agent 节点 ──
+
+const AgentNode: React.FC<{ node: AgentPanelEntry }> = ({ node }) => {
+  const [expanded, setExpanded] = useState(true);
   const hasChildren = node.children.length > 0;
   return (
-    <div>
-      <div
-        className="ap-agent-node"
-        style={{ paddingLeft: `${8 + depth * 16}px` }}
-        onClick={() => setExpanded((e) => !e)}
-      >
-        <span className={`ap-agent-dot ${node.status}`} />
-        <span className="ap-agent-id">{node.id}</span>
-        {hasChildren && (
-          <span style={{ color: 'var(--obs-text-2)', fontSize: '10px', cursor: 'pointer' }}>
-            {expanded ? '▾' : '▸'}
+    <div className="ap-agent">
+      <div className="ap-agent-card" onClick={() => hasChildren && setExpanded((e) => !e)}>
+        <div className="ap-agent-top">
+          <span className={`ap-dot ${node.status}`} />
+          <span className="ap-agent-id" title={node.id}>
+            {node.id}
           </span>
+          <span className={`ap-status ${node.status}`}>{AGENT_STATUS_LABEL[node.status] ?? node.status}</span>
+          {hasChildren && <span className="ap-agent-chevron">{expanded ? '▾' : '▸'}</span>}
+        </div>
+        {node.description && (
+          <div className="ap-agent-desc" title={node.description}>
+            {node.description}
+          </div>
         )}
-        <span className="ap-agent-desc">{node.description}</span>
       </div>
       {expanded && hasChildren && (
         <div className="ap-agent-children">
           {node.children.map((child) => (
-            <AgentTreeNode key={child.id} node={child} depth={depth + 1} />
+            <AgentNode key={child.id} node={child} />
           ))}
         </div>
       )}
@@ -83,72 +115,111 @@ const AgentTreeNode: React.FC<{ node: AgentPanelEntry; depth: number }> = ({ nod
   );
 };
 
-// ── TaskBoard row ──
+// ── 任务：TaskBoard 卡片 ──
 
-const TaskBoardRow: React.FC<{ entry: BoardEntry }> = ({ entry }) => {
+const TaskCard: React.FC<{ entry: BoardEntry }> = ({ entry }) => {
   const [expanded, setExpanded] = useState(false);
+  const dur = fmtDuration((entry.finishedAt ?? Date.now()) - entry.startedAt);
   return (
-    <>
-      <tr className="ap-tb-row" onClick={() => setExpanded((e) => !e)}>
-        <td>{entry.agentId}</td>
-        <td style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+    <div className="ap-task-card" onClick={() => setExpanded((e) => !e)}>
+      <div className="ap-task-top">
+        <span className={`ap-badge ${entry.status}`}>{BOARD_STATUS_LABEL[entry.status] ?? entry.status}</span>
+        <span className="ap-task-desc" title={entry.description}>
           {entry.description}
-        </td>
-        <td>
-          <span className={`ap-tb-badge ${entry.status}`}>{entry.status}</span>
-        </td>
-        <td style={{ textAlign: 'right' }}>{entry.filesTouched.length}</td>
-        <td style={{ fontSize: '9px', color: 'var(--obs-text-2)' }}>{fmtRelTime(entry.startedAt)}</td>
-      </tr>
+        </span>
+      </div>
+      <div className="ap-task-meta">
+        <span className="ap-task-agent">{entry.agentId}</span>
+        <span className="ap-task-meta-sep">·</span>
+        <span>{entry.filesTouched.length} 文件</span>
+        <span className="ap-task-meta-sep">·</span>
+        <span>{dur}</span>
+        <span className="ap-task-time">{fmtRelTime(entry.startedAt)}</span>
+      </div>
       {expanded && (
-        <tr>
-          <td colSpan={5}>
-            <div className="ap-tb-detail">
-              {entry.summary && (
-                <>
-                  <div className="ap-tb-detail-label">Summary</div>
-                  <div className="ap-tb-detail-text">{entry.summary}</div>
-                </>
-              )}
-              {entry.filesTouched.length > 0 && (
-                <>
-                  <div className="ap-tb-detail-label" style={{ marginTop: '6px' }}>Files ({entry.filesTouched.length})</div>
-                  <div className="ap-tb-detail-text">{entry.filesTouched.join('\n')}</div>
-                </>
-              )}
-              {entry.diff && (
-                <div className="ap-tb-diff">{entry.diff}</div>
-              )}
-            </div>
-          </td>
-        </tr>
+        <div className="ap-task-detail">
+          {entry.summary && (
+            <>
+              <div className="ap-detail-label">摘要</div>
+              <div className="ap-detail-text">{entry.summary}</div>
+            </>
+          )}
+          {entry.filesTouched.length > 0 && (
+            <>
+              <div className="ap-detail-label">改动文件 ({entry.filesTouched.length})</div>
+              <div className="ap-detail-text ap-detail-files">{entry.filesTouched.join('\n')}</div>
+            </>
+          )}
+          {entry.diff && <div className="ap-detail-diff">{entry.diff}</div>}
+          {!entry.summary && entry.filesTouched.length === 0 && !entry.diff && (
+            <div className="ap-detail-text ap-detail-none">暂无详情</div>
+          )}
+        </div>
       )}
-    </>
+    </div>
   );
 };
 
-// ── Collapsible section ──
+// ── 动态：统一时间线 ──
 
-const Section: React.FC<{
-  title: string;
-  count: string;
-  startOpen: boolean;
-  children: React.ReactNode;
-}> = ({ title, count, startOpen, children }) => {
-  const [open, setOpen] = useState(startOpen);
+type FeedItem =
+  | { kind: 'msg'; ts: number; entry: MessageFlowEntry }
+  | { kind: 'discovery'; ts: number; entry: DiscoveryEntry }
+  | { kind: 'alert'; ts: number; entry: LifecycleAlert };
+
+const FEED_ICON: Record<FeedItem['kind'], string> = {
+  msg: 'send',
+  discovery: 'info',
+  alert: 'alert',
+};
+
+const FeedRow: React.FC<{ item: FeedItem }> = ({ item }) => {
+  let head: React.ReactNode;
+  let text: string;
+  let level = '';
+  if (item.kind === 'msg') {
+    const m = item.entry.msg;
+    head = (
+      <>
+        <span className="ap-feed-who">{m.from}</span>
+        <span className="ap-feed-arrow">→</span>
+        <span className="ap-feed-who">{m.to}</span>
+        <span className="ap-feed-type">{m.type}</span>
+      </>
+    );
+    text = payloadSummary(m.payload);
+  } else if (item.kind === 'discovery') {
+    const d = item.entry;
+    head = (
+      <>
+        <span className="ap-feed-who">{d.agentId}</span>
+        <span className="ap-feed-type">{d.category}</span>
+      </>
+    );
+    text = `${d.key}: ${d.value}`;
+  } else {
+    const a = item.entry;
+    head = <span className="ap-feed-who">生命周期</span>;
+    text = a.text;
+    level = a.level;
+  }
   return (
-    <div className="ap-section">
-      <div className="ap-section-head" onClick={() => setOpen((o) => !o)}>
-        <span className="ap-section-arrow">{open ? '▾' : '▸'}</span>
-        <span className="ap-section-label">{title}</span>
-        {count && <span className="ap-section-badge">{count}</span>}
+    <div className={`ap-feed-item ${item.kind}${level ? ` ${level}` : ''}`}>
+      <span className="ap-feed-icon" dangerouslySetInnerHTML={{ __html: iconHtml(FEED_ICON[item.kind], 11) }} />
+      <div className="ap-feed-body">
+        <div className="ap-feed-head">{head}</div>
+        <div className="ap-feed-text" title={text}>
+          {text}
+        </div>
       </div>
-      <div className={`ap-section-body${open ? '' : ' collapsed'}`}>{children}</div>
+      <span className="ap-feed-time">{fmtRelTime(item.ts)}</span>
     </div>
   );
 };
 
 // ── Main Component ──
+
+type TabId = 'topology' | 'tasks' | 'feed';
 
 export function AgentsPanel() {
   const open = useDockStore((s) => s.open.agents);
@@ -158,6 +229,8 @@ export function AgentsPanel() {
   const discoveries = useAgentPanelStore((s) => s.discoveries);
   const messageFlow = useAgentPanelStore((s) => s.messageFlow);
   const alerts = useAgentPanelStore((s) => s.alerts);
+
+  const [tab, setTab] = useState<TabId>('topology');
 
   // Data refresh: mount + bus listener + 2s polling
   useEffect(() => {
@@ -181,19 +254,50 @@ export function AgentsPanel() {
     };
   }, [open]);
 
-  const tree = buildAgentTree(agents);
-  const recentMsgs = messageFlow.slice(-20);
-  const recentAlerts = alerts.slice(-5);
+  const tree = useMemo(() => buildAgentTree(agents), [agents]);
+
+  // 状态统计：运行中 / 空闲 / 已完成 / 异常(失败+停止)
+  const stats = useMemo(() => {
+    let running = 0,
+      idle = 0,
+      completed = 0,
+      bad = 0;
+    for (const a of agents) {
+      if (a.status === 'running') running++;
+      else if (a.status === 'idle' || a.status === 'paused') idle++;
+      else if (a.status === 'completed') completed++;
+      else bad++;
+    }
+    return { running, idle, completed, bad };
+  }, [agents]);
+
+  // 任务排序：运行中优先，其余按开始时间倒序
+  const sortedTasks = useMemo(() => {
+    const rank = (s: BoardStatus) => (s === 'running' ? 0 : s === 'failed' ? 1 : 2);
+    return [...taskBoard].sort((a, b) => rank(a.status) - rank(b.status) || b.startedAt - a.startedAt);
+  }, [taskBoard]);
+
+  // 动态流：消息 + 发现 + 告警，按时间倒序
+  const feed = useMemo(() => {
+    const items: FeedItem[] = [
+      ...messageFlow.map((entry): FeedItem => ({ kind: 'msg', ts: entry.ts, entry })),
+      ...discoveries.map((entry): FeedItem => ({ kind: 'discovery', ts: entry.ts, entry })),
+      ...alerts.map((entry): FeedItem => ({ kind: 'alert', ts: entry.ts, entry })),
+    ];
+    items.sort((a, b) => b.ts - a.ts);
+    return items.slice(0, 40);
+  }, [messageFlow, discoveries, alerts]);
+
+  const hasWarnAlert = alerts.some((a) => a.level === 'warn');
 
   return (
     <div id="agents-panel" className={open ? 'ap-open' : ''}>
       {/* Header */}
       <div className="ap-tab">
-        <span
-          className="ap-tab-icon"
-          dangerouslySetInnerHTML={{ __html: iconHtml('agent', 14) }}
-        />
-        <span className="ap-tab-label"><span className="zh">智能体</span>AGENTS</span>
+        <span className="ap-tab-icon" dangerouslySetInnerHTML={{ __html: iconHtml('agent', 14) }} />
+        <span className="ap-tab-label">
+          <span className="zh">智能体</span>AGENTS
+        </span>
         <button
           className="ap-close-btn"
           dangerouslySetInnerHTML={{ __html: iconHtml('close', 16) }}
@@ -204,85 +308,66 @@ export function AgentsPanel() {
         />
       </div>
 
-      {/* Content */}
+      {/* 状态总览 */}
+      <div className="ap-stats">
+        <div className="ap-stat">
+          <span className="ap-dot running" />
+          <span className="ap-stat-num">{stats.running}</span>
+          <span className="ap-stat-label">运行中</span>
+        </div>
+        <div className="ap-stat">
+          <span className="ap-dot idle" />
+          <span className="ap-stat-num">{stats.idle}</span>
+          <span className="ap-stat-label">空闲</span>
+        </div>
+        <div className="ap-stat">
+          <span className="ap-dot completed" />
+          <span className="ap-stat-num">{stats.completed}</span>
+          <span className="ap-stat-label">已完成</span>
+        </div>
+        <div className="ap-stat">
+          <span className="ap-dot failed" />
+          <span className="ap-stat-num">{stats.bad}</span>
+          <span className="ap-stat-label">异常</span>
+        </div>
+      </div>
+
+      {/* 标签页 */}
+      <div className="ap-tabs">
+        <button className={`ap-tab-btn${tab === 'topology' ? ' active' : ''}`} onClick={() => setTab('topology')}>
+          拓扑<span className="ap-tab-count">{agents.length}</span>
+        </button>
+        <button className={`ap-tab-btn${tab === 'tasks' ? ' active' : ''}`} onClick={() => setTab('tasks')}>
+          任务<span className="ap-tab-count">{taskBoard.length}</span>
+        </button>
+        <button className={`ap-tab-btn${tab === 'feed' ? ' active' : ''}`} onClick={() => setTab('feed')}>
+          动态<span className="ap-tab-count">{feed.length}</span>
+          {hasWarnAlert && <span className="ap-tab-dot" />}
+        </button>
+      </div>
+
+      {/* 内容 */}
       <div className="ap-content">
-        {/* ── Agent tree ── */}
-        <Section title="Agent 拓扑" count={String(agents.length)} startOpen={true}>
-          {tree.length === 0 ? (
+        {tab === 'topology' &&
+          (tree.length === 0 ? (
             <div className="ap-empty">无活跃 Agent</div>
           ) : (
-            tree.map((node) => <AgentTreeNode key={node.id} node={node} depth={0} />)
-          )}
-        </Section>
+            tree.map((node) => <AgentNode key={node.id} node={node} />)
+          ))}
 
-        {/* ── TaskBoard ── */}
-        <Section title="TaskBoard" count={String(taskBoard.length)} startOpen={true}>
-          {taskBoard.length === 0 ? (
+        {tab === 'tasks' &&
+          (sortedTasks.length === 0 ? (
             <div className="ap-empty">无任务记录</div>
           ) : (
-            <table className="ap-tb-table">
-              <thead>
-                <tr>
-                  <th>Agent</th>
-                  <th>描述</th>
-                  <th>状态</th>
-                  <th style={{ textAlign: 'right' }}>文件</th>
-                  <th>时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                {taskBoard.map((entry) => (
-                  <TaskBoardRow key={entry.agentId} entry={entry} />
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Section>
+            sortedTasks.map((entry) => <TaskCard key={entry.agentId} entry={entry} />)
+          ))}
 
-        {/* ── Discovery board ── */}
-        <Section title="发现区" count={String(discoveries.length)} startOpen={false}>
-          {discoveries.length === 0 ? (
-            <div className="ap-empty">无共享发现</div>
+        {tab === 'feed' &&
+          (feed.length === 0 ? (
+            <div className="ap-empty">暂无动态</div>
           ) : (
-            discoveries.map((entry) => (
-              <div key={entry.id} className="ap-msg-item">
-                <span className="ap-msg-type">[{entry.category}]</span>
-                <span className="ap-msg-from">{entry.agentId}</span>
-                <span className="ap-msg-arrow">→</span>
-                <span className="ap-msg-payload">{entry.key}: {entry.value.slice(0, 100)}</span>
-              </div>
-            ))
-          )}
-        </Section>
-
-        {/* ── Message flow ── */}
-        <Section title="消息流" count={String(recentMsgs.length)} startOpen={false}>
-          {recentMsgs.length === 0 ? (
-            <div className="ap-empty">无消息</div>
-          ) : (
-            recentMsgs.map((m, i) => (
-              <div key={i} className="ap-msg-item">
-                <span className="ap-msg-from">{m.msg.from}</span>
-                <span className="ap-msg-arrow">→</span>
-                <span className="ap-msg-to">{m.msg.to}</span>
-                <span className="ap-msg-type">[{m.msg.type}]</span>
-                <span className="ap-msg-payload">{payloadSummary(m.msg.payload)}</span>
-              </div>
-            ))
-          )}
-        </Section>
-
-        {/* ── Alerts ── */}
-        {recentAlerts.length > 0 && (
-          <Section title="告警" count={String(recentAlerts.length)} startOpen={false}>
-            {recentAlerts.map((alert) => (
-              <div key={alert.id} className={`ap-alert ${alert.level}`}>
-                <span className="ap-alert-text">{alert.text}</span>
-                <span className="ap-alert-time">{fmtRelTime(alert.ts)}</span>
-              </div>
-            ))}
-          </Section>
-        )}
+            feed.map((item, i) => <FeedRow key={`${item.kind}-${item.ts}-${i}`} item={item} />)
+          ))}
       </div>
     </div>
   );
