@@ -76,6 +76,13 @@ fn model_dir_candidates() -> Vec<PathBuf> {
 
 impl MiniLMEmbedder {
     fn load() -> Result<Self, String> {
+        // 0. 限制 ONNX Runtime 的 CPU 占用：官方预编译的 onnxruntime.dll 用 OpenMP 构建，
+        //    默认 intra-op 并行会吃满所有核，后台向量重建会把整个系统拖卡（UI 渲染、
+        //    Agent 事件循环、Tauri 主进程全被抢 CPU）。OMP_NUM_THREADS 必须在 ORT 初始化
+        //    前设置才生效（OpenMP 构建下 with_intra_threads 无效）；留 1-2 个核给交互。
+        if std::env::var_os("OMP_NUM_THREADS").is_none() {
+            std::env::set_var("OMP_NUM_THREADS", "2");
+        }
         // 1. 初始化 ONNX Runtime（动态加载 DLL，进程级一次）
         ORT_INIT.get_or_init(|| {
             let mut last_err = String::from("无候选路径");
@@ -109,6 +116,9 @@ impl MiniLMEmbedder {
         let tokenizer = WordPieceTokenizer::from_file(&vocab_path)?;
         let session = Session::builder()
             .map_err(|e| format!("session builder: {e}"))?
+            // 兜底：非 OpenMP 构建的 ORT 用此限制线程数；OpenMP 构建走上面的 OMP_NUM_THREADS
+            .with_intra_threads(2)
+            .map_err(|e| format!("session intra threads: {e}"))?
             .commit_from_file(&model_path)
             .map_err(|e| format!("ONNX 模型加载失败 ({}): {e}", model_path.display()))?;
 
