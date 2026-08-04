@@ -3,7 +3,6 @@
 
 pub mod memory;
 pub mod sqlite;
-pub mod migration;
 pub mod store;
 pub mod incremental;
 pub mod string_arena;

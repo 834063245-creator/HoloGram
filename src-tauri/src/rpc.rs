@@ -86,33 +86,10 @@ pub(crate) async fn rpc(
             let path = opt_str(&params, "path");
             commands::graph::load_graph_json(path, state).await
         }
-        "load_binary_graph" => {
-            let path = opt_str(&params, "path");
-            ok_json(commands::graph::load_binary_graph(path, state).await)
-        }
         "analyze_and_load" => {
             let path = req_str(&params, "path", "analyze_and_load")?;
             let force = opt_bool(&params, "force");
             commands::graph::analyze_and_load(path, force, app).await
-        }
-        "analyze_in_background" => {
-            let path = req_str(&params, "path", "analyze_in_background")?;
-            commands::graph::analyze_in_background(path, app).await
-        }
-        "engine_get_graph" => commands::graph::engine_get_graph(),
-        "engine_neighbors" => {
-            let node_id = req_str(&params, "node_id", "engine_neighbors")?;
-            let depth = opt_usize(&params, "depth").unwrap_or(1);
-            commands::graph::engine_neighbors(node_id, depth)
-        }
-        "engine_path" => {
-            let from_id = req_str(&params, "from_id", "engine_path")?;
-            let to_id = req_str(&params, "to_id", "engine_path")?;
-            commands::graph::engine_path(from_id, to_id)
-        }
-        "engine_search" => {
-            let query = req_str(&params, "query", "engine_search")?;
-            commands::graph::engine_search(query)
         }
         "engine_impact" => {
             let node_id = req_str(&params, "node_id", "engine_impact")?;
@@ -123,12 +100,6 @@ pub(crate) async fn rpc(
         // ═══════════════════════════════════════════════════════
         // Git（23 个命令）
         // ═══════════════════════════════════════════════════════
-        "git_tree_status" => {
-            let path = req_str(&params, "path", "git_tree_status")?;
-            let is_agent = opt_bool(&params, "is_agent");
-            let _agent_id = opt_str(&params, "_agent_id");
-            commands::git_cmds::git_tree_status(path, is_agent, _agent_id, state, app).await
-        }
         "git_status" => {
             let path = req_str(&params, "path", "git_status")?;
             let is_agent = opt_bool(&params, "is_agent");
@@ -156,13 +127,6 @@ pub(crate) async fn rpc(
             let _agent_id = opt_str(&params, "_agent_id");
             commands::git_cmds::git_stage(path, files, is_agent, _agent_id, state, app).await
         }
-        "git_unstage" => {
-            let path = req_str(&params, "path", "git_unstage")?;
-            let files = req_strs(&params, "files", "git_unstage")?;
-            let is_agent = opt_bool(&params, "is_agent");
-            let _agent_id = opt_str(&params, "_agent_id");
-            commands::git_cmds::git_unstage(path, files, is_agent, _agent_id, state, app).await
-        }
         "git_stage_all" => {
             let path = req_str(&params, "path", "git_stage_all")?;
             let is_agent = opt_bool(&params, "is_agent");
@@ -188,12 +152,6 @@ pub(crate) async fn rpc(
             let _agent_id = opt_str(&params, "_agent_id");
             commands::git_cmds::git_pull(path, is_agent, _agent_id, state, app).await
         }
-        "git_fetch" => {
-            let path = req_str(&params, "path", "git_fetch")?;
-            let is_agent = opt_bool(&params, "is_agent");
-            let _agent_id = opt_str(&params, "_agent_id");
-            commands::git_cmds::git_fetch(path, is_agent, _agent_id, state, app).await
-        }
         "git_log" => {
             let path = req_str(&params, "path", "git_log")?;
             let limit = opt_i32(&params, "limit");
@@ -206,12 +164,6 @@ pub(crate) async fn rpc(
             let is_agent = opt_bool(&params, "is_agent");
             let _agent_id = opt_str(&params, "_agent_id");
             commands::git_cmds::git_init(path, is_agent, _agent_id, state, app).await
-        }
-        "git_list_branches" => {
-            let path = req_str(&params, "path", "git_list_branches")?;
-            let is_agent = opt_bool(&params, "is_agent");
-            let _agent_id = opt_str(&params, "_agent_id");
-            commands::git_cmds::git_list_branches(path, is_agent, _agent_id, state, app).await
         }
         "git_checkout" => {
             let path = req_str(&params, "path", "git_checkout")?;
@@ -239,11 +191,6 @@ pub(crate) async fn rpc(
             let _agent_id = opt_str(&params, "_agent_id");
             commands::git_cmds::git_stash_pop(path, is_agent, _agent_id, state, app).await
         }
-        "git_stash_list" => {
-            let path = req_str(&params, "path", "git_stash_list")?;
-            let _agent_id = opt_str(&params, "_agent_id");
-            commands::git_cmds::git_stash_list(path, _agent_id, state, app).await
-        }
         "git_discard" => {
             let path = req_str(&params, "path", "git_discard")?;
             let file = req_str(&params, "file", "git_discard")?;
@@ -256,18 +203,6 @@ pub(crate) async fn rpc(
             let file = req_str(&params, "file", "git_blame")?;
             let _agent_id = opt_str(&params, "_agent_id");
             commands::git_cmds::git_blame(path, file, _agent_id, state, app).await
-        }
-        "git_file_at_head" => {
-            let path = req_str(&params, "path", "git_file_at_head")?;
-            let file = req_str(&params, "file", "git_file_at_head")?;
-            let _agent_id = opt_str(&params, "_agent_id");
-            commands::git_cmds::git_file_at_head(path, file, _agent_id, state, app).await
-        }
-        "git_show" => {
-            let path = req_str(&params, "path", "git_show")?;
-            let commit = req_str(&params, "commit", "git_show")?;
-            let _agent_id = opt_str(&params, "_agent_id");
-            commands::git_cmds::git_show(path, commit, _agent_id, state, app).await
         }
 
         // ═══════════════════════════════════════════════════════
@@ -347,36 +282,10 @@ pub(crate) async fn rpc(
             let _agent_id = opt_str(&params, "_agent_id");
             ok_unit(commands::filesystem::move_file(from, to, is_agent, _agent_id, state, app).await)
         }
-        "open_in_explorer" => {
-            let path = req_str(&params, "path", "open_in_explorer")?;
-            let is_agent = opt_bool(&params, "is_agent");
-            let _agent_id = opt_str(&params, "_agent_id");
-            ok_unit(commands::filesystem::open_in_explorer(path, is_agent, _agent_id, state, app).await)
-        }
 
         // ═══════════════════════════════════════════════════════
         // 搜索（3 个命令）
         // ═══════════════════════════════════════════════════════
-        "search_code" => {
-            let directory = req_str(&params, "directory", "search_code")?;
-            let pattern = req_str(&params, "pattern", "search_code")?;
-            let file_types = opt_str(&params, "file_types");
-            let max_results = opt_usize(&params, "max_results");
-            let use_regex = opt_bool(&params, "use_regex");
-            let context_lines = opt_usize(&params, "context_lines");
-            let output_mode = opt_str(&params, "output_mode");
-            let show_line_numbers = opt_bool(&params, "show_line_numbers");
-            let head_limit = opt_usize(&params, "head_limit");
-            let offset = opt_usize(&params, "offset");
-            let glob_filter = opt_str(&params, "glob_filter");
-            let is_agent = opt_bool(&params, "is_agent");
-            let _agent_id = opt_str(&params, "_agent_id");
-            commands::search::search_code(
-                directory, pattern, file_types, max_results, use_regex,
-                context_lines, output_mode, show_line_numbers, head_limit,
-                offset, glob_filter, is_agent, _agent_id, state, app,
-            ).await
-        }
         "search_content" => {
             let directory = req_str(&params, "directory", "search_content")?;
             let pattern = req_str(&params, "pattern", "search_content")?;
@@ -514,7 +423,6 @@ pub(crate) async fn rpc(
             let provider = req_str(&params, "provider", "credential_delete")?;
             ok_unit(commands::identity::credential_delete(provider))
         }
-        "credential_clear" => ok_unit(commands::identity::credential_clear()),
 
         // ═══════════════════════════════════════════════════════
         // Agent 隔离（7 个命令）
@@ -537,9 +445,6 @@ pub(crate) async fn rpc(
         }
         "agent_isolation_status" => {
             commands::isolation::agent_isolation_status(state)
-        }
-        "agent_isolation_prune" => {
-            commands::isolation::agent_isolation_prune(state)
         }
         "agent_isolation_force_purge" => {
             let agent_id = req_str(&params, "agent_id", "agent_isolation_force_purge")?;
@@ -566,11 +471,6 @@ pub(crate) async fn rpc(
             let path = opt_str(&params, "path");
             commands::hologram::hologram_run_check(path, state).await
         }
-        "hologram_hotspots" => {
-            let days = opt_i32(&params, "days");
-            let min_count = opt_i32(&params, "min_count");
-            commands::hologram::hologram_hotspots(days, min_count, state).await
-        }
         "hologram_record_event" => {
             let event_type = req_str(&params, "event_type", "hologram_record_event")?;
             let file = opt_str(&params, "file");
@@ -581,11 +481,6 @@ pub(crate) async fn rpc(
             commands::hologram::hologram_record_event(event_type, file, summary, state)
                 .await
                 .map(|_| "null".into())
-        }
-        "hologram_gate_check" => {
-            let path = req_str(&params, "path", "hologram_gate_check")?;
-            let module_file = opt_str(&params, "module_file");
-            commands::hologram::hologram_gate_check(path, module_file, state).await
         }
         "get_full_graph" => commands::hologram::get_full_graph(state).await,
 
@@ -633,12 +528,6 @@ pub(crate) async fn rpc(
                 .map_err(|e| format!("session_append: write: {e}"))?;
             f.flush()
                 .map_err(|e| format!("session_append: flush: {e}"))?;
-            ok_unit(Ok(()))
-        }
-        "session_flush" => {
-            // 轻量空操作 — session_append 每次写入都已刷新。
-            // 此端点存在是为了让 beforeunload 可以 fire-and-forget 最终刷新
-            // 而不阻塞，并作为批量写入的未来扩展点。
             ok_unit(Ok(()))
         }
 

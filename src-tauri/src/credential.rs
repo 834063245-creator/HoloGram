@@ -72,47 +72,6 @@ pub fn delete_api_key(provider: &str) -> Result<(), String> {
     }
 }
 
-/// 删除所有已存储的凭证。
-pub fn clear_credentials() -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let _ = std::fs::remove_file(cred_path());
-        Ok(())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // 导出 keychain，查找所有 Hologram 条目，提取 provider 名称。
-        let output = std::process::Command::new("security")
-            .args(["dump-keychain"])
-            .output()
-            .map_err(|e| format!("security dump: {e}"))?;
-        let dump = String::from_utf8_lossy(&output.stdout);
-        let providers = parse_keychain_dump_providers(&dump);
-
-        // 如果解析未找到任何 provider，回退到已知默认值。
-        let targets: Vec<&str> = if providers.is_empty() {
-            vec!["deepseek", "anthropic", "openai"]
-        } else {
-            providers.iter().map(|s| s.as_str()).collect()
-        };
-
-        for prov in &targets {
-            let _ = std::process::Command::new("security")
-                .args(["delete-generic-password", "-s", "hologram", "-a", prov])
-                .output();
-        }
-        Ok(())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        // secret-tool clear 只需 service 属性
-        let _ = std::process::Command::new("secret-tool")
-            .args(["clear", "service", "hologram"])
-            .output();
-        Ok(())
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // macOS Keychain dump 解析器 — 从
 // `security dump-keychain` 输出中提取 provider 名称。

@@ -466,19 +466,8 @@ pub(crate) fn validate_hologram_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 辅助函数：获取活动 WorkspaceHandle 的引用。
-#[allow(dead_code)] // ponytail: 保留用于非权限工作区访问
-pub(crate) fn with_workspace<F, R>(state: &WorkspaceState, f: F) -> Result<R, String>
-where
-    F: FnOnce(&workspace::WorkspaceHandle) -> Result<R, String>,
-{
-    let guard = state.lock().map_err(|e| format!("工作区状态错误: {e}"))?;
-    let handle = guard.as_ref().ok_or("未打开工作区，请先打开项目")?;
-    f(handle)
-}
-
 // ═══════════════════════════════════════════════════════
-// Phase 2：权限辅助函数 — 替换旧的 with_workspace 沙箱调用
+// Phase 2：权限辅助函数（2026-08-04：with_workspace 已删 — 全库零调用）
 
 /// 从工作区状态获取 PermissionContext，并立即释放锁。
 pub(crate) fn get_ctx(state: &WorkspaceState) -> Result<Arc<PermissionContext>, String> {
@@ -875,17 +864,9 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
         "node_count": nc, "edge_count": ec,
     }).to_string())
 }
-
-/// 在图上运行查询。从 Engine 读取。
-pub(crate) fn with_graph<F: Fn(&Graph) -> serde_json::Value>(f: F) -> Result<String, String> {
-    engine_api::engine_read_graph(|g| {
-        serde_json::to_string(&f(g)).unwrap_or_default()
-    })
-    .map_err(|e| format!("Engine error: {}", e))
-}
+// （2026-08-04 清理：with_graph 全库零调用，已删 — 查询统一走 with_index/MemoryIndex）
 
 /// 在 MemoryIndex（基于 CSR，O(1) 邻接查询）上运行查询。
-/// 遍历查询时优先使用此函数而非 with_graph。
 pub(crate) fn with_index<F: FnOnce(&MemoryIndex) -> serde_json::Value>(f: F) -> Result<String, String> {
     engine_api::engine_read(|idx| {
         serde_json::to_string(&f(idx)).unwrap_or_default()
@@ -1444,17 +1425,6 @@ where
         }
     }
     Err(format!("{}: unreachable", label))
-}
-
-/// 将深度限制到 u8::MAX (255)，溢出时记录警告。
-/// 供 engine_neighbors/impact/path 使用，防止静默截断。
-pub(crate) fn clamp_depth(depth: usize) -> u8 {
-    if depth > u8::MAX as usize {
-        tracing::warn!(depth, "depth clamped to 255");
-        u8::MAX
-    } else {
-        depth as u8
-    }
 }
 
 /// 在内容中查找包含查询字符串的行（模糊子串匹配）。

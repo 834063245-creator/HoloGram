@@ -148,18 +148,7 @@ pub(crate) async fn read_bytes(
 
     Ok((real_path, bytes))
 }
-
-/// 仅解析和验证读取路径 — 无 I/O。当下游逻辑需要已解析路径时使用
-/// （如 git 命令、资源管理器打开）。
-pub(crate) async fn verify_read_path(
-    file_path: &str,
-    is_agent: bool,
-    agent_id: Option<&str>,
-    state: &tauri::State<'_, WorkspaceState>,
-    app: &AppHandle,
-) -> Result<PathBuf, String> {
-    crate::utils::resolve_read_dispatch(file_path, is_agent, agent_id, state, app).await
-}
+// （2026-08-04 清理：verify_read_path 前端零调用，已删）
 
 // ═══════════════════════════════════════════════════════════════
 // 写入操作 — 权限检查 + I/O 合为一步

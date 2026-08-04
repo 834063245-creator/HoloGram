@@ -46,13 +46,6 @@ use engine::graph::Graph;
 #[cfg(test)]
 use engine::graph::{Node, NodeKind, Edge, EdgeKind};
 
-/// 设置活跃工作区 — 现为空操作桩。请改用 workspace_activate。
-/// 保留以维持 API 兼容性；前端从不直接调用此方法。
-#[tauri::command]
-fn set_active_project(_path: String) -> Result<(), String> {
-    Ok(())
-}
-
 /// 返回当前活跃工作区路径（未设置时为空字符串）。
 /// 前端在冷启动时 graph meta.source_root 缺失时用作回退。
 #[tauri::command]
@@ -103,7 +96,6 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             rpc::rpc,
-            set_active_project,
             get_active_project,
         ])
         .setup(|app| {

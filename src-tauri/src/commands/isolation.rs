@@ -140,19 +140,6 @@ pub(crate) fn agent_isolation_status(
 }
 
 #[tauri::command]
-pub(crate) fn agent_isolation_prune(
-    state: tauri::State<'_, crate::WorkspaceState>,
-) -> Result<String, String> {
-    let project_path = crate::utils::workspace_path(&state)?;
-    let main_path = std::path::PathBuf::from(&project_path);
-    match crate::agent_isolation::prune_stale_worktrees(&main_path, 30) {
-        Ok(0) => Ok(serde_json::json!({"pruned": 0}).to_string()),
-        Ok(n) => Ok(serde_json::json!({"pruned": n}).to_string()),
-        Err(e) => Err(e),
-    }
-}
-
-#[tauri::command]
 pub(crate) fn agent_isolation_force_purge(
     agent_id: String,
     state: tauri::State<'_, crate::WorkspaceState>,

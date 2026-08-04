@@ -120,47 +120,6 @@ pub(crate) async fn hologram_record_event(
 
 
 // ═══════════════════════════════════════════════════════
-// P6: Hotspots — 复发热点检测（L4 复发计数）
+// （2026-08-04 清理：hologram_hotspots / hologram_gate_check 前端零调用，已删）
 // ═══════════════════════════════════════════════════════
 
-#[tauri::command]
-pub(crate) async fn hologram_hotspots(
-    days: Option<i32>,
-    min_count: Option<i32>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-) -> Result<String, String> {
-    crate::utils::check_mcp_permission("hologram_hotspots", &state)?;
-    let limit = min_count.unwrap_or(3) as usize;
-    let _ = days;
-    tokio::task::spawn_blocking(move || {
-        match engine_api::engine_query_timeline(limit) {
-            Ok(events) => Ok(serde_json::json!({"events": events, "limit": limit}).to_string()),
-            Err(e) => Ok(serde_json::json!({"error": e, "events": []}).to_string()),
-        }
-    }).await.map_err(|e| format!("热点查询失败: {e}"))?
-}
-
-// ═══════════════════════════════════════════════════════
-// P8: Gate Check — 门禁模式（新模块 fan-in/fan-out/耦合评估）
-// ═══════════════════════════════════════════════════════
-
-#[tauri::command]
-pub(crate) async fn hologram_gate_check(
-    path: String,
-    _module_file: Option<String>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-) -> Result<String, String> {
-    crate::utils::check_mcp_permission("hologram_gate_check", &state)?;
-    // 门禁检查复用 hologram_run_check 逻辑
-    let target = path;
-    let changed_files: Vec<String> = state.lock().unwrap().as_ref()
-        .and_then(|h| h.changed_files.lock().ok())
-        .map(|f| f.clone())
-        .unwrap_or_default();
-    tokio::task::spawn_blocking(move || {
-        use engine::routing::preflight::run_full_check;
-        let after = engine_api::engine_read_graph(|g| g.clone()).unwrap_or_default();
-        let result = run_full_check(&after, &after, &changed_files, &target);
-        Ok(serde_json::to_string(&result).unwrap_or_default())
-    }).await.map_err(|e| format!("任务失败: {e}"))?
-}

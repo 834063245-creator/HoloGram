@@ -2,56 +2,6 @@
 // SPDX-License-Identifier: MIT
 // Git commands — IDE-level version control (status, diff, stage, commit, push, etc.).
 
-
-#[tauri::command]
-pub(crate) async fn git_tree_status(
-    path: String,
-    is_agent: Option<bool>,
-    _agent_id: Option<String>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    let porcelain = crate::utils::run_git(path, vec![
-        "status".to_string(), "--porcelain".to_string(),
-        "--ignored".to_string(), "--untracked-files".to_string(),
-    ]).await.unwrap_or_default();
-
-    let mut result = serde_json::Map::new();
-    for line in porcelain.lines() {
-        if line.len() < 4 { continue; }
-        let st = &line[..2];
-        let file_path = line[3..].trim();
-        let file_path = if let Some(idx) = file_path.find(" -> ") {
-            &file_path[idx + 4..]
-        } else {
-            file_path
-        };
-        let status = if st == "!!" {
-            "ignored"
-        } else if st == "??" {
-            "untracked"
-        } else if st.contains('D') {
-            "deleted"
-        } else if st.contains('A') {
-            "added"
-        } else if st.contains('R') {
-            "renamed"
-        } else if st.contains('M') {
-            "modified"
-        } else {
-            "modified"
-        };
-        result.insert(file_path.to_string(), serde_json::json!(status));
-        let parts: Vec<&str> = file_path.split('/').collect();
-        for i in 1..parts.len() {
-            let dir = parts[..i].join("/");
-            result.entry(dir).or_insert(serde_json::json!("modified-dir"));
-        }
-    }
-    Ok(serde_json::json!(result).to_string())
-}
-
 #[tauri::command]
 pub(crate) async fn git_status(
     path: String,
@@ -144,21 +94,6 @@ pub(crate) async fn git_stage(
 }
 
 #[tauri::command]
-pub(crate) async fn git_unstage(
-    path: String,
-    files: Vec<String>,
-    is_agent: Option<bool>,
-    _agent_id: Option<String>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "unstage", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    let mut args: Vec<String> = vec!["reset".to_string(), "HEAD".to_string(), "--".to_string()];
-    args.extend(files.iter().map(|s| s.to_string()));
-    crate::utils::run_git(path, args).await
-}
-
-#[tauri::command]
 pub(crate) async fn git_stage_all(
     path: String,
     is_agent: Option<bool>,
@@ -208,18 +143,6 @@ pub(crate) async fn git_pull(
 }
 
 #[tauri::command]
-pub(crate) async fn git_fetch(
-    path: String,
-    is_agent: Option<bool>,
-    _agent_id: Option<String>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "fetch", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["fetch".to_string(), "--all".to_string(), "--prune".to_string()]).await
-}
-
-#[tauri::command]
 pub(crate) async fn git_log(
     path: String,
     limit: Option<i32>,
@@ -265,23 +188,6 @@ pub(crate) async fn git_init(
 ) -> Result<String, String> {
     crate::utils::require_git_dispatch(&path, "init", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["init".to_string()]).await
-}
-
-#[tauri::command]
-pub(crate) async fn git_list_branches(
-    path: String,
-    is_agent: Option<bool>,
-    _agent_id: Option<String>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    let out = crate::utils::run_git(path.clone(), vec!["branch".to_string(), "--format=%(refname:short)".to_string()]).await?;
-    let branches: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-    let current_out = crate::utils::run_git(path.clone(), vec!["branch".to_string(), "--show-current".to_string()]).await?;
-    let current = current_out.trim().to_string();
-    serde_json::to_string(&serde_json::json!({ "branches": branches, "current": current }))
-        .map_err(|e| format!("JSON 序列化失败: {}", e))
 }
 
 #[tauri::command]
@@ -335,17 +241,6 @@ pub(crate) async fn git_stash_pop(
 }
 
 #[tauri::command]
-pub(crate) async fn git_stash_list(
-    path: String,
-    _agent_id: Option<String>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    crate::utils::require_read(&path, _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["stash".to_string(), "list".to_string()]).await
-}
-
-#[tauri::command]
 pub(crate) async fn git_discard(
     path: String,
     file: String,
@@ -368,30 +263,4 @@ pub(crate) async fn git_blame(
 ) -> Result<String, String> {
     crate::utils::require_read(&path, _agent_id.as_deref(), &state, &app).await?;
     crate::utils::run_git(path.clone(), vec!["blame".to_string(), "--line-porcelain".to_string(), file.clone()]).await
-}
-
-#[tauri::command]
-pub(crate) async fn git_file_at_head(
-    path: String,
-    file: String,
-    _agent_id: Option<String>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    crate::utils::require_read(&path, _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["show".to_string(), format!("HEAD:{}", file.clone())]).await
-}
-
-#[tauri::command]
-pub(crate) async fn git_show(
-    path: String,
-    commit: String,
-    _agent_id: Option<String>,
-    state: tauri::State<'_, crate::WorkspaceState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    crate::utils::require_read(&path, _agent_id.as_deref(), &state, &app).await?;
-    let output = crate::utils::run_git(path.clone(), vec!["show".to_string(), "--name-only".to_string(), "--format=".to_string(), commit.clone()]).await?;
-    let files: Vec<&str> = output.lines().filter(|l| !l.is_empty()).collect();
-    serde_json::to_string(&files).map_err(|e| e.to_string())
 }
