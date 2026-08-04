@@ -8,7 +8,7 @@
 //
 // git 是安全网：merge 出问题可以 git reset 回滚。
 
-import type { TaskBoard } from '../task-board';
+import type { TaskBoard, BoardEntry } from '../task-board';
 import type { Tool, ToolExecutor } from '../tool';
 import { enqueueIsolationOp } from '../isolation-queue';
 import { runGraphGate, runCompileTest } from './merge-gate';
@@ -70,6 +70,11 @@ export function createMergeTool(
       const gate = effectiveGate();
       const gateOpts = { projectPath: opts.projectPath, exec };
 
+      // 批量 merge：成功合并的条目先收集，图检查在循环后统一跑一次 —
+      // runGraphGate 是整图分析（不依赖单个 entry），逐条跑 N 次 = N 次全图扫描 + N 次轮询，
+      // 批量场景（5 Agent）会被放大成分钟级。统一一次：5× 全图 → 1×。
+      const mergedEntries: BoardEntry[] = [];
+
       for (const entry of children) {
         if (!entry.isolationId) {
           // 无 worktree（fresh 模式）— 直接标记完成
@@ -99,30 +104,12 @@ export function createMergeTool(
             }
           }
 
-          // ② merge（cherry-pick 进主仓）
+          // ② merge（cherry-pick 进主仓）— 收集条目，图检查在循环后统一跑一次
           await enqueueIsolationOp(async () => {
             await exec('agent_isolation_merge', { agent_id: entry.isolationId });
             await exec('agent_isolation_discard', { agent_id: entry.isolationId }).catch(() => {});
           });
-
-          // ③ merge-then-verify：图检查（watcher 已增量分析主仓，轮询 run_check 直到非 quiet）
-          // 门禁定位：信息报告，不是裁决 — L5 红线是启发式有噪音，
-          // 失败只标记 + 报告，改动保留在主仓（commit 在历史），主 Agent 决定修复/revert/接受。
-          if (gate.graph) {
-            const gateResult = await runGraphGate(entry, gateOpts);
-            if (!gateResult.passed) {
-              board.fail(entry.agentId, '[门禁] ' + gateResult.report);
-              conflicts++;
-              conflictDetails.push(
-                `${entry.agentId} (${entry.description}): 门禁未通过，改动已保留在主仓，请审阅后决定修复 / git revert / 接受\n${gateResult.report}`,
-              );
-              continue;
-            }
-          }
-
-          board.markMerged(entry.agentId);
-          merged++;
-          mergedDetails.push(`${entry.agentId} (${entry.description}) — ✅ 已合并`);
+          mergedEntries.push(entry);
         } catch (mergeErr: any) {
           conflicts++;
           const errMsg = mergeErr?.message || String(mergeErr);
@@ -152,6 +139,36 @@ export function createMergeTool(
               } catch { /* 尽力而为 */ }
             }
           });
+        }
+      }
+
+      // ③ merge-then-verify：图检查 — 批量统一跑一次（而非逐条）
+      // runGraphGate 是整图分析（只依赖 projectPath/exec），一次即可覆盖所有已 merge 的变更；
+      // watcher 已增量分析主仓，轮询 run_check 直到非 quiet。
+      // 门禁定位：信息报告，不是裁决 — L5 红线是启发式有噪音，
+      // 失败只标记 + 报告，改动保留在主仓（commit 在历史），主 Agent 决定修复/revert/接受。
+      if (gate.graph && mergedEntries.length > 0) {
+        const gateResult = await runGraphGate(mergedEntries[0], gateOpts);
+        if (!gateResult.passed) {
+          for (const entry of mergedEntries) {
+            board.fail(entry.agentId, '[门禁] ' + gateResult.report);
+          }
+          conflicts += mergedEntries.length;
+          conflictDetails.push(
+            `${mergedEntries.map((e) => e.agentId).join(', ')}: 门禁未通过，改动已保留在主仓，请审阅后决定修复 / git revert / 接受\n${gateResult.report}`,
+          );
+        } else {
+          for (const entry of mergedEntries) {
+            board.markMerged(entry.agentId);
+            merged++;
+            mergedDetails.push(`${entry.agentId} (${entry.description}) — ✅ 已合并`);
+          }
+        }
+      } else {
+        for (const entry of mergedEntries) {
+          board.markMerged(entry.agentId);
+          merged++;
+          mergedDetails.push(`${entry.agentId} (${entry.description}) — ✅ 已合并`);
         }
       }
 

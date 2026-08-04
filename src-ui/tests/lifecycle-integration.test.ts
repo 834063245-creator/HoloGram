@@ -11,6 +11,9 @@
 
 import { describe, expect, it, vi } from "vitest"
 
+// 单测环境无真实引擎图 — 关闭 merge 门禁的图检查（merge.ts 预留旁路）
+;(globalThis as any).__HOLOGRAM_MERGE_GATE__ = { graph: false }
+
 // ── bridge mock ──
 
 const mockRpc = vi.fn()
@@ -115,7 +118,7 @@ describe("集成：3 个异步 spawn 并行 → 统一 merge 无冲突", () => {
       return "ok"
     }
 
-    const mergeTool = createMergeTool(board, () => "main", exec)
+    const mergeTool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const result = await mergeTool.execute({})
 
     expect(result).toContain("已合并 3 个子Agent")
@@ -181,7 +184,7 @@ describe("集成：2 个异步 spawn 改同一文件 → merge 冲突", () => {
     }
     const mergeCalls: string[] = []
 
-    const mergeTool = createMergeTool(board, () => "main", exec)
+    const mergeTool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const result = await mergeTool.execute({})
 
     expect(result).toContain("1 个冲突")
@@ -263,7 +266,7 @@ describe("集成：sync + async 混合 spawn", () => {
 
     // merge async 子 Agent
     const exec: ToolExecutor = async (name) => (name === "agent_isolation_merge" ? "ok" : "discarded")
-    const mergeTool = createMergeTool(board, () => "main", exec)
+    const mergeTool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const mergeResult = await mergeTool.execute({})
     expect(mergeResult).toContain("已合并 1 个子Agent")
   })

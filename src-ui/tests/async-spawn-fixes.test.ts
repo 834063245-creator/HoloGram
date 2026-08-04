@@ -12,6 +12,9 @@
 
 import { describe, expect, it, vi } from "vitest"
 
+// 单测环境无真实引擎图 — 关闭 merge 门禁的图检查（merge.ts 预留旁路）
+;(globalThis as any).__HOLOGRAM_MERGE_GATE__ = { graph: false }
+
 // ── bridge mock — Agent 构造时 import rpc，必须先 mock ──
 
 const mockRpc = vi.fn()
@@ -225,7 +228,7 @@ describe("async_spawn_no_auto_merge", () => {
     expect(children[0].status).not.toBe("merged")
 
     // 额外验证：手动调 agent_merge 才会 merge
-    const mergeTool = createMergeTool(board, () => "main", exec)
+    const mergeTool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const mergeResult = await mergeTool.execute({})
     expect(mergeResult).toContain("已合并 1 个子Agent")
     expect(board.getEntry(children[0].agentId)!.status).toBe("merged")

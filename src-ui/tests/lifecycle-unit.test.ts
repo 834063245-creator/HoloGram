@@ -13,6 +13,9 @@
 
 import { describe, expect, it, vi } from "vitest"
 
+// 单测环境无真实引擎图 — 关闭 merge 门禁的图检查（merge.ts 预留旁路）
+;(globalThis as any).__HOLOGRAM_MERGE_GATE__ = { graph: false }
+
 // ── bridge mock — Agent 构造时 import rpc，必须先 mock ──
 
 const mockRpc = vi.fn()
@@ -313,7 +316,7 @@ describe("agent_merge — 串行合并 + 冲突保全", () => {
       return "ok"
     }
 
-    const tool = createMergeTool(board, () => "main", exec)
+    const tool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const result = await tool.execute({})
 
     expect(result).toContain("已合并 2 个子Agent")
@@ -340,7 +343,7 @@ describe("agent_merge — 串行合并 + 冲突保全", () => {
       return "discarded"
     }
 
-    const tool = createMergeTool(board, () => "main", exec)
+    const tool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const result = await tool.execute({})
 
     expect(result).toContain("0 个子Agent")
@@ -361,7 +364,7 @@ describe("agent_merge — 串行合并 + 冲突保全", () => {
     board.complete("sub-fresh", "summary", "diff")
 
     const exec: ToolExecutor = async () => "ok"
-    const tool = createMergeTool(board, () => "main", exec)
+    const tool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const result = await tool.execute({})
 
     expect(result).toContain("已合并 1 个子Agent")
@@ -371,7 +374,7 @@ describe("agent_merge — 串行合并 + 冲突保全", () => {
   it("无待合并条目时返回提示", async () => {
     const board = new TaskBoard()
     const exec: ToolExecutor = async () => "ok"
-    const tool = createMergeTool(board, () => "main", exec)
+    const tool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const result = await tool.execute({})
     expect(result).toContain("没有待合并")
   })

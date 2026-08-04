@@ -12,6 +12,9 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest"
 
+// 单测环境无真实引擎图 — 关闭 merge 门禁的图检查（merge.ts 预留旁路）
+;(globalThis as any).__HOLOGRAM_MERGE_GATE__ = { graph: false }
+
 // ── bridge mock — Agent 构造时 import rpc，必须先 mock ──
 
 const mockRpc = vi.fn()
@@ -150,7 +153,7 @@ describe("端到端：async spawn → bus result → agent_merge", () => {
       if (name === "agent_isolation_discard") return "discarded"
       return "ok"
     }
-    const mergeTool = createMergeTool(board, () => "main", exec)
+    const mergeTool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const result = await mergeTool.execute({})
 
     expect(result).toContain("已合并 3 个子Agent")

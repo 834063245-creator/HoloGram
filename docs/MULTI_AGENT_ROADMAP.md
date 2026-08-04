@@ -54,6 +54,8 @@
 | `merge.ts` 循环 | touch 顺延 TTL → 可选编译测试 → merge → 图检查 → 通过 markMerged / 失败 board.fail + 报告（**改动保留**） |
 | `task-board.ts` | `touch(agentId)` 顺延 30min TTL（防门禁中途被巡检误杀） |
 
+**2026-08-04 优化（5-Agent 实测暴露）**：merge 门禁从"逐条图检查"改为"批量统一一次"——原实现每个子 Agent 串行跑一次 `runGraphGate`（整图分析 + 最长 60s 轮询），5 个 Agent = 5 次全图扫描，秒级任务被放大成分钟级。`runGraphGate` 本身只依赖 projectPath/exec（不依赖单个 entry），统一一次即可覆盖全部已 merge 变更：5× 全图 → 1×。门禁语义不变（信息报告，失败只标记不回滚）。
+
 **关键设计决策（2026-08-03 修正）**：
 - **门禁定位 = 信息报告，不是裁决**。L5 红线（blast radius / 跨社区边 / L4 穿透）是启发式，**噪音可能很大**（正常重构碰高扇入模块就可能误报）。自动回滚（git reset --hard）会误伤正常改动 = 子 Agent 白做。故失败只标记 + 报告，主 Agent 决定修复 / git revert / 接受。**误报的代价从"白做"降为"零"。**
 - 时序：worktree 变更对引擎图不可见（watcher 忽略 `.hologram`）→ 必须 merge-then-verify（先 cherry-pick → watcher 增量分析 → 图检查）。
