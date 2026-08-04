@@ -38,6 +38,7 @@ import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
 // ── 运行时层（替代 bootstrap.ts）──
 import { AgentRuntime } from './agent/runtime/runtime';
+import type { AgentHandle } from './agent/runtime/types';
 import {
   buildGraphContextFromData,
   buildToolRegistry,
@@ -419,21 +420,17 @@ export class Workspace {
     if (this.runtime) {
       await this.runtime.flushAllBoards();
     }
-    // 销毁运行时 Agent
+    // 销毁运行时 Agent — disposeAll 逐句柄走完整清理
+    // （flush + saveState('done') + LifecycleManager 停止 + bus 注销）
     if (this.runtime) {
-      for (const summary of this.runtime.listAgents()) {
-        this.runtime.destroyAgent(summary.id);
-      }
+      this.runtime.disposeAll();
       this.runtime = null;
     }
     // 清除 Agent 面板数据
     useAgentPanelStore.getState().setAgents([]);
     useAgentPanelStore.getState().setTaskBoard([]);
     useAgentPanelStore.getState().setDiscoveries([]);
-    // 清除前持久化 Agent 状态
-    if (this.agent) {
-      this.agent.saveState('done').catch(() => {});
-    }
+    // this.agent 是借用引用 — disposeAll 已完成 saveState，这里只需断开
     this.agent = null;
     try {
       await auraShutdown();
@@ -636,7 +633,10 @@ export class Workspace {
     refreshTimeline(this.path).catch(() => {});
 
     // ── 工厂：每次调用通过 runtime 创建全新 Agent ──
-    const factory = async (): Promise<Agent | null> => {
+    // 返回 runtime 句柄（含 dispose）— 所有权随句柄交给会话 state
+    // （agentSessionState），会话关闭时由其负责销毁；
+    // agentRef/this.agent 仅是借用 raw Agent 引用（spawn 闭包、notifyMemorySaved）。
+    const factory = async (): Promise<AgentHandle | null> => {
       let s = loadSettings();
       s = await restoreSecrets(s);
       const act = getActiveProvider(s);
@@ -708,14 +708,14 @@ export class Workspace {
       if (!agent) return null;
       agentRef.current = agent;
       this.memoryManager?.prewarmAura();
-      return agent;
+      return handle;
     };
 
     // 注册工厂 + 创建初始 Agent
     chatPanel.setAgentFactory(factory);
     const initialAgent = await factory();
     if (initialAgent) {
-      this.agent = initialAgent;
+      this.agent = agentRef.current;
       chatPanel.setAgent(initialAgent);
       this.onStatusChange?.('[Agent] ✅ 已就绪');
     }

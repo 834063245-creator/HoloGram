@@ -4,13 +4,13 @@
 // Tests for AgentSessionState — the store that replaced the four
 // module-level Maps in chat-session.ts.
 
-import { describe, expect, it, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createAgentSessionState, type AgentSessionStateApi } from '../src/agent/agent-session-state';
 
-// ── Mock ChatAgentHandle — minimal shape for testing ──
+// ── Mock OwnedAgentHandle — minimal shape for testing ──
 function mockAgent(cascadeAbort: () => void = () => {}): any {
-  return { cascadeAbort };
+  return { cascadeAbort, dispose: () => {} };
 }
 
 function mockExec(running = false): any {
@@ -170,6 +170,59 @@ describe('AgentSessionState', () => {
       // panel-2 untouched
       expect(state.getAgent('panel-2', 1)).not.toBeNull();
       expect(state.getExec('panel-2', 1)).not.toBeNull();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // 句柄所有权 — dispose 语义
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('handle ownership (dispose)', () => {
+    it('removeAgent disposes the handle before deleting', () => {
+      const agent = mockAgent();
+      agent.dispose = vi.fn();
+      state.setAgent('panel-1', 1, agent);
+      state.removeAgent('panel-1', 1);
+      expect(agent.dispose).toHaveBeenCalledTimes(1);
+      expect(state.getAgent('panel-1', 1)).toBeNull();
+    });
+
+    it('setAgent overwriting a different handle disposes the old one', () => {
+      const oldAgent = mockAgent();
+      oldAgent.dispose = vi.fn();
+      const newAgent = mockAgent();
+      newAgent.dispose = vi.fn();
+      state.setAgent('panel-1', 1, oldAgent);
+      state.setAgent('panel-1', 1, newAgent);
+      expect(oldAgent.dispose).toHaveBeenCalledTimes(1);
+      expect(newAgent.dispose).not.toHaveBeenCalled();
+      expect(state.getAgent('panel-1', 1)).toBe(newAgent);
+    });
+
+    it('setAgent with the same handle object does NOT dispose it', () => {
+      const agent = mockAgent();
+      agent.dispose = vi.fn();
+      state.setAgent('panel-1', 1, agent);
+      state.setAgent('panel-1', 1, agent);
+      expect(agent.dispose).not.toHaveBeenCalled();
+      expect(state.getAgent('panel-1', 1)).toBe(agent);
+    });
+
+    it('clearPanelState disposes all handles of that panel only', () => {
+      const a1 = mockAgent(); a1.dispose = vi.fn();
+      const a2 = mockAgent(); a2.dispose = vi.fn();
+      const b1 = mockAgent(); b1.dispose = vi.fn();
+      state.setAgent('panel-1', 1, a1);
+      state.setAgent('panel-1', 2, a2);
+      state.setAgent('panel-2', 1, b1);
+      state.clearPanelState('panel-1');
+      expect(a1.dispose).toHaveBeenCalledTimes(1);
+      expect(a2.dispose).toHaveBeenCalledTimes(1);
+      expect(b1.dispose).not.toHaveBeenCalled();
+    });
+
+    it('removeAgent on unknown session is a no-op', () => {
+      expect(() => state.removeAgent('panel-1', 999)).not.toThrow();
     });
   });
 

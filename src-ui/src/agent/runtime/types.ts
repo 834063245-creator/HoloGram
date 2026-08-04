@@ -139,6 +139,10 @@ export interface AgentHandle extends ChatAgentHandle {
   readonly id: string;
   readonly parentId: string | null;
   readonly status: AgentStatus;
+  /** 销毁并注销此 Agent（幂等）。
+   *  句柄即所有权 — 创建者持有句柄，生命周期结束时必须 dispose；
+   *  调用后 Agent 从 runtime 注册表、MessageBus、LifecycleManager 中完全移除。 */
+  dispose(): void;
 }
 
 // ── Agent 概况 ──
@@ -156,12 +160,15 @@ export interface AgentSummary {
 export interface RuntimePort {
   /** 等待启动恢复完成 — createAgent 前必须 await */
   ready(): Promise<void>;
-  /** 创建一个 Agent 实例 */
+  /** 创建一个 Agent 实例。返回的句柄拥有该 Agent 的生命周期 —
+   *  调用者负责在生命周期结束时 handle.dispose()。 */
   createAgent(config: AgentConfig): Promise<AgentHandle>;
   /** 获取 Agent */
   getAgent(agentId: string): AgentHandle | null;
-  /** 销毁 Agent */
-  destroyAgent(agentId: string): void;
+  /** 销毁所有 Agent — 编排者（Workspace）整体停用时调用。
+   *  单个 Agent 的销毁只能经 AgentHandle.dispose()（句柄即所有权），
+   *  不提供按 id 的外部销毁入口。 */
+  disposeAll(): void;
   /** 获取所有 Agent 概况 */
   listAgents(): AgentSummary[];
   /** 获取指定会话的 TaskBoard（UI 面板用） */

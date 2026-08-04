@@ -82,6 +82,7 @@ describe('#1 exportSession parameter name', () => {
         { role: 'user', content: 'hello' },
         { role: 'assistant', content: 'hi' },
       ],
+      dispose: vi.fn(),
     } as any;
     panel.setAgent(fakeAgent);
 
@@ -183,6 +184,7 @@ describe('#10 scheduleAutoSave per-panel isolation', () => {
           { role: 'system', content: 'sys' },
           { role: 'user', content: 'hello' },
         ],
+        dispose: vi.fn(),
       } as any);
     }
 

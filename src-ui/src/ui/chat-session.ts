@@ -5,7 +5,7 @@
 // 从 chat.ts 的 ChatPanel 类中提取。
 // 所有函数接收 SessionContext，而非访问 `this`。
 
-import { agentSessionState, type TurnPair } from '../agent/agent-session-state';
+import { agentSessionState, type OwnedAgentHandle, type TurnPair } from '../agent/agent-session-state';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { createExecState, type ExecStateInstance } from '../agent/execution-state';
 import { rpc } from '../bridge';
@@ -88,7 +88,7 @@ export function setTurnPairs(storeId: string, pairs: TurnPair[]): void {
 export function getAgentFactory(storeId: string) {
   return agentSessionState.getAgentFactory(storeId);
 }
-export function setAgentFactory(storeId: string, fn: (() => Promise<ChatAgentHandle | null>) | null): void {
+export function setAgentFactory(storeId: string, fn: (() => Promise<OwnedAgentHandle | null>) | null): void {
   agentSessionState.setAgentFactory(storeId, fn);
 }
 
@@ -115,7 +115,7 @@ export function removeSessionExecState(storeId: string, sessionId: number): void
 }
 
 /** 全量重置 — 用于 ChatPanel 中切换工作区时的 setAgent。 */
-export function resetSessionState(storeId: string, ag: ChatAgentHandle): void {
+export function resetSessionState(storeId: string, ag: OwnedAgentHandle): void {
   const id = getChatStore(storeId).sess.getState().nextSessionId;
   const label = '会话 1';
   // 仅清除本面板的 agent 句柄和 exec 状态

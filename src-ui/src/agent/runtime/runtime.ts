@@ -133,6 +133,11 @@ class AgentHandleImpl implements AgentHandle {
     return this._agent.setUiSessionId(sid);
   }
 
+  /** 销毁此 Agent — 句柄即所有权，幂等（重复调用为 no-op） */
+  dispose(): void {
+    this._runtime._disposeAgent(this._agent.id);
+  }
+
   /** 直接访问底层 Agent — 仅供内部使用 */
   _getAgent(): Agent {
     return this._agent;
@@ -165,7 +170,7 @@ export class AgentRuntime implements RuntimePort {
   private _lifecycleManagers = new Map<string, AgentLifecycleManager>();
   /** 启动恢复 promise — createAgent 前必须 await ready() */
   private _readyPromise: Promise<void>;
-  /** agentId → sessionId 映射 — destroyAgent 时知道清理哪个会话的 board */
+  /** agentId → sessionId 映射 — _disposeAgent 时知道清理哪个会话的 board */
   private _agentSessions = new Map<string, string>();
 
   constructor(projectPath?: string) {
@@ -587,7 +592,9 @@ export class AgentRuntime implements RuntimePort {
     return this.agents.get(id) ?? null;
   }
 
-  destroyAgent(id: string): void {
+  /** 销毁单个 Agent — 仅供内部使用（AgentHandle.dispose / disposeAll）。
+   *  外部代码必须经句柄销毁，不提供按 id 的公开入口。幂等。 */
+  _disposeAgent(id: string): void {
     const handle = this.agents.get(id);
     if (!handle) return;
     // 获取此 Agent 的会话级 board
@@ -615,12 +622,20 @@ export class AgentRuntime implements RuntimePort {
     log.info('runtime', `agent destroyed: ${id}`);
   }
 
+  /** 销毁所有 Agent — Workspace 整体停用时调用 */
+  disposeAll(): void {
+    for (const id of [...this.agents.keys()]) {
+      this._disposeAgent(id);
+    }
+  }
+
   listAgents(): AgentSummary[] {
     return Array.from(this.agents.values()).map((h) => ({
       id: h.id,
       parentId: h.parentId,
       status: h.status,
-      description: h.id === 'main' ? '主Agent' : `Agent (${h.id})`,
+      // 会话主 Agent 的 id 是 main-<ts>-<rand>（不再硬编码 'main'），按 parentId 判定
+      description: h.parentId === null ? '主Agent' : `Agent (${h.id})`,
       subagentDepth: 0, // TODO: 从 Agent 暴露
     }));
   }

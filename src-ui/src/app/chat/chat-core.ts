@@ -13,6 +13,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import type { AgentEvent } from '../../agent/agent-types';
+import type { OwnedAgentHandle } from '../../agent/agent-session-state';
 import type { ChatAgentHandle, GoalRunResult } from '../../agent/chat-agent-handle';
 import { createExecState, type ExecStateInstance } from '../../agent/execution-state';
 import { GoalManager, type GoalRecord } from '../../agent/goal-manager';
@@ -254,7 +255,7 @@ export class ChatCore {
   get progressSink(): (data: { step: number; toolName: string }) => void {
     return (data: { step: number; toolName: string }) => this._updateStatusBar('thinking', `${data.toolName}…`);
   }
-  setAgentFactory(fn: () => Promise<ChatAgentHandle | null>): void {
+  setAgentFactory(fn: () => Promise<OwnedAgentHandle | null>): void {
     Session.setAgentFactory(this.panelId, fn);
   }
 
@@ -269,7 +270,7 @@ export class ChatCore {
     return sid ? Session.getSessionExecState(this.panelId, sid) : this._exec;
   }
 
-  setAgent(agent: ChatAgentHandle | null): void {
+  setAgent(agent: OwnedAgentHandle | null): void {
     if (!agent) return;
     // 替换所有会话 — setAgent 是启动/设置阶段，非会话管理。
     Session.resetSessionState(this.panelId, agent);

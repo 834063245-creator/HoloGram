@@ -28,7 +28,13 @@ export interface TurnPair {
   sessionIndex: number;
 }
 
-export type AgentFactory = () => Promise<ChatAgentHandle | null>;
+export type AgentFactory = () => Promise<OwnedAgentHandle | null>;
+
+/** 会话持有的 Agent 句柄 — 必须可销毁。
+ *  所有权契约：存入 setAgent 即转移所有权；removeAgent / clearPanelState /
+ *  setAgent 覆盖时由本注册器负责 dispose，调用方无需（也不得）自行销毁。
+ *  runtime 的 AgentHandle 天然满足此接口。 */
+export type OwnedAgentHandle = ChatAgentHandle & { dispose(): void };
 
 // ── Store 状态（可序列化）──
 
@@ -41,8 +47,10 @@ interface AgentSessionStoreState {
 
 export interface AgentSessionStateApi {
   // ── Agent 句柄（每会话）──
-  setAgent(storeId: string, sessionId: number, agent: ChatAgentHandle): void;
+  /** 存入句柄并接管其所有权 — 覆盖同键旧句柄时会先 dispose 旧句柄。 */
+  setAgent(storeId: string, sessionId: number, agent: OwnedAgentHandle): void;
   getAgent(storeId: string, sessionId: number): ChatAgentHandle | null;
+  /** 移除并 dispose 该会话的句柄。 */
   removeAgent(storeId: string, sessionId: number): void;
 
   // ── Exec 状态（每会话）──
@@ -61,7 +69,7 @@ export interface AgentSessionStateApi {
   setTurnPairs(storeId: string, pairs: TurnPair[]): void;
 
   // ── 批量操作 ──
-  /** 移除面板的所有 agent 句柄和 exec 状态。 */
+  /** 移除并 dispose 面板的所有 agent 句柄，清除 exec 状态。 */
   clearPanelState(storeId: string): void;
 
   // ── 订阅 ──
@@ -85,7 +93,7 @@ export function createAgentSessionState(): AgentSessionStateApi {
   }));
 
   // ── 非序列化可变状态（闭包）──
-  const _agentBySession = new Map<string, ChatAgentHandle>();
+  const _agentBySession = new Map<string, OwnedAgentHandle>();
   const _execBySession = new Map<string, ExecStateInstance>();
   const _agentFactoryByPanel = new Map<string, AgentFactory>();
   const _turnPairsByPanel = new Map<string, TurnPair[]>();
@@ -98,7 +106,12 @@ export function createAgentSessionState(): AgentSessionStateApi {
     // ── Agent 句柄 ──
 
     setAgent(storeId, sessionId, agent): void {
-      _agentBySession.set(agentKey(storeId, sessionId), agent);
+      const k = agentKey(storeId, sessionId);
+      // 覆盖即接管：旧句柄若无人 dispose 会成为 runtime 注册表里的孤儿
+      // （拓扑面板堆积的根因）。同一对象重复登记则跳过。
+      const prev = _agentBySession.get(k);
+      if (prev && prev !== agent) prev.dispose();
+      _agentBySession.set(k, agent);
       _bump();
     },
 
@@ -107,7 +120,12 @@ export function createAgentSessionState(): AgentSessionStateApi {
     },
 
     removeAgent(storeId, sessionId): void {
-      _agentBySession.delete(agentKey(storeId, sessionId));
+      const k = agentKey(storeId, sessionId);
+      const agent = _agentBySession.get(k);
+      if (agent) {
+        agent.dispose();
+        _agentBySession.delete(k);
+      }
       _bump();
     },
 
@@ -177,7 +195,10 @@ export function createAgentSessionState(): AgentSessionStateApi {
     clearPanelState(storeId): void {
       const prefix = storeId + ':';
       for (const k of [..._agentBySession.keys()]) {
-        if (k.startsWith(prefix)) _agentBySession.delete(k);
+        if (k.startsWith(prefix)) {
+          _agentBySession.get(k)?.dispose();
+          _agentBySession.delete(k);
+        }
       }
       for (const k of [..._execBySession.keys()]) {
         if (k.startsWith(prefix)) _execBySession.delete(k);

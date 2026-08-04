@@ -579,6 +579,7 @@ describe('ChatPanel session persistence', () => {
           { role: 'assistant', content: '好的，正在分析…' },
         ],
         setSession: vi.fn(),
+        dispose: vi.fn(),
       };
       panel.setAgent(fakeAgent as any);
 
@@ -598,6 +599,7 @@ describe('ChatPanel session persistence', () => {
       const newFakeAgent = {
         getSession: () => [{ role: 'system', content: 'fresh sys' }],
         setSession: vi.fn(),
+        dispose: vi.fn(),
       };
       panel.setAgent(newFakeAgent as any);
 

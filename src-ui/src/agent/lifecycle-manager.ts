@@ -70,7 +70,7 @@ export class AgentLifecycleManager {
     this.timer = setInterval(() => this._sweep(), LEAK_CHECK_INTERVAL_MS)
   }
 
-  /** 停止巡检 — destroyAgent 或 runtime 销毁时调用 */
+  /** 停止巡检 — AgentHandle.dispose() 或 runtime 销毁时调用 */
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer)
