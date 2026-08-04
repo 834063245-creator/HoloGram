@@ -147,35 +147,9 @@ impl AgentIsolation {
         path.to_path_buf()
     }
 
-    /// 清理工作树。若有变更则返回 diff，否则移除工作树。
-    pub fn cleanup(&self) -> Result<CleanupResult, String> {
-        if self.kind == IsolationKind::None {
-            return Ok(CleanupResult::NoChanges);
-        }
-        let wt = self.worktree_path.as_ref().ok_or("工作树路径不存在")?;
-
-        if !wt.exists() {
-            return Ok(CleanupResult::NoChanges);
-        }
-
-        // git diff --stat HEAD
-        let stat = run_git(wt, &["diff", "--stat", "HEAD"])?;
-        let full = run_git(wt, &["diff", "HEAD"])?;
-
-        if stat.trim().is_empty() {
-            remove_worktree(&self.main_repo_path, wt)?;
-            Ok(CleanupResult::NoChanges)
-        } else {
-            Ok(CleanupResult::HasChanges {
-                diff: format!("{stat}\n\n{full}"),
-                worktree_path: wt.clone(),
-            })
-        }
-    }
-
     /// 只读 diff 检查（不删除 worktree）。
     ///
-    /// 与 cleanup() 的区别：
+    /// 与已删除的 cleanup() 的区别：
     ///   1. 从不移除 worktree —— 删除只发生在显式 discard() / merge 成功路径；
     ///   2. 包含 untracked 新文件 —— git diff HEAD 默认不显示未跟踪文件，
     ///      若子 Agent 只新建文件（未 git add），cleanup() 会误判"无变更"
