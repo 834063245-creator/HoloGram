@@ -647,7 +647,9 @@ export class Workspace {
 
       await runtime.ready();
       const handle = await runtime.createAgent({
-        agentId: 'main',
+        // 唯一 agentId — 每会话一个 Agent 实例；'main' 硬编码会让所有会话的
+        // Agent 在 runtime.agents/_agentSessions 里互相覆盖（多会话错位根因之一）
+        agentId: `main-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         parentId: null,
         projectPath: this.path,
         graphData: this.graphData,

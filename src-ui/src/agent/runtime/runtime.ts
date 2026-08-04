@@ -50,7 +50,7 @@ import { ToolRegistry, agentInvoke } from '../tool';
 import { createCommunicationTools } from '../tools/communication';
 import { createMergeTool } from '../tools/merge';
 import { createBoardStatusTool } from '../tools/board-status';
-import { createAgentKillTool } from '../tools/subagent';
+import { createAgentKillTool, createSubAgentTool } from '../tools/subagent';
 import { createRequestTool } from '../tools/request';
 import { AgentLifecycleManager } from '../lifecycle-manager';
 import { enqueueIsolationOp } from '../isolation-queue';
@@ -485,6 +485,22 @@ export class AgentRuntime implements RuntimePort {
     // 注册 agent_request 工具 — 带超时的同步请求
     if (config.collaborationMode !== 'plan') {
       effR.register(createRequestTool(this._bus, () => newAgent.id));
+    }
+
+    // ── 替换 agent_spawn 为绑定本 Agent 的版本 ──
+    // 背景：agent_spawn 在 buildToolRegistry 用 workspace 传入的 subAgentSpawner
+    // （捕获 agentRef.current 单一引用）注册一次，所有 Agent 共享 → 多会话下
+    // spawn 会路由到最后创建的 Agent 实例，子 Agent 卡片 attach 到错误会话。
+    // 这里为每个 Agent 替换成绑定自身的 spawnSubAgent，_uiSessionId 必属本会话。
+    if (config.subAgentPool && config.subAgentSpawner) {
+      effR.unregister('agent_spawn');
+      effR.register(
+        createSubAgentTool(
+          (desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride) =>
+            newAgent.spawnSubAgent(desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride),
+          config.subAgentPool,
+        ),
+      );
     }
 
     // 7c. 接线 LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理

@@ -105,8 +105,13 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
         store.getState().touchMessage(m._id);
       } else {
         // 完全没有助手消息 — 保持 sink 存活以免事件丢失，
-        // 但让失败可见而非静默丢弃。
+        // 但让失败可见而非静默丢弃（多会话错位时用户需要知道）。
         console.warn(`[subagent] spawn ${info.agentId}: no assistant message to attach to`);
+        useAgentPanelStore.getState().pushAlert({
+          id: `spawn-attach-fail-${info.agentId}`,
+          level: 'warn',
+          text: `子 Agent ${info.agentId} 已启动，但消息流中无可挂载的助手消息，其过程可能不可见`,
+        });
       }
       return createSubAgentSink({
         subPart,
