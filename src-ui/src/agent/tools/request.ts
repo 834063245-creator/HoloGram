@@ -15,50 +15,37 @@
 //
 // 不做死锁检测 — timeout 兜底是工业标准（Erlang gen_server 40 年验证）。
 
+import { z } from 'zod';
 import type { MessageBus } from '../message-bus';
 import type { Tool } from '../tool';
+import { defineTool } from './define-tool';
 
 export function createRequestTool(bus: MessageBus, getAgentId: () => string): Tool {
-  return {
-    name: () => 'agent_request',
-    description: () =>
+  return defineTool({
+    name: 'agent_request',
+    description:
       'Send a synchronous request to another agent and wait for a reply. ' +
       'Blocks until the target agent replies or timeout expires. ' +
       'Use agent_message for fire-and-forget; use agent_request when you need a direct answer. ' +
       'Timeout defaults to 30s (max 120s). The target agent must use agent_reply to respond.',
-    parameters: () => ({
-      type: 'object',
-      properties: {
-        target: {
-          type: 'string',
-          description: 'Target agent ID to send the request to',
-        },
-        type: {
-          type: 'string',
-          description: 'Request type (e.g. "question", "lookup", "verify")',
-        },
-        content: {
-          type: 'string',
-          description: 'Request content — what you want the other agent to do or answer',
-        },
-        timeout_seconds: {
-          type: 'number',
-          description: 'Timeout in seconds (default 30, max 120)',
-        },
-      },
-      required: ['target', 'type', 'content'],
+    schema: z.object({
+      target: z.string().describe('Target agent ID to send the request to'),
+      type: z.string().describe('Request type (e.g. "question", "lookup", "verify")'),
+      content: z.string().describe('Request content — what you want the other agent to do or answer'),
+      timeout_seconds: z
+        .coerce.number()
+        .max(120)
+        .optional()
+        .default(30)
+        .describe('Timeout in seconds (default 30, max 120)'),
     }),
-    readOnly: () => false,
     execute: async (args) => {
-      const target = args.target as string;
-      const type = args.type as string;
-      const content = args.content as string;
-      const timeoutSec = Math.min((args.timeout_seconds as number) ?? 30, 120);
+      const target = args.target;
+      const type = args.type;
+      const content = args.content;
+      // zod 已保证 timeout_seconds ∈ [0, 120]（缺省 30）— 无需手写 ?? 30 + Math.min 兜底
+      const timeoutSec = args.timeout_seconds;
       const from = getAgentId();
-
-      if (!target || !type || !content) {
-        return 'Failed: target, type, and content are required';
-      }
 
       // 拓扑检查
       if (!bus.canSend(from, target)) {
@@ -103,5 +90,5 @@ export function createRequestTool(bus: MessageBus, getAgentId: () => string): To
         );
       });
     },
-  };
+  });
 }

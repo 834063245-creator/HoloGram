@@ -8,10 +8,12 @@
 //
 // git 是安全网：merge 出问题可以 git reset 回滚。
 
+import { z } from 'zod';
 import type { TaskBoard, BoardEntry } from '../task-board';
 import type { Tool, ToolExecutor } from '../tool';
 import { enqueueIsolationOp } from '../isolation-queue';
 import { runGraphGate, runCompileTest } from './merge-gate';
+import { defineTool } from './define-tool';
 
 // ── Merge 门禁配置 ──
 // v1：图检查默认开（merge-then-verify，轮询 hologram_run_check）；
@@ -29,26 +31,20 @@ export function createMergeTool(
   exec: ToolExecutor,
   opts: { projectPath: string },
 ): Tool {
-  return {
-    name: () => 'agent_merge',
-    description: () =>
+  return defineTool({
+    name: 'agent_merge',
+    description:
       'Merge completed sub-agent worktrees back into the main repository. ' +
       'Reviews all pending changes from the TaskBoard, merges them sequentially. ' +
       'On conflict, preserves the diff for manual application.',
-    parameters: () => ({
-      type: 'object',
-      properties: {
-        agent_ids: {
-          type: 'array',
-          items: { type: 'string' },
-          description:
-            'Sub-agent IDs to merge. If omitted, merges all completed sub-agents.',
-        },
-      },
+    schema: z.object({
+      agent_ids: z
+        .array(z.string())
+        .optional()
+        .describe('Sub-agent IDs to merge. If omitted, merges all completed sub-agents.'),
     }),
-    readOnly: () => false,
     execute: async (args) => {
-      const agentIds = args.agent_ids as string[] | undefined;
+      const agentIds = args.agent_ids;
       const parentId = getAgentId();
 
       let children = board.getChildren(parentId);
@@ -185,5 +181,5 @@ export function createMergeTool(
       }
       return parts.join('\n');
     },
-  };
+  });
 }

@@ -11,22 +11,24 @@
 // 注意：这不是 task_list（TaskManager 的任务系统）— 那是主 Agent 自己的待办，
 // 与子 Agent 共享状态板无关。
 
+import { z } from 'zod';
 import type { TaskBoard } from '../task-board';
 import type { Tool } from '../tool';
+import { defineTool } from './define-tool';
 
 const DIFF_LIMIT = 500;
 const SUMMARY_LIMIT = 200;
 
 export function createBoardStatusTool(board: TaskBoard, getParentId: () => string): Tool {
-  return {
-    name: () => 'agent_board',
-    description: () =>
+  return defineTool({
+    name: 'agent_board',
+    description:
       'Query the TaskBoard: all sub-agent entries (agentId, status, files touched, summary, diff). ' +
       'Use this to check which sub-agents have completed and what they changed — ' +
       'instead of guessing from agent_status or waiting for agent_inbox messages. ' +
       'This is NOT task_list (that is your own task tracker).',
-    parameters: () => ({ type: 'object', properties: {}, required: [] }),
-    readOnly: () => true,
+    schema: z.object({}),
+    readOnly: true,
     execute: async () => {
       const entries = board.getChildren(getParentId());
       if (entries.length === 0) {
@@ -51,5 +53,5 @@ export function createBoardStatusTool(board: TaskBoard, getParentId: () => strin
         })
         .join('\n\n---\n\n');
     },
-  };
+  });
 }

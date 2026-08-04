@@ -45,8 +45,8 @@ describe('agent_spawn — synchronous result flow', () => {
   it('requires a prompt', async () => {
     const pool = new SubAgentPool();
     const tool = createSubAgentTool(makeSpawner({ text: 'x' }), pool);
-    const out = await tool.execute({ description: 't' });
-    expect(out).toContain('prompt is required');
+    // zod 契约: prompt 是 required 字段 — 缺失时 defineTool 校验抛错（替代旧的字符串兜底）
+    await expect(tool.execute({ description: 't' })).rejects.toThrow(/参数校验失败/);
   });
 
   it('passes tool_allowlist and mode through to the spawner (dropped-allowlist regression)', async () => {

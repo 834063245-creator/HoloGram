@@ -13,9 +13,11 @@
 // 第一版 wait 做成了固定 sleep（LLM 猜秒数，猜错白等/等不够）——同样不对。
 // 事件驱动 + 超时兜底才是"等"，bash_wait 已验证这个模式。
 
+import { z } from 'zod';
 import type { Tool } from '../tool';
 import type { SubAgentPool } from '../coordinator';
 import { SubAgentStatus } from '../coordinator';
+import { defineTool } from './define-tool';
 
 const MAX_WAIT_MS = 600_000; // 10 分钟上限，对齐 SHELL_TIMEOUT
 const POLL_INTERVAL_MS = 500;
@@ -32,38 +34,39 @@ function statusLabel(status: SubAgentStatus): string {
 }
 
 export function createWaitTool(pool?: SubAgentPool): Tool {
-  return {
-    name: () => 'wait',
-    description: () =>
+  return defineTool({
+    name: 'wait',
+    description:
       'Block until a target completes, then return immediately — event-driven, NOT a fixed sleep. ' +
       'Pass agentId to wait for that sub-agent to finish: returns its final status the moment it completes (no polling loops, no guessing durations). ' +
       'For background shell jobs use bash_wait (dedicated tool). ' +
       'Omit agentId and pass durationMs ONLY as a fallback for non-event waits (watcher re-analysis, file appearance). ' +
       'Max 10 minutes per call.',
-    parameters: () => ({
-      type: 'object',
-      properties: {
-        agentId: {
-          type: 'string',
-          description: 'Sub-agent ID to wait for (from agent_spawn result or agent_status). Waits until it completes/fails/stops.',
-        },
-        durationMs: {
-          type: 'integer',
-          description: 'Fallback sleep when agentId is omitted (1000 = 1s, max 600000). Prefer agentId/bash_wait.',
-          default: 10_000,
-        },
-        timeoutMs: {
-          type: 'integer',
-          description: 'Max wait in ms (default 600000 = 10 min).',
-        },
-      },
-      required: [],
+    schema: z.object({
+      agentId: z
+        .string()
+        .optional()
+        .describe('Sub-agent ID to wait for (from agent_spawn result or agent_status). Waits until it completes/fails/stops.'),
+      // zod: coerce + default(10000) + max(600000) 替代手写 Number(args.durationMs) || 10_000 静默兜底
+      durationMs: z
+        .coerce.number()
+        .max(MAX_WAIT_MS)
+        .optional()
+        .default(10_000)
+        .describe('Fallback sleep when agentId is omitted (1000 = 1s, max 600000). Prefer agentId/bash_wait.'),
+      // timeoutMs 缺省 = MAX_WAIT_MS（对齐 description "default 600000 = 10 min"）— 替代 Number(args.timeoutMs) 的 NaN 静默 bug
+      timeoutMs: z
+        .coerce.number()
+        .max(MAX_WAIT_MS)
+        .optional()
+        .default(MAX_WAIT_MS)
+        .describe('Max wait in ms (default 600000 = 10 min).'),
     }),
-    readOnly: () => true,
+    readOnly: true,
     execute: async (args) => {
       const start = Date.now();
-      const timeoutMs = Math.min(Math.max(Number(args.timeoutMs) || MAX_WAIT_MS, 0), MAX_WAIT_MS);
-      const agentId = args.agentId as string | undefined;
+      const timeoutMs = args.timeoutMs;
+      const agentId = args.agentId;
 
       // ── 事件驱动：等子 Agent 完成 ──
       if (agentId && pool) {
@@ -85,9 +88,9 @@ export function createWaitTool(pool?: SubAgentPool): Tool {
       }
 
       // ── 兜底：无 agentId → 固定时长 sleep（仅限无事件可等的场景）──
-      const durationMs = Math.min(Math.max(Number(args.durationMs) || 10_000, 0), MAX_WAIT_MS);
+      const durationMs = args.durationMs;
       await sleep(durationMs);
       return `已等待 ${(durationMs / 1000).toFixed(1)}s。现在检查目标状态（优先使用 wait agentId / bash_wait 等事件驱动方式）。`;
     },
-  };
+  });
 }

@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
+import { z } from 'zod';
 import type { SubAgentPool } from '../coordinator';
 import { getSubAgentActivity, STUCK_THRESHOLD_S } from '../subagent-activity';
 import type { Tool, ToolExecutor } from '../tool';
 import { agentInvoke } from '../tool';
+import { defineTool } from './define-tool';
 
 // ═══════════════════════════════════════════════════════════════
 // Sub-Agent 工具 — 派发子 Agent 执行并行/委派任务
@@ -32,61 +34,57 @@ export type SubAgentSpawner = (
 ) => Promise<{ text: string; err?: string }>;
 
 export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool): Tool {
-  return {
-    name: () => 'agent_spawn',
-    description: () =>
+  return defineTool({
+    name: 'agent_spawn',
+    description:
       "Spawn a sub-agent to handle a focused, independent task. The call BLOCKS until the sub-agent finishes; its final report is returned as this tool's result. To run several tasks in parallel, emit multiple agent_spawn calls in a single turn. " +
       'Fork mode (default — omit subagent_type) injects your recent context so the sub-agent knows what you already did; set subagent_type="fresh" for a clean-slate agent. ' +
       'In fork mode, file edits run in an isolated git worktree and are auto-merged back on success; on merge conflict the diff is returned to you for manual application. In fresh mode, the sub-agent edits files directly in the working tree — ensure parallel fresh sub-agents have non-overlapping file scopes. ' +
       'Set async=true to spawn non-blocking — returns immediately with the sub-agent ID, and the result arrives via agent_message (type: "result"). Use agent_merge to merge all completed async sub-agents. ' +
       'Note: async sub-agents still occupy pool slots (max 5 concurrent). If the pool is full, spawn requests are queued (up to 20) and started as slots free up.',
-    parameters: () => ({
-      type: 'object',
-      properties: {
-        description: {
-          type: 'string',
-          description: 'Short label for the sub-agent task (3-5 words, used in progress display)',
-        },
-        prompt: {
-          type: 'string',
-          description:
-            'Complete, self-contained task directive for the sub-agent. Must include: what to do, which files to modify, and the expected outcome. Do NOT instruct the sub-agent to run builds or tests — it cannot do so (parallel build tools cause file-lock deadlocks). Verification is the parent agent\'s responsibility after all sub-agents finish. When spawning multiple sub-agents in parallel, give each a distinct, non-overlapping set of files to avoid write conflicts.',
-        },
-        subagent_type: {
-          type: 'string',
-          description:
-            'Omit to fork (inherits your recent context — DEFAULT). Set to "fresh" for a clean-slate sub-agent.',
-        },
-        tool_allowlist: {
-          type: 'array',
-          items: { type: 'string' },
-          description:
-            'Optional list of tool names the sub-agent is allowed to use. If omitted, all tools are available. Example: ["read_file", "search_content", "inspect_symbol"] for a read-only research agent.',
-        },
-        timeout_minutes: {
-          type: 'number',
-          description: 'Optional timeout override (default 30 minutes). The sub-agent is aborted when it exceeds this.',
-        },
-        async: {
-          type: 'boolean',
-          description:
-            'If true, returns immediately with the sub-agent ID. The sub-agent runs in the background; its result arrives via agent_message (type: "result"). If false (default), blocks until the sub-agent finishes. Use agent_merge to merge completed async sub-agents.',
-        },
-      },
-      required: ['description', 'prompt'],
+    schema: z.object({
+      description: z.string().describe('Short label for the sub-agent task (3-5 words, used in progress display)'),
+      prompt: z
+        .string()
+        .describe(
+          'Complete, self-contained task directive for the sub-agent. Must include: what to do, which files to modify, and the expected outcome. Do NOT instruct the sub-agent to run builds or tests — it cannot do so (parallel build tools cause file-lock deadlocks). Verification is the parent agent\'s responsibility after all sub-agents finish. When spawning multiple sub-agents in parallel, give each a distinct, non-overlapping set of files to avoid write conflicts.',
+        ),
+      subagent_type: z
+        .enum(['fresh', 'fork'])
+        .optional()
+        .describe(
+          'Omit to fork (inherits your recent context — DEFAULT). Set to "fresh" for a clean-slate sub-agent.',
+        ),
+      tool_allowlist: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Optional list of tool names the sub-agent is allowed to use. If omitted, all tools are available. Example: ["read_file", "search_content", "inspect_symbol"] for a read-only research agent.',
+        ),
+      timeout_minutes: z
+        .coerce.number()
+        .max(60)
+        .optional()
+        .describe('Optional timeout override (default 30 minutes). The sub-agent is aborted when it exceeds this.'),
+      async: z
+        .boolean()
+        .optional()
+        .describe(
+          'If true, returns immediately with the sub-agent ID. The sub-agent runs in the background; its result arrives via agent_message (type: "result"). If false (default), blocks until the sub-agent finishes. Use agent_merge to merge completed async sub-agents.',
+        ),
     }),
-    readOnly: () => false,
     execute: async (args, onProgress) => {
-      const description = (args.description as string) || '子任务';
-      const prompt = (args.prompt as string) || '';
-      const subagentType = args.subagent_type as string | undefined;
-      const toolAllowlist = args.tool_allowlist as string[] | undefined;
-      const timeoutMinutes = args.timeout_minutes as number | undefined;
+      const description = args.description || '子任务';
+      const prompt = args.prompt;
+      // zod enum 已保证 subagent_type 只可能是 'fresh' | 'fork' — 省略时默认 fork
+      const mode = args.subagent_type ?? 'fork';
+      const toolAllowlist = args.tool_allowlist;
+      const timeoutMinutes = args.timeout_minutes;
       const asyncMode = args.async === true;
       if (!prompt) return '(agent_spawn: prompt is required)';
-      const mode = subagentType === 'fresh' ? 'fresh' : 'fork';
-      const callId = (args._callId as string) || undefined;
-      const timeoutMs = timeoutMinutes && timeoutMinutes > 0 ? Math.min(timeoutMinutes, 60) * 60 * 1000 : undefined;
+      // _callId 由 streaming-executor 注入（不进 schema，passthrough 透传）
+      const callId = (args as { _callId?: string })._callId || undefined;
+      const timeoutMs = timeoutMinutes && timeoutMinutes > 0 ? timeoutMinutes * 60 * 1000 : undefined;
       // 在 pool.spawn 之前生成 agent ID，以便异步模式能将其返回给 LLM。
       // 此 ID 在 board、bus 和 UI 中一致使用 — pool 内部的
       // spawned.id 不会暴露给 LLM。
@@ -124,43 +122,33 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       const reason = handle.error || handle.result || '(未知错误)';
       return `子Agent ${handle.status === 'stopped' ? '被停止' : '失败'}: ${reason}`;
     },
-  };
+  });
 }
 
 /** agent_kill — 按 ID 停止运行中的子 Agent。
  *  幂等：若已结束或未找到，返回当前状态。
  *  只有父 Agent 能停止自己的子 Agent（pool 是 per-agent 的）。 */
 export function createAgentKillTool(pool: SubAgentPool, isolationExec?: ToolExecutor): Tool {
-  return {
-    name: () => 'agent_kill',
-    description: () =>
+  return defineTool({
+    name: 'agent_kill',
+    description:
       'Stop a running sub-agent by its ID. The sub-agent is aborted and its pool slot is freed immediately. ' +
       'Use this to cancel long-running or stuck sub-agents. ' +
       'Idempotent: if the agent already finished or does not exist, returns its current status without error. ' +
       'Set worktree="discard" to also clean up the sub-agent\'s isolated worktree.',
-    parameters: () => ({
-      type: 'object',
-      properties: {
-        agent_id: {
-          type: 'string',
-          description: 'The sub-agent ID to kill (returned by agent_spawn with async=true)',
-        },
-        reason: {
-          type: 'string',
-          description: 'Optional reason for killing the agent (for logging)',
-        },
-        worktree: {
-          type: 'string',
-          description: '"keep" (default) — leave the worktree intact for manual merge. "discard" — clean up the worktree.',
-        },
-      },
-      required: ['agent_id'],
+    schema: z.object({
+      agent_id: z.string().describe('The sub-agent ID to kill (returned by agent_spawn with async=true)'),
+      reason: z.string().optional().describe('Optional reason for killing the agent (for logging)'),
+      worktree: z
+        .enum(['keep', 'discard'])
+        .optional()
+        .default('keep')
+        .describe('"keep" (default) — leave the worktree intact for manual merge. "discard" — clean up the worktree.'),
     }),
-    readOnly: () => false,
     execute: async (args) => {
-      const agentId = args.agent_id as string;
-      const reason = args.reason as string | undefined;
-      const worktree = (args.worktree as string) ?? 'keep';
+      const agentId = args.agent_id;
+      const reason = args.reason;
+      const worktree = args.worktree;
 
       // 尝试停止运行中的 agent
       const stopped = pool.stop(agentId);
@@ -185,7 +173,7 @@ export function createAgentKillTool(pool: SubAgentPool, isolationExec?: ToolExec
 
       return `子Agent ${agentId} 不存在（可能已完成并清理）`;
     },
-  };
+  });
 }
 
 /** agent_status — 运行中子Agent 的可观测状态（只读）。
@@ -196,14 +184,14 @@ export function createAgentKillTool(pool: SubAgentPool, isolationExec?: ToolExec
  *  ⚠️ 疑似卡死，配合 agent_kill 形成「看见 → 杀掉」闭环。
  *  活动数据来自 subagent-activity.ts 的事件旁路。 */
 export function createAgentStatusTool(pool: SubAgentPool): Tool {
-  return {
-    name: () => 'agent_status',
-    description: () =>
+  return defineTool({
+    name: 'agent_status',
+    description:
       'Report the live status of each running sub-agent: id, description, total elapsed time, the tool call currently executing (if any), how long that call has been waiting, and seconds since its last event. ' +
       'Use this to tell a slow sub-agent apart from a stuck one before deciding to kill it — two signals are flagged as suspected-stuck (⚠️): a tool call waiting over 120s, and no events at all for over 120s (long generations stream text events, so an actively-generating sub-agent will not trip the second one). ' +
       'Read-only. Combine with agent_kill to stop stuck sub-agents.',
-    parameters: () => ({ type: 'object', properties: {} }),
-    readOnly: () => true,
+    schema: z.object({}),
+    readOnly: true,
     execute: async () => {
       const running = pool.listRunning();
       if (running.length === 0) return '当前没有运行中的子Agent。';
@@ -230,5 +218,5 @@ export function createAgentStatusTool(pool: SubAgentPool): Tool {
       }
       return lines.join('\n');
     },
-  };
+  });
 }
