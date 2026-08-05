@@ -129,6 +129,8 @@ FTS 惰性重建折中、R10 目标 全内核<15min),接手模型按规格机械
    - 候选方向(需设计决策):prepared statement 复用+边有序插入(小修);
      图大时改快照式持久化(跳过 SQLite 全量重写,架构级);增量保存
 5. 修完 M7 再重跑全内核验证;R0~R10 架构主线在此之后排期
+   → **更新(2026-08-06):R0~R8 已竣工(见下文「R 阶段进度」),M7 以 M7c 快照
+   持久化形式并入 R9.2,剩余 R9/R10。**
 6. (未测量维度)Dataflow/LSP 不在 --stress-real 内:Dataflow 按需计算不占管线内存;
    LSP warm 对 51k C 文件的 clangd 后台索引是独立课题,未测
 
@@ -144,3 +146,50 @@ FTS 惰性重建折中、R10 目标 全内核<15min),接手模型按规格机械
 | Flows | 5.3s | M6 后 |
 | **DB Save** | **1247.8s** | MemoryIndex 353s + bulk 885.6s(M7 目标) |
 | 总计 | 1697.6s | RSS 峰值 9.3GB |
+
+## R 阶段进度(2026-08-06,R0~R8 竣工,全部逐批提交)
+
+按 `docs/plans/graph-id-refactor-plan.md` v2 施工。每批 `cargo test --lib` 579 passed
+(R0 净增 9 个访问器边界用例后只增不减),R1~R7 后与 R8 后各跑一次 fs 数字契约,
+两次全绿:**155518 nodes / 426199 edges / 28284 communities,resolved 271321,
+总耗时 ~35-36.5s(基线 ~48s,无劣化)**。
+
+| 批 | commit | 内容 |
+|---|---|---|
+| R0 | `3049e7d` | `graph/id.rs`:NodeId/EdgeId newtype(serde transparent、Borrow<str>,无 Deref);Graph 加 nodes_iter/edges_iter/node_ids/edge_ids;Node 加 file()/short_name()/module() 语义访问器(扩展名表与 resolver 同源 GRAMMAR_LOADER)。纯新增零行为变化 |
+| R1 | (空批) | adapter/ 实测为 Graph 生产侧(返回 (Vec<Node>,Vec<Edge>,Tree) 元组),无任何 Graph 消费点,零改动 |
+| R2 | `c412c13` | resolver 容器访问迁移;私有 short_name/file_stem 调用点输入均为 node.name/edge.target(非 node.id),按规格全部保留 |
+| R3 | `bab1f9a` | di_reflection/dynamic_dispatch/bridge_rpc 迁移 nodes_iter/node_ids/get_node |
+| R4 | `b09238b` | analysis 其余模块;flows 文件收集改 Node::file();strip_line_suffix 标 #[allow(dead_code)] 留 R8(测试保留) |
+| R5 | `dc0a364` | community/routing 迁移 |
+| R6 | `5c7280c` | handlers find_references 图回退迁移 |
+| R7 | `90221ef` | main/engine 迁移;graph_from_index cross_file 推导改 Node::file()(见下注) |
+| R8 | `9b55c8c` | Graph.nodes/edges 改 pub(crate);新增 get_node_mut/get_edge_mut、nodes_map/edges_map(+_mut)、into_parts、take_nodes/take_edges、meta()/meta_mut()、outgoing()/incoming() 迭代器(旧 Vec 版标 deprecated 且调用点迁净);R1~R7 缺口清单 9 项全部收口 |
+
+**R7 行为边缘注记**:engine/mod.rs cross_file 推导从「无条件剥冒号尾段」改为
+Node::file()(只剥纯数字行号)。规范 path:line 下完全等价;fs 契约 resolved
+271321 不变,裁决通过。
+
+**R8 两处借用检查迫使的等价重构(已审 diff)**:
+- coupling.rs:节点表 take_nodes() 到局部建借用索引 → edges_map_mut().par_iter_mut()
+  → 放回原表(闭包内无 panic 路径)
+- flows.rs:Flow 元数据改延迟写回(循环内只读,循环后统一 get_node_mut;
+  循环体从不回读 properties["flow"],逐元素等价)
+
+**R8 偏离记录**:
+- 规格「diff 返回类型加 newtype 包装」经核无可包装对象(GraphDiff 字段均为
+  Node/Edge 克隆,无裸 String id),未动。
+- 清单外发现:src-tauri 是 engine 的 path 依赖,utils.rs 6 处只读访问随
+  pub(crate) 用 nodes_map()/edges_map() 迁移。
+- src-tauri `cargo check` 在 R7 提交态即失败(commands/shell.rs:323/333 E0631,
+  Graph 无关的既有问题),未修。
+
+**R8 后残留死代码**:flows.rs strip_line_suffix(#[allow(dead_code)],测试保留)。
+
+**剩余批次**:
+- R9:serde roundtrip 测试(小)+ M7c 快照持久化(核心;HOLOGRAM_SNAPSHOT_MIN_EDGES
+  默认 5M 边,bincode 全量 MemoryIndex,原子 rename,FTS 惰性重建 30s 预算降级,
+  反序列化失败回退 SQLite)。验收:fs 契约(走旧路零变化)+ drivers 压测
+  (阈值调 4M 强制快照,db-save 1247.8s → <60s)。
+- R10(可选):Graph 容器内部 u32 interning,NodeId 字符串句柄不变;
+  目标全内核 <15min @16GB,需带看门狗压测。
