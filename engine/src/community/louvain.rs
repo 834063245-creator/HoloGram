@@ -262,10 +262,14 @@ fn build_community_result(node_ids: &[String], comm_nodes: &[Vec<usize>]) -> Vec
 ///
 /// 使用纯 Louvain（仅局部移动）— 无 Leiden 精化。
 /// L1+ 在压缩后的超图上使用相同算法。
+///
+/// M2 (2026-08-06)：leaf_edges 改借用 (&str,&str)（调用方零克隆，
+/// 全内核 14M 边时消除 ~2.3GB 字符串对拷贝）；并在层级循环前
+/// 一次性预映射为 dense 索引对，每层循环从 O(E) HashMap 查找降为数组下标。
 fn detect_hierarchical_from_base(
     base: &[Community],
     seed: u64,
-    leaf_edges: &[(String, String)],
+    leaf_edges: &[(&str, &str)],
 ) -> Vec<HierarchicalCommunity> {
     let mut result: Vec<HierarchicalCommunity> = Vec::new();
     if base.is_empty() { return result; }
@@ -293,6 +297,17 @@ fn detect_hierarchical_from_base(
     let node_to_dense: HashMap<&str, usize> = all_node_ids.iter()
         .enumerate()
         .map(|(i, &id)| (id, i))
+        .collect();
+
+    // M2：leaf_edges 一次性预映射为 dense 索引对（端点缺失 → usize::MAX，循环内跳过）。
+    // 原实现每层循环对 9M+ 条边做 2 次 HashMap<&str> 查找，最多重复 MAX_LEVELS 轮。
+    let dense_edges: Vec<(usize, usize)> = leaf_edges
+        .iter()
+        .map(|(src, dst)| {
+            let d = node_to_dense.get(src).copied().unwrap_or(usize::MAX);
+            let e = node_to_dense.get(dst).copied().unwrap_or(usize::MAX);
+            (d, e)
+        })
         .collect();
 
     // 迭代压缩
@@ -329,14 +344,13 @@ fn detect_hierarchical_from_base(
         let mut m = 0.0f64;
 
         let mut edge_pairs: Vec<((usize, usize), f64)> = Vec::new();
-        for (src, dst) in leaf_edges {
-            let ci = node_to_dense.get(src.as_str()).map(|&d| node_to_ci[d]);
-            let cj = node_to_dense.get(dst.as_str()).map(|&d| node_to_ci[d]);
-            if let (Some(ci), Some(cj)) = (ci, cj) {
-                if ci != usize::MAX && cj != usize::MAX && ci != cj {
-                    let (a, b) = if ci < cj { (ci, cj) } else { (cj, ci) };
-                    edge_pairs.push(((a, b), 1.0));
-                }
+        for &(ds, dt) in &dense_edges {
+            if ds == usize::MAX || dt == usize::MAX { continue; }
+            let ci = node_to_ci[ds];
+            let cj = node_to_ci[dt];
+            if ci != usize::MAX && cj != usize::MAX && ci != cj {
+                let (a, b) = if ci < cj { (ci, cj) } else { (cj, ci) };
+                edge_pairs.push(((a, b), 1.0));
             }
         }
         edge_pairs.sort_by(|(a, _), (b, _)| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
@@ -693,8 +707,8 @@ fn detect_communities_from_index_louvain(idx: &MemoryIndex, seed: u64) -> Vec<Co
 /// 如需 Leiden 精化的扁平社区，请改用 detect_communities()。
 pub fn detect_hierarchical_communities(graph: &Graph, seed: u64) -> Vec<HierarchicalCommunity> {
     let base = detect_communities_louvain(graph, seed);
-    let leaf_edges: Vec<(String, String)> = graph.edges.values()
-        .map(|e| (e.source.clone(), e.target.clone()))
+    let leaf_edges: Vec<(&str, &str)> = graph.edges.values()
+        .map(|e| (e.source.as_str(), e.target.as_str()))
         .collect();
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
@@ -705,8 +719,8 @@ pub fn detect_hierarchical_communities_with_base(
     base: Vec<Community>,
     seed: u64,
 ) -> Vec<HierarchicalCommunity> {
-    let leaf_edges: Vec<(String, String)> = graph.edges.values()
-        .map(|e| (e.source.clone(), e.target.clone()))
+    let leaf_edges: Vec<(&str, &str)> = graph.edges.values()
+        .map(|e| (e.source.as_str(), e.target.as_str()))
         .collect();
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
@@ -717,12 +731,16 @@ pub fn detect_hierarchical_communities_from_index(
     seed: u64,
 ) -> Vec<HierarchicalCommunity> {
     let base = detect_communities_from_index_louvain(idx, seed);
-    let leaf_edges: Vec<(String, String)> = idx.edges_iter()
+    // edges_iter 返回 owned String — 先持有再借用,语义不变
+    let owned_edges: Vec<(String, String)> = idx.edges_iter()
         .into_iter()
         .flat_map(|(src, targets)| {
-            let s = src.to_string();
+            let s = src;
             targets.into_iter().map(move |(tgt, _, _, _)| (s.clone(), tgt))
         })
+        .collect();
+    let leaf_edges: Vec<(&str, &str)> = owned_edges.iter()
+        .map(|(s, t)| (s.as_str(), t.as_str()))
         .collect();
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
@@ -738,8 +756,8 @@ pub fn detect_communities_and_hierarchy(
 ) -> (Vec<Community>, Vec<HierarchicalCommunity>) {
     let base = detect_communities(graph, seed);  // Leiden 精化的扁平社区
     let hier_base = detect_communities_louvain(graph, seed);  // 用于层次化的 Louvain
-    let leaf_edges: Vec<(String, String)> = graph.edges.values()
-        .map(|e| (e.source.clone(), e.target.clone()))
+    let leaf_edges: Vec<(&str, &str)> = graph.edges.values()
+        .map(|e| (e.source.as_str(), e.target.as_str()))
         .collect();
     let hierarchical = detect_hierarchical_from_base(&hier_base, seed, &leaf_edges);
     (base, hierarchical)
