@@ -132,7 +132,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let changed_files = changed_files.as_slice();
 
     // 首次打开：静默建立基线 — 不审计整个项目。
-    if before.nodes.is_empty() && !after.nodes.is_empty() && changed_files.is_empty() {
+    if before.node_count() == 0 && after.node_count() > 0 && changed_files.is_empty() {
         return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
     }
 
@@ -206,7 +206,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         0usize
     } else {
         let mut seed_nodes: HashSet<&str> = HashSet::new();
-        for node in after.nodes.values() {
+        for (_, node) in after.nodes_iter() {
             if let Some(ref loc) = node.location {
                 if changed_files.iter().any(|f| loc.starts_with(f.as_str()) || loc.contains(f.as_str())) {
                     seed_nodes.insert(node.id.as_str());
@@ -222,7 +222,7 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
         }
         // 构建邻接表
         let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-        for edge in after.edges.values() {
+        for (_, edge) in after.edges_iter() {
             adj.entry(&edge.source).or_default().push(&edge.target);
             adj.entry(&edge.target).or_default().push(&edge.source);
         }
@@ -247,8 +247,8 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
             node_to_comm.insert(nid.as_str(), ci);
         }
     }
-    let cross_community_edges = after.edges.values()
-        .filter(|e| {
+    let cross_community_edges = after.edges_iter()
+        .filter(|(_, e)| {
             let sc = node_to_comm.get(e.source.as_str());
             let tc = node_to_comm.get(e.target.as_str());
             sc != tc || sc.is_none()
@@ -259,13 +259,13 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let new_thread_conflicts = 0u32;
 
     // ── api_signature_changes：统计变更的函数/方法节点 ──
-    let api_signature_changes = if before.nodes.is_empty() {
+    let api_signature_changes = if before.node_count() == 0 {
         0u32
     } else {
         let mut changed = 0u32;
-        for (nid, after_node) in after.nodes.iter() {
+        for (nid, after_node) in after.nodes_iter() {
             if !matches!(after_node.kind, NodeKind::Symbol) { continue; }
-            if let Some(before_node) = before.nodes.get(nid) {
+            if let Some(before_node) = before.get_node(nid) {
                 // 入度/出度不同则计为变更
                 if before_node.out_degree != after_node.out_degree
                     || before_node.in_degree != after_node.in_degree

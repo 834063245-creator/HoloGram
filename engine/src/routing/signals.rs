@@ -7,7 +7,7 @@ use crate::routing::patterns::PatternMatcher;
 use serde_json::{json, Value};
 
 fn count_l4_edges(graph: &Graph) -> usize {
-    graph.edges.values().filter(|e| e.coupling_depth >= 4).count()
+    graph.edges_iter().filter(|(_, e)| e.coupling_depth >= 4).count()
 }
 
 /// 稳定的违规标识 — 确定性、可读、跨检查运行保持一致。
@@ -82,9 +82,9 @@ impl SignalGenerator {
                 signals.push(json!({"signal":{"description":format!("{} shared variable(s) detected across function boundaries ({} reads, {} writes).", df.l3_shared_vars, df.l3_reads, df.l3_writes),"file_path":"","line":0,"level":3,"affected_nodes":[],"violation_id":vid(3,"shared_vars","dataflow")},"level":3}));
             }
         } else {
-            for edge in after.edges.values() {
+            for (_, edge) in after.edges_iter() {
                 if edge.coupling_depth >= 3 {
-                    let loc = after.nodes.get(&edge.source)
+                    let loc = after.get_node(&edge.source)
                         .and_then(|n| n.location.as_deref())
                         .unwrap_or("");
                     // 使用路径感知匹配：文件必须匹配路径段，而非任意子串

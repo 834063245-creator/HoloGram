@@ -26,17 +26,17 @@ pub struct HierarchicalCommunity {
 // ═══════════════════════════════════════════════════════════════
 
 fn build_adjacency(graph: &Graph) -> Option<(Vec<String>, Vec<Vec<(usize, f64)>>, Vec<f64>, f64)> {
-    let mut node_ids: Vec<&String> = graph.nodes.keys().collect();
+    let mut node_ids: Vec<&str> = graph.node_ids().collect();
     node_ids.sort();
     let n = node_ids.len();
     if n == 0 { return None; }
 
-    let id_to_idx: HashMap<&String, usize> = node_ids.iter()
+    let id_to_idx: HashMap<&str, usize> = node_ids.iter()
         .enumerate()
         .map(|(i, id)| (*id, i))
         .collect();
 
-    let m: f64 = graph.edges.len() as f64;
+    let m: f64 = graph.edge_count() as f64;
     if m == 0.0 {
         let owned_ids: Vec<String> = node_ids.iter().map(|id| id.to_string()).collect();
         return Some((owned_ids, vec![vec![]; n], vec![0.0; n], 0.0));
@@ -45,8 +45,8 @@ fn build_adjacency(graph: &Graph) -> Option<(Vec<String>, Vec<Vec<(usize, f64)>>
     let mut degrees = vec![0.0f64; n];
     let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
 
-    for edge in graph.edges.values() {
-        if let (Some(&s), Some(&t)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target)) {
+    for edge in graph.edges_iter().map(|(_, e)| e) {
+        if let (Some(&s), Some(&t)) = (id_to_idx.get(edge.source.as_str()), id_to_idx.get(edge.target.as_str())) {
             let w = 1.0;
             adj[s].push((t, w));
             adj[t].push((s, w));
@@ -707,8 +707,8 @@ fn detect_communities_from_index_louvain(idx: &MemoryIndex, seed: u64) -> Vec<Co
 /// 如需 Leiden 精化的扁平社区，请改用 detect_communities()。
 pub fn detect_hierarchical_communities(graph: &Graph, seed: u64) -> Vec<HierarchicalCommunity> {
     let base = detect_communities_louvain(graph, seed);
-    let leaf_edges: Vec<(&str, &str)> = graph.edges.values()
-        .map(|e| (e.source.as_str(), e.target.as_str()))
+    let leaf_edges: Vec<(&str, &str)> = graph.edges_iter()
+        .map(|(_, e)| (e.source.as_str(), e.target.as_str()))
         .collect();
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
@@ -719,8 +719,8 @@ pub fn detect_hierarchical_communities_with_base(
     base: Vec<Community>,
     seed: u64,
 ) -> Vec<HierarchicalCommunity> {
-    let leaf_edges: Vec<(&str, &str)> = graph.edges.values()
-        .map(|e| (e.source.as_str(), e.target.as_str()))
+    let leaf_edges: Vec<(&str, &str)> = graph.edges_iter()
+        .map(|(_, e)| (e.source.as_str(), e.target.as_str()))
         .collect();
     detect_hierarchical_from_base(&base, seed, &leaf_edges)
 }
@@ -756,8 +756,8 @@ pub fn detect_communities_and_hierarchy(
 ) -> (Vec<Community>, Vec<HierarchicalCommunity>) {
     let base = detect_communities(graph, seed);  // Leiden 精化的扁平社区
     let hier_base = detect_communities_louvain(graph, seed);  // 用于层次化的 Louvain
-    let leaf_edges: Vec<(&str, &str)> = graph.edges.values()
-        .map(|e| (e.source.as_str(), e.target.as_str()))
+    let leaf_edges: Vec<(&str, &str)> = graph.edges_iter()
+        .map(|(_, e)| (e.source.as_str(), e.target.as_str()))
         .collect();
     let hierarchical = detect_hierarchical_from_base(&hier_base, seed, &leaf_edges);
     (base, hierarchical)
@@ -841,25 +841,25 @@ pub fn match_communities_to_previous(
 pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
 
-    let new_ids: HashSet<String> = graph.nodes.iter()
+    let new_ids: HashSet<String> = graph.nodes_iter()
         .filter(|(_, n)| n.community_id.is_none())
-        .map(|(id, _)| id.clone())
+        .map(|(id, _)| id.to_string())
         .collect();
 
     if new_ids.is_empty() { return Vec::new(); }
 
     // 单次遍历边 — 为每个新节点累加社区投票
     let mut votes: HashMap<String, HashMap<usize, usize>> = HashMap::new();
-    for edge in graph.edges.values() {
+    for (_, edge) in graph.edges_iter() {
         if new_ids.contains(&edge.source) {
-            if let Some(nbr) = graph.nodes.get(&edge.target) {
+            if let Some(nbr) = graph.get_node(&edge.target) {
                 if let Some(cid) = nbr.community_id {
                     *votes.entry(edge.source.clone()).or_default().entry(cid).or_default() += 1;
                 }
             }
         }
         if new_ids.contains(&edge.target) {
-            if let Some(nbr) = graph.nodes.get(&edge.source) {
+            if let Some(nbr) = graph.get_node(&edge.source) {
                 if let Some(cid) = nbr.community_id {
                     *votes.entry(edge.target.clone()).or_default().entry(cid).or_default() += 1;
                 }
@@ -993,7 +993,7 @@ mod tests {
             .flat_map(|c| c.node_ids.clone())
             .collect();
         covered.sort();
-        let mut expected: Vec<String> = g.nodes.keys().cloned().collect();
+        let mut expected: Vec<String> = g.node_ids().map(str::to_string).collect();
         expected.sort();
         assert_eq!(covered, expected,
             "Level 0 communities should cover all nodes exactly once");
@@ -1090,7 +1090,7 @@ mod tests {
                 .flat_map(|c| c.node_ids.clone())
                 .collect();
             covered.sort();
-            let mut expected: Vec<String> = g.nodes.keys().cloned().collect();
+            let mut expected: Vec<String> = g.node_ids().map(str::to_string).collect();
             expected.sort();
             assert_eq!(covered, expected);
         }
@@ -1108,7 +1108,7 @@ mod tests {
             .flat_map(|c| c.node_ids.clone())
             .collect();
         covered.sort();
-        let mut expected: Vec<String> = g.nodes.keys().cloned().collect();
+        let mut expected: Vec<String> = g.node_ids().map(str::to_string).collect();
         expected.sort();
         assert_eq!(covered, expected);
 
@@ -1135,7 +1135,7 @@ mod tests {
                 .flat_map(|c| c.node_ids.clone())
                 .collect();
             covered.sort();
-            let mut expected: Vec<String> = g.nodes.keys().cloned().collect();
+            let mut expected: Vec<String> = g.node_ids().map(str::to_string).collect();
             expected.sort();
             assert_eq!(covered, expected, "Level 0 should cover all nodes");
 
@@ -1252,7 +1252,7 @@ mod tests {
             .flat_map(|c| c.node_ids.clone())
             .collect();
         covered.sort();
-        let mut expected: Vec<String> = g.nodes.keys().cloned().collect();
+        let mut expected: Vec<String> = g.node_ids().map(str::to_string).collect();
         expected.sort();
         assert_eq!(covered, expected);
     }
@@ -1385,7 +1385,7 @@ mod tests {
         assign_communities_to_new_nodes(&mut g);
 
         // n3 应加入社区 0（2 票对 1 票）
-        assert_eq!(g.nodes.get("n3").unwrap().community_id, Some(0));
+        assert_eq!(g.get_node("n3").unwrap().community_id, Some(0));
     }
 
     #[test]
@@ -1402,7 +1402,7 @@ mod tests {
         assign_communities_to_new_nodes(&mut g);
 
         // n1 没有带 community_id 的邻居 → 保持 None
-        assert_eq!(g.nodes.get("n1").unwrap().community_id, None);
+        assert_eq!(g.get_node("n1").unwrap().community_id, None);
     }
 
     #[test]
@@ -1419,9 +1419,9 @@ mod tests {
         assign_communities_to_new_nodes(&mut g);
 
         // n0 保留其 community_id = 5
-        assert_eq!(g.nodes.get("n0").unwrap().community_id, Some(5));
+        assert_eq!(g.get_node("n0").unwrap().community_id, Some(5));
         // n1 从 n0 继承社区 5
-        assert_eq!(g.nodes.get("n1").unwrap().community_id, Some(5));
+        assert_eq!(g.get_node("n1").unwrap().community_id, Some(5));
     }
 
     #[test]
