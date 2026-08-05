@@ -7,17 +7,21 @@
 ## 数字契约(每批完成后必须成立)
 
 ```
-cargo test --lib                     # 569+ 全绿,只增不减
+cargo test --lib                     # 570+ 全绿,只增不减
 fs 子树压测(D:/linux-7.1.0/fs):     # M 阶段每步、R10 后必跑;R 阶段中间批可免
   155518 nodes / 426199 edges / 28284 communities   # 图数字一个不许变
+  cross-file 解析边数 271321                         # 解析语义不许变
   总耗时基线 ~48s                                     # 劣化 >10% 视为回归
+  注: flows 数量有 285-329 历史波动带(resolver HashMap 迭代序非确定性),不作契约
 ```
 
 ## 总序
 
 ```
-M1 → M2 → M3 → [全内核验证] → R0 → R1~R7(可并行)→ R8 → R9 → R10
-└─ 救场:16GB 跑全内核 ─┘   └────────── 架构主线:newtype 化 ──────────┘
+M1~M3(内存救场)✅ → [全内核验证:内存墙已翻] → M4~M6(算法墙)✅ → M7(db-save 规模墙)
+                                                                      ↓
+                    R0 → R1~R7(可并行)→ R8 → R9(吸收 M7c)→ R10
+                    └────────── 架构主线:newtype 化 ──────────┘
 ```
 
 M 与 R 正交(M 改算法级临时结构,R 改 ID 表示),M 必须先做——架构重构不自动
@@ -63,6 +67,35 @@ M 与 R 正交(M 改算法级临时结构,R 改 ID 表示),M 必须先做——�
 M5 coupling(197s,1035×)、M6 flows 字符串克隆(已知未修)**。
 M4~M6 已插入总序,先于 R 阶段执行——全内核「能跑」但「跑不完」就没有实用价值。
 详见 docs/agents/perf-stress-handoff.md 第三轮优化节。
+
+### M4 resolver 超线性修复 ✅(2026-08-06 已提交)
+- **改**:`engine/src/graph/resolver.rs`
+- **实测根因**:不是候选扫描平方(drivers cand_scans 仅 141 万),而是逐边常数
+  (端点 clone×2、infer_language 全串 lowercase、逐候选 Vec 分配)在换页压力下放大
+- **修法**:Cow 借用、infer_language 按 source 记忆化、评分三处零分配、
+  diag 键 &'static str、分段计时 + misses/cand_scans 计数器(保留作后续诊断)
+- **验收**:drivers(12.6M 边)cross-file 36.9s 回归线性;fs 图数字+解析边 271321 不变
+
+### M5 coupling 借用化+并行 ✅(2026-08-06 已提交)
+- **改**:`engine/src/analysis/coupling.rs`
+- **注**:drivers 旧代码实测仅 3.1s,内核 197s 主要是换页抖动;借用+rayon
+  砍常数一个量级,换页敏感性同步下降
+
+### M6 flows 邻接/入度借用化 ✅(2026-08-06 已提交)
+- **改**:`engine/src/analysis/flows.rs`(M2 同模式;入参取 edges 字段保分裂借用)
+
+### M7 db-save 规模墙(下一个, drivers 实测 1247.8s 为全程最大单块)
+- **构成**:MemoryIndex::from_existing_graph 353s(fs 3.2s)+ bulk_replace_all
+  885.6s(edges 插入 228s/索引重建 242.5s/commit 292s 数 GB WAL fsync/nodes 94s/fts 28s)
+- **M7a 小修(~半天)**:MemoryIndex 构建并行化(intern 预分配 + 桶构建 rayon 化)
+  + bulk 写入 prepared statement 复用 + 边按 source 有序插入(B-tree 局部性)。
+  预计 1247s → 500-600s
+- **M7b 中修(1~2 天)**:SQLite 写入路径重构——事务内并发建索引、WAL 分批
+  checkpoint、节点/边双连接并行写入再合并。预计 → 200-300s
+- **M7c 架构(并入 R9)**:图超阈值跳过 SQLite 全量重写,MemoryIndex 直接 mmap
+  快照(CSR 本扁平,启动秒载)——本质是 Graph 表示统一问题,与 R9 存储边界
+  定型合并设计,不单独立项
+- **验收**:数字契约全项 + drivers db-save 耗时写入交接文档
 
 ---
 
@@ -112,10 +145,13 @@ M4~M6 已插入总序,先于 R 阶段执行——全内核「能跑」但「跑�
   这些被 main.rs/handlers 依赖的残留公共面(保留为方法,签名用 newtype)。
 - **验收**:数字契约全项
 
-### R9 serde/存储边界定型
+### R9 serde/存储边界定型(吸收 M7c)
 - **改**:`engine/src/storage/sqlite.rs`、`engine/src/storage/memory.rs`、JSON 落盘路径
 - **做法**:定义 newtype 的 serde 表现=纯字符串(磁盘格式与线格式零变化,
   hologram.db 不需要迁移);MemoryIndex 与 Graph 的 ID 转换收口为单一入口。
+  **吸收 M7c**:图超阈值(建议 500 万边,env 可调)时跳过 SQLite 全量重写,
+  改 MemoryIndex mmap 快照持久化(CSR 扁平数组直接落盘,启动秒载)——
+  22M 边规模的 db-save 从 886s 级降到秒级,这是存储边界定型的正当组成部分。
 - **验收**:数字契约全项;加一个旧库冷启动兼容测试(用现网 hologram.db fixture)
 
 ### R10 内部表示换 u32 + arena(可选,最后才做)
