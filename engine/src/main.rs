@@ -346,8 +346,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if req_owned.starts_with("delayed") {
                 // 延迟边查询：筛选 Triggers/Awaits/Sequences 类型的时序边
                 handle_simple("delayed", req_owned.trim(), |g, _| {
-                    let delayed: Vec<_> = g.edges.values().filter(|e| matches!(e.kind, EdgeKind::Triggers|EdgeKind::Awaits|EdgeKind::Sequences))
-                        .map(|e| json!({"source":e.source,"target":e.target,"type":e.kind.as_str()}))
+                    let delayed: Vec<_> = g.edges_iter().filter(|(_, e)| matches!(e.kind, EdgeKind::Triggers|EdgeKind::Awaits|EdgeKind::Sequences))
+                        .map(|(_, e)| json!({"source":e.source,"target":e.target,"type":e.kind.as_str()}))
                         .collect();
                     json!(delayed)
                 })
@@ -385,8 +385,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let dry_run: bool = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(false);
                 let _node_id = parts.get(3).copied().unwrap_or("");
                 handle_simple("rename:", old_name, move |g, _| {
-                    let matched: Vec<_> = g.nodes.values()
-                        .filter(|n| n.name == old_name)
+                    let matched: Vec<_> = g.nodes_iter()
+                        .filter(|(_, n)| n.name == old_name)
+                        .map(|(_, n)| n)
                         .collect();
                     if matched.is_empty() {
                         json!({"error": format!("No nodes match '{}'", old_name)})
@@ -456,7 +457,7 @@ fn handle_analyze(path: &str) -> Vec<u8> {
 
     // ── 序列化完整图数据，供前端消费 ──
     // 节点：ID、名称、类型、位置、入度、出度、属性、位置坐标、社区 ID
-    let nodes: Vec<serde_json::Value> = result.graph.nodes.values().map(|n| {
+    let nodes: Vec<serde_json::Value> = result.graph.nodes_iter().map(|(_, n)| {
         serde_json::json!({
             "id": n.id, "name": n.name, "type": n.kind.as_str(),
             "location": n.location, "in_degree": n.in_degree,
@@ -466,7 +467,7 @@ fn handle_analyze(path: &str) -> Vec<u8> {
     }).collect();
 
     // 边：ID、源节点、目标节点、类型、耦合深度、是否跨文件、时序延迟
-    let edges: Vec<serde_json::Value> = result.graph.edges.values().map(|e| {
+    let edges: Vec<serde_json::Value> = result.graph.edges_iter().map(|(_, e)| {
         serde_json::json!({
             "id": e.id, "source": e.source, "target": e.target,
             "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
@@ -709,7 +710,7 @@ fn handle_query(request: &str, prefix: &str) -> Vec<u8> {
 /// 供前端进行整体渲染。引擎未初始化时返回空数组。
 fn handle_get_graph() -> Vec<u8> {
     match hologram_engine::engine::engine_read_graph(|g| {
-        let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| {
+        let nodes: Vec<serde_json::Value> = g.nodes_iter().map(|(_, n)| {
             serde_json::json!({
                 "id": n.id, "name": n.name, "type": n.kind.as_str(),
                 "location": n.location, "in_degree": n.in_degree,
@@ -717,7 +718,7 @@ fn handle_get_graph() -> Vec<u8> {
                 "position": n.position, "community_id": n.community_id,
             })
         }).collect();
-        let edges: Vec<serde_json::Value> = g.edges.values().map(|e| {
+        let edges: Vec<serde_json::Value> = g.edges_iter().map(|(_, e)| {
             serde_json::json!({
                 "id": e.id, "source": e.source, "target": e.target,
                 "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,

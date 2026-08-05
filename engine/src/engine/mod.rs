@@ -119,14 +119,10 @@ fn graph_from_index(idx: &MemoryIndex) -> Graph {
             // ponytail: cross_file 是在 CSR 往返中丢失的分析元数据。
             // 在 target 被 move 到 Edge::new 之前从节点位置计算。
             let cross_file = {
-                let sf = idx.get_node(&source).and_then(|n| n.location.as_deref());
-                let tf = idx.get_node(&target).and_then(|n| n.location.as_deref());
+                let sf = idx.get_node(&source).and_then(|n| n.file());
+                let tf = idx.get_node(&target).and_then(|n| n.file());
                 match (sf, tf) {
-                    (Some(s), Some(t)) => {
-                        let s_file = s.rsplit_once(':').map(|(f, _)| f).unwrap_or(s);
-                        let t_file = t.rsplit_once(':').map(|(f, _)| f).unwrap_or(t);
-                        s_file != t_file
-                    }
+                    (Some(s), Some(t)) => s != t,
                     _ => false,
                 }
             };
@@ -946,11 +942,11 @@ mod tests {
         assert_eq!(g.edge_count(), 2);
 
         // Edge n1→n2：相同文件 → cross_file=false
-        let e1 = g.edges.values().find(|e| e.source == "n1" && e.target == "n2").unwrap();
+        let e1 = g.edges_iter().map(|(_, e)| e).find(|e| e.source == "n1" && e.target == "n2").unwrap();
         assert!(!e1.cross_file, "n1→n2 should be same-file (both in src/lib.rs), got cross_file={}", e1.cross_file);
 
         // Edge n1→n3：不同文件 → cross_file=true
-        let e2 = g.edges.values().find(|e| e.source == "n1" && e.target == "n3").unwrap();
+        let e2 = g.edges_iter().map(|(_, e)| e).find(|e| e.source == "n1" && e.target == "n3").unwrap();
         assert!(e2.cross_file, "n1→n3 should be cross-file (lib.rs vs main.rs), got cross_file={}", e2.cross_file);
     }
 
@@ -967,7 +963,7 @@ mod tests {
         idx.flush_pending();
 
         let g = graph_from_index(&idx);
-        let e = g.edges.values().next().unwrap();
+        let e = g.edges_iter().next().unwrap().1;
         assert!(!e.cross_file, "edges without locations should default cross_file=false");
     }
 

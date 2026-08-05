@@ -368,7 +368,7 @@ impl Engine {
         // 7.5. 构建语义向量索引（后台异步执行）
         // ponytail: 使用步骤 5.9 中已填充 snippet 的节点。
         // 在后台线程运行 — 不阻塞流水线完成。
-        let vector_nodes: Vec<crate::graph::Node> = result.graph.nodes.values().cloned().collect();
+        let vector_nodes: Vec<crate::graph::Node> = result.graph.nodes_iter().map(|(_, n)| n.clone()).collect();
         let vector_path = project_root.join(".hologram").join("vectors.usearch");
         std::thread::spawn(move || {
             // 并发守卫：与增量重建互斥，避免两个线程同时写同一索引文件

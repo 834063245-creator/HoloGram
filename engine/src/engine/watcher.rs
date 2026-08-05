@@ -243,7 +243,7 @@ impl Engine {
             if !voted_ids.is_empty() {
                 let voted_nodes: Vec<&crate::graph::Node> = voted_ids
                     .iter()
-                    .filter_map(|id| graph.nodes.get(id))
+                    .filter_map(|id| graph.get_node(id))
                     .collect();
                 if let Err(e) = store.db.batch_upsert_nodes(&voted_nodes) {
                     warn!("[engine watcher] persist voted community_ids failed: {}", e);
