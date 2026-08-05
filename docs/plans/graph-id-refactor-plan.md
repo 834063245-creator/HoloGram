@@ -1,174 +1,247 @@
-# Graph ID 抽象重构 — Agent 分批施工方案
+# Graph ID 抽象重构 — R 阶段完整实现规格(供接手模型直接施工)
 
-> 2026-08-06 · 缘起:全内核规模评估(docs/agents/perf-stress-handoff.md)发现 String ID 全仓耦合
-> (~35 文件/上千访问点)。本方案是给 Agent 直接派发用的作战地图,不是人类阅读版路线图。
-> 每批:边界清晰、可独立验收、行为零变化(除 M 阶段)、单 commit 可 revert。
+> 2026-08-06 v2 · 本文档是 R0~R10 的**实现规格书**,不是路线图。
+> 设计决策已全部钉死,施工者不需要做架构判断,只做机械化落地+逐批验收。
+> 背景与实测依据:docs/agents/perf-stress-handoff.md(第三/四轮优化节)。
 
-## 数字契约(每批完成后必须成立)
+## 0. 施工前必读(现状与硬约束)
 
+**已完成前提(M 系列,全部已提交)**:M1 merger interning、M2 community 去克隆、
+M3 parse_cache 门控、M4 resolver 超线性修复、M5 coupling 借用+并行、M6 flows 借用化。
+全内核(51k 文件/17M 边)65 分钟无 OOM(RSS 8.6~10.5GB);drivers(12.6M 边)
+完整跑完 1697s,瓶颈现为 db-save(M7c 在 R9 解决)。
+
+**数字契约(每批完成后必须成立,违者 revert)**:
 ```
 cargo test --lib                     # 570+ 全绿,只增不减
-fs 子树压测(D:/linux-7.1.0/fs):     # M 阶段每步、R10 后必跑;R 阶段中间批可免
-  155518 nodes / 426199 edges / 28284 communities   # 图数字一个不许变
-  cross-file 解析边数 271321                         # 解析语义不许变
-  总耗时基线 ~48s                                     # 劣化 >10% 视为回归
-  注: flows 数量有 285-329 历史波动带(resolver HashMap 迭代序非确定性),不作契约
+cd engine && cargo build --release
+./target/release/hologram-engine.exe --stress-real D:/linux-7.1.0/fs 1
+  → 155518 nodes / 426199 edges / 28284 communities   # 一个不许变
+  → cross-file resolved = 271321                       # 解析语义不许变
+  → 总耗时基线 ~48s,劣化 >10% 视为回归
+  注: flows 数量 285-329 波动是已知噪声(resolver HashMap 迭代序),不作契约
 ```
+中间规模验证(必要时):`--stress-real D:/linux-7.1.0/drivers 1`(~28 分钟,
+做完 M7c/R10 必跑)。全内核验证只在 R10 后跑,必须带看门狗
+(RSS>12GB 或剩余<2GB 自动停,跑法见 handoff 文档)。
 
-## 总序
-
-```
-M1~M3(内存救场)✅ → [全内核验证:内存墙已翻] → M4~M6(算法墙)✅ → M7(db-save 规模墙)
-                                                                      ↓
-                    R0 → R1~R7(可并行)→ R8 → R9(吸收 M7c)→ R10
-                    └────────── 架构主线:newtype 化 ──────────┘
-```
-
-M 与 R 正交(M 改算法级临时结构,R 改 ID 表示),M 必须先做——架构重构不自动
-消除临时结构,且全内核是当下硬需求。R 阶段任何时刻可暂停,仓始终处于可发布态。
+**施工纪律**:
+1. 一批一 commit,message 格式 `refactor(engine): [批号] 内容`,可独立 revert。
+2. 本仓可能有其他 Agent/工具并行工作:改文件前先 `git status`,发现他人改动
+   不要覆盖;自己的半成品被 stash 不要慌,内容用 Edit 工具重放即可恢复。
+3. Windows + Git Bash 环境;cargo 命令都在 `engine/` 目录下执行。
+4. 每批交接写清:改动文件、验证命令输出尾行、数字契约是否跑过。
+5. **任何一批做完仓都处于可发布状态** —— 这是分批的核心意义。
 
 ---
 
-## Phase M — 内存救场(3 批,串行,约 2~3 天)
+## R0 newtype 与访问器引入(纯新增,零行为变化)
 
-### M1 merger 索引 interning 化
-- **改**:`engine/src/graph/merge.rs` 一个文件
-- **现状**:`edge_index: HashSet<(String,String,u8)>`(merge.rs:30,9M 边第二份字符串克隆,
-  ~2.0GB @ 62% 解析点);`loc_index: HashMap<String,String>`(merge.rs:26,~0.35GB)
-- **做法**:merger 内部挂一个局部 StringArena(复用 `storage/string_arena.rs`),
-  `edge_index` 改 `HashSet<(u32,u32,u8)>`,`loc_index` 改 `HashMap<u32,u32>`。
-  merge 完成后 arena 随 merger drop,不影响下游任何类型。
-- **验收**:数字契约全项;全内核压测 62% 点 RSS 7.3GB → 预期 ~5GB
-- **禁止**:改 Graph/MemoryIndex 公共类型;改 merge 语义(去重判定必须逐位等价)
+**改**:`engine/src/graph/`(新增 `id.rs`;`graph.rs`、`node.rs` 只加不改;
+`graph/mod.rs` 加 re-export)。**禁止**:改任何消费方;改现有 pub 字段;改 serde 表现。
 
-### M2 community leaf_edges 去克隆
-- **改**:`engine/src/community/louvain.rs`(+ 调用方签名适配,限 pipeline.rs 社区段)
-- **现状**:louvain.rs:741-743 `leaf_edges: Vec<(String,String)>` 克隆全部边端点
-  (14M 边 ≈ 2.3GB 瞬时);`detect_hierarchical_from_base` 内部 edge_pairs/sorted_edges 同理
-- **做法**:build_adjacency 已产 `owned_ids: Vec<String>` + usize 邻接——leaf_edges
-  改传 `(u32,u32)` 索引对,字符串只在最终写回 community_id 时按索引查一次。
-- **验收**:数字契约全项(社区数 28284 不变是关键)
+### id.rs 完整规格
 
-### M3 parse_cache 预算门控
-- **改**:`engine/src/pipeline/runner.rs`、`engine/src/engine/pipeline.rs`
-- **现状**:全部源码常驻到 snippet 阶段(pipeline.rs:285 才 clear);全内核 ~1.5GB
-- **做法**:runner 累计缓存字节数,超预算(默认 512MB,env 可调)则后续文件不缓存,
-  只记路径。所有 parse_cache 消费点(bridge_rpc.rs:67、di_reflection/mod.rs:72、
-  dynamic_dispatch_vue.rs:37、snippet 阶段等)走统一的 `get_source(path)` 助手:
-  命中返回缓存,miss 则 fs::read_to_string 盘读。先盘点全部消费点(miss 时各自
-  现在是什么行为,保持等价)。
-- **验收**:数字契约全项;加一个小预算单元测试(超限后 miss 路径结果与缓存一致)
+```rust
+// engine/src/graph/id.rs
+use serde::{Deserialize, Serialize};
 
-### M 阶段毕业标准(2026-08-06 实测结论)
+/// 节点 ID 的强类型句柄。R0~R9 内部为 String;R10 起 Graph 容器与热路径
+/// 索引 u32 化,但 NodeId 本身**永远保持字符串句柄**——
+/// 这保证 as_str() 签名全程稳定,消费方零感知。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]   // 序列化表现 = 纯字符串,磁盘/线格式零漂移
+pub struct NodeId(String);
 
-~~16GB 机器全内核压测跑完不 OOM~~ → **内存目标达成**:全程 ~65 分钟 RSS 8.6~10.5GB,
-看门狗未动,最终被 1h 任务超时终止于 community 阶段(非内存原因)。
-但暴露三个算法级超线性(fs 规模隐身):**M4 resolver(1268s,指数~2.3)、
-M5 coupling(197s,1035×)、M6 flows 字符串克隆(已知未修)**。
-M4~M6 已插入总序,先于 R 阶段执行——全内核「能跑」但「跑不完」就没有实用价值。
-详见 docs/agents/perf-stress-handoff.md 第三轮优化节。
+/// 边 ID 的强类型句柄。设计同 NodeId。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EdgeId(String);
 
-### M4 resolver 超线性修复 ✅(2026-08-06 已提交)
-- **改**:`engine/src/graph/resolver.rs`
-- **实测根因**:不是候选扫描平方(drivers cand_scans 仅 141 万),而是逐边常数
-  (端点 clone×2、infer_language 全串 lowercase、逐候选 Vec 分配)在换页压力下放大
-- **修法**:Cow 借用、infer_language 按 source 记忆化、评分三处零分配、
-  diag 键 &'static str、分段计时 + misses/cand_scans 计数器(保留作后续诊断)
-- **验收**:drivers(12.6M 边)cross-file 36.9s 回归线性;fs 图数字+解析边 271321 不变
+macro_rules! impl_id {
+    ($T:ident) => {
+        impl $T {
+            pub fn new(s: impl Into<String>) -> Self { Self(s.into()) }
+            pub fn as_str(&self) -> &str { &self.0 }
+            pub fn into_string(self) -> String { self.0 }
+        }
+        impl std::fmt::Display for $T {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+        impl From<String> for $T { fn from(s: String) -> Self { Self(s) } }
+        impl From<&str> for $T { fn from(s: &str) -> Self { Self(s.to_string()) } }
+        impl AsRef<str> for $T { fn as_ref(&self) -> &str { &self.0 } }
+        impl std::borrow::Borrow<str> for $T { fn borrow(&self) -> &str { &self.0 } }
+    };
+}
+impl_id!(NodeId);
+impl_id!(EdgeId);
+```
 
-### M5 coupling 借用化+并行 ✅(2026-08-06 已提交)
-- **改**:`engine/src/analysis/coupling.rs`
-- **注**:drivers 旧代码实测仅 3.1s,内核 197s 主要是换页抖动;借用+rayon
-  砍常数一个量级,换页敏感性同步下降
+**设计说明(施工者勿改)**:
+- **不实现 `Deref<Target=str>`** —— 防止消费方绕过语义访问器继续做字符串手术;
+  需要字符串就显式 `.as_str()`。
+- `Borrow<str>` 让 `HashMap<NodeId, _>.get(name: &str)` 可用,迁移期关键。
+- `serde(transparent)` 是 R9 的预埋:磁盘格式从第一天就是纯字符串。
 
-### M6 flows 邻接/入度借用化 ✅(2026-08-06 已提交)
-- **改**:`engine/src/analysis/flows.rs`(M2 同模式;入参取 edges 字段保分裂借用)
+### graph.rs 新增访问器(只加不改)
 
-### M7 db-save 规模墙(下一个, drivers 实测 1247.8s 为全程最大单块)
-- **构成**:MemoryIndex::from_existing_graph 353s(fs 3.2s)+ bulk_replace_all
-  885.6s(edges 插入 228s/索引重建 242.5s/commit 292s 数 GB WAL fsync/nodes 94s/fts 28s)
-- **M7a 小修(~半天)**:MemoryIndex 构建并行化(intern 预分配 + 桶构建 rayon 化)
-  + bulk 写入 prepared statement 复用 + 边按 source 有序插入(B-tree 局部性)。
-  预计 1247s → 500-600s
-- **M7b 中修(1~2 天)**:SQLite 写入路径重构——事务内并发建索引、WAL 分批
-  checkpoint、节点/边双连接并行写入再合并。预计 → 200-300s
-- **M7c 架构(并入 R9)**:图超阈值跳过 SQLite 全量重写,MemoryIndex 直接 mmap
-  快照(CSR 本扁平,启动秒载)——本质是 Graph 表示统一问题,与 R9 存储边界
-  定型合并设计,不单独立项
-- **验收**:数字契约全项 + drivers db-save 耗时写入交接文档
+```rust
+// 迭代器 —— 替代消费方直接访问 pub 字段。
+// 当前容器仍是 HashMap<String, _>,故 yield &str;R8 换容器后签名不变。
+pub fn nodes_iter(&self) -> impl Iterator<Item = (&str, &Node)> {
+    self.nodes.iter().map(|(k, v)| (k.as_str(), v))
+}
+pub fn edges_iter(&self) -> impl Iterator<Item = (&str, &Edge)> {
+    self.edges.iter().map(|(k, v)| (k.as_str(), v))
+}
+pub fn node_ids(&self) -> impl Iterator<Item = &str> {
+    self.nodes.keys().map(|k| k.as_str())
+}
+pub fn edge_ids(&self) -> impl Iterator<Item = &str> {
+    self.edges.keys().map(|k| k.as_str())
+}
+// get_node/get_edge/remove_node/remove_edge/add_node/add_edge* 已存在,不动
+```
+
+### node.rs 语义访问器(收口全仓的 ID 手撕解析)
+
+```rust
+impl Node {
+    /// 所属文件路径(不含行号)。来自 location,无 location 返回 None。
+    /// 语义 = flows.rs strip_line_suffix(统一搬到这里):
+    /// 去掉末尾 ":行号" 段(处理 Windows 盘符,只剥纯数字后缀)。
+    pub fn file(&self) -> Option<&str>;
+
+    /// 短名 —— id 的最后一段,但若该段是已知代码扩展名则再往前取一段。
+    /// 语义 = resolver.rs 的 short_name(原样搬入,含 is_common_extension 逻辑,
+    /// 扩展名表复用 code_extension_set())。
+    pub fn short_name(&self) -> &str;
+
+    /// 模块路径 —— id 去掉最后一段。无 '.' 时返回整个 id。
+    pub fn module(&self) -> &str;
+}
+```
+
+**搬迁清单(语义源头,施工时逐个核对等价性)**:
+- `resolver.rs:320-346` short_name/file_stem(扩展名感知)
+- `flows.rs:25-33` strip_line_suffix(行号剥离)
+- `merge.rs` node_key_parts(location 或 id 兜底规则)
+- 消费方迁移在 R1~R7 进行,R0 只建访问器,不动消费方。
+
+**验收**:`cargo test --lib` 绿(含为三个访问器各加 2-3 个边界用例:
+带点 id、无点 id、Windows 盘符 location、无 location)。零行为变化,不跑压测。
 
 ---
 
-## Phase R — newtype 主线(架构重构)
+## R1~R7 逐模块迁移消费点(AgentSwarm 并行,批间文件集互斥)
 
-### R0 newtype 与访问器引入(纯新增,零风险)
-- **改**:`engine/src/graph/`(新增 id.rs;graph.rs 只加方法不改字段)
-- **做法**:
-  ```rust
-  pub struct NodeId(String);   // 内部表示本阶段不换,只建抽象
-  pub struct EdgeId(String);
-  ```
-  给 Graph 加:`iter_nodes()` / `iter_edges()` / `get_node(&NodeId)` /
-  `node_by_idx` 等访问器;给 Node 加语义访问器 `file()` / `module()` /
-  `short_name()`(封装点分拆解析,替代各处的 `rfind('.')` 手撕)。
-- **验收**:`cargo test --lib` 绿;为零行为变化,不跑压测
-- **禁止**:改任何消费方;改 Graph 现有 pub 字段
+### 统一指令模板(每批原样下发)
 
-### R1~R7 逐模块迁移消费点(可 AgentSwarm 并行,批间文件集互斥)
+```
+把批内文件对 graph.nodes / graph.edges 的直接字段访问,迁移到 R0 访问器:
+- for (k, v) in &graph.nodes        → for (k, v) in graph.nodes_iter()
+- graph.nodes.get(&id)              → graph.get_node(&id)   (已存在)
+- graph.nodes.contains_key(&id)     → graph.get_node(&id).is_some()
+- graph.edges.get(&id) / 同理       → graph.get_edge(&id) / 同理
+- node.id / edge.source 的语义解析(rfind('.')、rsplit、split('.').count()、
+  strip_line_suffix、short_name 等) → node.file() / node.short_name() / node.module()
+铁律:不改任何行为、不加新功能、不改批外文件、不改 graph/ 目录。
+发现必须改 graph/ 才能继续时,记入交接「R8 缺口清单」,越级改 = 整批 revert。
+验收:cargo test --lib 绿;批内 grep 自检 `\.nodes\b|\.edges\b` 直接访问清零
+(测试模块内构造 fixture 除外,测试允许直接构造 HashMap)。
+```
 
-每批同一指令模板:**把批内对 `graph.nodes`/`graph.edges` 的直接访问和
-`node.id`/`edge.source`/`edge.target` 的裸 String 操作,迁移到 R0 的 newtype +
-访问器;ID 语义解析(rfind('.')、split、拼接 key)一律改用语义访问器;
-不改任何行为,不加新功能。**
+### 批次划分(文件集互斥,可同模板并行派发)
 
-| 批 | 文件集 | 访问点规模 |
+| 批 | 文件集 | 访问点规模(grep 实测) |
 |---|---|---|
 | R1 | `engine/src/adapter/`(18 语言) | .source/.target ~108 |
 | R2 | `engine/src/graph/resolver.rs` | API 108 + .source/.target 44 |
 | R3 | `engine/src/analysis/di_reflection/`、`dynamic_dispatch*.rs`、`bridge_rpc.rs` | ~120 |
-| R4 | `engine/src/analysis/`(flows、framework_routes、coupling、explore 等其余) | ~80 |
+| R4 | `engine/src/analysis/`(flows、framework_routes、coupling、explore、dataflow* 等其余) | ~80 |
 | R5 | `engine/src/community/`、`engine/src/routing/` | ~45 |
 | R6 | `engine/src/storage/`、`engine/src/tools/handlers.rs` | ~70 |
-| R7 | `engine/src/main.rs`、`engine/src/mcp.rs`、`engine/src/engine/` 其余 | ~60 |
+| R7 | `engine/src/main.rs`、`engine/src/mcp.rs`、`engine/src/engine/`、`engine/src/stress.rs` | ~60 |
 
-- **互斥约定**:每批只许动自己文件集;发现必须改 graph.rs 才能继续时,
-  在交接里记录缺口,留给 R8 统一处理,不越界改。
-- **验收(每批)**:`cargo test --lib` 绿 + 批内 grep 自检:`graph.nodes`/
-  `graph.edges` 直接访问清零。
-- **派发方式**:AgentSwarm,R1~R7 七个 item 同模板并行;全部完成后统一
-  跑一次压测数字契约再进 R8。
-
-### R8 Graph 字段私有化 + 缺口收口
-- **改**:`engine/src/graph/graph.rs` + R1~R7 记录的缺口
-- **做法**:`nodes`/`edges` 改 pub(crate) 或全私有,编译器把漏网点全部指出来,
-  逐个收口。处理 `meta`、`from_json_file`、`diff`、`outgoing_edges/incoming_edges`
-  这些被 main.rs/handlers 依赖的残留公共面(保留为方法,签名用 newtype)。
-- **验收**:数字契约全项
-
-### R9 serde/存储边界定型(吸收 M7c)
-- **改**:`engine/src/storage/sqlite.rs`、`engine/src/storage/memory.rs`、JSON 落盘路径
-- **做法**:定义 newtype 的 serde 表现=纯字符串(磁盘格式与线格式零变化,
-  hologram.db 不需要迁移);MemoryIndex 与 Graph 的 ID 转换收口为单一入口。
-  **吸收 M7c**:图超阈值(建议 500 万边,env 可调)时跳过 SQLite 全量重写,
-  改 MemoryIndex mmap 快照持久化(CSR 扁平数组直接落盘,启动秒载)——
-  22M 边规模的 db-save 从 886s 级降到秒级,这是存储边界定型的正当组成部分。
-- **验收**:数字契约全项;加一个旧库冷启动兼容测试(用现网 hologram.db fixture)
-
-### R10 内部表示换 u32 + arena(可选,最后才做)
-- **前提**:R0~R9 完成,所有消费点只依赖 newtype API
-- **改**:原则上只动 `engine/src/graph/` 内部;若仍有渗漏,说明 R8 没收干净,回头补
-- **做法**:NodeId 内部 String→u32,Graph 容器 Vec/IndexMap 化,arena 入 Graph。
-  参考 MemoryIndex 的 StringArena 既有实现。
-- **验收**:数字契约全项 + 全内核压测,RSS 与耗时写入交接文档
+**互斥约定**:任何批不得修改批外文件;resolver.rs 在 R2 独占(它刚被 M4 改过,
+语义最敏感)。全部完成后统一跑一次 fs 数字契约再进 R8。
 
 ---
 
-## 派发与执行规则
+## R8 Graph 字段私有化 + 缺口收口(串行,不可并行)
 
-1. **一批一 commit**,commit message 格式 `refactor(engine): [批号] 内容` — 每批可独立 revert。
-2. 每批交接里写清:改动文件、grep 自检结果、测试输出尾行、数字契约是否跑过。
-3. R1~R7 并行派发时,任何批不得修改批外文件;冲突缺口记录不修补。
-4. 压测跑法见 docs/agents/perf-stress-handoff.md「压测工具用法」节;
-   全内核必须带看门狗(RSS>12GB 或剩余<2GB 自动停)。
-5. 本方案任何一批做完,仓都处于可发布状态——这是与人类分阶段的核心区别:
-   停在哪一批都不是半成品。
+**改**:`engine/src/graph/graph.rs` + R1~R7 交接的缺口清单。
+**做法**:`nodes`/`edges` 改 `pub(crate)`(第一步)或全私有(最终态),
+让编译器把所有漏网点指出来,逐个收口。以下公共面保留为方法,签名定型:
+
+| 现有公共面 | R8 定型 | 位置 |
+|---|---|---|
+| `meta: serde_json::Value` | `meta()` / `meta_mut()` 访问器 | main.rs:616 baseline、store.rs |
+| `from_json_file` | 保留,内部改走访问器 | graph.rs:49 |
+| `diff`(GraphDiff 含克隆 Node/Edge) | 保留签名,返回类型加 newtype 包装 | graph.rs:188-235 |
+| `outgoing_edges/incoming_edges`(O(E) 全扫) | 保留但标注 deprecated,新增 `outgoing(node) -> 迭代器`(仍 O(E),R10 容器换后自然变快) | graph.rs:159-171 |
+
+**验收**:数字契约全项 + `pub(crate)` 警告清零。
+
+---
+
+## R9 serde/存储边界定型(吸收 M7c 快照持久化)
+
+**改**:`engine/src/storage/sqlite.rs`、`engine/src/storage/memory.rs`、
+`engine/src/storage/store.rs`、JSON 落盘路径。
+
+### R9.1 serde 定型(小)
+- 确认 NodeId/EdgeId `serde(transparent)` 全程生效;hologram.db、
+  *.json 线格式零变化(加 roundtrip 测试:旧 fixture 库冷启动读回一致)。
+
+### R9.2 M7c 快照持久化(核心,解决 db-save 规模墙)
+**问题**:22M 边规模 bulk_replace_all 885s(drivers 4.8M 边已 1247.8s),
+SQLite 全量重写路线在大图下无前途(handoff 第四轮 M7 节有分解数据)。
+
+**规格**:
+- **阈值**:env `HOLOGRAM_SNAPSHOT_MIN_EDGES`,默认 5_000_000。
+  边数 < 阈值走现有 SQLite bulk_replace_all;≥ 阈值走快照。
+- **格式**:`<project>/.hologram/graph.snapshot`(bincode 序列化
+  MemoryIndex 全量:arena strings、CSR 数组、Node Vec、辅助索引;
+  写 `.tmp` 后原子 rename)。
+- **加载**:`GraphStore::open` 检测快照存在且 mtime ≥ hologram.db 时
+  优先快照加载(秒级);否则走现有 SQLite 路径。
+- **FTS 折中(钉死,勿自由发挥)**:快照模式下 fts_nodes 不预建;
+  首次 FTS 查询时从 MemoryIndex 惰性重建(超 30s 预算则返回降级错误,
+  提示用 hologram_explore 代替)。timeline_events 不受影响(独立表)。
+- **回退**:快照反序列化失败 → 删快照,回退 SQLite 路径,记 warn。
+
+**验收**:数字契约全项(fs 边数 42.6 万 < 阈值,走旧路,行为零变化);
+drivers 压测(485 万边,阈值调 4M 强制走快照)验证写入从 1247.8s → <60s。
+
+---
+
+## R10 内部表示 u32 化(最后,可选)
+
+**前提**:R0~R9 完成,所有消费点只依赖访问器与 NodeId API。
+**改**:原则上只动 `engine/src/graph/` 内部。
+**规格(钉死)**:
+- NodeId/EdgeId **保持字符串句柄不变**(as_str() 签名稳定,消费方零感知);
+- u32 interning 只作用于 Graph **容器内部**:`nodes/edges` 改
+  `IndexMap<NodeId, _>` 或 arena+handle 双映射,热路径索引
+  (resolver 三索引、merger 两索引、community 邻接)改 u32 键;
+- 目标:**全内核(51k 文件)完整管线 < 15 分钟 @ 16GB**(当前 ~1.5h+ 且跑不完)。
+**验收**:数字契约全项 + 全内核压测(带看门狗),耗时/RSS 写入 handoff 文档。
+
+---
+
+## 常见坑(前序批次实测)
+
+1. **rayon 并行 HashMap**:用 `map.par_iter_mut().for_each(|(_, v)| ...)`,
+   `values_mut()` 没有并行适配器。
+2. **借用分裂**:要借用 edges 同时 mut nodes,把辅助索引入参定为
+   `&HashMap<String, Edge>` 字段而非 `&Graph`(M6 已示范)。
+3. **语义等价陷阱**:改迭代器/单遍扫描时,平票取首个、空集返回 None、
+   match_len≥2 这类边界必须逐条对照原实现(resolver 批改时最要小心)。
+4. **压测污染**:验收压测运行期间不要在同机编译,否则阶段耗时不具可比性
+   (图数字仍有效,耗时无效)。
+5. **flows/社区数跨轮微差**(±40/±7)是 resolver HashMap 迭代序非确定性,
+   已记账,不是回归;要严格可复现性需另行立项(不在本方案范围)。

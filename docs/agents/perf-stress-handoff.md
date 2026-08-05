@@ -110,6 +110,10 @@ fs 子树验收:图数字 155518/426199/28284 三轮不变,总计 91.0s → **38
 
 ## 下一步(优先级重排:M4+ 算法瓶颈 > R 阶段架构重构)
 
+**R 阶段实现规格已定稿,见 `docs/plans/graph-id-refactor-plan.md`(2026-08-06 v2)** —
+设计决策全部钉死(NodeId 永为字符串句柄、serde transparent、快照阈值 5M 边、
+FTS 惰性重建折中、R10 目标 全内核<15min),接手模型按规格机械施工即可。
+
 1. ~~M4 resolver 超线性~~ → 已修复(2026-08-06,已提交)。根因不是候选扫描平方
    (实测 cand_scans 仅 141 万 @ drivers),而是逐边常数(端点 clone×2、全串
    lowercase、逐候选 Vec 分配)在换页压力下放大。修:Cow 借用 + infer_language
