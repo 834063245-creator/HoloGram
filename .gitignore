@@ -180,3 +180,6 @@ scripts/python-3.14.4-embed-amd64.zip
 
 # Engine binaries
 engine-bin/
+
+# WorkBuddy local memory (never commit)
+.workbuddy/

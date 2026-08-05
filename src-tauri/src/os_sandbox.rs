@@ -190,18 +190,24 @@ pub fn status() -> SandboxStatus {
 pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     #[cfg(windows)]
     {
-        let shell = imp::detect_shell();
-        if let imp::Shell::Bash(ref bash_path) = shell {
-            let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
-            match imp::spawn(&cmdline, cwd) {
-                Ok(child) => return Ok(child),
-                Err(e) => {
-                    eprintln!("[hologram] bash spawn failed ({}), falling back to Cmd", e);
-                }
+        // 固定解释器策略（对齐 kimi-code / hermes-agent）：
+        // - 探测到 Git Bash → 一律用 bash，spawn 失败直接报错，不静默回退 cmd
+        //   （静默回退会让 Agent 猜不到命令跑在哪个解释器上，语法必踩坑）
+        // - 探测结果就是 Cmd（本机无 Git Bash）→ 用 cmd，但 shell_env() 会
+        //   显式上报，前端注入 Agent system prompt 声明 shell=cmd
+        match imp::detect_shell() {
+            imp::Shell::Bash(ref bash_path) => {
+                let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
+                imp::spawn(&cmdline, cwd)
+            }
+            imp::Shell::Cmd => {
+                eprintln!(
+                    "[hologram] no Git Bash detected — shell=cmd (Agent environment block will declare this)"
+                );
+                let cmdline = format!("cmd /s /c \"{}\"", command);
+                imp::spawn(&cmdline, cwd)
             }
         }
-        let cmdline = format!("cmd /s /c \"{}\"", command);
-        imp::spawn(&cmdline, cwd)
     }
     #[cfg(target_os = "macos")]
     {
@@ -226,6 +232,55 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         spawn_plain(command, cwd)
+    }
+}
+
+/// 当前 shell 环境信息 — 供前端注入 Agent system prompt。
+/// Agent 第一轮就知道命令跑在哪个解释器上，从源头消灭"猜语法"类错误。
+pub fn shell_env() -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        match imp::detect_shell() {
+            imp::Shell::Bash(path) => serde_json::json!({
+                "os": "windows",
+                "shell": "bash",
+                "shell_path": path,
+                "notes": "命令跑在 Git Bash (bash) 上，用 Unix 语法：/dev/null 不是 NUL、路径用正斜杠、用 ls 而不是 dir"
+            }),
+            imp::Shell::Cmd => serde_json::json!({
+                "os": "windows",
+                "shell": "cmd",
+                "shell_path": "",
+                "notes": "未检测到 Git Bash，命令跑在 cmd.exe 上：用 %var% 而非 $var，用 dir 而非 ls"
+            }),
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        serde_json::json!({
+            "os": "macos",
+            "shell": "bash",
+            "shell_path": "/bin/bash",
+            "notes": "命令跑在 bash 上，用 Unix 语法"
+        })
+    }
+    #[cfg(target_os = "linux")]
+    {
+        serde_json::json!({
+            "os": "linux",
+            "shell": "bash",
+            "shell_path": "/bin/bash",
+            "notes": "命令跑在 bash 上，用 Unix 语法"
+        })
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    {
+        serde_json::json!({
+            "os": "unknown",
+            "shell": "unknown",
+            "shell_path": "",
+            "notes": ""
+        })
     }
 }
 

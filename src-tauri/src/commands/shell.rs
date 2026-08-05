@@ -1,11 +1,38 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Shell 执行：exec_command、bash_output、bash_wait、bash_kill。
+// Shell 执行：exec_command、bash_output、bash_wait、bash_kill、shell_env。
 
 use std::thread;
 use std::time::Duration;
 
 use tauri::Emitter;
+
+/// Agent 工具输出上限 — 超长输出进上下文会滚雪球烧 token。
+/// 对齐 DeepSeek-Reasonix 的 32KB（head+tail 各半 + 截断标记）。
+const MAX_TOOL_OUTPUT_CHARS: usize = 32_000;
+
+/// 截断工具输出：head 50% + tail 50%，中间插截断标记。
+/// 按 char 边界切，避免 UTF-8 切坏；保留首尾最有信息量的部分。
+fn truncate_output(s: &str) -> String {
+    let total = s.chars().count();
+    if total <= MAX_TOOL_OUTPUT_CHARS {
+        return s.to_string();
+    }
+    let half = MAX_TOOL_OUTPUT_CHARS / 2;
+    let head: String = s.chars().take(half).collect();
+    let tail: String = s.chars().skip(total - half).collect();
+    let omitted = total - MAX_TOOL_OUTPUT_CHARS;
+    format!(
+        "{head}\n…[output truncated: {omitted} chars omitted — 可拆小命令或加窄参数后重试]…\n{tail}"
+    )
+}
+
+/// 当前 shell 环境 — 前端注入 Agent system prompt 用（见 os_sandbox::shell_env）。
+#[tauri::command]
+pub(crate) fn shell_env() -> String {
+    serde_json::to_string(&crate::os_sandbox::shell_env())
+        .unwrap_or_else(|_| r#"{"os":"unknown","shell":"unknown","shell_path":"","notes":""}"#.into())
+}
 
 #[tauri::command]
 pub(crate) async fn exec_command(
@@ -246,7 +273,7 @@ pub(crate) async fn exec_command(
                 let full_output = if stdout.is_empty() && stderr.is_empty() {
                     "(无输出)".into()
                 } else {
-                    format!("{}{}", stdout, stderr)
+                    truncate_output(&format!("{}{}", stdout, stderr))
                 };
 
                 if !status.success() {
@@ -274,12 +301,12 @@ pub(crate) async fn exec_command(
                         .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
                         .map(|v| String::from_utf8_lossy(&v).to_string())
                         .unwrap_or_default();
-                    return Ok(format!(
+                    return Ok(truncate_output(&format!(
                         "[exit code: -1] 命令超时 ({}ms)，已终止。可拆小命令或增大 timeoutMs 后重试。\n{}{}",
                         timeout_ms.unwrap_or(300_000),
                         stdout,
                         stderr
-                    ));
+                    )));
                 }
                 thread::sleep(Duration::from_millis(50));
             }
@@ -293,7 +320,7 @@ pub(crate) async fn exec_command(
 
 #[tauri::command]
 pub(crate) async fn bash_output(job_id: u32) -> Result<String, String> {
-    crate::utils::read_bg_output(job_id)
+    crate::utils::read_bg_output(job_id).map(truncate_output)
 }
 
 #[tauri::command]
@@ -303,7 +330,7 @@ pub(crate) async fn bash_kill(job_id: u32) -> Result<String, String> {
 
 #[tauri::command]
 pub(crate) async fn bash_wait(job_id: u32, timeout_ms: Option<u64>) -> Result<String, String> {
-    crate::utils::wait_bg(job_id, timeout_ms.unwrap_or(60_000))
+    crate::utils::wait_bg(job_id, timeout_ms.unwrap_or(60_000)).map(truncate_output)
 }
 
 #[tauri::command]

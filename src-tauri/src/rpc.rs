@@ -357,6 +357,7 @@ pub(crate) async fn rpc(
             let timeout_ms = opt_u64(&params, "timeout_ms");
             commands::shell::bash_wait(job_id, timeout_ms).await
         }
+        "shell_env" => Ok(commands::shell::shell_env()),
         "drain_bg_notifications" => {
             commands::shell::drain_bg_notifications().await
         }
