@@ -46,6 +46,19 @@ fn build_calls_adjacency(graph: &crate::graph::Graph) -> HashMap<String, Vec<(St
     adj
 }
 
+/// 构建 CALLS 边的反向入度索引：target_node_id → 入边 CALLS 数量。
+/// 一次遍历 O(E)，供入口点检测 O(1) 查询 —— 替代逐节点全边扫描
+/// （O(N×E) 字符串比较，压测中占 Flow 阶段 80%+ 耗时）。
+fn build_calls_indegree(graph: &crate::graph::Graph) -> HashMap<String, usize> {
+    let mut indegree: HashMap<String, usize> = HashMap::new();
+    for edge in graph.edges.values() {
+        if edge.kind == EdgeKind::Calls {
+            *indegree.entry(edge.target.clone()).or_default() += 1;
+        }
+    }
+    indegree
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 入口点检测
 // ═══════════════════════════════════════════════════════════════
@@ -70,6 +83,7 @@ fn is_entry_point_name(name: &str) -> bool {
 fn detect_entry_points(
     graph: &crate::graph::Graph,
     calls_adj: &HashMap<String, Vec<(String, String)>>,
+    calls_indegree: &HashMap<String, usize>,
 ) -> Vec<(String, String, Option<String>)> {
     // 返回 (node_id, entry_kind, framework_or_none) 元组
     let mut entries: Vec<(String, String, Option<String>)> = Vec::new();
@@ -112,12 +126,8 @@ fn detect_entry_points(
         if name.starts_with("test_") || name.ends_with("_test") || name.ends_with("Test") {
             continue;
         }
-        // 使用反向查找计算入边 CALLS 边数量
-        let call_incoming = graph
-            .edges
-            .values()
-            .filter(|e| e.target == *nid && e.kind == EdgeKind::Calls)
-            .count();
+        // 反向索引 O(1) 查入边 CALLS 数量(逐节点全边扫描的 O(N×E) 已移除)
+        let call_incoming = calls_indegree.get(nid).copied().unwrap_or(0);
         let is_entry_name = is_entry_point_name(name);
         if call_incoming == 0 || is_entry_name {
             let kind = if is_entry_name {
@@ -244,7 +254,8 @@ fn compute_criticality(
 /// 完整的 Flow 元数据持久化在每个入口点节点的 `properties["flow"]` 中。
 pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
     let calls_adj = build_calls_adjacency(&result.graph);
-    let entries = detect_entry_points(&result.graph, &calls_adj);
+    let calls_indegree = build_calls_indegree(&result.graph);
+    let entries = detect_entry_points(&result.graph, &calls_adj, &calls_indegree);
 
     // 上限 5000 条 Flow — 超过即为噪声，非信号。
     let entry_limit = entries.len().min(5000);
@@ -479,5 +490,40 @@ mod tests {
         let a_out = adj.get("a").unwrap();
         assert_eq!(a_out.len(), 2, "should have 2 CALLS edges from a");
         assert!(adj.get("b").is_none(), "b has no outgoing CALLS");
+    }
+
+    #[test]
+    fn test_detect_flows_performance_no_regression() {
+        // 性能回归:入口检测必须走反向入度索引,不得逐节点全边扫描。
+        // 旧实现 O(N×E):8000 节点 × 32000 边 = 2.56 亿次字符串比较,
+        // debug 下约 7-8s;索引实现应远快于 3s。节点 ID 用长路径模拟真实场景
+        // (真实 ID 共享长前缀,字符串比较更贵)。
+        let mut graph = Graph::new();
+        let n = 8000usize;
+        for i in 0..n {
+            let id = format!("src/pkg/mod_{}/file_{}.go::sym_{}", i % 50, i, i);
+            let name = if i < 20 { format!("handleRequest{}", i) } else { format!("func{}", i) };
+            graph.add_node(make_node(&id, &name, NodeKind::Function));
+        }
+        // 32000 条唯一 CALLS 边:(s, s+1+k),k ∈ 0..4 —— 每节点入度恰为 4
+        for i in 0..(n * 4) {
+            let s = i % n;
+            let t = (s + 1 + (i / n)) % n;
+            let sid = format!("src/pkg/mod_{}/file_{}.go::sym_{}", s % 50, s, s);
+            let tid = format!("src/pkg/mod_{}/file_{}.go::sym_{}", t % 50, t, t);
+            make_calls_edge(&mut graph, &sid, &tid);
+        }
+
+        let mut result = make_result(graph);
+        let start = std::time::Instant::now();
+        let count = detect_all_flows(&mut result);
+        let elapsed = start.elapsed();
+
+        assert_eq!(count, 20, "20 个命名入口,每个都有被调用者");
+        assert!(
+            elapsed.as_millis() < 3000,
+            "detect_all_flows too slow: {}ms — 疑似入度计算退化为全边扫描",
+            elapsed.as_millis()
+        );
     }
 }
