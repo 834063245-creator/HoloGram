@@ -570,6 +570,7 @@ impl MemoryIndex {
 
     /// 持久化到 SQLite（全量转储，全量分析后使用）。
     pub fn to_sqlite(&self, db: &SqliteDb) -> Result<(), String> {
+        let t = std::time::Instant::now();
         let nodes: Vec<&Node> = self.nodes.values().collect();
         // 通过辅助方法收集所有边（CSR + pending - removed）
         let mut edges: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = Vec::new();
@@ -586,6 +587,8 @@ impl MemoryIndex {
                 }
             }
         }
+        eprintln!("[sqlite] to_sqlite: edge collect {:.1}s ({} edges)",
+            t.elapsed().as_secs_f64(), edges.len());
         db.bulk_replace_all(&nodes, &edges)
     }
 

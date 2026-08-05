@@ -316,10 +316,48 @@ impl SqliteDb {
     // ── 批量写入（全量分析 + 增量）──
 
     /// 用给定节点和边替换 SQLite 中的所有图数据。
-    /// 使用分块多行 INSERT，批量加载期间禁用 FTS 触发器。
-    /// ponytail：WAL 模式下 synchronous=NORMAL 是安全的。
-    /// SQLite 参数上限为 999；节点 11 列 → 80 行/块，边 6 列 → 150 行/块。
+    /// 使用分块多行 INSERT。批量加载优化：
+    /// - 先删 FTS 触发器再 DELETE —— 否则删除阶段对每行旧节点
+    ///   触发一次 FTS 'delete' 插入（155k 节点 ≈ 9s 的纯浪费）
+    /// - 先删二级索引、插入后批量重建 —— CREATE INDEX 的排序构建
+    ///   远快于逐行维护 B-tree（426k 边 × 5 索引曾是最大头）
+    /// - 加载期间关闭外键检查 —— 输入来自 MemoryIndex，端点已保证存在；
+    ///   FK 检查是每边 2 次 nodes(id) 查表
+    /// - synchronous=OFF —— 派生缓存 DB，断电损坏重跑分析即可；提交后恢复
+    /// SQLite 参数上限为 999；节点 12 列 → 66 行/块，边 6 列 → 150 行/块。
     pub fn bulk_replace_all(
+        &self,
+        nodes: &[&Node],
+        edges: &[(&str, &str, EdgeKind, u8, Option<f64>)],
+    ) -> Result<(), String> {
+        let t_total = std::time::Instant::now();
+
+        // foreign_keys 不能在事务内修改 —— 必须在 tx 开始前设置。
+        self.conn
+            .execute_batch("PRAGMA foreign_keys=OFF; PRAGMA synchronous=OFF;")
+            .map_err(|e| format!("pragma bulk: {}", e))?;
+
+        let result = self.bulk_replace_inner(nodes, edges);
+
+        // 无论成败都恢复连接级设置（失败时 tx 已随 drop 回滚）。
+        let restore = self
+            .conn
+            .execute_batch("PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
+            .map_err(|e| format!("pragma restore: {}", e));
+        result?;
+        restore?;
+        eprintln!(
+            "[sqlite] bulk_replace_all total={:.1}s ({} nodes, {} edges)",
+            t_total.elapsed().as_secs_f64(),
+            nodes.len(),
+            edges.len()
+        );
+        Ok(())
+    }
+
+    /// bulk_replace_all 的事务主体。DDL（DROP/CREATE INDEX、DROP TRIGGER）
+    /// 在 SQLite 中是事务性的，任何失败都随 tx 回滚，不留半残 schema。
+    fn bulk_replace_inner(
         &self,
         nodes: &[&Node],
         edges: &[(&str, &str, EdgeKind, u8, Option<f64>)],
@@ -330,17 +368,29 @@ impl SqliteDb {
         tx.execute_batch("PRAGMA cache_size=-50000;")
             .map_err(|e| format!("pragma cache: {}", e))?;
 
-        // 清除旧数据
-        tx.execute_batch("DELETE FROM edges; DELETE FROM nodes;")
-            .map_err(|e| format!("delete: {}", e))?;
-
-        // 批量插入期间删除 FTS 触发器 —— 最后重建 FTS。
+        // 先删 FTS 触发器（保住 DELETE 阶段），再删二级索引（保住 INSERT 阶段）。
         tx.execute_batch("DROP TRIGGER IF EXISTS nodes_ai;
                           DROP TRIGGER IF EXISTS nodes_ad;
-                          DROP TRIGGER IF EXISTS nodes_au;")
-            .map_err(|e| format!("drop fts triggers: {}", e))?;
+                          DROP TRIGGER IF EXISTS nodes_au;
+                          DROP INDEX IF EXISTS idx_nodes_kind;
+                          DROP INDEX IF EXISTS idx_nodes_location;
+                          DROP INDEX IF EXISTS idx_nodes_name;
+                          DROP INDEX IF EXISTS idx_nodes_community;
+                          DROP INDEX IF EXISTS idx_edges_source;
+                          DROP INDEX IF EXISTS idx_edges_target;
+                          DROP INDEX IF EXISTS idx_edges_kind;
+                          DROP INDEX IF EXISTS idx_edges_coupling;
+                          DROP INDEX IF EXISTS idx_edges_source_target;")
+            .map_err(|e| format!("drop triggers/indexes: {}", e))?;
+
+        // 清除旧数据
+        let t = std::time::Instant::now();
+        tx.execute_batch("DELETE FROM edges; DELETE FROM nodes;")
+            .map_err(|e| format!("delete: {}", e))?;
+        let t_delete = t.elapsed().as_secs_f64();
 
         // ── 分块插入节点 ──
+        let t = std::time::Instant::now();
         const NODE_CHUNK: usize = 66; // 12 列 × 66 = 792 参数，安全在 999 以内
         let node_sql = "INSERT INTO nodes (id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id, non_defines_in_degree) VALUES ";
         for chunk in nodes.chunks(NODE_CHUNK) {
@@ -374,8 +424,10 @@ impl SqliteDb {
             tx.execute(&sql, param_refs.as_slice())
                 .map_err(|e| format!("insert node chunk: {}", e))?;
         }
+        let t_nodes = t.elapsed().as_secs_f64();
 
         // ── 分块插入边 ──
+        let t = std::time::Instant::now();
         const EDGE_CHUNK: usize = 150; // 6 列 × 150 = 900 参数
         let edge_sql = "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec) VALUES ";
         for chunk in edges.chunks(EDGE_CHUNK) {
@@ -397,8 +449,25 @@ impl SqliteDb {
             tx.execute(&sql, param_refs.as_slice())
                 .map_err(|e| format!("insert edge chunk: {}", e))?;
         }
+        let t_edges = t.elapsed().as_secs_f64();
+
+        // ── 批量重建二级索引（定义与 ensure_schema 保持一致）──
+        let t = std::time::Instant::now();
+        tx.execute_batch(
+            "CREATE INDEX idx_nodes_kind ON nodes(kind);
+             CREATE INDEX idx_nodes_location ON nodes(location);
+             CREATE INDEX idx_nodes_name ON nodes(name);
+             CREATE INDEX idx_nodes_community ON nodes(community_id);
+             CREATE INDEX idx_edges_source ON edges(source);
+             CREATE INDEX idx_edges_target ON edges(target);
+             CREATE INDEX idx_edges_kind ON edges(kind);
+             CREATE INDEX idx_edges_coupling ON edges(coupling_depth);
+             CREATE INDEX idx_edges_source_target ON edges(source, target);",
+        ).map_err(|e| format!("recreate indexes: {}", e))?;
+        let t_indexes = t.elapsed().as_secs_f64();
 
         // ── 重建 FTS 并重新创建触发器 ──
+        let t = std::time::Instant::now();
         tx.execute_batch(
             "INSERT INTO fts_nodes(fts_nodes) VALUES('rebuild');
              CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
@@ -412,11 +481,16 @@ impl SqliteDb {
                  INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
              END;",
         ).map_err(|e| format!("rebuild fts: {}", e))?;
+        let t_fts = t.elapsed().as_secs_f64();
 
         tx.execute_batch("PRAGMA cache_size=-2000;")
             .map_err(|e| format!("pragma restore: {}", e))?;
 
+        let t = std::time::Instant::now();
         tx.commit().map_err(|e| format!("commit: {}", e))?;
+        let t_commit = t.elapsed().as_secs_f64();
+        eprintln!("[sqlite] bulk_replace: delete={:.1}s nodes={:.1}s edges={:.1}s indexes={:.1}s fts={:.1}s commit={:.1}s",
+            t_delete, t_nodes, t_edges, t_indexes, t_fts, t_commit);
         Ok(())
     }
 
@@ -750,6 +824,84 @@ mod tests {
         let reads = loaded.iter().find(|(_, _, k, _, _)| *k == EdgeKind::Reads).unwrap();
         assert_eq!(reads.3, 2);
         assert!(reads.4.is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 批量加载优化的回归测试：二次 bulk_replace_all（走 DELETE 旧数据路径）后，
+    /// 数据必须正确替换，FTS 触发器/二级索引/外键与 synchronous pragma 全部恢复。
+    #[test]
+    fn test_bulk_replace_all_twice_restores_schema() {
+        let tmp = std::env::temp_dir().join("hologram_test_bulk_twice");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = SqliteDb::open(&tmp).unwrap();
+
+        let nodes1: Vec<Node> = vec![
+            make_test_node("alpha", NodeKind::Function),
+            make_test_node("beta", NodeKind::Function),
+        ];
+        let edges1: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = vec![
+            ("alpha", "beta", EdgeKind::Calls, 1u8, None),
+        ];
+        db.bulk_replace_all(&nodes1.iter().collect::<Vec<_>>(), &edges1).unwrap();
+
+        // 第二次替换 —— 旧数据存在，走触发器/索引先删后建路径
+        let nodes2: Vec<Node> = vec![
+            make_test_node("gamma", NodeKind::Class),
+            make_test_node("delta", NodeKind::Class),
+        ];
+        let edges2: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = vec![
+            ("gamma", "delta", EdgeKind::Inherits, 2u8, None),
+        ];
+        db.bulk_replace_all(&nodes2.iter().collect::<Vec<_>>(), &edges2).unwrap();
+
+        // 数据被完整替换
+        let loaded_nodes = db.load_all_nodes().unwrap();
+        assert_eq!(loaded_nodes.len(), 2);
+        assert!(loaded_nodes.iter().all(|n| n.id == "gamma" || n.id == "delta"));
+        let loaded_edges = db.load_all_edges().unwrap();
+        assert_eq!(loaded_edges.len(), 1);
+        assert_eq!(loaded_edges[0].2, EdgeKind::Inherits);
+
+        // FTS 索引已重建且可搜索
+        let hits = db.fts_search("gamma", 10).unwrap();
+        assert_eq!(hits, vec!["gamma".to_string()]);
+
+        // FTS 触发器已恢复 —— upsert 新节点后立即可搜到
+        let extra = make_test_node("epsilon", NodeKind::Symbol);
+        db.batch_upsert_nodes(&[&extra]).unwrap();
+        let hits = db.fts_search("epsilon", 10).unwrap();
+        assert_eq!(hits, vec!["epsilon".to_string()]);
+
+        // 二级索引已重建
+        for idx in [
+            "idx_nodes_kind", "idx_nodes_location", "idx_nodes_name", "idx_nodes_community",
+            "idx_edges_source", "idx_edges_target", "idx_edges_kind",
+            "idx_edges_coupling", "idx_edges_source_target",
+        ] {
+            let count: i64 = db.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                    params![idx],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "索引 {} 应在 bulk_replace_all 后恢复", idx);
+        }
+
+        // pragma 已恢复
+        let fk: i64 = db.conn().query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        assert_eq!(fk, 1, "foreign_keys 应恢复为 ON");
+        let sync: i64 = db.conn().query_row("PRAGMA synchronous", [], |r| r.get(0)).unwrap();
+        assert_eq!(sync, 1, "synchronous 应恢复为 NORMAL(1)");
+
+        // 外键约束真实生效 —— 插入悬挂边必须失败
+        let dangling: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = vec![
+            ("gamma", "no_such_node", EdgeKind::Calls, 1u8, None),
+        ];
+        assert!(db.batch_upsert_edges(&dangling).is_err(),
+            "FK 恢复后悬挂边插入应被拒绝");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
