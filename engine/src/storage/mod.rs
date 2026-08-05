@@ -5,6 +5,7 @@ pub mod memory;
 pub mod sqlite;
 pub mod store;
 pub mod incremental;
+pub mod snapshot;
 pub mod string_arena;
 
 pub use memory::{LoadProgress, MemoryIndex};

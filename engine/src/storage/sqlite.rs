@@ -586,6 +586,114 @@ impl SqliteDb {
         Ok(ids)
     }
 
+    /// 惰性全量重建 fts_nodes（快照模式专用 —— 快照加载后 fts_nodes 未预建）。
+    ///
+    /// fts_nodes 是 external-content 表（content=nodes）：查询侧按 rowid 回
+    /// 内容表取列值，只插 FTS 表而 nodes 为空时 MATCH 查不到任何 id（实测）。
+    /// 因此单事务内：先删 nodes 三个同步触发器（避免逐行触发开销，DDL 随事务
+    /// 回滚），DELETE fts_nodes + nodes，再以**相同显式 rowid** 双写 nodes
+    /// （全列数据，与 bulk_replace_all 同构）与 fts_nodes（rowid, id, name,
+    /// location），最后重建触发器。每 1 万行检查一次耗时，
+    /// 超 budget_secs → tx 随 drop 回滚并返回 Err。
+    pub fn fts_rebuild_from_rows<'a, I>(&self, nodes: I, budget_secs: u64) -> Result<(), String>
+    where
+        I: Iterator<Item = &'a Node>,
+    {
+        let start = std::time::Instant::now();
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("fts rebuild tx: {}", e))?;
+        tx.execute_batch(
+            "DROP TRIGGER IF EXISTS nodes_ai;
+             DROP TRIGGER IF EXISTS nodes_ad;
+             DROP TRIGGER IF EXISTS nodes_au;
+             DELETE FROM fts_nodes;
+             DELETE FROM nodes;",
+        )
+        .map_err(|e| format!("fts rebuild prepare tables: {}", e))?;
+
+        const BATCH: usize = 10_000;
+        let mut rowid: i64 = 1;
+        let mut count: usize = 0;
+        {
+            let mut node_stmt = tx
+                .prepare(
+                    "INSERT INTO nodes (rowid, id, name, kind, location, properties, out_degree, in_degree, position_x, position_y, position_z, community_id, non_defines_in_degree)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                )
+                .map_err(|e| format!("fts rebuild node prepare: {}", e))?;
+            let mut fts_stmt = tx
+                .prepare("INSERT INTO fts_nodes(rowid, id, name, location) VALUES (?1, ?2, ?3, ?4)")
+                .map_err(|e| format!("fts rebuild fts prepare: {}", e))?;
+            for node in nodes {
+                let (px, py, pz) = match node.position {
+                    Some([x, y, z]) => (Some(x as f64), Some(y as f64), Some(z as f64)),
+                    None => (None, None, None),
+                };
+                let props = serde_json::to_string(&node.properties)
+                    .unwrap_or_else(|_| "{}".into());
+                if let Err(e) = node_stmt.execute(params![
+                    rowid,
+                    node.id,
+                    node.name,
+                    node.kind.as_str(),
+                    node.location,
+                    props,
+                    node.out_degree as i64,
+                    node.in_degree as i64,
+                    px,
+                    py,
+                    pz,
+                    node.community_id.map(|v| v as i64),
+                    node.non_defines_in_degree as i64,
+                ]) {
+                    return Err(format!("fts rebuild node insert: {}", e)); // tx drop → 回滚
+                }
+                if let Err(e) = fts_stmt.execute(params![
+                    rowid,
+                    node.id,
+                    node.name,
+                    node.location.as_deref().unwrap_or(""),
+                ]) {
+                    return Err(format!("fts rebuild fts insert: {}", e)); // tx drop → 回滚
+                }
+                rowid += 1;
+                count += 1;
+                if count % BATCH == 0 && start.elapsed().as_secs() > budget_secs {
+                    return Err(format!(
+                        "fts rebuild: 超过 {}s 预算（已写入 {} 行）",
+                        budget_secs, count
+                    )); // tx drop → 回滚
+                }
+            }
+        }
+
+        // 重建同步触发器（定义与 ensure_schema 一致），恢复增量路径的 FTS 联动
+        if let Err(e) = tx.execute_batch(
+            "CREATE TRIGGER nodes_ai AFTER INSERT ON nodes BEGIN
+                 INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
+             END;
+             CREATE TRIGGER nodes_ad AFTER DELETE ON nodes BEGIN
+                 INSERT INTO fts_nodes(fts_nodes, rowid, id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
+             END;
+             CREATE TRIGGER nodes_au AFTER UPDATE ON nodes BEGIN
+                 INSERT INTO fts_nodes(fts_nodes, rowid, id, name, location) VALUES ('delete', old.rowid, old.id, old.name, old.location);
+                 INSERT INTO fts_nodes(rowid, id, name, location) VALUES (new.rowid, new.id, new.name, new.location);
+             END;",
+        ) {
+            return Err(format!("fts rebuild recreate triggers: {}", e)); // tx drop → 回滚
+        }
+
+        tx.commit().map_err(|e| format!("fts rebuild commit: {}", e))?;
+        eprintln!(
+            "[sqlite] fts_rebuild_from_rows: {} rows in {:.1}s",
+            count,
+            start.elapsed().as_secs_f64()
+        );
+        Ok(())
+    }
+
     // ── 时间线事件 ──
 
     pub fn record_timeline(

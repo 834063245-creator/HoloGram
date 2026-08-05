@@ -11,10 +11,13 @@
 // 行业先例：rustc Symbol、Sourcegraph 字符串去重、Kythe graph store。
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
 use crate::graph::{EdgeKind, Node};
+use crate::storage::snapshot::MemoryIndexSnapshot;
 use crate::storage::sqlite::SqliteDb;
 use crate::storage::string_arena::StringArena;
 
@@ -86,6 +89,12 @@ pub struct MemoryIndex {
     has_aux_indexes: bool,
     /// 合成边索引: (source_handle, target_handle) — 结构工具遍历时跳过
     synthesized_edges: HashSet<(u32, u32)>,
+    /// FTS 索引是否与内存图脱节（需要惰性重建）。
+    /// 不进快照 —— 快照反序列化后恒置 true。
+    /// 语义：from_sqlite → false（fts 随 bulk 重建过）；
+    /// from_existing_graph → true（新图尚未写库）；
+    /// to_sqlite 成功后 → false；save_snapshot 后保持 true；from_snapshot → true。
+    fts_dirty: AtomicBool,
 }
 
 /// 从位置字符串（如 "C:/file.py:10" 或 "C:\file.py:10"）中提取文件路径。
@@ -364,6 +373,8 @@ impl MemoryIndex {
             edge_count: 0,
             has_aux_indexes: true,
             synthesized_edges: HashSet::new(),
+            // 空索引无从重建（节点数 0 跳过）；from_* 构造器按来源覆盖
+            fts_dirty: AtomicBool::new(false),
         }
     }
 
@@ -472,10 +483,13 @@ impl MemoryIndex {
 
         idx.recompute_degrees(&out_buckets, &in_buckets);
         idx.flatten_buckets(&out_buckets, &in_buckets);
+        // 全新构建的图尚未写库 —— SQLite fts_nodes 不反映此索引，标记待惰性重建
+        idx.fts_dirty.store(true, Ordering::Release);
         idx
     }
 
-    /// 从 SQLite 加载（冷启动）。
+    /// 从 SQLite 加载（冷启动）。fts_dirty 保持 false（new() 默认）——
+    /// fts_nodes 随 bulk_replace_all 重建过，与库中节点一致。
     pub fn from_sqlite(db: &SqliteDb) -> Result<Self, String> {
         let mut idx = Self::new();
         let db_nodes = db.load_all_nodes()?;
@@ -589,7 +603,60 @@ impl MemoryIndex {
         }
         eprintln!("[sqlite] to_sqlite: edge collect {:.1}s ({} edges)",
             t.elapsed().as_secs_f64(), edges.len());
-        db.bulk_replace_all(&nodes, &edges)
+        db.bulk_replace_all(&nodes, &edges)?;
+        // fts_nodes 已随 bulk 重建并与本索引一致 —— 清除惰性重建标记
+        self.fts_dirty.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    // ── 快照持久化（超大图快速路径，M7c）──
+
+    /// 将索引全量快照到 `<project_root>/.hologram/graph.snapshot`（bincode 1.3）。
+    /// 原子落盘：先写 .tmp 再 rename（同 vector/mod.rs 先例，现代 Rust 的
+    /// fs::rename 在 Windows 上替换已存在目标）；序列化或写入失败时清理 .tmp。
+    /// 成功后 fts_dirty 保持 true —— 快照不写 fts_nodes。
+    pub fn save_snapshot(&self, project_root: &Path) -> Result<(), String> {
+        let t = std::time::Instant::now();
+        let snap = to_snapshot(self);
+        let bytes = bincode::serialize(&snap)
+            .map_err(|e| format!("snapshot serialize: {}", e))?;
+        let dir = project_root.join(".hologram");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir .hologram: {}", e))?;
+        let path = crate::storage::snapshot::snapshot_path(project_root);
+        let tmp = crate::storage::snapshot::snapshot_tmp_path(project_root);
+        if let Err(e) = std::fs::write(&tmp, &bytes) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("snapshot write: {}", e));
+        }
+        std::fs::rename(&tmp, &path).map_err(|e| format!("snapshot rename: {}", e))?;
+        eprintln!(
+            "[snapshot] save_snapshot: {:.1}s ({} bytes, {} nodes, {} edges)",
+            t.elapsed().as_secs_f64(),
+            bytes.len(),
+            self.node_count(),
+            self.edge_count()
+        );
+        Ok(())
+    }
+
+    /// 从 `<project_root>/.hologram/graph.snapshot` 读回索引（bincode 反序列化）。
+    /// 文件缺失、读取或反序列化失败均返回 Err —— 调用方（GraphStore::open）
+    /// 负责删除快照并回退 SQLite 路径。
+    pub fn load_snapshot(project_root: &Path) -> Result<MemoryIndex, String> {
+        let t = std::time::Instant::now();
+        let path = crate::storage::snapshot::snapshot_path(project_root);
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("snapshot read {}: {}", path.display(), e))?;
+        let snap: MemoryIndexSnapshot = bincode::deserialize(&bytes)
+            .map_err(|e| format!("snapshot deserialize: {}", e))?;
+        let idx = from_snapshot(snap);
+        eprintln!(
+            "[snapshot] load_snapshot: {:.1}s ({} nodes, {} edges)",
+            t.elapsed().as_secs_f64(),
+            idx.node_count(),
+            idx.edge_count()
+        );
+        Ok(idx)
     }
 
     // ── 辅助方法 ──
@@ -1012,7 +1079,11 @@ impl MemoryIndex {
 
     // ── 全文搜索（委托给 SQLite FTS5）──
 
+    /// FTS 惰性重建预算（秒）。超出即回滚并返回降级错误。
+    const FTS_REBUILD_BUDGET_SECS: u64 = 30;
+
     pub fn fts_search(&self, db: &SqliteDb, query: &str, limit: usize) -> Result<Vec<Node>, String> {
+        self.ensure_fts_fresh(db)?;
         let ids = db.fts_search(query, limit)?;
         let mut results = Vec::with_capacity(ids.len());
         for id in &ids {
@@ -1023,6 +1094,34 @@ impl MemoryIndex {
             }
         }
         Ok(results)
+    }
+
+    /// FTS 索引是否待惰性重建（快照加载后 / 新图未写库）。
+    pub fn fts_dirty(&self) -> bool {
+        self.fts_dirty.load(Ordering::Acquire)
+    }
+
+    /// FTS 惰性重建（快照模式折中）—— 快照加载后 fts_nodes 未预建，
+    /// 首个 FTS 查询时在事务内全量重建（刷新 nodes 内容表 + 分批直插 FTS 表，
+    /// 绕开 nodes 触发器）。超预算回滚并保持 dirty，返回降级错误；
+    /// 节点数为 0 时跳过重建直接放行。
+    fn ensure_fts_fresh(&self, db: &SqliteDb) -> Result<(), String> {
+        if !self.fts_dirty.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if self.nodes.is_empty() {
+            self.fts_dirty.store(false, Ordering::Release);
+            return Ok(());
+        }
+        db.fts_rebuild_from_rows(self.nodes.values(), Self::FTS_REBUILD_BUDGET_SECS)
+            .map_err(|e| {
+                format!(
+                    "{}；全文搜索暂不可用（已回滚），请改用 hologram_explore 工具查询",
+                    e
+                )
+            })?;
+        self.fts_dirty.store(false, Ordering::Release);
+        Ok(())
     }
 
     // ── 迭代 ──
@@ -1256,6 +1355,73 @@ impl MemoryIndex {
 impl Default for MemoryIndex {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── 快照转换（字段私有，必须在模块内）──
+
+/// 提取 MemoryIndex 的纯数据快照（bincode 序列化落盘用）。
+/// 字段一一对应；arena 只导出字符串表，lookup 在重建侧恢复。
+pub(crate) fn to_snapshot(idx: &MemoryIndex) -> MemoryIndexSnapshot {
+    MemoryIndexSnapshot {
+        arena_strings: idx.arena.strings().to_vec(),
+        nodes: idx
+            .nodes
+            .iter()
+            .map(|(&h, n)| (h, crate::storage::snapshot::SnapshotNode::from_node(n)))
+            .collect(),
+        node_by_idx: idx.node_by_idx.clone(),
+        handle_to_idx: idx.handle_to_idx.clone(),
+        out_offsets: idx.out_offsets.clone(),
+        out_targets: idx.out_targets.clone(),
+        out_kinds: idx.out_kinds.clone(),
+        out_coupling: idx.out_coupling.clone(),
+        out_delays: idx.out_delays.clone(),
+        in_offsets: idx.in_offsets.clone(),
+        in_targets: idx.in_targets.clone(),
+        in_kinds: idx.in_kinds.clone(),
+        in_coupling: idx.in_coupling.clone(),
+        in_delays: idx.in_delays.clone(),
+        pending_adds: idx.pending_adds.clone(),
+        pending_removes: idx.pending_removes.clone(),
+        name_index: idx.name_index.clone(),
+        file_index: idx.file_index.clone(),
+        edge_count: idx.edge_count,
+        has_aux_indexes: idx.has_aux_indexes,
+        synthesized_edges: idx.synthesized_edges.clone(),
+    }
+}
+
+/// 从快照重建 MemoryIndex。fts_dirty 恒置 true —— 快照模式下
+/// fts_nodes 不预建，首个 FTS 查询时惰性重建（ensure_fts_fresh）。
+pub(crate) fn from_snapshot(snap: MemoryIndexSnapshot) -> MemoryIndex {
+    MemoryIndex {
+        arena: StringArena::from_strings(snap.arena_strings),
+        nodes: snap
+            .nodes
+            .into_iter()
+            .map(|(h, sn)| (h, sn.into_node()))
+            .collect(),
+        node_by_idx: snap.node_by_idx,
+        handle_to_idx: snap.handle_to_idx,
+        out_offsets: snap.out_offsets,
+        out_targets: snap.out_targets,
+        out_kinds: snap.out_kinds,
+        out_coupling: snap.out_coupling,
+        out_delays: snap.out_delays,
+        in_offsets: snap.in_offsets,
+        in_targets: snap.in_targets,
+        in_kinds: snap.in_kinds,
+        in_coupling: snap.in_coupling,
+        in_delays: snap.in_delays,
+        pending_adds: snap.pending_adds,
+        pending_removes: snap.pending_removes,
+        name_index: snap.name_index,
+        file_index: snap.file_index,
+        edge_count: snap.edge_count,
+        has_aux_indexes: snap.has_aux_indexes,
+        synthesized_edges: snap.synthesized_edges,
+        fts_dirty: AtomicBool::new(true),
     }
 }
 
@@ -1592,6 +1758,224 @@ mod tests {
             .collect();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].3, None, "Calls edge should have no delay");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── R9.1: 旧线格式零漂移（批内范围限 storage/，故置于本测试模块）──
+
+    /// 旧格式 JSON（plain string id）HashMap 形式：
+    /// Graph::from_json_file 读回必须与 serde_json 直读一致。
+    /// NodeId/EdgeId 的 serde(transparent)（id.rs R0 已测）保证磁盘/线格式零漂移。
+    #[test]
+    fn test_r91_old_wire_format_hashmap_zero_drift() {
+        let json = r#"{
+            "nodes": {
+                "src/a.rs::fn_a": {"id":"src/a.rs::fn_a","name":"fn_a","type":"function","location":"src/a.rs:10","properties":{"role":"entry"},"out_degree":1,"in_degree":0,"community_id":7},
+                "src/b.rs::fn_b": {"id":"src/b.rs::fn_b","name":"fn_b","type":"function","location":"src/b.rs:20","properties":{},"out_degree":0,"in_degree":1}
+            },
+            "edges": {
+                "e1": {"id":"e1","source":"src/a.rs::fn_a","target":"src/b.rs::fn_b","type":"calls","coupling_depth":2,"temporal_delay_sec":0.5}
+            },
+            "meta": {"version": "4"}
+        }"#;
+        let tmp = std::env::temp_dir().join("hologram_test_r91_hashmap.json");
+        std::fs::write(&tmp, json).unwrap();
+
+        let via_file = Graph::from_json_file(tmp.to_str().unwrap()).unwrap();
+        let via_serde: Graph = serde_json::from_str(json).unwrap();
+
+        assert_eq!(via_file.node_count(), via_serde.node_count());
+        assert_eq!(via_file.edge_count(), via_serde.edge_count());
+        for (id, node) in via_serde.nodes_iter() {
+            let n = via_file.get_node(id).expect("from_json_file 应含相同节点");
+            assert_eq!(n.name, node.name);
+            assert_eq!(n.location, node.location);
+            assert_eq!(n.community_id, node.community_id);
+            assert_eq!(n.properties, node.properties);
+        }
+        for (id, edge) in via_serde.edges_iter() {
+            let e = via_file.get_edge(id).expect("from_json_file 应含相同边");
+            assert_eq!(e.source, edge.source);
+            assert_eq!(e.target, edge.target);
+            assert_eq!(e.kind, edge.kind);
+            assert_eq!(e.coupling_depth, edge.coupling_depth);
+            assert_eq!(e.temporal_delay_sec, edge.temporal_delay_sec);
+        }
+        assert_eq!(via_file.meta(), via_serde.meta());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// 旧格式 JSON 数组形式（Python 导出）：与同一图的 HashMap 形式读回一致。
+    /// 双格式均走 plain string id，断言两条路径零漂移。
+    #[test]
+    fn test_r91_old_wire_format_array_matches_hashmap() {
+        let array_json = r#"{
+            "nodes": [
+                {"id":"n1","name":"main","type":"function","location":"src/main.rs:1","properties":{"tag":"x"},"community_id":3},
+                {"id":"n2","name":"helper","type":"symbol","location":null,"properties":{}}
+            ],
+            "edges": [
+                {"id":"e1","source":"n1","target":"n2","type":"calls","coupling_depth":1},
+                {"id":"e2","source":"n2","target":"n1","type":"triggers","temporal_delay_sec":1.25}
+            ]
+        }"#;
+        let map_json = r#"{
+            "nodes": {
+                "n1": {"id":"n1","name":"main","type":"function","location":"src/main.rs:1","properties":{"tag":"x"},"community_id":3},
+                "n2": {"id":"n2","name":"helper","type":"symbol","location":null,"properties":{}}
+            },
+            "edges": {
+                "e1": {"id":"e1","source":"n1","target":"n2","type":"calls","coupling_depth":1},
+                "e2": {"id":"e2","source":"n2","target":"n1","type":"triggers","temporal_delay_sec":1.25}
+            }
+        }"#;
+        let tmp_a = std::env::temp_dir().join("hologram_test_r91_array.json");
+        let tmp_m = std::env::temp_dir().join("hologram_test_r91_map.json");
+        std::fs::write(&tmp_a, array_json).unwrap();
+        std::fs::write(&tmp_m, map_json).unwrap();
+
+        let ga = Graph::from_json_file(tmp_a.to_str().unwrap()).unwrap();
+        let gm = Graph::from_json_file(tmp_m.to_str().unwrap()).unwrap();
+
+        assert_eq!(ga.node_count(), gm.node_count());
+        assert_eq!(ga.edge_count(), gm.edge_count());
+        for (id, node) in gm.nodes_iter() {
+            let n = ga.get_node(id).expect("数组格式应含相同节点");
+            assert_eq!(n.name, node.name);
+            assert_eq!(n.location, node.location);
+            assert_eq!(n.community_id, node.community_id);
+            assert_eq!(n.properties, node.properties);
+        }
+        for (id, edge) in gm.edges_iter() {
+            let e = ga.get_edge(id).expect("数组格式应含相同边");
+            assert_eq!(e.source, edge.source);
+            assert_eq!(e.kind, edge.kind);
+            assert_eq!(e.coupling_depth, edge.coupling_depth);
+            assert_eq!(e.temporal_delay_sec, edge.temporal_delay_sec);
+        }
+        let _ = std::fs::remove_file(&tmp_a);
+        let _ = std::fs::remove_file(&tmp_m);
+    }
+
+    /// R9.1: SQLite 冷启动读回 —— bulk_replace_all 后用全新 SqliteDb 实例
+    /// 重开同一库，from_sqlite 的节点/边计数与抽样字段必须一致。
+    #[test]
+    fn test_r91_sqlite_cold_start_roundtrip() {
+        let tmp = std::env::temp_dir().join("hologram_test_r91_coldstart");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        {
+            let db = SqliteDb::open(&tmp).unwrap();
+            let mut idx = MemoryIndex::new();
+            let mut n1 = test_node("a", "fn_a", Some("src/a.rs:10"));
+            n1.community_id = Some(7);
+            n1.position = Some([1.0, 2.0, 3.0]);
+            n1.properties = serde_json::json!({"role": "entry"});
+            idx.insert_node(n1);
+            idx.insert_node(test_node("b", "fn_b", Some("src/b.rs:20")));
+            idx.insert_node(test_node("c", "cls_c", Some("src/c.rs:1")));
+            idx.upsert_edge("a", "b", EdgeKind::Calls, 2, Some(0.5));
+            idx.upsert_edge("b", "c", EdgeKind::Inherits, 1, None);
+            idx.flush_pending();
+            idx.to_sqlite(&db).unwrap();
+        } // db 随作用域 drop —— 模拟进程退出
+
+        // 全新实例重开（冷启动）
+        let db2 = SqliteDb::open(&tmp).unwrap();
+        let loaded = MemoryIndex::from_sqlite(&db2).unwrap();
+        assert_eq!(loaded.node_count(), 3);
+        assert_eq!(loaded.edge_count(), 2);
+        assert!(!loaded.fts_dirty(), "from_sqlite → dirty=false");
+
+        let a = loaded.get_node("a").unwrap();
+        assert_eq!(a.name, "fn_a");
+        assert_eq!(a.location.as_deref(), Some("src/a.rs:10"));
+        assert_eq!(a.community_id, Some(7));
+        assert_eq!(a.position, Some([1.0, 2.0, 3.0]));
+        assert_eq!(a.properties, serde_json::json!({"role": "entry"}));
+
+        let out = loaded.outgoing("a", None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "b");
+        assert_eq!(out[0].1, EdgeKind::Calls);
+        assert_eq!(out[0].2, 2);
+        assert_eq!(out[0].3, Some(0.5));
+
+        // 冷启动后 FTS 可直查（bulk 重建过，无需惰性重建）
+        let hits = loaded.fts_search(&db2, "fn_b", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "b");
+        assert!(!loaded.fts_dirty(), "干净索引查询不应触发重建");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 快照模式 FTS 惰性重建：from_existing_graph（dirty=true）→ 首个 fts_search
+    /// 在事务内重建 FTS（SQLite 侧 nodes 表为空，直插 FTS 表），
+    /// 结果正确且之后 dirty=false。
+    #[test]
+    fn test_fts_lazy_rebuild_from_existing_graph() {
+        let tmp = std::env::temp_dir().join("hologram_test_fts_lazy");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = SqliteDb::open(&tmp).unwrap(); // 空库 —— nodes/fts_nodes 均无内容
+
+        let mut nodes = HashMap::new();
+        nodes.insert("a".into(), test_node("a", "handle_request", Some("src/a.rs")));
+        nodes.insert("b".into(), test_node("b", "handle_response", Some("src/b.rs")));
+        nodes.insert("c".into(), test_node("c", "compute_hash", Some("src/c.rs")));
+        let mut edges = HashMap::new();
+        edges.insert("e1".into(), Edge::new("e1", "a", "b", EdgeKind::Calls));
+        let idx = MemoryIndex::from_existing_graph(nodes, edges);
+        assert!(idx.fts_dirty(), "from_existing_graph → dirty=true");
+
+        // 首个 FTS 查询触发惰性重建
+        let hits = idx.fts_search(&db, "handle_request", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "handle_request");
+        assert!(!idx.fts_dirty(), "重建成功后 dirty 转 false");
+
+        // 后续查询沿用已建 FTS，不再重建
+        let hits2 = idx.fts_search(&db, "handle", 10).unwrap();
+        assert_eq!(hits2.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// fts_dirty 语义钉死：from_existing_graph → true；to_sqlite 成功 → false；
+    /// from_sqlite → false；save_snapshot 后保持 true；from_snapshot → true。
+    #[test]
+    fn test_fts_dirty_semantics() {
+        let tmp = std::env::temp_dir().join("hologram_test_fts_dirty");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = SqliteDb::open(&tmp).unwrap();
+
+        let mut nodes = HashMap::new();
+        nodes.insert("a".into(), test_node("a", "A", Some("src/a.rs")));
+        nodes.insert("b".into(), test_node("b", "B", Some("src/b.rs")));
+        let mut edges = HashMap::new();
+        edges.insert("e1".into(), Edge::new("e1", "a", "b", EdgeKind::Calls));
+        let idx = MemoryIndex::from_existing_graph(nodes, edges);
+        assert!(idx.fts_dirty());
+
+        idx.to_sqlite(&db).unwrap();
+        assert!(!idx.fts_dirty(), "to_sqlite 成功后 → false");
+
+        let loaded = MemoryIndex::from_sqlite(&db).unwrap();
+        assert!(!loaded.fts_dirty(), "from_sqlite → false");
+
+        let idx2 = MemoryIndex::from_existing_graph(
+            HashMap::from([("x".to_string(), test_node("x", "X", None))]),
+            HashMap::new(),
+        );
+        assert!(idx2.fts_dirty());
+        idx2.save_snapshot(&tmp).unwrap();
+        assert!(idx2.fts_dirty(), "save_snapshot 后保持 true");
+        let loaded2 = MemoryIndex::load_snapshot(&tmp).unwrap();
+        assert!(loaded2.fts_dirty(), "from_snapshot → true");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

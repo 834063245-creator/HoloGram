@@ -39,6 +39,10 @@ impl GraphStore {
     /// 3. JSON 迁移（回退）
     pub fn open(project_root: &Path) -> Result<Self, String> {
         let start = std::time::Instant::now();
+        // 快照优先级比较需要 hologram.db 的「真实」mtime ——
+        // SqliteDb::open 会在文件缺失时创建它（mtime 变成现在），必须先取样。
+        let db_path = project_root.join(".hologram").join("hologram.db");
+        let db_mtime = std::fs::metadata(&db_path).and_then(|m| m.modified()).ok();
         let db = SqliteDb::open(project_root)?;
 
         let load_start = chrono::Utc::now().timestamp_millis() as u64;
@@ -57,6 +61,44 @@ impl GraphStore {
             load_start_ms: AtomicU64::new(load_start),
             reindex_handle: Mutex::new(None),
         };
+
+        // 快照快速路径（超大图）：快照存在且 mtime ≥ hologram.db 时优先加载；
+        // hologram.db 原本不存在 → 快照存在即优先。
+        let snap_path = crate::storage::snapshot::snapshot_path(project_root);
+        if let Ok(snap_meta) = std::fs::metadata(&snap_path) {
+            let prefer = match (snap_meta.modified().ok(), db_mtime) {
+                (Some(snap_ts), Some(db_ts)) => snap_ts >= db_ts,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            if prefer {
+                match MemoryIndex::load_snapshot(project_root) {
+                    Ok(idx) => {
+                        let nodes = idx.node_count();
+                        let edges = idx.edge_count();
+                        *store.index.write() = idx;
+                        let elapsed = start.elapsed().as_millis() as u64;
+                        *store.loading.write() = LoadProgress {
+                            phase: "ready".into(),
+                            nodes_loaded: nodes,
+                            edges_loaded: edges,
+                            nodes_total: nodes,
+                            edges_total: edges,
+                            elapsed_ms: elapsed,
+                        };
+                        info!(
+                            "[store] loaded from snapshot: {} nodes, {} edges in {}ms",
+                            nodes, edges, elapsed
+                        );
+                        return Ok(store);
+                    }
+                    Err(e) => {
+                        warn!("[store] 快照加载失败（{}），删除快照并回退 SQLite", e);
+                        let _ = std::fs::remove_file(&snap_path);
+                    }
+                }
+            }
+        }
 
         // 优先尝试 SQLite
         match MemoryIndex::from_sqlite(&store.db) {
@@ -133,10 +175,17 @@ impl GraphStore {
         Ok(store)
     }
 
-    /// 将当前 MemoryIndex 持久化到 SQLite。
+    /// 将当前 MemoryIndex 持久化。保存漏斗：
+    /// edge_count ≥ snapshot_min_edges()（默认 5M，env
+    /// HOLOGRAM_SNAPSHOT_MIN_EDGES 覆盖）→ bincode 快照（原子 rename）；
+    /// 否则走现有 SQLite 全量重写。
     pub fn save(&self) -> Result<(), String> {
         let idx = self.index.read();
-        idx.to_sqlite(&self.db)
+        if idx.edge_count() >= crate::storage::snapshot::snapshot_min_edges() {
+            idx.save_snapshot(&self.project_root)
+        } else {
+            idx.to_sqlite(&self.db)
+        }
     }
 
     /// 返回此存储对应的项目根目录。
@@ -240,5 +289,96 @@ impl GraphStore {
     pub fn write<R>(&self, f: impl FnOnce(&mut MemoryIndex) -> R) -> R {
         let mut idx = self.index.write();
         f(&mut idx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
+    use crate::storage::snapshot::{snapshot_path, SNAPSHOT_ENV_LOCK};
+    use std::collections::HashMap;
+
+    fn tmp_project(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("hologram_test_store_{}_{}", name, std::process::id()))
+    }
+
+    fn small_index() -> MemoryIndex {
+        let mut nodes = HashMap::new();
+        let mut a = Node::new("a", "fn_a", NodeKind::Function);
+        a.location = Some("src/a.rs:1".into());
+        nodes.insert("a".into(), a);
+        nodes.insert("b".into(), Node::new("b", "fn_b", NodeKind::Function));
+        let mut edges = HashMap::new();
+        edges.insert("e1".into(), Edge::new("e1", "a", "b", EdgeKind::Calls));
+        MemoryIndex::from_existing_graph(nodes, edges)
+    }
+
+    /// 小阈值集成：HOLOGRAM_SNAPSHOT_MIN_EDGES=0 时 save 走快照路径，
+    /// 重开 GraphStore 优先快照加载，FTS 惰性重建后可用。
+    #[test]
+    fn test_store_save_snapshot_path_and_reload() {
+        let _guard = SNAPSHOT_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HOLOGRAM_SNAPSHOT_MIN_EDGES", "0");
+        let tmp = tmp_project("snap_save");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // store1 保持存活 —— 关闭最后连接会触发 WAL checkpoint 推高
+        // hologram.db mtime（生产稳定态下 db 无写入、mtime 保持 ≤ 快照），
+        // 测试内用并发连接模拟「快照更新」的前提。
+        let store1 = GraphStore::open(&tmp).unwrap();
+        store1.swap_index(small_index());
+        store1.save().unwrap();
+        assert!(snapshot_path(&tmp).exists(), "阈值 0 → 应生成 graph.snapshot");
+
+        // 重开：快照 mtime ≥ hologram.db → 快照优先
+        let store2 = GraphStore::open(&tmp).unwrap();
+        store2.read(|idx| {
+            assert_eq!(idx.node_count(), 2);
+            assert_eq!(idx.edge_count(), 1);
+            assert!(idx.fts_dirty(), "快照加载 → dirty=true");
+            assert_eq!(idx.get_node("a").unwrap().name, "fn_a");
+        });
+        // 快照模式下首个 FTS 查询惰性重建，之后 dirty=false
+        let hits = store2
+            .read(|idx| idx.fts_search(&store2.db, "fn_a", 10))
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "fn_a");
+        store2.read(|idx| assert!(!idx.fts_dirty()));
+
+        std::env::remove_var("HOLOGRAM_SNAPSHOT_MIN_EDGES");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// open 级回退：损坏快照 + 有效 SQLite → 删快照、走 SQLite 成功。
+    #[test]
+    fn test_store_open_falls_back_on_corrupt_snapshot() {
+        let _guard = SNAPSHOT_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("HOLOGRAM_SNAPSHOT_MIN_EDGES");
+        let tmp = tmp_project("corrupt_fallback");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        {
+            let store = GraphStore::open(&tmp).unwrap();
+            store.swap_index(small_index());
+            store.save().unwrap(); // 小图 < 默认阈值 → SQLite 路径
+            assert!(!snapshot_path(&tmp).exists(), "小图不应生成快照");
+        }
+
+        // 写入垃圾快照（mtime 现在 ≥ db mtime → 会被优先尝试）
+        std::fs::write(snapshot_path(&tmp), b"corrupted garbage bytes").unwrap();
+
+        let store2 = GraphStore::open(&tmp).unwrap();
+        assert!(!snapshot_path(&tmp).exists(), "损坏快照应被删除");
+        store2.read(|idx| {
+            assert_eq!(idx.node_count(), 2, "应回退到 SQLite 数据");
+            assert_eq!(idx.edge_count(), 1);
+            assert!(!idx.fts_dirty(), "SQLite 加载 → dirty=false");
+        });
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
