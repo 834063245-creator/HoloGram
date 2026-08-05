@@ -177,6 +177,25 @@ impl Graph {
     pub fn edge_count(&self) -> usize {
         self.edges.len()
     }
+
+    // ── 迭代访问器(R0)—— 替代消费方直接访问 pub 字段 ──
+    // 当前容器仍是 HashMap<String, _>,故 yield &str;R8 换容器后签名不变。
+
+    pub fn nodes_iter(&self) -> impl Iterator<Item = (&str, &Node)> {
+        self.nodes.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    pub fn edges_iter(&self) -> impl Iterator<Item = (&str, &Edge)> {
+        self.edges.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    pub fn node_ids(&self) -> impl Iterator<Item = &str> {
+        self.nodes.keys().map(|k| k.as_str())
+    }
+
+    pub fn edge_ids(&self) -> impl Iterator<Item = &str> {
+        self.edges.keys().map(|k| k.as_str())
+    }
 }
 
 impl Default for Graph {

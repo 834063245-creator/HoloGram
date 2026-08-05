@@ -3,6 +3,24 @@
 
 use serde::{Deserialize, Serialize};
 
+// ── R0 语义访问器的扩展名表 ──
+// 与 resolver.rs 的 code_extension_set() 同源(GRAMMAR_LOADER),
+// 语义逐字等价;R2 迁移 resolver 消费点时统一去重。
+fn code_extension_set() -> &'static std::collections::HashSet<String> {
+    static SET: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(|| {
+        crate::engine::GRAMMAR_LOADER
+            .supported_extensions()
+            .into_iter()
+            .collect()
+    })
+}
+
+fn is_common_extension(s: &str) -> bool {
+    code_extension_set().contains(s)
+}
+
 /// Node 类型 — 对应 Python 的 NodeType 枚举。
 /// O(1) 度数追踪（修复了 v3 社区检测中的 O(V×E) 性能问题）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -90,6 +108,50 @@ impl Node {
             self.name,
             self.kind.as_str()
         )
+    }
+
+    /// 所属文件路径(不含行号)。来自 location,无 location 返回 None。
+    /// 语义 = flows.rs strip_line_suffix(R0 统一搬到这里):
+    /// 去掉末尾 ":行号" 段(处理 Windows 盘符,只剥纯数字后缀)。
+    pub fn file(&self) -> Option<&str> {
+        self.location.as_deref().map(|loc| {
+            if let Some(pos) = loc.rfind(':') {
+                let maybe_line = &loc[pos + 1..];
+                if maybe_line.chars().all(|c| c.is_ascii_digit()) {
+                    return &loc[..pos];
+                }
+            }
+            loc
+        })
+    }
+
+    /// 短名 —— id 的最后一段,但若该段是已知代码扩展名则再往前取一段。
+    /// 语义 = resolver.rs 的 short_name(原样搬入,含 is_common_extension 逻辑,
+    /// 扩展名表复用 code_extension_set())。
+    ///
+    /// "django.http.HttpResponse" → "HttpResponse"
+    /// "a.rs"                     → "a"
+    /// "app.views.index"          → "index"
+    pub fn short_name(&self) -> &str {
+        let full = self.id.as_str();
+        let last = full.rsplit('.').next().unwrap_or(full);
+        if is_common_extension(last) {
+            if let Some(stripped) = full.strip_suffix(&format!(".{}", last)) {
+                return stripped
+                    .rsplit(&['.', '/', '\\'])
+                    .next()
+                    .unwrap_or(stripped);
+            }
+        }
+        full.rsplit('.').next().unwrap_or(full)
+    }
+
+    /// 模块路径 —— id 去掉最后一段。无 '.' 时返回整个 id。
+    pub fn module(&self) -> &str {
+        match self.id.rfind('.') {
+            Some(pos) => &self.id[..pos],
+            None => &self.id,
+        }
     }
 }
 
@@ -211,5 +273,71 @@ mod tests {
         assert_eq!(back.out_degree, 3);
         assert_eq!(back.in_degree, 1);
         assert_eq!(back.community_id, Some(0));
+    }
+
+    // ── R0 语义访问器边界用例 ──
+
+    #[test]
+    fn test_file_strips_line_suffix() {
+        let mut n = Node::new("n1", "f", NodeKind::Symbol);
+        n.location = Some("src/main.rs:42".into());
+        assert_eq!(n.file(), Some("src/main.rs"));
+        // 无行号后缀 → 原样返回
+        n.location = Some("src/main.rs".into());
+        assert_eq!(n.file(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn test_file_windows_drive_letter() {
+        let mut n = Node::new("n1", "f", NodeKind::Symbol);
+        // Windows 盘符冒号不是行号分隔符,不应被剥
+        n.location = Some("C:\\Users\\foo\\bar.rs:10".into());
+        assert_eq!(n.file(), Some("C:\\Users\\foo\\bar.rs"));
+        n.location = Some("C:\\Users\\foo\\bar.rs".into());
+        assert_eq!(n.file(), Some("C:\\Users\\foo\\bar.rs"));
+        // 冒号后非纯数字 → 保持原样
+        n.location = Some("http://example.com".into());
+        assert_eq!(n.file(), Some("http://example.com"));
+    }
+
+    #[test]
+    fn test_file_no_location() {
+        let n = Node::new("n1", "f", NodeKind::Symbol);
+        assert_eq!(n.file(), None);
+    }
+
+    #[test]
+    fn test_short_name_dotted_id() {
+        let n = Node::new("django.http.HttpResponse", "HttpResponse", NodeKind::Class);
+        assert_eq!(n.short_name(), "HttpResponse");
+        let n = Node::new("app.views.index", "index", NodeKind::Function);
+        assert_eq!(n.short_name(), "index");
+    }
+
+    #[test]
+    fn test_short_name_extension_aware() {
+        // 最后一段是已知代码扩展名 → 再往前取一段
+        let n = Node::new("a.rs", "a", NodeKind::File);
+        assert_eq!(n.short_name(), "a");
+        let n = Node::new("app.models.py", "models", NodeKind::File);
+        assert_eq!(n.short_name(), "models");
+    }
+
+    #[test]
+    fn test_short_name_no_dot() {
+        let n = Node::new("main", "main", NodeKind::Function);
+        assert_eq!(n.short_name(), "main");
+    }
+
+    #[test]
+    fn test_module_dotted_and_plain() {
+        let n = Node::new("a.b.c", "c", NodeKind::Symbol);
+        assert_eq!(n.module(), "a.b");
+        // 无 '.' → 返回整个 id
+        let n = Node::new("main", "main", NodeKind::Symbol);
+        assert_eq!(n.module(), "main");
+        // 扩展名式 id 也按同一规则(只去最后一段,不感知扩展名)
+        let n = Node::new("a.rs", "a", NodeKind::File);
+        assert_eq!(n.module(), "a");
     }
 }
