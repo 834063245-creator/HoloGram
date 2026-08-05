@@ -122,7 +122,8 @@ FTS 惰性重建折中、R10 目标 全内核<15min),接手模型按规格机械
 2. ~~M5 coupling 超线性~~ → 已修复(借用化 + rayon)。注:drivers 旧代码实测仅
    3.1s,内核 197s 主要是换页抖动;常数砍量级后换页敏感性同步下降
 3. ~~M6 flows 字符串克隆~~ → 已修复(借用化,同 M2 模式)
-4. **M7 db-save 规模墙(新发现,drivers 实测 1247.8s 为全程最大单块)**:
+4. ~~M7 db-save 规模墙~~ → **已解决(2026-08-06,R9.2 快照持久化,drivers 写入
+   885.6s → 56.3s,见下文「R 阶段进度」)**。原始分解:
    - MemoryIndex::from_existing_graph 353s(fs 3.2s)——intern+桶排序在大边数下劣化
    - bulk_replace_all 885.6s:edges 插入 228s(21k 行/s)、索引重建 242.5s、
      commit 292s(数 GB WAL fsync)、nodes 94s、fts 28s
@@ -147,12 +148,13 @@ FTS 惰性重建折中、R10 目标 全内核<15min),接手模型按规格机械
 | **DB Save** | **1247.8s** | MemoryIndex 353s + bulk 885.6s(M7 目标) |
 | 总计 | 1697.6s | RSS 峰值 9.3GB |
 
-## R 阶段进度(2026-08-06,R0~R8 竣工,全部逐批提交)
+## R 阶段进度(2026-08-06,R0~R9 竣工,全部逐批提交)
 
-按 `docs/plans/graph-id-refactor-plan.md` v2 施工。每批 `cargo test --lib` 579 passed
-(R0 净增 9 个访问器边界用例后只增不减),R1~R7 后与 R8 后各跑一次 fs 数字契约,
-两次全绿:**155518 nodes / 426199 edges / 28284 communities,resolved 271321,
-总耗时 ~35-36.5s(基线 ~48s,无劣化)**。
+按 `docs/plans/graph-id-refactor-plan.md` v2 施工。R0~R8 每批 `cargo test --lib` 579 passed
+(R0 净增 9 个访问器边界用例后只增不减),R9 后 594 passed(净增 15)。
+R1~R7 后与 R8 后各跑一次 fs 数字契约,两次全绿:**155518 nodes / 426199 edges /
+28284 communities,resolved 271321,总耗时 ~35-36.5s(基线 ~48s,无劣化)**;
+R9 后 fs 契约第三次全绿(35.6s,42.6 万边 < 5M 阈值走 SQLite 旧路,逐位不变)。
 
 | 批 | commit | 内容 |
 |---|---|---|
@@ -165,6 +167,27 @@ FTS 惰性重建折中、R10 目标 全内核<15min),接手模型按规格机械
 | R6 | `5c7280c` | handlers find_references 图回退迁移 |
 | R7 | `90221ef` | main/engine 迁移;graph_from_index cross_file 推导改 Node::file()(见下注) |
 | R8 | `9b55c8c` | Graph.nodes/edges 改 pub(crate);新增 get_node_mut/get_edge_mut、nodes_map/edges_map(+_mut)、into_parts、take_nodes/take_edges、meta()/meta_mut()、outgoing()/incoming() 迭代器(旧 Vec 版标 deprecated 且调用点迁净);R1~R7 缺口清单 9 项全部收口 |
+| R9 | `cca3e4e` | serde 定型 roundtrip 测试(旧 JSON 双格式零漂移 + SQLite 冷启动读回)+ M7c 快照持久化:新模块 storage/snapshot.rs(bincode 1.3 全量 MemoryIndex,.tmp 原子 rename),阈值 HOLOGRAM_SNAPSHOT_MIN_EDGES 默认 5M 边,GraphStore::save 漏斗分流、open 优先快照(mtime ≥ hologram.db)、损坏删快照回退 SQLite;FTS 惰性重建(见下注) |
+
+**R9 drivers 验收(阈值 4M 强制快照,存档 stress-real-linux-drivers-r9-snapshot.txt)**:
+图数字与 M4 基线逐项一致(1859750 nodes / 4846727 edges / 384653 communities);
+**快照写入 56.3s(2.44GB,<60s 达标,原 bulk_replace_all 885.6s,15.7×)**;
+db-save 阶段 1247.8s → 382.4s(memory-index build 312.7s + swap+snapshot 69.7s);
+**总耗时 1697.6s → 778.2s(2.2×)**,RSS 峰值 6.2GB(原 9.3GB)。
+
+**R9 两处机制性发现**:
+- fts_nodes 实为 external-content 表(content=nodes),「只直插 FTS 表」实测 0 命中;
+  最终实现为单事务双写 nodes 内容表 + fts_nodes(同 rowid,DROP/重建同步触发器,
+  DDL 随事务回滚),规格钉死点(事务/分批/30s 预算/降级文案含 hologram_explore)全保留。
+- bincode 不支持 serde_json::Value 的 deserialize_any,Node.properties 以 JSON 文本
+  进快照(SnapshotNode 镜像,into_node 解析失败回退空对象)。
+
+**R9 残留风险(规格钉死的 mtime 启发式固有,待规格层面裁决)**:快照模式下任何
+hologram.db 写入(FTS 惰性重建、timeline)在连接关闭触发 WAL checkpoint 时会把
+db mtime 推过快照 → 下次启动走 SQLite 读到 nodes-only 旧图。堵法:meta 表记快照
+代际,或快照加载后对 db 写入做 mtime 补偿。另:engine/mod.rs:503 的
+`.unwrap_or_default()` 会吞掉 FTS 降级 Err 变空结果(批外未动);watcher 增量路径
+from_existing_graph → dirty=true,首个 FTS 查询会触发一次惰性重建(30s 预算兜底,正确但冗余)。
 
 **R7 行为边缘注记**:engine/mod.rs cross_file 推导从「无条件剥冒号尾段」改为
 Node::file()(只剥纯数字行号)。规范 path:line 下完全等价;fs 契约 resolved
@@ -187,9 +210,6 @@ Node::file()(只剥纯数字行号)。规范 path:line 下完全等价;fs 契约
 **R8 后残留死代码**:flows.rs strip_line_suffix(#[allow(dead_code)],测试保留)。
 
 **剩余批次**:
-- R9:serde roundtrip 测试(小)+ M7c 快照持久化(核心;HOLOGRAM_SNAPSHOT_MIN_EDGES
-  默认 5M 边,bincode 全量 MemoryIndex,原子 rename,FTS 惰性重建 30s 预算降级,
-  反序列化失败回退 SQLite)。验收:fs 契约(走旧路零变化)+ drivers 压测
-  (阈值调 4M 强制快照,db-save 1247.8s → <60s)。
 - R10(可选):Graph 容器内部 u32 interning,NodeId 字符串句柄不变;
-  目标全内核 <15min @16GB,需带看门狗压测。
+  目标全内核 <15min @16GB,需带看门狗压测。R9 后 db-save 墙已破,
+  全内核瓶颈回到 community(22M 边规模无数据)与 memory-index build(drivers 312.7s)。
