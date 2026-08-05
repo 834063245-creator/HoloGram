@@ -79,5 +79,7 @@ $BIN --stress-suite                     # small→large 缩放对比
 
 1. ~~DB Save 调查~~ → 已完成(见上"第二轮优化"),35s vs 52s 噪声结论:52s 是真实值
 2. ~~Snippet Extract~~ → 已完成
-3. 决定是否启动内存 interning 重构(全内核规模的入场券)——这是剩下唯一的大项
+3. ~~内存 interning 全量重构~~ → **已否决**(String→u32 波及 ~35 文件/上千访问点,性价比不成立);
+   替代方案见 `docs/plans/graph-id-refactor-plan.md`:M1~M3 内存救场(merger 索引 interning、
+   community 去克隆、parse_cache 门控)+ R0~R10 newtype 分阶段主线,全部按 Agent 可派发批次设计
 4. (可选)bulk_replace 余量:prepared statement 复用 + 边有序插入,预计 18s→12s 量级
