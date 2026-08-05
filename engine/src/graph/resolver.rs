@@ -97,6 +97,15 @@ fn build_indexes(graph: &Graph) -> ResolverIndexes {
 
 /// resolve_name 的记忆化包装。
 /// 键必须包含语言 —— 同名不同语言的引用解析结果不同。
+/// M4: resolver 结构计数 — 定位内核规模的隐性超线性用。
+#[derive(Default)]
+struct ResolveStats {
+    /// resolve_cache 未命中次数（= 唯一 (名, 语言) 数）
+    cache_misses: usize,
+    /// Σ 进入语言过滤的候选列表长度（唯一名 × 候选长度乘积项）
+    candidate_scans: usize,
+}
+
 /// 外层按语言分桶，使命中路径无需为查询分配 String。
 fn cached_resolve_name(
     name: &str,
@@ -104,12 +113,14 @@ fn cached_resolve_name(
     cache: &mut HashMap<Option<&'static str>, HashMap<String, Option<String>>>,
     idx: &ResolverIndexes,
     graph: &Graph,
+    stats: &mut ResolveStats,
 ) -> Option<String> {
     let inner = cache.entry(lang).or_default();
     if let Some(hit) = inner.get(name) {
         return hit.clone();
     }
-    let result = resolve_name(name, &idx.name, &idx.stem, &idx.lang, graph, lang);
+    stats.cache_misses += 1;
+    let result = resolve_name(name, &idx.name, &idx.stem, &idx.lang, graph, lang, stats);
     inner.insert(name.to_string(), result.clone());
     result
 }
@@ -127,6 +138,9 @@ impl CrossFileResolver {
             Option<&'static str>,
             HashMap<String, Option<String>>,
         > = HashMap::new();
+        // M4: 分段计时 + 结构计数,用于定位内核规模的隐性超线性
+        let mut stats = ResolveStats::default();
+        let t_loop = std::time::Instant::now();
 
         let mut resolved = 0usize;
         let mut unresolved_count = 0usize;
@@ -141,7 +155,10 @@ impl CrossFileResolver {
         let mut diag_source_missing: usize = 0;  // source 未找到
         let mut diag_bare_multi: usize = 0;      // 裸名，候选项存在但 best_qualified_match 拒绝（match_len<2）
         let mut diag_dotted_no_suffix: usize = 0;// 点分名，短名存在但后缀不匹配
-        let mut diag_by_kind: HashMap<String, usize> = HashMap::new();
+        let mut diag_by_kind: HashMap<&'static str, usize> = HashMap::new();
+        // M4: infer_language 按 source 记忆化 —— 原实现对每条边
+        // 做全串 to_lowercase 分配(内核 17M 边 × 100+ 字符)。
+        let mut lang_memo: HashMap<&str, Option<&'static str>> = HashMap::new();
 
         for (eid, edge) in &graph.edges {
             let is_usage = edge.kind == EdgeKind::Usage;
@@ -158,11 +175,16 @@ impl CrossFileResolver {
             }
             // 尝试解析 source（如果不在图中）。
             // 使用 edge.source 本身推断 source 语言用于过滤。
-            let src_lang = infer_language(&edge.source);
-            let src_id = if graph.nodes.contains_key(&edge.source) {
-                Some(edge.source.clone())
+            let src_lang = *lang_memo
+                .entry(edge.source.as_str())
+                .or_insert_with(|| infer_language(&edge.source));
+            // M4: Cow 借用 —— 仅命中图外的边才需要 owned 结果,
+            // 原实现对每条边无条件 clone 两个端点 id(内核 ~34M 次)。
+            let src_id: Option<Cow<'_, str>> = if graph.nodes.contains_key(&edge.source) {
+                Some(Cow::Borrowed(edge.source.as_str()))
             } else {
-                cached_resolve_name(&edge.source, src_lang, &mut resolve_cache, &idx, graph)
+                cached_resolve_name(&edge.source, src_lang, &mut resolve_cache, &idx, graph, &mut stats)
+                    .map(Cow::Owned)
             };
 
             // 尝试解析 target（如果不在图中）。
@@ -173,22 +195,23 @@ impl CrossFileResolver {
                 Some(id) if id != edge.source => infer_language(id).or(src_lang),
                 _ => src_lang,
             };
-            let tgt_id = if graph.nodes.contains_key(&edge.target) {
-                Some(edge.target.clone())
+            let tgt_id: Option<Cow<'_, str>> = if graph.nodes.contains_key(&edge.target) {
+                Some(Cow::Borrowed(edge.target.as_str()))
             } else {
-                cached_resolve_name(&edge.target, tgt_lang, &mut resolve_cache, &idx, graph)
+                cached_resolve_name(&edge.target, tgt_lang, &mut resolve_cache, &idx, graph, &mut stats)
+                    .map(Cow::Owned)
             };
 
             let src_ok = src_id.is_some();
             let tgt_ok = tgt_id.is_some();
 
-            if let (Some(s), Some(t)) = (src_id, tgt_id) {
+            if let (Some(s), Some(t)) = (src_id.as_deref(), tgt_id.as_deref()) {
                 if s != edge.source || t != edge.target {
                     // 边目标已改变 — 创建解析后的版本
                     let mut new_edge = edge.clone();
                     new_edge.id = format!("{}_resolved", edge.id);
-                    new_edge.source = s;
-                    new_edge.target = t;
+                    new_edge.source = s.to_string();
+                    new_edge.target = t.to_string();
                     new_edge.cross_file = true;
                     new_edges.push(new_edge);
                     to_remove.push(eid.clone());
@@ -197,7 +220,7 @@ impl CrossFileResolver {
             } else {
                 unresolved_count += 1;
                 // ── 分类失败原因 ──
-                *diag_by_kind.entry(format!("{:?}", edge.kind)).or_default() += 1;
+                *diag_by_kind.entry(edge.kind.as_str()).or_default() += 1;
                 if !src_ok && !graph.nodes.contains_key(&edge.source) {
                     diag_source_missing += 1;
                 }
@@ -238,7 +261,7 @@ impl CrossFileResolver {
                 diag_bare_multi, diag_dotted_no_suffix, diag_source_missing
             );
             // 未解析边中前 5 种 edge kind
-            let mut kind_counts: Vec<(String, usize)> = diag_by_kind.into_iter().collect();
+            let mut kind_counts: Vec<(&str, usize)> = diag_by_kind.into_iter().collect();
             kind_counts.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
             let top_kinds: Vec<String> = kind_counts.iter().take(5)
                 .map(|(k, c)| format!("{}={}", k, c))
@@ -247,6 +270,8 @@ impl CrossFileResolver {
         }
 
         // 移除旧的未解析边，添加已解析的边
+        let loop_secs = t_loop.elapsed().as_secs_f64();
+        let t_wb = std::time::Instant::now();
         for eid in &to_remove {
             graph.remove_edge(eid);
         }
@@ -265,11 +290,13 @@ impl CrossFileResolver {
                 }));
             }
         }
+        let wb_secs = t_wb.elapsed().as_secs_f64();
 
         // 清理：移除端点不存在的跨文件边。
         // 文件内边（Usage、Writes、同文件 Calls）的 target 是裸名
         // 而非 node ID — 它们原样有效。
         // 歧义边（上面标记的）保留供用户/LSP 解析。
+        let t_orphan = std::time::Instant::now();
         let orphan_edges: Vec<String> = graph
             .edges
             .iter()
@@ -291,6 +318,13 @@ impl CrossFileResolver {
         for eid in &orphan_edges {
             graph.remove_edge(eid);
         }
+        let orphan_secs = t_orphan.elapsed().as_secs_f64();
+        eprintln!(
+            "[cross-file] loop {:.1}s (misses={}, cand_scans={}) | writeback {:.1}s (+{} -{} edges) | orphan {:.1}s (-{} edges)",
+            loop_secs, stats.cache_misses, stats.candidate_scans,
+            wb_secs, resolved, to_remove.len(),
+            orphan_secs, orphan_edges.len()
+        );
 
         if unresolved_count > 0 || !orphan_edges.is_empty() || !ambiguous_edges.is_empty() {
             if unresolved_count > 0 {
@@ -406,17 +440,17 @@ fn candidate_lang(
 /// 将候选项过滤为匹配给定语言的候选项（如果已知）。
 /// 返回匹配候选项的引用 Vec。
 /// 如果 `lang` 为 None 或没有同语言候选项，则返回所有候选项。
+/// M4: `all` Vec 改为惰性回退 —— 命中同语言时不再做无谓的全量收集。
 fn filter_by_language<'a>(
     candidates: &'a [String],
     lang: Option<&str>,
     lang_map: &HashMap<String, Option<&'static str>>,
 ) -> Vec<&'a String> {
-    let all: Vec<&String> = candidates.iter().collect();
     let same_lang: Vec<&String> = candidates
         .iter()
         .filter(|c| lang == candidate_lang(c, lang_map))
         .collect();
-    if same_lang.is_empty() { all } else { same_lang }
+    if same_lang.is_empty() { candidates.iter().collect() } else { same_lang }
 }
 
 /// 尝试将名称引用解析为实际的 node ID。
@@ -427,6 +461,7 @@ fn resolve_name(
     lang_map: &HashMap<String, Option<&'static str>>,
     graph: &Graph,
     source_lang: Option<&str>,
+    stats: &mut ResolveStats,
 ) -> Option<String> {
     // ── 策略 1：精确匹配 ──
     if graph.nodes.contains_key(name) {
@@ -437,6 +472,7 @@ fn resolve_name(
     // 适用于裸 fn/class 名："fn_a" → "a.rs.fn_a"
     let short = short_name(name);
     if let Some(candidates) = name_index.get(&short) {
+        stats.candidate_scans += candidates.len();
         let filtered = filter_by_language(candidates, source_lang, lang_map);
         if filtered.len() == 1 && !name.contains('.') {
             return Some(filtered[0].clone());
@@ -459,6 +495,7 @@ fn resolve_name(
     let stem = file_stem(name);
     if stem != short {
         if let Some(candidates) = stem_index.get(&stem) {
+            stats.candidate_scans += candidates.len();
             let filtered = filter_by_language(candidates, source_lang, lang_map);
             if filtered.len() == 1 {
                 return Some(filtered[0].clone());
@@ -487,6 +524,7 @@ fn resolve_name(
     if normalized.as_ref() != name {
         let short_norm = short_name(&normalized);
         if let Some(candidates) = name_index.get(&short_norm) {
+            stats.candidate_scans += candidates.len();
             let filtered = filter_by_language(candidates, source_lang, lang_map);
             if filtered.len() == 1 {
                 return Some(filtered[0].clone());
@@ -518,6 +556,7 @@ fn resolve_name(
             stripped = stripped[dot_pos + 1..].to_string();
             let short = short_name(&stripped);
             if let Some(candidates) = name_index.get(&short) {
+                stats.candidate_scans += candidates.len();
                 let filtered = filter_by_language(candidates, source_lang, lang_map);
                 if filtered.len() == 1 {
                     return Some(filtered[0].clone());
@@ -540,16 +579,23 @@ fn resolve_name(
 /// 当多个节点共享同一短名称时选择最佳候选项。
 /// "models.User" 对比候选项 ["auth.models.User", "shop.models.User"]
 /// → 按后缀匹配 "auth.models.User"（两者都以 "models.User" 结尾）。
+/// M4: 迭代器后缀比较,替代逐候选 rsplit().collect::<Vec>() 分配风暴。
 fn best_qualified_match(name: &str, candidates: &[&String]) -> Option<String> {
-    let name_parts: Vec<&str> = name.rsplit('.').collect();
+    let name_len = name.split('.').count();
     let mut best: Option<&&String> = None;
     let mut best_score = 0usize;
 
     for candidate in candidates {
-        let cand_parts: Vec<&str> = candidate.rsplit('.').collect();
-        let match_len = name_parts.len().min(cand_parts.len());
-        if match_len >= 2 && name_parts[..match_len] == cand_parts[..match_len] {
-            let score = cand_parts.len(); // 完整路径越长 = 限定程度越高
+        let cand_len = candidate.split('.').count();
+        let match_len = name_len.min(cand_len);
+        // 语义等价原实现:rsplit 后前 match_len 段(自尾端)全部相等
+        if match_len >= 2
+            && name.rsplit('.')
+                .zip(candidate.rsplit('.'))
+                .take(match_len)
+                .all(|(a, b)| a == b)
+        {
+            let score = cand_len; // 完整路径越长 = 限定程度越高
             if score > best_score {
                 best_score = score;
                 best = Some(candidate);
@@ -581,46 +627,42 @@ fn best_bare_match(
 
     // 评分：lang_match * 100000 + kind_prio * 1000 + 路径深度
     // 同语言候选项始终优先于跨语言候选项。
-    let scored: Vec<(&&String, usize)> = candidates
-        .iter()
-        .filter_map(|c| {
-            let kind_prio = match graph.nodes.get(*c).map(|n| &n.kind) {
-                Some(NodeKind::Function) => 0,
-                Some(NodeKind::Class) => 1,
-                Some(NodeKind::Symbol) => 2,
-                Some(NodeKind::Variable) => 3,
-                _ => 4,
-            };
-            let depth = c.split('.').count();
-            let lang_bonus = if source_lang.is_some() && candidate_lang(c, lang_map) == source_lang {
-                100000
-            } else {
-                0
-            };
-            Some((c, lang_bonus + kind_prio * 1000 + depth))
-        })
-        .collect();
+    // M4: 单遍扫描,不分配 scored/tied Vec —— 语义等价:
+    // 取最小分候选(并列保持首个),最小分有并列 → None(歧义)。
+    let mut best: Option<&&String> = None;
+    let mut best_score = usize::MAX;
+    let mut tied = false;
 
-    if scored.is_empty() {
+    for c in candidates {
+        let kind_prio = match graph.nodes.get(*c).map(|n| &n.kind) {
+            Some(NodeKind::Function) => 0,
+            Some(NodeKind::Class) => 1,
+            Some(NodeKind::Symbol) => 2,
+            Some(NodeKind::Variable) => 3,
+            _ => 4,
+        };
+        let depth = c.split('.').count();
+        let lang_bonus = if source_lang.is_some() && candidate_lang(c, lang_map) == source_lang {
+            100000
+        } else {
+            0
+        };
+        let score = lang_bonus + kind_prio * 1000 + depth;
+        if score < best_score {
+            best_score = score;
+            best = Some(c);
+            tied = false;
+        } else if score == best_score {
+            tied = true;
+        }
+    }
+
+    if tied {
+        tracing::debug!("best_bare_match: candidates with same score — ambiguous, returning None");
         return None;
     }
 
-    let min_score = scored.iter().map(|(_, s)| *s).min().unwrap();
-    let tied: Vec<String> = scored.iter()
-        .filter(|(_, s)| *s == min_score)
-        .map(|(c, _)| (**c).clone())
-        .collect();
-
-    if tied.len() > 1 {
-        tracing::debug!(
-            candidates = ?tied.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-            "best_bare_match: {} candidates with same score — ambiguous, returning None",
-            tied.len()
-        );
-        return None;
-    }
-
-    tied.first().cloned()
+    best.map(|c| (*c).clone())
 }
 
 #[cfg(test)]
@@ -1149,7 +1191,7 @@ mod tests {
 
         // 一致性基准：绕过缓存，用同一索引直接调 resolve_name
         let idx = build_indexes(&g);
-        let expected = resolve_name("read", &idx.name, &idx.stem, &idx.lang, &g, Some("rust"));
+        let expected = resolve_name("read", &idx.name, &idx.stem, &idx.lang, &g, Some("rust"), &mut ResolveStats::default());
         assert_eq!(expected.as_deref(), Some("w.rs.read"));
 
         let start = Instant::now();
