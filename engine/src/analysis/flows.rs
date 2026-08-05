@@ -34,13 +34,17 @@ fn strip_line_suffix(loc: &str) -> &str {
 
 /// 构建 CALLS 边的邻接索引：source_node_id → (target_node_id, edge_id) 列表。
 /// 仅构建一次，供入口点检测和 Flow 追踪共用，避免 O(V×E) 扫描。
-fn build_calls_adjacency(graph: &crate::graph::Graph) -> HashMap<String, Vec<(String, String)>> {
-    let mut adj: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for edge in graph.edges.values() {
+/// M6 (2026-08-06): 全借用零克隆 —— 原实现对每条 Calls 边克隆
+/// source+target+edge.id 三个 String（全内核百万级 Calls 边 ≈ 2GB 瞬时）。
+/// 入参取 edges 字段而非整个 Graph：返回值借用 edges，调用方
+/// 仍可 mut 访问 graph.nodes（字段级分裂借用）。
+fn build_calls_adjacency(edges: &HashMap<String, crate::graph::Edge>) -> HashMap<&str, Vec<(&str, &str)>> {
+    let mut adj: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for edge in edges.values() {
         if edge.kind == EdgeKind::Calls {
-            adj.entry(edge.source.clone())
+            adj.entry(edge.source.as_str())
                 .or_default()
-                .push((edge.target.clone(), edge.id.clone()));
+                .push((edge.target.as_str(), edge.id.as_str()));
         }
     }
     adj
@@ -49,11 +53,12 @@ fn build_calls_adjacency(graph: &crate::graph::Graph) -> HashMap<String, Vec<(St
 /// 构建 CALLS 边的反向入度索引：target_node_id → 入边 CALLS 数量。
 /// 一次遍历 O(E)，供入口点检测 O(1) 查询 —— 替代逐节点全边扫描
 /// （O(N×E) 字符串比较，压测中占 Flow 阶段 80%+ 耗时）。
-fn build_calls_indegree(graph: &crate::graph::Graph) -> HashMap<String, usize> {
-    let mut indegree: HashMap<String, usize> = HashMap::new();
-    for edge in graph.edges.values() {
+/// M6: 同样借用化，不再克隆 target。
+fn build_calls_indegree(edges: &HashMap<String, crate::graph::Edge>) -> HashMap<&str, usize> {
+    let mut indegree: HashMap<&str, usize> = HashMap::new();
+    for edge in edges.values() {
         if edge.kind == EdgeKind::Calls {
-            *indegree.entry(edge.target.clone()).or_default() += 1;
+            *indegree.entry(edge.target.as_str()).or_default() += 1;
         }
     }
     indegree
@@ -82,8 +87,8 @@ fn is_entry_point_name(name: &str) -> bool {
 /// 3. 零 CALLS 入度非测试函数 — 回退方案
 fn detect_entry_points(
     graph: &crate::graph::Graph,
-    calls_adj: &HashMap<String, Vec<(String, String)>>,
-    calls_indegree: &HashMap<String, usize>,
+    calls_adj: &HashMap<&str, Vec<(&str, &str)>>,
+    calls_indegree: &HashMap<&str, usize>,
 ) -> Vec<(String, String, Option<String>)> {
     // 返回 (node_id, entry_kind, framework_or_none) 元组
     let mut entries: Vec<(String, String, Option<String>)> = Vec::new();
@@ -103,11 +108,11 @@ fn detect_entry_points(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         // 沿出边 CALLS 边查找实际的 handler 节点
-        if let Some(outgoing) = calls_adj.get(nid) {
+        if let Some(outgoing) = calls_adj.get(nid.as_str()) {
             for (target, _) in outgoing {
-                if !seen.contains(target) {
-                    seen.insert(target.clone());
-                    entries.push((target.clone(), "framework_route".into(), framework.clone()));
+                if !seen.contains(*target) {
+                    seen.insert(target.to_string());
+                    entries.push((target.to_string(), "framework_route".into(), framework.clone()));
                 }
             }
         }
@@ -127,7 +132,7 @@ fn detect_entry_points(
             continue;
         }
         // 反向索引 O(1) 查入边 CALLS 数量(逐节点全边扫描的 O(N×E) 已移除)
-        let call_incoming = calls_indegree.get(nid).copied().unwrap_or(0);
+        let call_incoming = calls_indegree.get(nid.as_str()).copied().unwrap_or(0);
         let is_entry_name = is_entry_point_name(name);
         if call_incoming == 0 || is_entry_name {
             let kind = if is_entry_name {
@@ -150,7 +155,7 @@ fn detect_entry_points(
 /// 从入口点沿 CALLS 边前向 BFS，收集完整的
 /// 调用链（最多 `max_depth` 跳）。返回 (node_ids, edge_ids, depth)。
 fn trace_flow(
-    calls_adj: &HashMap<String, Vec<(String, String)>>,
+    calls_adj: &HashMap<&str, Vec<(&str, &str)>>,
     entry_node_id: &str,
     max_depth: u32,
 ) -> (Vec<String>, Vec<String>, u32) {
@@ -169,16 +174,16 @@ fn trace_flow(
             continue;
         }
 
-        if let Some(outgoing) = calls_adj.get(&current) {
+        if let Some(outgoing) = calls_adj.get(current.as_str()) {
             // 仅在确实找到被调用者时更新 max_reached
             max_reached = max_reached.max(depth + 1);
 
             for (target, edge_id) in outgoing {
-                if !seen.contains(target) {
-                    seen.insert(target.clone());
-                    visited_nodes.push(target.clone());
-                    visited_edges.push(edge_id.clone());
-                    queue.push_back((target.clone(), depth + 1));
+                if !seen.contains(*target) {
+                    seen.insert(target.to_string());
+                    visited_nodes.push(target.to_string());
+                    visited_edges.push(edge_id.to_string());
+                    queue.push_back((target.to_string(), depth + 1));
                 }
             }
         }
@@ -253,8 +258,8 @@ fn compute_criticality(
 /// 返回有意义的 Flow 数量（含 ≥1 个被调用者的入口点）。
 /// 完整的 Flow 元数据持久化在每个入口点节点的 `properties["flow"]` 中。
 pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
-    let calls_adj = build_calls_adjacency(&result.graph);
-    let calls_indegree = build_calls_indegree(&result.graph);
+    let calls_adj = build_calls_adjacency(&result.graph.edges);
+    let calls_indegree = build_calls_indegree(&result.graph.edges);
     let entries = detect_entry_points(&result.graph, &calls_adj, &calls_indegree);
 
     // 上限 5000 条 Flow — 超过即为噪声，非信号。
@@ -487,7 +492,7 @@ mod tests {
         // 非 CALLS 边应被排除
         graph.add_edge(Edge::new("a::b::imports", "a", "b", EdgeKind::Imports));
 
-        let adj = build_calls_adjacency(&graph);
+        let adj = build_calls_adjacency(&graph.edges);
         let a_out = adj.get("a").unwrap();
         assert_eq!(a_out.len(), 2, "should have 2 CALLS edges from a");
         assert!(adj.get("b").is_none(), "b has no outgoing CALLS");
