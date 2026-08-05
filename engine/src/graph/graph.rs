@@ -26,10 +26,11 @@ use super::{Edge, Node};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Graph {
+    // R8: 字段私有化第一步 —— pub(crate),跨 crate 访问一律走访问器。
     #[serde(default)]
-    pub nodes: HashMap<String, Node>,
+    pub(crate) nodes: HashMap<String, Node>,
     #[serde(default)]
-    pub edges: HashMap<String, Edge>,
+    pub(crate) edges: HashMap<String, Edge>,
     #[serde(default)]
     pub meta: serde_json::Value,
 }
@@ -101,6 +102,10 @@ impl Graph {
         self.nodes.get(id)
     }
 
+    pub fn get_node_mut(&mut self, id: &str) -> Option<&mut Node> {
+        self.nodes.get_mut(id)
+    }
+
     pub fn remove_node(&mut self, id: &str) -> Option<Node> {
         let edge_ids: Vec<String> = self
             .edges
@@ -156,6 +161,21 @@ impl Graph {
         self.edges.get(id)
     }
 
+    pub fn get_edge_mut(&mut self, id: &str) -> Option<&mut Edge> {
+        self.edges.get_mut(id)
+    }
+
+    /// O(E) 全扫出边,惰性迭代 —— 替代 outgoing_edges 的 Vec 分配。
+    pub fn outgoing<'a>(&'a self, node_id: &'a str) -> impl Iterator<Item = &'a Edge> {
+        self.edges.values().filter(move |e| e.source == node_id)
+    }
+
+    /// O(E) 全扫入边,惰性迭代 —— 替代 incoming_edges 的 Vec 分配。
+    pub fn incoming<'a>(&'a self, node_id: &'a str) -> impl Iterator<Item = &'a Edge> {
+        self.edges.values().filter(move |e| e.target == node_id)
+    }
+
+    #[deprecated(note = "use outgoing()/incoming()")]
     pub fn outgoing_edges(&self, node_id: &str) -> Vec<&Edge> {
         self.edges
             .values()
@@ -163,6 +183,7 @@ impl Graph {
             .collect()
     }
 
+    #[deprecated(note = "use outgoing()/incoming()")]
     pub fn incoming_edges(&self, node_id: &str) -> Vec<&Edge> {
         self.edges
             .values()
@@ -195,6 +216,51 @@ impl Graph {
 
     pub fn edge_ids(&self) -> impl Iterator<Item = &str> {
         self.edges.keys().map(|k| k.as_str())
+    }
+
+    // ── 表级访问器(R8)—— 字段私有化后的整表出入口 ──
+
+    /// 字段级只读借用 —— 供借用分裂场景(如同时 &nodes 与 &mut edges)。
+    pub fn nodes_map(&self) -> &HashMap<String, Node> {
+        &self.nodes
+    }
+
+    /// 字段级只读借用 —— 供借用分裂场景。
+    pub fn edges_map(&self) -> &HashMap<String, Edge> {
+        &self.edges
+    }
+
+    /// 字段级可变借用 —— 供 rayon par_iter_mut 等批量可变场景。
+    pub fn nodes_map_mut(&mut self) -> &mut HashMap<String, Node> {
+        &mut self.nodes
+    }
+
+    /// 字段级可变借用 —— 供 rayon par_iter_mut 等批量可变场景。
+    pub fn edges_map_mut(&mut self) -> &mut HashMap<String, Edge> {
+        &mut self.edges
+    }
+
+    /// 整表按值取出(消耗 Graph,meta 随壳丢弃)。
+    pub fn into_parts(self) -> (HashMap<String, Node>, HashMap<String, Edge>) {
+        (self.nodes, self.edges)
+    }
+
+    /// std::mem::take 语义 —— 取走节点表,原位留空表。
+    pub fn take_nodes(&mut self) -> HashMap<String, Node> {
+        std::mem::take(&mut self.nodes)
+    }
+
+    /// std::mem::take 语义 —— 取走边表,原位留空表。
+    pub fn take_edges(&mut self) -> HashMap<String, Edge> {
+        std::mem::take(&mut self.edges)
+    }
+
+    pub fn meta(&self) -> &serde_json::Value {
+        &self.meta
+    }
+
+    pub fn meta_mut(&mut self) -> &mut serde_json::Value {
+        &mut self.meta
     }
 }
 

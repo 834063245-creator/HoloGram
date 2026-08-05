@@ -24,8 +24,10 @@ fn compute_coupling_impl(graph: &mut Graph, incremental: bool) {
     // M5: 全借用零分配 —— 原实现对每个节点克隆 id + pkg 两个 String
     // （内核 249 万节点 ≈ 500 万次分配），边循环再对每条边做两次
     // 110B 字符串哈希查找。pkg 只取首段切片，不为切片分配。
-    let node_pkg: HashMap<&str, &str> = graph
-        .nodes
+    // R8: 节点表临时 take 到局部 —— node_pkg 借用局部表而非 Graph,
+    // 与 edges_map_mut() 的可变借用错开;循环结束后原表放回(O(1) 移动)。
+    let nodes = graph.take_nodes();
+    let node_pkg: HashMap<&str, &str> = nodes
         .values()
         .map(|n| {
             let loc = n.location.as_deref().unwrap_or("");
@@ -40,7 +42,7 @@ fn compute_coupling_impl(graph: &mut Graph, incremental: bool) {
 
     // M5: rayon 并行 —— 每条边独立写自己的 coupling_depth,无共享状态。
     // 内核 17M 边 × 2 次大表哈希查找是常数大头,单机 6 线程摊薄。
-    graph.edges.par_iter_mut().for_each(|(_, edge)| {
+    graph.edges_map_mut().par_iter_mut().for_each(|(_, edge)| {
         // 增量模式：跳过已被 DI reflection 分类过的边（L3/L4）
         if incremental && edge.coupling_depth > 0 {
             return;
@@ -58,6 +60,10 @@ fn compute_coupling_impl(graph: &mut Graph, incremental: bool) {
             EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences | EdgeKind::Throws => 4, // L4：时序
         };
     });
+
+    // node_pkg 随作用域结束,节点表原样放回。
+    drop(node_pkg);
+    *graph.nodes_map_mut() = nodes;
 }
 
 #[cfg(test)]

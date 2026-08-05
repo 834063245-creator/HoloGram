@@ -283,7 +283,7 @@ impl CrossFileResolver {
 
         // 将歧义边标记为待用户/LSP 解析，而非删除。
         for eid in &ambiguous_edges {
-            if let Some(edge) = graph.edges.get_mut(eid) {
+            if let Some(edge) = graph.get_edge_mut(eid) {
                 edge.metadata = Some(serde_json::json!({
                     "ambiguous": true,
                     "original_target": edge.target.clone(),

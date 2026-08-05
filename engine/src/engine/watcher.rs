@@ -249,8 +249,9 @@ impl Engine {
                     warn!("[engine watcher] persist voted community_ids failed: {}", e);
                 }
             }
+            let (graph_nodes, graph_edges) = graph.into_parts();
             let final_idx =
-                MemoryIndex::from_existing_graph(graph.nodes, graph.edges);
+                MemoryIndex::from_existing_graph(graph_nodes, graph_edges);
             let synth_ms = synth_start.elapsed().as_millis();
             info!(
                 "[engine watcher] post-incremental synthesis (neighbor vote): {} assigned, {}ms",

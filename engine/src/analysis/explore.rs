@@ -454,8 +454,7 @@ fn bfs_path(
         }
 
         // 检查出边
-        let out_edges = ctx.graph.outgoing_edges(&cur);
-        for edge in &out_edges {
+        for edge in ctx.graph.outgoing(&cur) {
             if explore_count >= MAX_EXPLORE {
                 break;
             }
@@ -472,8 +471,7 @@ fn bfs_path(
             }
         }
         // 检查入边（数据逆向流动）
-        let in_edges = ctx.graph.incoming_edges(&cur);
-        for edge in &in_edges {
+        for edge in ctx.graph.incoming(&cur) {
             if explore_count >= MAX_EXPLORE {
                 break;
             }
@@ -509,7 +507,7 @@ fn path_depth(prev: &HashMap<String, String>, from: &str, cur: &str) -> usize {
 }
 
 fn find_edge_kind(graph: &Graph, from: &str, to: &str) -> String {
-    for edge in graph.outgoing_edges(from) {
+    for edge in graph.outgoing(from) {
         if edge.target == to {
             return edge.kind.as_str().to_string();
         }
@@ -527,8 +525,7 @@ fn compute_blast_radius(ctx: &ExploreCtx) -> serde_json::Value {
     let mut seen = HashSet::new();
 
     for node in &ctx.named_nodes {
-        let incoming = ctx.graph.incoming_edges(&node.id);
-        for edge in &incoming {
+        for edge in ctx.graph.incoming(&node.id) {
             if let Some(src) = ctx.graph.get_node(&edge.source) {
                 let (file, line) = parse_location(&src.location);
                 if seen.insert(src.id.clone()) {
@@ -572,7 +569,7 @@ fn compute_relationships(ctx: &ExploreCtx) -> serde_json::Value {
     let mut by_kind: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
 
     for node in &ctx.named_nodes {
-        for edge in ctx.graph.outgoing_edges(&node.id) {
+        for edge in ctx.graph.outgoing(&node.id) {
             if ctx.named_ids.contains(&edge.target) {
                 let kind = edge.kind.as_str().to_string();
                 by_kind.entry(kind).or_default().push(json!({
@@ -583,7 +580,7 @@ fn compute_relationships(ctx: &ExploreCtx) -> serde_json::Value {
                 }));
             }
         }
-        for edge in ctx.graph.incoming_edges(&node.id) {
+        for edge in ctx.graph.incoming(&node.id) {
             if ctx.named_ids.contains(&edge.source) {
                 let kind = edge.kind.as_str().to_string();
                 by_kind.entry(kind).or_default().push(json!({
@@ -688,7 +685,7 @@ fn read_source_sections(ctx: &ExploreCtx, truncated: &mut bool, hint: &mut Strin
 
     // 也尝试从 blast radius 节点（邻居）读取文件
     for node in &ctx.named_nodes {
-        for edge in ctx.graph.outgoing_edges(&node.id) {
+        for edge in ctx.graph.outgoing(&node.id) {
             if total_chars >= max_output || file_sections.len() >= max_files {
                 *truncated = true;
                 break;
@@ -888,16 +885,14 @@ fn compute_alerts(ctx: &ExploreCtx) -> serde_json::Value {
     // 线程冲突 — 检查连接到命名节点的 Medium 节点
     let mut thread_conflicts = Vec::new();
     for node in &ctx.named_nodes {
-        for edge in ctx.graph.outgoing_edges(&node.id) {
+        for edge in ctx.graph.outgoing(&node.id) {
             if let Some(target) = ctx.graph.get_node(&edge.target) {
                 if matches!(target.kind, NodeKind::Medium) {
-                    let accessors: Vec<_> = ctx.graph.incoming_edges(&target.id)
-                        .iter()
+                    let accessors: Vec<_> = ctx.graph.incoming(&target.id)
                         .filter_map(|e| ctx.graph.get_node(&e.source).map(|n| n.name.clone()))
                         .collect();
                     if accessors.len() >= 2 {
-                        let has_write = ctx.graph.incoming_edges(&target.id)
-                            .iter()
+                        let has_write = ctx.graph.incoming(&target.id)
                             .any(|e| matches!(e.kind, EdgeKind::Writes));
                         thread_conflicts.push(json!({
                             "resource": target.name,

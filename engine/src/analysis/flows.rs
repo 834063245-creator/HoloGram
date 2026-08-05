@@ -38,8 +38,8 @@ fn strip_line_suffix(loc: &str) -> &str {
 /// 仅构建一次，供入口点检测和 Flow 追踪共用，避免 O(V×E) 扫描。
 /// M6 (2026-08-06): 全借用零克隆 —— 原实现对每条 Calls 边克隆
 /// source+target+edge.id 三个 String（全内核百万级 Calls 边 ≈ 2GB 瞬时）。
-/// 入参取 edges 字段而非整个 Graph：返回值借用 edges，调用方
-/// 仍可 mut 访问 graph.nodes（字段级分裂借用）。
+/// 入参取边表（经 `Graph::edges_map()`）而非整个 Graph：返回值借用边表，
+/// 零克隆；借用存活期间调用方只读 Graph，节点写回延至借用结束后统一执行。
 fn build_calls_adjacency(edges: &HashMap<String, crate::graph::Edge>) -> HashMap<&str, Vec<(&str, &str)>> {
     let mut adj: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
     for edge in edges.values() {
@@ -260,13 +260,16 @@ fn compute_criticality(
 /// 返回有意义的 Flow 数量（含 ≥1 个被调用者的入口点）。
 /// 完整的 Flow 元数据持久化在每个入口点节点的 `properties["flow"]` 中。
 pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
-    let calls_adj = build_calls_adjacency(&result.graph.edges);
-    let calls_indegree = build_calls_indegree(&result.graph.edges);
+    let calls_adj = build_calls_adjacency(result.graph.edges_map());
+    let calls_indegree = build_calls_indegree(result.graph.edges_map());
     let entries = detect_entry_points(&result.graph, &calls_adj, &calls_indegree);
 
     // 上限 5000 条 Flow — 超过即为噪声，非信号。
     let entry_limit = entries.len().min(5000);
     let mut flow_count = 0usize;
+    // 两个索引借用整张 Graph，循环内只能只读访问；
+    // Flow 元数据写回在借用结束后统一执行。
+    let mut pending_flows: Vec<(String, serde_json::Value)> = Vec::new();
 
     for (idx, (entry_id, kind, framework)) in entries.into_iter().take(entry_limit).enumerate() {
         let (node_ids, edge_ids, depth) = trace_flow(&calls_adj, &entry_id, 20);
@@ -288,21 +291,25 @@ pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
         // 将 Flow 元数据持久化到入口点节点。
         // node_ids 存储在此处，因为 handler（get_flow, get_affected_flows）
         // 需要完整路径 — MemoryIndex 中没有独立的 Flow 存储区。
-        if let Some(node) = result.graph.nodes.get_mut(&entry_id) {
-            node.properties["flow"] = serde_json::json!({
-                "id": idx,
-                "entry_kind": kind,
-                "framework": framework,
-                "criticality": criticality,
-                "depth": depth,
-                "node_count": node_ids.len(),
-                "file_count": file_count,
-                "l4_count": l4_count,
-                "cross_community": cross_comm,
-                "node_ids": node_ids,
-            });
-        }
+        pending_flows.push((entry_id, serde_json::json!({
+            "id": idx,
+            "entry_kind": kind,
+            "framework": framework,
+            "criticality": criticality,
+            "depth": depth,
+            "node_count": node_ids.len(),
+            "file_count": file_count,
+            "l4_count": l4_count,
+            "cross_community": cross_comm,
+            "node_ids": node_ids,
+        })));
         flow_count += 1;
+    }
+
+    for (entry_id, flow) in pending_flows {
+        if let Some(node) = result.graph.get_node_mut(&entry_id) {
+            node.properties["flow"] = flow;
+        }
     }
 
     flow_count

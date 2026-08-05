@@ -262,7 +262,7 @@ impl Engine {
             })
             .collect();
         // 并行遍历节点 — 尝试将 node.id 作为 module 前缀，逐步剥离
-        let snippets_extracted: usize = result.graph.nodes.par_iter_mut()
+        let snippets_extracted: usize = result.graph.nodes_map_mut().par_iter_mut()
             .map(|(_, node)| {
                 if node.snippet.is_some() { return 0usize; }
                 let mut key: &str = node.id.as_str();
@@ -344,7 +344,7 @@ impl Engine {
         }
         for (comm, &stable_id) in communities.iter().zip(stable_ids.iter()) {
             for node_id in comm {
-                if let Some(node) = result.graph.nodes.get_mut(node_id) {
+                if let Some(node) = result.graph.get_node_mut(node_id) {
                     node.community_id = Some(stable_id);
                 }
             }
@@ -395,8 +395,8 @@ impl Engine {
         // 8. 写入 GraphStore（MemoryIndex + SQLite）
         set_progress("写入数据库", 0, 0, "");
         let stage_start = std::time::Instant::now();
-        let graph_nodes = std::mem::take(&mut result.graph.nodes);
-        let graph_edges = std::mem::take(&mut result.graph.edges);
+        let graph_nodes = result.graph.take_nodes();
+        let graph_edges = result.graph.take_edges();
         let idx = MemoryIndex::from_existing_graph(graph_nodes, graph_edges);
         eprintln!("[engine]   db-save: memory-index build {:.1}s",
             stage_start.elapsed().as_secs_f64());

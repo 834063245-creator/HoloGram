@@ -65,8 +65,8 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
         };
         let node = g.get_node(&resolved).unwrap();
         let nb = query::neighbors(g, &resolved, 1);
-        let incoming: Vec<_> = g.incoming_edges(&resolved).iter().map(|e| edge_to_value(e)).collect();
-        let outgoing: Vec<_> = g.outgoing_edges(&resolved).iter().map(|e| edge_to_value(e)).collect();
+        let incoming: Vec<_> = g.incoming(&resolved).map(edge_to_value).collect();
+        let outgoing: Vec<_> = g.outgoing(&resolved).map(edge_to_value).collect();
         json!({
             "node": node_to_value(node),
             "neighbor_count": nb.len(),

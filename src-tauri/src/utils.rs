@@ -771,20 +771,20 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
         return engine_api::engine_read_graph(|graph| {
             let nc = graph.node_count();
             let ec = graph.edge_count();
-            let nodes: Vec<serde_json::Value> = graph.nodes.values().map(|n| serde_json::json!({
+            let nodes: Vec<serde_json::Value> = graph.nodes_map().values().map(|n| serde_json::json!({
                 "id": n.id, "name": n.name, "type": n.kind.as_str(),
                 "location": n.location, "in_degree": n.in_degree,
                 "out_degree": n.out_degree, "properties": n.properties,
                 "position": n.position, "community_id": n.community_id,
             })).collect();
-            let edges: Vec<serde_json::Value> = graph.edges.values().map(|e| serde_json::json!({
+            let edges: Vec<serde_json::Value> = graph.edges_map().values().map(|e| serde_json::json!({
                 "id": e.id, "source": e.source, "target": e.target,
                 "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
                 "cross_file": e.cross_file,
                 "temporal_delay_sec": e.temporal_delay_sec,
             })).collect();
             let mut comm_map: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
-            for n in graph.nodes.values() {
+            for n in graph.nodes_map().values() {
                 if let Some(cid) = n.community_id {
                     comm_map.entry(cid).or_default().push(&n.id);
                 }
@@ -878,14 +878,14 @@ pub(crate) fn with_index<F: FnOnce(&MemoryIndex) -> serde_json::Value>(f: F) -> 
 /// 仅从 Engine 读取。
 pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String> {
     engine_api::engine_read_graph(|g| {
-        let nodes: Vec<serde_json::Value> = g.nodes.values().map(|n| serde_json::json!({
+        let nodes: Vec<serde_json::Value> = g.nodes_map().values().map(|n| serde_json::json!({
             "id": n.id, "name": n.name, "type": n.kind.as_str(),
             "location": n.location, "in_degree": n.in_degree,
             "out_degree": n.out_degree,
             "properties": n.properties, "position": n.position,
             "community_id": n.community_id,
         })).collect();
-        let edges: Vec<serde_json::Value> = g.edges.values().map(|e| serde_json::json!({
+        let edges: Vec<serde_json::Value> = g.edges_map().values().map(|e| serde_json::json!({
             "id": e.id, "source": e.source, "target": e.target,
             "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
             "cross_file": e.cross_file,
@@ -913,7 +913,7 @@ pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String
         // （在分析阶段已设置），然后仅运行 Phase 2 凝聚。
         // 避免每次序列化时重新运行 Phase 1 detect_communities。
         let mut base_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
-        for n in g.nodes.values() {
+        for n in g.nodes_map().values() {
             if let Some(cid) = n.community_id {
                 base_map.entry(cid).or_default().push(n.id.clone());
             }

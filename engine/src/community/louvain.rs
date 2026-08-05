@@ -876,7 +876,7 @@ pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) -> Vec<S
             })
             .map(|(cid, _)| cid)
         {
-            if let Some(node) = graph.nodes.get_mut(nid) {
+            if let Some(node) = graph.get_node_mut(nid) {
                 node.community_id = Some(best_cid);
                 assigned.push(nid.clone());
             }

@@ -90,7 +90,8 @@ impl GraphStore {
             info!("[store] 从 JSON 迁移: {}", json_path.display());
             match Graph::from_json_file(&json_path.to_string_lossy()) {
                 Ok(g) => {
-                    let idx = MemoryIndex::from_existing_graph(g.nodes, g.edges);
+                    let (g_nodes, g_edges) = g.into_parts();
+                    let idx = MemoryIndex::from_existing_graph(g_nodes, g_edges);
                     let nodes = idx.node_count();
                     let edges = idx.edge_count();
                     // 尝试持久化到 SQLite（失败非致命）
