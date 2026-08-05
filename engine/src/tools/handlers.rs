@@ -1854,8 +1854,8 @@ pub(crate) fn handler_find_references(args: &Value) -> ToolResponse {
 
     // 回退：使用图查找入边引用
     match engine::engine_read_graph(|g| {
-        let _node_ids: Vec<String> = g.nodes.keys().cloned().collect();
-        let refs: Vec<Value> = g.edges.iter()
+        let _node_ids: Vec<String> = g.node_ids().map(|s| s.to_string()).collect();
+        let refs: Vec<Value> = g.edges_iter()
             .take(100)
             .map(|(_, e)| json!({
                 "source": e.source,
