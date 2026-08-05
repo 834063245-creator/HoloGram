@@ -31,7 +31,7 @@ pub fn synthesize_bridge_calls(
 
     // Step 1: 收集所有 Rust command 函数名
     let mut rust_commands: HashMap<String, String> = HashMap::new(); // name → node_id
-    for (nid, node) in graph.nodes.iter() {
+    for (nid, node) in graph.nodes_iter() {
         if node.kind != NodeKind::Function { continue; }
         let loc = match &node.location {
             Some(l) => l,
@@ -42,7 +42,7 @@ pub fn synthesize_bridge_calls(
         // 检查是否在 src-tauri/ 路径下（或不限定路径，看 #[tauri::command] 属性无法从节点获取）
         // 策略：匹配常见的 Tauri command 命名模式 —
         // 这些函数名通常是 snake_case 动词，如 read_file_content、write_file、create_directory
-        rust_commands.insert(node.name.clone(), nid.clone());
+        rust_commands.insert(node.name.clone(), nid.to_string());
     }
 
     // Step 2: 扫描 TS 文件，找 rpc('xxx', ...) 调用
@@ -72,12 +72,12 @@ pub fn synthesize_bridge_calls(
         if !source.contains("rpc") { continue; }
 
         // 找到当前文件中定义的函数（调用者）
-        let caller_nodes: Vec<(String, String)> = graph.nodes.iter()
+        let caller_nodes: Vec<(String, String)> = graph.nodes_iter()
             .filter(|(_, n)| {
                 if n.kind != NodeKind::Function && n.kind != NodeKind::Class { return false; }
                 n.location.as_ref().map_or(false, |l| l.starts_with(file.as_str()) || l.starts_with(&abs_key))
             })
-            .map(|(id, n)| (id.clone(), n.name.clone()))
+            .map(|(id, n)| (id.to_string(), n.name.clone()))
             .collect();
 
         let mut seen_cmds: HashSet<String> = HashSet::new();
@@ -118,13 +118,13 @@ pub fn synthesize_bridge_calls(
 
 /// 在图中查找给定文件路径的 File 节点。
 fn find_file_node(graph: &Graph, file: &str) -> Option<String> {
-    for (id, node) in graph.nodes.iter() {
+    for (id, node) in graph.nodes_iter() {
         if node.kind == NodeKind::File {
             if let Some(ref loc) = node.location {
                 let loc_normalized = loc.replace('\\', "/");
                 let file_normalized = file.replace('\\', "/");
                 if loc_normalized == file_normalized || loc_normalized.ends_with(&file_normalized) {
-                    return Some(id.clone());
+                    return Some(id.to_string());
                 }
             }
         }

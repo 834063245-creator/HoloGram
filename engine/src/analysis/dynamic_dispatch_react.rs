@@ -76,7 +76,7 @@ fn synthesize_jsx_children(graph: &mut Graph, file: &str, source: &str) -> usize
     if parent_id.is_none() { return 0; }
     let parent_id = parent_id.unwrap();
 
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
 
     for caps in re.captures_iter(source) {
@@ -86,7 +86,7 @@ fn synthesize_jsx_children(graph: &mut Graph, file: &str, source: &str) -> usize
         seen.insert(tag.clone());
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name == tag && matches!(node.kind, NodeKind::Function | NodeKind::Class) {
                     graph.add_edge_unchecked(Edge::synthesized(
                         format!("jsx_{}_{}", parent_id, nid),
@@ -108,7 +108,7 @@ fn synthesize_setstate_render(graph: &mut Graph, file: &str, source: &str) -> us
 
     let render_id = {
         let mut rid = None;
-        for node in graph.nodes.values() {
+        for node in graph.nodes_iter().map(|(_, v)| v) {
             if node.name == "render" && node.kind == NodeKind::Function {
                 if let Some(ref loc) = node.location {
                     if loc.starts_with(file) { rid = Some(node.id.clone()); break; }
@@ -137,7 +137,7 @@ fn synthesize_setstate_render(graph: &mut Graph, file: &str, source: &str) -> us
 fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r"dispatch\s*\(\s*(\w+)\s*\(").unwrap();
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
 
     let caller_id = find_first_in_file(graph, file);
@@ -149,7 +149,7 @@ fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize 
         seen.insert(action.clone());
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name == action && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller) = caller_id {
                         graph.add_edge_unchecked(Edge::synthesized(
@@ -171,7 +171,7 @@ fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize 
 fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r"\buse(?:Get|Post|Put|Delete|Patch)(\w+)(?:Query|Mutation)\b").unwrap();
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
 
     let caller_id = find_first_in_file(graph, file);
@@ -183,7 +183,7 @@ fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
         seen.insert(endpoint.clone());
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name.contains(&endpoint) && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller) = caller_id {
                         graph.add_edge_unchecked(Edge::synthesized(
@@ -211,7 +211,7 @@ fn synthesize_nextjs_data_fetch(graph: &mut Graph, file: &str, source: &str) -> 
     if file_id.is_none() { return 0; }
     let file_id = file_id.unwrap();
 
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
 
     for caps in re.captures_iter(source) {
@@ -221,7 +221,7 @@ fn synthesize_nextjs_data_fetch(graph: &mut Graph, file: &str, source: &str) -> 
         seen.insert(func_name.clone());
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name == func_name && node.kind == NodeKind::Function {
                     if let Some(ref loc) = node.location {
                         if loc.starts_with(file) {
@@ -251,7 +251,7 @@ fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usiz
     if file_id.is_none() { return 0; }
     let file_id = file_id.unwrap();
 
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen_create_target: HashSet<String> = HashSet::new();
 
     for caps in re.captures_iter(source) {
@@ -267,7 +267,7 @@ fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usiz
         }
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name == "create" && node.kind == NodeKind::Function {
                     if seen_create_target.contains(nid) { continue; }
                     seen_create_target.insert(nid.clone());
@@ -289,7 +289,7 @@ fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usiz
 
 /// 查找给定文件路径对应的 File 节点。
 fn find_file_node(graph: &Graph, file: &str) -> Option<String> {
-    for node in graph.nodes.values() {
+    for node in graph.nodes_iter().map(|(_, v)| v) {
         if node.kind == NodeKind::File {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {
@@ -302,7 +302,7 @@ fn find_file_node(graph: &Graph, file: &str) -> Option<String> {
 }
 
 fn find_first_in_file(graph: &Graph, file: &str) -> Option<String> {
-    for node in graph.nodes.values() {
+    for node in graph.nodes_iter().map(|(_, v)| v) {
         if matches!(node.kind, NodeKind::Function | NodeKind::Class | NodeKind::File) {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {

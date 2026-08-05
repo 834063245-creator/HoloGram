@@ -387,9 +387,9 @@ fn find_containing_py_function(node: &tree_sitter::Node, source: &str) -> Option
 /// 为给定符号名查找或创建 Graph 节点。
 fn find_or_create_node(graph: &mut Graph, name: &str, file: &str, line: usize) -> String {
     // 尝试查找已有节点
-    for (id, node) in &graph.nodes {
+    for (id, node) in graph.nodes_iter() {
         if node.name == name {
-            return id.clone();
+            return id.to_string();
         }
     }
     // 创建占位节点

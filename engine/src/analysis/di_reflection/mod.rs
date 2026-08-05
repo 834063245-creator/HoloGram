@@ -249,29 +249,29 @@ pub fn detect_eval(
 pub(crate) fn find_or_create_di_node(graph: &mut Graph, name: &str, file: &str, line: usize) -> String {
     let file_lang = infer_language(file);
     // 先尝试精确匹配 — 优先同语言节点
-    for (id, node) in &graph.nodes {
+    for (id, node) in graph.nodes_iter() {
         if node.name == name && file_lang == infer_language(id) {
-            return id.clone();
+            return id.to_string();
         }
     }
     // 回退：不限语言的精确匹配（合成标记可能无语言）
-    for (id, node) in &graph.nodes {
+    for (id, node) in graph.nodes_iter() {
         if node.name == name {
-            return id.clone();
+            return id.to_string();
         }
     }
     // 尝试末尾组件匹配（用于限定名）— 优先同语言
     if let Some(last_part) = name.rsplit('.').next() {
         if last_part != name {
-            for (id, node) in &graph.nodes {
+            for (id, node) in graph.nodes_iter() {
                 if node.name == last_part && file_lang == infer_language(id) {
-                    return id.clone();
+                    return id.to_string();
                 }
             }
             // 回退：不限语言的末尾组件匹配
-            for (id, node) in &graph.nodes {
+            for (id, node) in graph.nodes_iter() {
                 if node.name == last_part {
-                    return id.clone();
+                    return id.to_string();
                 }
             }
         }

@@ -59,7 +59,7 @@ pub fn synthesize_vue_edges(
 fn synthesize_vue_handlers(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r#"(?:@|v-on:)[a-zA-Z][\w-]*(?:\.[\w]+)*\s*=\s*"([^"]+)""#).unwrap();
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
     let caller = find_first_in_file(graph, file);
 
@@ -71,7 +71,7 @@ fn synthesize_vue_handlers(graph: &mut Graph, file: &str, source: &str) -> usize
         seen.insert(fn_name.clone());
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name == fn_name && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller_id) = caller {
                         graph.add_edge_unchecked(Edge::synthesized(
@@ -92,7 +92,7 @@ fn synthesize_vue_handlers(graph: &mut Graph, file: &str, source: &str) -> usize
 fn synthesize_vue_composables(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r#"(?:const|let|var)\s*\{[^}]+\}\s*=\s*(\w+)\s*\("#).unwrap();
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
     let caller = find_first_in_file(graph, file);
 
@@ -103,7 +103,7 @@ fn synthesize_vue_composables(graph: &mut Graph, file: &str, source: &str) -> us
         seen.insert(composable.clone());
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name == composable && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller_id) = caller {
                         graph.add_edge_unchecked(Edge::synthesized(
@@ -124,7 +124,7 @@ fn synthesize_vue_composables(graph: &mut Graph, file: &str, source: &str) -> us
 fn synthesize_vuex_dispatch(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r#"dispatch\s*\(\s*['"]([^'"]+)['"]"#).unwrap();
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
     let caller = find_first_in_file(graph, file);
 
@@ -135,7 +135,7 @@ fn synthesize_vuex_dispatch(graph: &mut Graph, file: &str, source: &str) -> usiz
         seen.insert(action.clone());
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name == action && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller_id) = caller {
                         graph.add_edge_unchecked(Edge::synthesized(
@@ -156,7 +156,7 @@ fn synthesize_vuex_dispatch(graph: &mut Graph, file: &str, source: &str) -> usiz
 fn synthesize_pinia(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
     let re = regex::Regex::new(r#"defineStore\s*\(\s*['"]([^'"]+)['"]"#).unwrap();
-    let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let caller = find_first_in_file(graph, file);
 
     for caps in re.captures_iter(source) {
@@ -167,7 +167,7 @@ fn synthesize_pinia(graph: &mut Graph, file: &str, source: &str) -> usize {
                 .collect::<String>());
 
         for nid in &node_ids {
-            if let Some(node) = graph.nodes.get(nid) {
+            if let Some(node) = graph.get_node(nid) {
                 if node.name == store_fn_name && matches!(node.kind, NodeKind::Function) {
                     if let Some(ref caller_id) = caller {
                         graph.add_edge_unchecked(Edge::synthesized(
@@ -186,7 +186,7 @@ fn synthesize_pinia(graph: &mut Graph, file: &str, source: &str) -> usize {
 }
 
 fn find_first_in_file(graph: &Graph, file: &str) -> Option<String> {
-    for node in graph.nodes.values() {
+    for node in graph.nodes_iter().map(|(_, v)| v) {
         if matches!(node.kind, NodeKind::Function | NodeKind::Class | NodeKind::File) {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {
