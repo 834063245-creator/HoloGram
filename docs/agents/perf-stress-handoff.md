@@ -75,11 +75,47 @@ $BIN --stress-suite                     # small→large 缩放对比
 - dataflow_engine.rs:421 同样逐文件 Query::new 未缓存(该阶段仅 ~1s)
 - 合成压测生成器边密度 ~5 倍于真实项目,suite 适合暴露超线性,不代表真实体验
 
-## 下一步建议
+## 第三轮优化(2026-08-06 晚,Phase M 已提交:M1/M2/M3)
 
-1. ~~DB Save 调查~~ → 已完成(见上"第二轮优化"),35s vs 52s 噪声结论:52s 是真实值
-2. ~~Snippet Extract~~ → 已完成
-3. ~~内存 interning 全量重构~~ → **已否决**(String→u32 波及 ~35 文件/上千访问点,性价比不成立);
-   替代方案见 `docs/plans/graph-id-refactor-plan.md`:M1~M3 内存救场(merger 索引 interning、
-   community 去克隆、parse_cache 门控)+ R0~R10 newtype 分阶段主线,全部按 Agent 可派发批次设计
-4. (可选)bulk_replace 余量:prepared statement 复用 + 边有序插入,预计 18s→12s 量级
+按 `docs/plans/graph-id-refactor-plan.md` 执行内存救场,全部一批一 commit:
+
+| 批 | 内容 | commit |
+|---|---|---|
+| M1 | GraphMerger 的 edge_index/loc_index 全 interning 化(内置 StringArena,索引只存 u32 句柄)——消除解析期 ~2.3GB 字符串重复,这是全内核 OOM 的最大头 | `perf(engine): [M1]` |
+| M2 | detect_hierarchical_from_base 的 leaf_edges 改 &[(&str,&str)] 借用 + dense 索引一次性预映射(原每层循环对全边做 HashMap 查找 ×最多 8 层) | `perf(engine): [M2]` |
+| M3 | parse_cache 字节预算门控(env HOLOGRAM_PARSE_CACHE_MB 默认 512MB),超预算文件记 cache_skipped_files,snippet 阶段补盘读回退(只认清单,未触发时行为逐位不变) | `perf(engine): [M3]` |
+
+fs 子树验收:图数字 155518/426199/28284 三轮不变,总计 91.0s → **38.8s**,community 8.4s→5.9s(M2 的 CPU 红利),1MB 小预算强制走盘读回退仍产出完全相同的图和 155518 条 snippet。
+
+### 全内核实测(D:/linux-7.1.0,51k 文件)——内存墙已翻,算法墙现身
+
+跑法:`--stress-real D:/linux-7.1.0 1` 后台 + RSS>12GB 看门狗。
+**结果:全程 ~65 分钟未 OOM(RSS 8.6~10.5GB),最终被 1 小时任务超时在 community 阶段终止。**
+存档 `test-results/stress-real-linux-kernel-v3.txt`(gitignored)。
+
+阶段实录(对照 fs 子树):
+
+| 阶段 | 内核 | fs | 结论 |
+|---|---|---|---|
+| Core Parse | 1283s(249万节点/1736万边) | 9s | 线性(137× 边,143× 文件),健康 |
+| **Cross-File Resolver** | **1268s** | 2.5s | **超线性,实测指数 ~2.3**(未解析边 14.35×,耗时 507×)。818 万未解析(687 万 bare extern + 96 万多候选),解析出 501 万新边 |
+| **Coupling** | **197s** | 0.19s | **超线性,1035×**——同型 bug(fs 规模下绝对值太小一直隐身) |
+| 合成阶段合计 | ~178s(eval 79s、coupling-incr 83s) | ~0.3s | 也偏大,待查 |
+| Snippet Extract | 69s(249万条,含 1.5万文件盘读) | 0.9s | 可接受 |
+| Community | 被终止,未完成 | 5.9s | **未知**,2240 万边规模无数据 |
+| Flows / DB Save | 未到达 | 0.4s / 21.6s | 无数据;flows 的 build_calls_adjacency 字符串克隆是已知未修项 |
+
+**Phase M 毕业判定:内存目标达成(16GB 可建全内核结构图,看门狗全程未动);
+但总耗时进入不可用区域(~1.5h 量级),瓶颈从内存转为三个算法级超线性。**
+
+## 下一步(优先级重排:M4+ 算法瓶颈 > R 阶段架构重构)
+
+1. **M4 resolver 超线性**(1268s,占全程 ~1/3):先 profile 定位平方项——
+   嫌疑:多候选(bare_multi)路径的候选枚举、resolve_cache 的键构造、
+   或对 249 万节点索引的某种全扫。验收标准:内核 cross-file < 120s
+2. **M5 coupling 超线性**(197s):coupling.rs 的 L1-L4 计算路径,
+   node_pkg 克隆是已知小项但解释不了 1035×,查真正的平方项
+3. **M6 flows build_calls_adjacency 字符串克隆**(已知未修,内核规模 ~2GB 瞬时)
+4. 修完 M4~M6 再重跑全内核验证;R0~R10 架构主线在此之后排期
+5. (未测量维度)Dataflow/LSP 不在 --stress-real 内:Dataflow 按需计算不占管线内存;
+   LSP warm 对 51k C 文件的 clangd 后台索引是独立课题,未测
