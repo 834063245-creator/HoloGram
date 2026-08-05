@@ -6,6 +6,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use rayon::prelude::*;
 use tracing::{info, warn};
 
 use crate::analysis::coupling::compute_coupling;
@@ -239,35 +240,38 @@ impl Engine {
         // ── 5.9 为向量索引提取源码片段 ──
         // ponytail: 先构建 module→source 索引（O(F)），再单次遍历节点
         // （O(N×D)，D = module 深度）。原为 O(F×N) — 1060 文件 × 26293 节点 = 27.8M 次迭代。
+        // 2026-08-06: 引用借用代替全量 source clone；rayon 并行（extract_snippet 为纯计算）。
         set_progress("源码片段提取", 0, 0, "");
         let stage_start = std::time::Instant::now();
-        let mut snippets_extracted = 0usize;
-        // 构建文件索引：module_id → source（clone 以释放 parse_cache 借用）
-        let file_map: std::collections::HashMap<String, String> = result.parse_cache.iter()
+        // 构建文件索引：module_id → source（借用 parse_cache，不做全量 clone）
+        let file_map: std::collections::HashMap<String, &String> = result.parse_cache.iter()
             .map(|(fp, (src, _))| {
                 let mid = crate::path_utils::normalize_path(fp)
                     .replace(['/', '\\'], ".");
-                (mid, src.clone())
+                (mid, src)
             })
             .collect();
-        // 单次遍历节点 — 尝试将 node.id 作为 module 前缀，逐步剥离
-        for (_, node) in result.graph.nodes.iter_mut() {
-            if node.snippet.is_some() { continue; }
-            let mut key: &str = node.id.as_str();
-            loop {
-                if let Some(source) = file_map.get(key) {
-                    if let Some(snippet) = crate::vector::extract_snippet(source, &node.name, &node.kind) {
-                        node.snippet = Some(snippet);
-                        snippets_extracted += 1;
+        // 并行遍历节点 — 尝试将 node.id 作为 module 前缀，逐步剥离
+        let snippets_extracted: usize = result.graph.nodes.par_iter_mut()
+            .map(|(_, node)| {
+                if node.snippet.is_some() { return 0usize; }
+                let mut key: &str = node.id.as_str();
+                loop {
+                    if let Some(source) = file_map.get(key) {
+                        if let Some(snippet) = crate::vector::extract_snippet(source, &node.name, &node.kind) {
+                            node.snippet = Some(snippet);
+                            return 1;
+                        }
+                        break;
                     }
-                    break;
+                    match key.rfind('.') {
+                        Some(pos) => key = &key[..pos],
+                        None => break,
+                    }
                 }
-                match key.rfind('.') {
-                    Some(pos) => key = &key[..pos],
-                    None => break,
-                }
-            }
-        }
+                0
+            })
+            .sum();
         let snippet_elapsed = stage_start.elapsed().as_secs_f64();
         eprintln!("[engine] stage: snippet-extract done in {:.1}s ({} snippets)",
             snippet_elapsed, snippets_extracted);
@@ -375,6 +379,8 @@ impl Engine {
         let graph_nodes = std::mem::take(&mut result.graph.nodes);
         let graph_edges = std::mem::take(&mut result.graph.edges);
         let idx = MemoryIndex::from_existing_graph(graph_nodes, graph_edges);
+        eprintln!("[engine]   db-save: memory-index build {:.1}s",
+            stage_start.elapsed().as_secs_f64());
         // 使用 MemoryIndex 去重后的计数 — 原始 Graph 有来自多阶段合成的
         // 重复边，在去重时会被合并。
         let node_count = idx.node_count();
@@ -382,6 +388,7 @@ impl Engine {
         let elapsed = started_at.elapsed().as_secs_f64();
 
         {
+            let save_start = std::time::Instant::now();
             let store_guard = self
                 .store
                 .lock()
@@ -392,6 +399,8 @@ impl Engine {
                     warn!("[engine] SQLite save failed: {}", e);
                 }
             }
+            eprintln!("[engine]   db-save: swap+sqlite {:.1}s",
+                save_start.elapsed().as_secs_f64());
         }
         eprintln!("[engine] stage: db-save done in {:.1}s",
             stage_start.elapsed().as_secs_f64());

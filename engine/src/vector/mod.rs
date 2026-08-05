@@ -349,13 +349,14 @@ pub fn extract_snippet(source: &str, node_name: &str, node_kind: &NodeKind) -> O
         return Some(lines.join("\n"));
     }
 
-    for (line_num, line) in source.lines().enumerate() {
-        if line.contains(node_name) {
-            let all_lines: Vec<&str> = source.lines().collect();
-            let start = line_num.saturating_sub(1);
-            let end = (start + 30).min(all_lines.len());
-            return Some(all_lines[start..end].join("\n"));
-        }
+    // 字节级子串搜索（memchr 加速），命中后按 \n 计数推行号。
+    // 旧实现逐行 contains + 命中后全量 collect 所有行，每节点 O(文件大小)
+    // 且伴随全文件行 Vec 分配 —— 155k 节点时是不可忽视的分配风暴。
+    if let Some(byte_pos) = source.find(node_name) {
+        let line_num = source.as_bytes()[..byte_pos].iter().filter(|&&b| b == b'\n').count();
+        let start = line_num.saturating_sub(1);
+        let window: Vec<&str> = source.lines().skip(start).take(30).collect();
+        return Some(window.join("\n"));
     }
     Some(format!("{} {}", node_kind.as_str(), node_name))
 }

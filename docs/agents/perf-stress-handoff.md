@@ -1,7 +1,7 @@
 # 性能压测与优化交接 — 2026-08-06
 
 > 背景:一次完整的压测驱动优化会话。引擎全量分析在 Reasonix 上 457.7s → 16.6s(27.6×),
-> 内核 fs 子树 128.8s → 91.0s。本文档记录已完成的修复、当前瓶颈和下一步。
+> 内核 fs 子树 128.8s → 91.0s(同日第二轮优化后 → ~48s)。本文档记录已完成的修复、当前瓶颈和下一步。
 
 ## 压测工具用法(engine 内置)
 
@@ -33,14 +33,27 @@ $BIN --stress-suite                     # small→large 缩放对比
 3. 逐文件重复编译(tree-sitter Query::new、正则等)——编译结果必须缓存
 4. 未修:resolver 候选顺序依赖 HashMap 迭代序 → 跨轮结果微差(社区数 1481/1482/1488),不影响性能,影响严格可复现性
 
-## 当前瓶颈(fs 子树 91.0s 内,按优先级)
+## 第二轮优化(2026-08-06 下午,未提交)
+
+分段计时揭穿一个误判:**"DB Save" 阶段 ≠ SQLite 写入**,它包含 MemoryIndex 构建(3.3s)+ 边收集(0.4s)+ bulk_replace_all。52.3s 里真正的 SQLite 写入是 45.9s,拆分:edges 插入 23.4s(5 个二级索引逐行维护 + FK 每边 2 次查 nodes)+ DELETE 9.1s(FTS 触发器对 155k 旧节点逐行 'delete' 插入)+ nodes 7.5s + commit 5.0s。FTS rebuild 只有 0.8s(原头号嫌疑洗清)。
+
+| 修复 | 文件 | 效果 |
+|---|---|---|
+| bulk_replace_all 重构:先删 FTS 触发器再 DELETE;先删 9 个二级索引、插入后批量 CREATE INDEX;加载期 foreign_keys=OFF + synchronous=OFF(连接级,事后恢复;DDL 随事务回滚不留半残 schema) | storage/sqlite.rs(bulk_replace_inner) | bulk 45.9s→18s,DB Save 52s→22s |
+| extract_snippet 改字节级 `str::find`(原逐行 contains + 命中后全量 collect 行 Vec);snippet 阶段 rayon 并行 + 去掉全量 source clone(改借用) | vector/mod.rs:346, engine/pipeline.rs:240 | Snippet Extract 17.9s→1.3s(14×),并消掉一次全源码语料克隆 |
+
+**fs 子树总计:91.0s → 43.1s/53.8s 两轮(mean 48.4s)**。回归:`cargo test --lib` 569 通过(新增 test_bulk_replace_all_twice_restores_schema 覆盖二次替换后触发器/索引/FK/pragma 恢复)。存档 `stress-real-linux-fs-v4-instrumented.txt`(定位用)/`-v5-dbsave.txt`/`-v6-snippet.txt`。
+
+## 当前瓶颈(fs 子树 ~48s 内,按优先级)
 
 | 阶段 | 耗时 | 占比 | 备注 |
 |---|---|---|---|
-| **DB Save** | 52.3s | 57% | **下一个目标,未调查**。疑点:同代码两轮跑出 35.2s 和 52.3s,先排除噪声再定位。嫌疑方向:FTS 触发器、逐行 INSERT、snippet 文本写入 |
-| Snippet Extract | 17.9s | 20% | 15.5 万个节点逐个切片源码,轻度超线性 |
-| Core Parse | 9.0s | 10% | 2169 文件,~240 文件/s,健康 |
-| Community | 8.4s | 9% | 155k 节点hold住 |
+| DB Save | 21.6s | 45% | bulk 内 18s:edges 插入 7.5s + nodes 4.2s + 索引重建 3.5s。再压榨方向:prepared statement 复用(现每 chunk 重新解析 900 参数 SQL)、边按 source 有序插入(B-tree 局部性)。收益递减,建议先不动 |
+| Core Parse | 9.0s | 19% | 2169 文件,~240 文件/s,健康 |
+| Community | 8.4s | 17% | 155k 节点 hold 住 |
+| Snippet Extract | 1.3s | 3% | 已解决 |
+
+**教训补充(第 5 条)**:阶段名会骗人——"DB Save" 里藏着内存索引构建;给阶段内部加分段计时再动手,别凭阶段名猜瓶颈。
 
 ## 内存天花板(全内核跑不了的根因)
 
@@ -64,6 +77,7 @@ $BIN --stress-suite                     # small→large 缩放对比
 
 ## 下一步建议
 
-1. **DB Save 调查**:先连跑两轮确认 35s vs 52s 哪个是真实值;profile sqlite.rs 的写入路径(FTS 触发器、事务粒度、prepared statement 复用)
-2. Snippet Extract:看是否逐节点重复读文件/重复切片
-3. 决定是否启动内存 interning 重构(全内核规模的入场券)
+1. ~~DB Save 调查~~ → 已完成(见上"第二轮优化"),35s vs 52s 噪声结论:52s 是真实值
+2. ~~Snippet Extract~~ → 已完成
+3. 决定是否启动内存 interning 重构(全内核规模的入场券)——这是剩下唯一的大项
+4. (可选)bulk_replace 余量:prepared statement 复用 + 边有序插入,预计 18s→12s 量级
