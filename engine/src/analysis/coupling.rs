@@ -18,27 +18,37 @@ pub fn compute_coupling_incremental(graph: &mut Graph) {
 }
 
 fn compute_coupling_impl(graph: &mut Graph, incremental: bool) {
-    // 从节点位置提取包前缀，用于区分 L1 和 L2
-    let node_pkg: HashMap<String, String> = graph
+    use rayon::prelude::*;
+
+    // 从节点位置提取包前缀，用于区分 L1 和 L2。
+    // M5: 全借用零分配 —— 原实现对每个节点克隆 id + pkg 两个 String
+    // （内核 249 万节点 ≈ 500 万次分配），边循环再对每条边做两次
+    // 110B 字符串哈希查找。pkg 只取首段切片，不为切片分配。
+    let node_pkg: HashMap<&str, &str> = graph
         .nodes
         .values()
         .map(|n| {
             let loc = n.location.as_deref().unwrap_or("");
             // 提取顶层包："src/views.py" → "src"
-            let pkg = loc.split('/').next().unwrap_or("").to_string();
-            (n.id.clone(), pkg)
+            let pkg = match loc.find('/') {
+                Some(pos) => &loc[..pos],
+                None => loc,
+            };
+            (n.id.as_str(), pkg)
         })
         .collect();
 
-    for edge in graph.edges.values_mut() {
+    // M5: rayon 并行 —— 每条边独立写自己的 coupling_depth,无共享状态。
+    // 内核 17M 边 × 2 次大表哈希查找是常数大头,单机 6 线程摊薄。
+    graph.edges.par_iter_mut().for_each(|(_, edge)| {
         // 增量模式：跳过已被 DI reflection 分类过的边（L3/L4）
         if incremental && edge.coupling_depth > 0 {
-            continue;
+            return;
         }
         edge.coupling_depth = match edge.kind {
             EdgeKind::Imports | EdgeKind::Calls | EdgeKind::Inherits | EdgeKind::Defines => {
-                let src_pkg = node_pkg.get(&edge.source);
-                let tgt_pkg = node_pkg.get(&edge.target);
+                let src_pkg = node_pkg.get(edge.source.as_str());
+                let tgt_pkg = node_pkg.get(edge.target.as_str());
                 match (src_pkg, tgt_pkg) {
                     (Some(s), Some(t)) if s == t && !s.is_empty() => 1, // L1：同包
                     _ => 2, // L2：跨包
@@ -47,7 +57,7 @@ fn compute_coupling_impl(graph: &mut Graph, incremental: bool) {
             EdgeKind::Reads | EdgeKind::Writes | EdgeKind::Shares | EdgeKind::Usage => 3, // L3：数据
             EdgeKind::Triggers | EdgeKind::Awaits | EdgeKind::Sequences | EdgeKind::Throws => 4, // L4：时序
         };
-    }
+    });
 }
 
 #[cfg(test)]
