@@ -76,11 +76,11 @@ fn build_indexes(graph: &Graph) -> ResolverIndexes {
         stem: HashMap::new(),
         lang: HashMap::new(),
     };
-    for (id, node) in &graph.nodes {
-        idx.lang.insert(id.clone(), infer_language(id));
+    for (id, node) in graph.nodes_iter() {
+        idx.lang.insert(id.to_string(), infer_language(id));
 
         let short = short_name(&node.name);
-        idx.name.entry(short.clone()).or_default().push(id.clone());
+        idx.name.entry(short.clone()).or_default().push(id.to_string());
 
         // File / Module 节点：也按主干索引以支持 import 边
         if node.kind == super::node::NodeKind::File
@@ -88,7 +88,7 @@ fn build_indexes(graph: &Graph) -> ResolverIndexes {
         {
             let stem = file_stem(&node.name);
             if stem != short {
-                idx.stem.entry(stem).or_default().push(id.clone());
+                idx.stem.entry(stem).or_default().push(id.to_string());
             }
         }
     }
@@ -160,7 +160,7 @@ impl CrossFileResolver {
         // 做全串 to_lowercase 分配(内核 17M 边 × 100+ 字符)。
         let mut lang_memo: HashMap<&str, Option<&'static str>> = HashMap::new();
 
-        for (eid, edge) in &graph.edges {
+        for (eid, edge) in graph.edges_iter() {
             let is_usage = edge.kind == EdgeKind::Usage;
             // ponytail: 仅解析跨文件边。文件内边（Usage、Writes、
             // 同文件 Calls）的 target 是裸名而非 node ID — 它们
@@ -180,7 +180,7 @@ impl CrossFileResolver {
                 .or_insert_with(|| infer_language(&edge.source));
             // M4: Cow 借用 —— 仅命中图外的边才需要 owned 结果,
             // 原实现对每条边无条件 clone 两个端点 id(内核 ~34M 次)。
-            let src_id: Option<Cow<'_, str>> = if graph.nodes.contains_key(&edge.source) {
+            let src_id: Option<Cow<'_, str>> = if graph.get_node(&edge.source).is_some() {
                 Some(Cow::Borrowed(edge.source.as_str()))
             } else {
                 cached_resolve_name(&edge.source, src_lang, &mut resolve_cache, &idx, graph, &mut stats)
@@ -195,7 +195,7 @@ impl CrossFileResolver {
                 Some(id) if id != edge.source => infer_language(id).or(src_lang),
                 _ => src_lang,
             };
-            let tgt_id: Option<Cow<'_, str>> = if graph.nodes.contains_key(&edge.target) {
+            let tgt_id: Option<Cow<'_, str>> = if graph.get_node(&edge.target).is_some() {
                 Some(Cow::Borrowed(edge.target.as_str()))
             } else {
                 cached_resolve_name(&edge.target, tgt_lang, &mut resolve_cache, &idx, graph, &mut stats)
@@ -214,14 +214,14 @@ impl CrossFileResolver {
                     new_edge.target = t.to_string();
                     new_edge.cross_file = true;
                     new_edges.push(new_edge);
-                    to_remove.push(eid.clone());
+                    to_remove.push(eid.to_string());
                     resolved += 1;
                 }
             } else {
                 unresolved_count += 1;
                 // ── 分类失败原因 ──
                 *diag_by_kind.entry(edge.kind.as_str()).or_default() += 1;
-                if !src_ok && !graph.nodes.contains_key(&edge.source) {
+                if !src_ok && graph.get_node(&edge.source).is_none() {
                     diag_source_missing += 1;
                 }
                 if !tgt_ok {
@@ -240,7 +240,7 @@ impl CrossFileResolver {
                     }
                     // 候选项存在但无法唯一解析 — 标记为歧义
                     if in_index || in_stem {
-                        ambiguous_edges.push(eid.clone());
+                        ambiguous_edges.push(eid.to_string());
                     }
                 }
                 tracing::debug!(
@@ -298,13 +298,12 @@ impl CrossFileResolver {
         // 歧义边（上面标记的）保留供用户/LSP 解析。
         let t_orphan = std::time::Instant::now();
         let orphan_edges: Vec<String> = graph
-            .edges
-            .iter()
+            .edges_iter()
             .filter(|(_, e)| {
                 if !e.cross_file {
                     return false;
                 }
-                if graph.nodes.contains_key(&e.source) && graph.nodes.contains_key(&e.target) {
+                if graph.get_node(&e.source).is_some() && graph.get_node(&e.target).is_some() {
                     return false;
                 }
                 // 保留歧义边
@@ -313,7 +312,7 @@ impl CrossFileResolver {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false)
             })
-            .map(|(id, _)| id.clone())
+            .map(|(id, _)| id.to_string())
             .collect();
         for eid in &orphan_edges {
             graph.remove_edge(eid);
@@ -464,7 +463,7 @@ fn resolve_name(
     stats: &mut ResolveStats,
 ) -> Option<String> {
     // ── 策略 1：精确匹配 ──
-    if graph.nodes.contains_key(name) {
+    if graph.get_node(name).is_some() {
         return Some(name.to_string());
     }
 
@@ -540,7 +539,7 @@ fn resolve_name(
     if name.contains('.') {
         for ext in code_extensions() {
             let with_ext = format!("{}.{}", name, ext);
-            if graph.nodes.contains_key(&with_ext) {
+            if graph.get_node(&with_ext).is_some() {
                 return Some(with_ext);
             }
         }
@@ -634,7 +633,7 @@ fn best_bare_match(
     let mut tied = false;
 
     for c in candidates {
-        let kind_prio = match graph.nodes.get(*c).map(|n| &n.kind) {
+        let kind_prio = match graph.get_node(*c).map(|n| &n.kind) {
             Some(NodeKind::Function) => 0,
             Some(NodeKind::Class) => 1,
             Some(NodeKind::Symbol) => 2,
