@@ -110,12 +110,33 @@ fs 子树验收:图数字 155518/426199/28284 三轮不变,总计 91.0s → **38
 
 ## 下一步(优先级重排:M4+ 算法瓶颈 > R 阶段架构重构)
 
-1. **M4 resolver 超线性**(1268s,占全程 ~1/3):先 profile 定位平方项——
-   嫌疑:多候选(bare_multi)路径的候选枚举、resolve_cache 的键构造、
-   或对 249 万节点索引的某种全扫。验收标准:内核 cross-file < 120s
-2. **M5 coupling 超线性**(197s):coupling.rs 的 L1-L4 计算路径,
-   node_pkg 克隆是已知小项但解释不了 1035×,查真正的平方项
-3. **M6 flows build_calls_adjacency 字符串克隆**(已知未修,内核规模 ~2GB 瞬时)
-4. 修完 M4~M6 再重跑全内核验证;R0~R10 架构主线在此之后排期
-5. (未测量维度)Dataflow/LSP 不在 --stress-real 内:Dataflow 按需计算不占管线内存;
+1. ~~M4 resolver 超线性~~ → 已修复(2026-08-06,已提交)。根因不是候选扫描平方
+   (实测 cand_scans 仅 141 万 @ drivers),而是逐边常数(端点 clone×2、全串
+   lowercase、逐候选 Vec 分配)在换页压力下放大。修:Cow 借用 + infer_language
+   记忆化 + 三处评分零分配 + 分段计时/计数器。**drivers(12.6M 边)cross-file
+   36.9s,回归线性;全内核外推 ~50s(原 1268s)**
+2. ~~M5 coupling 超线性~~ → 已修复(借用化 + rayon)。注:drivers 旧代码实测仅
+   3.1s,内核 197s 主要是换页抖动;常数砍量级后换页敏感性同步下降
+3. ~~M6 flows 字符串克隆~~ → 已修复(借用化,同 M2 模式)
+4. **M7 db-save 规模墙(新发现,drivers 实测 1247.8s 为全程最大单块)**:
+   - MemoryIndex::from_existing_graph 353s(fs 3.2s)——intern+桶排序在大边数下劣化
+   - bulk_replace_all 885.6s:edges 插入 228s(21k 行/s)、索引重建 242.5s、
+     commit 292s(数 GB WAL fsync)、nodes 94s、fts 28s
+   - 候选方向(需设计决策):prepared statement 复用+边有序插入(小修);
+     图大时改快照式持久化(跳过 SQLite 全量重写,架构级);增量保存
+5. 修完 M7 再重跑全内核验证;R0~R10 架构主线在此之后排期
+6. (未测量维度)Dataflow/LSP 不在 --stress-real 内:Dataflow 按需计算不占管线内存;
    LSP warm 对 51k C 文件的 clangd 后台索引是独立课题,未测
+
+### drivers 中间规模基准(2026-08-06,M4 后,存档 stress-real-linux-drivers-m4.txt)
+
+| 阶段 | 耗时 | 备注 |
+|---|---|---|
+| Core Parse | 163.8s | 33.6k 文件,186 万节点/1259 万边 |
+| Cross-File | 36.9s | loop 20.8 + writeback 7.5 + orphan 5.0(M4 后线性) |
+| Coupling | 3.1s | M5 前旧代码 |
+| Snippet Extract | 29.1s | 186 万条(含盘读回退) |
+| Community | 154.7s | 384653 社区,轻微超线性可接受 |
+| Flows | 5.3s | M6 后 |
+| **DB Save** | **1247.8s** | MemoryIndex 353s + bulk 885.6s(M7 目标) |
+| 总计 | 1697.6s | RSS 峰值 9.3GB |
