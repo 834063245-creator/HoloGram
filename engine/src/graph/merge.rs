@@ -4,7 +4,8 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-use super::{Edge, EdgeKind, Graph, Node};
+use super::{Edge, EdgeKind, Graph, Node, NodeKind};
+use crate::storage::string_arena::StringArena;
 
 /// 持久化 Graph 合并器，带增量索引。
 ///
@@ -20,14 +21,24 @@ use super::{Edge, EdgeKind, Graph, Node};
 /// 边淹没 edge HashMap。否则每个 TS/JS 文件中的
 /// 每个 call_expression 都会生成一条边（14K+/文件），
 /// 在百万级条目时引发反复的 HashMap rehash 风暴。
+///
+/// 2026-08-06 (M1)：索引全面 interning 化。原实现在 `edge_index` 里
+/// 为每条唯一边克隆 source+target、在 `loc_index` 里克隆复合键 +
+/// node id —— 全内核规模（9M 边）下是 ~2.3GB 的字符串重复，
+/// 占解析期 OOM 峰值的最大头。现由 `arena` 驻留字符串，
+/// 索引只存 u32 句柄；arena 随 merger drop，不影响下游类型。
 pub struct GraphMerger {
     graph: Graph,
-    /// "location::name::kind" → node ID
-    loc_index: HashMap<String, String>,
-    /// "(source, target, edge_kind_discriminant)" — 全局边去重。
+    /// 跨合并存活的字符串驻留器（loc/edge 索引共享）。
+    arena: StringArena,
+    /// "(location-or-id, name, kind)" 句柄三元组 → node ID 句柄。
+    /// 原拼 "location::name::kind" 复合字符串；元组键语义等价，
+    /// 且消除了 "::" 分隔符与字段内容碰撞的边界 case。
+    loc_index: HashMap<(u32, u32, NodeKind), u32>,
+    /// "(source, target, edge_kind_discriminant)" 句柄 — 全局边去重。
     /// ponytail: 跨合并调用持久化，镜像 loc_index 模式。
     /// 整个项目中每个唯一的 (source, target, kind) 只保留一条边。
-    edge_index: HashSet<(String, String, u8)>,
+    edge_index: HashSet<(u32, u32, u8)>,
 }
 
 // ponytail: 将 EdgeKind 编码为 u8 判别值，用于索引中高效的 Hash+Eq。
@@ -52,6 +63,7 @@ impl GraphMerger {
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
+            arena: StringArena::new(),
             loc_index: HashMap::new(),
             edge_index: HashSet::new(),
         }
@@ -63,6 +75,7 @@ impl GraphMerger {
         graph.edges.reserve(estimated_edges);
         Self {
             graph,
+            arena: StringArena::new(),
             loc_index: HashMap::with_capacity(estimated_nodes),
             edge_index: HashSet::with_capacity(estimated_edges),
         }
@@ -71,11 +84,9 @@ impl GraphMerger {
     /// 仅在 (source, target, kind) 之前未出现过时插入边。
     /// 返回 true 表示边确实被添加了。
     fn add_edge_deduped(&mut self, edge: Edge) -> bool {
-        let key = (
-            edge.source.clone(),
-            edge.target.clone(),
-            edge_kind_id(&edge.kind),
-        );
+        let src_h = self.arena.intern(&edge.source);
+        let tgt_h = self.arena.intern(&edge.target);
+        let key = (src_h, tgt_h, edge_kind_id(&edge.kind));
         if self.edge_index.insert(key) {
             // 合并时有意允许目标为未解析裸名的边
             // （例如 `from db import ...` 中的 "db"）。跨文件解析器
@@ -90,18 +101,20 @@ impl GraphMerger {
     /// 将另一个 Graph 合并到累加器中。O(|other.nodes| + |other.edges|)。
     pub fn merge(&mut self, other: Graph) -> usize {
         let mut added = 0usize;
-        let mut seen: HashMap<String, ()> = HashMap::new();
+        let mut seen: HashSet<(u32, u32, NodeKind)> = HashSet::new();
 
         for (_, node) in other.nodes {
-            let key = node_key(&node);
-            if seen.contains_key(&key) {
+            let (a, b, k) = node_key_parts(&node);
+            let key = (self.arena.intern(a), self.arena.intern(b), k);
+            if seen.contains(&key) {
                 continue;
             }
             match self.loc_index.entry(key) {
                 Entry::Occupied(_) => continue,
                 Entry::Vacant(e) => {
-                    seen.insert(e.key().clone(), ());
-                    e.insert(node.id.clone());
+                    seen.insert(*e.key());
+                    let id_h = self.arena.intern(&node.id);
+                    e.insert(id_h);
                     self.graph.add_node(node);
                     added += 1;
                 }
@@ -117,18 +130,20 @@ impl GraphMerger {
     /// ponytail: 跳过 build_file_graph() → 节省每文件 HashMap 分配/释放开销。
     pub fn merge_slices(&mut self, nodes: &[Node], edges: &[Edge]) -> usize {
         let mut added = 0usize;
-        let mut seen: HashMap<String, ()> = HashMap::with_capacity(nodes.len());
+        let mut seen: HashSet<(u32, u32, NodeKind)> = HashSet::with_capacity(nodes.len());
 
         for node in nodes {
-            let key = node_key(node);
-            if seen.contains_key(&key) {
+            let (a, b, k) = node_key_parts(node);
+            let key = (self.arena.intern(a), self.arena.intern(b), k);
+            if seen.contains(&key) {
                 continue;
             }
             match self.loc_index.entry(key) {
                 Entry::Occupied(_) => continue,
                 Entry::Vacant(e) => {
-                    seen.insert(e.key().clone(), ());
-                    e.insert(node.id.clone());
+                    seen.insert(*e.key());
+                    let id_h = self.arena.intern(&node.id);
+                    e.insert(id_h);
                     self.graph.add_node(node.clone());
                     added += 1;
                 }
@@ -137,7 +152,7 @@ impl GraphMerger {
         // ponytail: 两级边去重。
         // 第一级（快速）：文件内去重，使用借用的 &str，零克隆。
         //    一个 React 组件调用 console.log 100 次 → 99 次在此跳过。
-        // 第二级（慢速）：全局持久索引，克隆 source+target。
+        // 第二级（慢速）：全局持久索引，只存 u32 句柄（M1 后零克隆）。
         //    每文件仅 1 个唯一的 (src,tgt,kind) 到达此级别。
         let cap = edges.len().min(5000);
         let mut local_dedup: HashSet<(&str, &str, u8)> = HashSet::with_capacity(cap);
@@ -166,30 +181,14 @@ impl GraphMerger {
     }
 }
 
-/// 构建去重键："location::name::kind"
-fn node_key(node: &Node) -> String {
-    if let Some(loc) = &node.location {
-        // ponytail: String::with_capacity 避免 format!() 的重新分配开销。
-        // 逐节点的 format 开销在 300K+ 节点时会累积。
-        let cap = loc.len() + node.name.len() + node.kind.as_str().len() + 6;
-        let mut key = String::with_capacity(cap);
-        key.push_str(loc);
-        key.push_str("::");
-        key.push_str(&node.name);
-        key.push_str("::");
-        key.push_str(node.kind.as_str());
-        key
-    } else {
-        // 无 location — 使用 node id（每文件唯一）
-        let cap = node.id.len() + node.name.len() + node.kind.as_str().len() + 6;
-        let mut key = String::with_capacity(cap);
-        key.push_str(&node.id);
-        key.push_str("::");
-        key.push_str(&node.name);
-        key.push_str("::");
-        key.push_str(node.kind.as_str());
-        key
-    }
+/// 去重键组分：(location 或 id, name, kind)。
+/// 原实现逐节点拼 "location::name::kind" 复合 String；借用式元组
+/// 零堆分配，句柄化后由 arena 统一驻留字符串。
+/// 注意：元组键消除了 "::" 分隔符与字段内容碰撞的理论边界 case，
+/// 语义与复合键等价（更严格的区分不会产生错误去重）。
+#[inline]
+fn node_key_parts(node: &Node) -> (&str, &str, NodeKind) {
+    (node.location.as_deref().unwrap_or(&node.id), &node.name, node.kind)
 }
 
 impl Default for GraphMerger {
