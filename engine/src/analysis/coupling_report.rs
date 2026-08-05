@@ -28,7 +28,7 @@ pub fn coupling_report(graph: &Graph, module: &str) -> serde_json::Value {
         false
     }
 
-    for e in graph.edges.values() {
+    for (_, e) in graph.edges_iter() {
         if node_matches(graph, &e.source, module, &normalized)
             || node_matches(graph, &e.target, module, &normalized)
         {

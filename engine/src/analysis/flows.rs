@@ -22,6 +22,8 @@ const SECURITY_KEYWORDS: &[&str] = &[
 
 /// 去除位置字符串末尾的 `:line_number` 后缀。
 /// 处理 Windows 驱动器号路径（如 `C:\foo\bar.rs:42` → `C:\foo\bar.rs`）。
+/// R4: 唯一生产调用点已迁移到 `Node::file()`；函数与测试保留。
+#[allow(dead_code)]
 fn strip_line_suffix(loc: &str) -> &str {
     if let Some(pos) = loc.rfind(':') {
         let maybe_line = &loc[pos + 1..];
@@ -95,7 +97,7 @@ fn detect_entry_points(
     let mut seen: HashSet<String> = HashSet::new();
 
     // ── 第 1 层：框架路由 ──
-    for (nid, node) in &graph.nodes {
+    for (nid, node) in graph.nodes_iter() {
         let props = match node.properties.as_object() {
             Some(p) => p,
             None => continue,
@@ -108,7 +110,7 @@ fn detect_entry_points(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         // 沿出边 CALLS 边查找实际的 handler 节点
-        if let Some(outgoing) = calls_adj.get(nid.as_str()) {
+        if let Some(outgoing) = calls_adj.get(nid) {
             for (target, _) in outgoing {
                 if !seen.contains(*target) {
                     seen.insert(target.to_string());
@@ -119,7 +121,7 @@ fn detect_entry_points(
     }
 
     // ── 第 2+3 层：命名约定 + 零入度 ──
-    for (nid, node) in &graph.nodes {
+    for (nid, node) in graph.nodes_iter() {
         if seen.contains(nid) {
             continue;
         }
@@ -132,7 +134,7 @@ fn detect_entry_points(
             continue;
         }
         // 反向索引 O(1) 查入边 CALLS 数量(逐节点全边扫描的 O(N×E) 已移除)
-        let call_incoming = calls_indegree.get(nid.as_str()).copied().unwrap_or(0);
+        let call_incoming = calls_indegree.get(nid).copied().unwrap_or(0);
         let is_entry_name = is_entry_point_name(name);
         if call_incoming == 0 || is_entry_name {
             let kind = if is_entry_name {
@@ -140,8 +142,8 @@ fn detect_entry_points(
             } else {
                 "orphan_entry"
             };
-            seen.insert(nid.clone());
-            entries.push((nid.clone(), kind.into(), None));
+            seen.insert(nid.to_string());
+            entries.push((nid.to_string(), kind.into(), None));
         }
     }
 
@@ -205,17 +207,17 @@ fn compute_criticality(
     // 统计 L4（时序）边数量
     let l4_count = edge_ids
         .iter()
-        .filter_map(|eid| graph.edges.get(eid))
+        .filter_map(|eid| graph.get_edge(eid))
         .filter(|e| e.coupling_depth >= 4)
         .count() as u32;
 
     // 统计跨社区边数量
     let cross_comm = edge_ids
         .iter()
-        .filter_map(|eid| graph.edges.get(eid))
+        .filter_map(|eid| graph.get_edge(eid))
         .filter(|e| {
-            let src_comm = graph.nodes.get(&e.source).and_then(|n| n.community_id);
-            let tgt_comm = graph.nodes.get(&e.target).and_then(|n| n.community_id);
+            let src_comm = graph.get_node(&e.source).and_then(|n| n.community_id);
+            let tgt_comm = graph.get_node(&e.target).and_then(|n| n.community_id);
             src_comm.is_some() && tgt_comm.is_some() && src_comm != tgt_comm
         })
         .count() as u32;
@@ -223,7 +225,7 @@ fn compute_criticality(
     // 安全关键词命中
     let security_score = node_ids
         .iter()
-        .filter_map(|nid| graph.nodes.get(nid))
+        .filter_map(|nid| graph.get_node(nid))
         .map(|n| {
             let lower = n.name.to_lowercase();
             SECURITY_KEYWORDS
@@ -275,9 +277,8 @@ pub fn detect_all_flows(result: &mut PipelineResult) -> usize {
 
         let file_count = node_ids
             .iter()
-            .filter_map(|nid| result.graph.nodes.get(nid))
-            .filter_map(|n| n.location.as_deref())
-            .map(|loc| strip_line_suffix(loc))
+            .filter_map(|nid| result.graph.get_node(nid))
+            .filter_map(|n| n.file())
             .collect::<HashSet<_>>()
             .len() as u32;
 

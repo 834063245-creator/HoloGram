@@ -9,8 +9,7 @@ use serde_json::json;
 
 /// 从 Tarjan SCC 分类循环：pure_code、data_persistent、llm_involved。
 pub fn classify_cycles(graph: &Graph) -> serde_json::Value {
-    classify_cycles_inner(graph.nodes.iter().map(|(id, n)| (id.as_str(), n)),
-        &detect_cycles(graph))
+    classify_cycles_inner(graph.nodes_iter(), &detect_cycles(graph))
 }
 
 pub fn classify_cycles_from_index(idx: &MemoryIndex) -> serde_json::Value {

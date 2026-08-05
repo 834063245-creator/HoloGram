@@ -6,14 +6,14 @@ use crate::storage::MemoryIndex;
 use std::collections::HashMap;
 
 pub fn detect_cycles(graph: &Graph) -> Vec<serde_json::Value> {
-    let n = graph.nodes.len();
+    let n = graph.node_count();
     if n == 0 { return vec![]; }
-    let node_ids: Vec<&String> = graph.nodes.keys().collect();
-    let id_to_idx: HashMap<&String, usize> = node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let node_ids: Vec<&str> = graph.node_ids().collect();
+    let id_to_idx: HashMap<&str, usize> = node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
     let mut adj = vec![vec![]; n];
     let mut skipped = 0usize;
-    for e in graph.edges.values() {
-        if let (Some(&s), Some(&t)) = (id_to_idx.get(&e.source), id_to_idx.get(&e.target)) {
+    for (_, e) in graph.edges_iter() {
+        if let (Some(&s), Some(&t)) = (id_to_idx.get(e.source.as_str()), id_to_idx.get(e.target.as_str())) {
             adj[s].push(t);
         } else {
             skipped += 1;
@@ -50,11 +50,11 @@ pub fn detect_cycles_from_index(idx: &MemoryIndex) -> Vec<serde_json::Value> {
     if skipped > 0 {
         tracing::debug!(skipped, total_nodes = n, "cycles: {} edge targets unresolved (likely external/stdlib deps)", skipped);
     }
-    let node_refs: Vec<&String> = node_ids.iter().collect();
+    let node_refs: Vec<&str> = node_ids.iter().map(|s| s.as_str()).collect();
     run_tarjan(&node_refs, &adj)
 }
 
-fn run_tarjan(node_ids: &[&String], adj: &[Vec<usize>]) -> Vec<serde_json::Value> {
+fn run_tarjan(node_ids: &[&str], adj: &[Vec<usize>]) -> Vec<serde_json::Value> {
     let n = node_ids.len();
     let mut index = 0u32;
     let mut idx = vec![u32::MAX; n];

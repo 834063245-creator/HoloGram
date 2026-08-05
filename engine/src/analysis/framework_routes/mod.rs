@@ -485,21 +485,21 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framewo
 /// 查找与处理函数引用匹配的已有图节点。
 pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, _current_file: &str) -> String {
     // 先尝试精确名称匹配
-    for (id, node) in &graph.nodes {
+    for (id, node) in graph.nodes_iter() {
         if node.name == handler_ref {
-            return id.clone();
+            return id.to_string();
         }
         // 检查名称是否以 handler_ref 结尾（限定名匹配）
         if node.name.ends_with(handler_ref) {
-            return id.clone();
+            return id.to_string();
         }
     }
 
     // 尝试匹配最后一个组件（如 `views.user_list` → 查找 `user_list`）
     if let Some(last_part) = handler_ref.rsplit('.').next() {
-        for (id, node) in &graph.nodes {
+        for (id, node) in graph.nodes_iter() {
             if node.name == last_part {
-                return id.clone();
+                return id.to_string();
             }
         }
     }
@@ -511,7 +511,7 @@ pub(crate) fn find_handler_node(graph: &Graph, handler_ref: &str, _current_file:
 
 /// 检查处理函数节点是否位于与路由不同的文件中。
 fn is_cross_file(graph: &Graph, handler_node_id: &str, route_file: &str) -> bool {
-    if let Some(node) = graph.nodes.get(handler_node_id) {
+    if let Some(node) = graph.get_node(handler_node_id) {
         if let Some(ref loc) = node.location {
             // 使用 file_key 进行一致的文件路径提取（处理盘符）
             let norm_handler = file_key(loc);

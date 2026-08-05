@@ -8,13 +8,13 @@ pub fn fragile_nodes(graph: &Graph, limit: usize) -> Vec<serde_json::Value> {
     // 构建按节点的边索引：一次 O(E) 遍历替代每个节点 O(V×E) 的边扫描。
     // 20,655 个节点 × 270,690 条边 = 56 亿次过滤操作 → ~30 万次操作。
     let mut node_edges: std::collections::HashMap<&str, Vec<&crate::graph::Edge>> =
-        std::collections::HashMap::with_capacity(graph.nodes.len());
-    for e in graph.edges.values() {
+        std::collections::HashMap::with_capacity(graph.node_count());
+    for (_, e) in graph.edges_iter() {
         node_edges.entry(&e.source).or_default().push(e);
         node_edges.entry(&e.target).or_default().push(e);
     }
 
-    let mut scored: Vec<(f64, &str)> = graph.nodes.values().map(|n| {
+    let mut scored: Vec<(f64, &str)> = graph.nodes_iter().map(|(_, n)| {
         let fan = (n.out_degree + n.in_degree) as f64;
         let coupling_penalty = if let Some(edges) = node_edges.get(n.id.as_str()) {
             edges.iter().map(|e| (e.coupling_depth as f64).powi(2)).sum::<f64>() / fan.max(1.0)
