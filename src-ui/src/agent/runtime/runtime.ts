@@ -410,6 +410,29 @@ export class AgentRuntime implements RuntimePort {
         claudeMd = await rpc<string>('read_file_content', { filePath: `${config.projectPath}/CLAUDE.md` });
       } catch {}
       const snap = config.graphData ? buildGraphSnapshot(config.graphData) : '';
+
+      // 运行环境块 — 探测当前 shell（bash/cmd），注入 system prompt。
+      // Agent 第一轮就知道命令跑在哪个解释器上，避免"猜语法"反复踩坑。
+      let shellEnvSection = '';
+      try {
+        const raw = await rpc<string>('shell_env');
+        const env = raw ? JSON.parse(raw) : null;
+        if (env && typeof env === 'object' && env.shell) {
+          if (env.shell === 'bash') {
+            shellEnvSection =
+              `- OS: ${env.os ?? 'unknown'} (Windows 环境)\n` +
+              `- Shell: bash (Git Bash)\n` +
+              `- 所有命令跑在 bash 上，用 Unix 语法：用 /dev/null 而不是 NUL、路径用正斜杠、用 ls 而不是 dir、变量用 $var`;
+          } else {
+            shellEnvSection =
+              `- OS: ${env.os ?? 'unknown'}\n` +
+              `- Shell: ${env.shell}\n` +
+              `- 命令跑在 ${env.shell} 上，用对应语法（bash 用 $var，cmd 用 %var%）`;
+          }
+          if (env.notes) shellEnvSection += `\n- 提示: ${env.notes}`;
+        }
+      } catch {}
+
       sysPrompt = buildSystemPrompt(
         config.graphData,
         config.projectPath,
@@ -418,6 +441,7 @@ export class AgentRuntime implements RuntimePort {
         claudeMd,
         config.collaborationMode ?? 'normal',
         config.provider.name(),
+        shellEnvSection,
       );
     }
 

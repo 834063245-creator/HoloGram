@@ -145,6 +145,7 @@ export function buildSystemPrompt(
   claudeMdSection = '',
   collaborationMode: 'normal' | 'plan' = 'normal',
   providerName?: string,
+  shellEnvSection = '',
 ): string {
   const modelIdentity = providerName === 'anthropic'
     ? '你的后端 API 是 Anthropic (Claude)。任何关于模型品牌的问题，回答"Claude（由 HoloGram 调度）"。'
@@ -160,6 +161,9 @@ export function buildSystemPrompt(
 - ${modelIdentity}`;
     if (memorySection.trim()) {
       prompt += `\n\n## 记忆库\n${memorySection}`;
+    }
+    if (shellEnvSection.trim()) {
+      prompt += `\n\n## 运行环境\n${shellEnvSection.trim()}`;
     }
     return prompt;
   }
@@ -274,7 +278,14 @@ ${modeBlock}`;
     suffix += `\n\n## 项目规范\n${claudeMdSection}`;
   }
 
-  return staticRules + suffix;
+  // 运行环境块 — 由 Runtime 探测 shell_env 注入，Agent 第一轮就知道
+  // 命令跑在哪个解释器上，从源头消灭"猜语法"类错误（对齐三家成熟框架做法）。
+  let envBlock = '';
+  if (shellEnvSection.trim()) {
+    envBlock = `\n\n## 运行环境\n${shellEnvSection.trim()}`;
+  }
+
+  return staticRules + envBlock + suffix;
 }
 
 // ── Tool registry builder ──
