@@ -27,11 +27,27 @@ pub struct PipelineResult {
     /// 解析缓存：file_path → (source_code, parsed_tree)。
     /// 传递给后续合成阶段（步骤 4-6），使其可以重新遍历相同的
     /// AST，而无需从磁盘重新读取和重新解析文件。
+    /// M3: 受预算门控（env HOLOGRAM_PARSE_CACHE_MB，默认 512MB）——
+    /// 全内核源码 ~1.5GB 常驻是 OOM 推手之一；超预算文件不缓存，
+    /// 下游统一走既有的 miss 盘读回退。
     pub parse_cache: HashMap<String, (String, Option<tree_sitter::Tree>)>,
+    /// 因缓存预算超限而未入 parse_cache 的已解析文件（规范化绝对路径）。
+    /// snippet 阶段的盘读回退只认这份清单 —— 未缓存运行它为空，
+    /// 保证 snippet 行为与门控前逐位一致。
+    pub cache_skipped_files: Vec<String>,
     /// 已发现的源文件（绝对路径）。
     /// 传递给后续合成阶段，使其可以遍历此列表而非
     /// 重新遍历整个项目目录树（消除了 3 次 walkdir）。
     pub discovered_files: Vec<std::path::PathBuf>,
+}
+
+/// 解析缓存预算（字节）。env HOLOGRAM_PARSE_CACHE_MB 可调，默认 512MB。
+fn parse_cache_budget() -> usize {
+    std::env::var("HOLOGRAM_PARSE_CACHE_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(512)
+        .saturating_mul(1024 * 1024)
 }
 
 /// 对项目目录运行完整的分析流水线。
@@ -40,6 +56,11 @@ pub struct PipelineResult {
 /// 3. 合并为单个 graph（增量索引）
 /// 4. 为下游合成阶段构建解析缓存
 pub fn analyze_project(root: &Path) -> PipelineResult {
+    analyze_project_with_budget(root, parse_cache_budget())
+}
+
+/// analyze_project 的预算显式版 — 测试可注入小预算覆盖 miss 路径。
+fn analyze_project_with_budget(root: &Path, cache_budget: usize) -> PipelineResult {
     let start = Instant::now();
 
     // 步骤 1：文件发现
@@ -65,6 +86,8 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
 
     let mut merger = GraphMerger::with_capacity(file_count * 40, file_count * 150);
     let mut parse_cache = HashMap::with_capacity(file_count);
+    let mut cache_skipped_files: Vec<String> = Vec::new();
+    let mut cache_bytes = 0usize;
     let mut files_parsed = 0usize;
     let mut files_failed = 0usize;
 
@@ -93,7 +116,14 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
             files_parsed += 1;
             merger.merge_slices(&result.nodes, &result.edges);
             let abs_path = normalize_path(&result.path.to_string_lossy());
-            parse_cache.insert(abs_path, (result.source, None));
+            // M3: 预算门控 — 超预算文件不缓存,记入清单供 snippet 阶段盘读回退
+            let src_len = result.source.len();
+            if cache_bytes + src_len <= cache_budget {
+                cache_bytes += src_len;
+                parse_cache.insert(abs_path, (result.source, None));
+            } else {
+                cache_skipped_files.push(abs_path);
+            }
             // ponytail: 按批收集 CST 树，在后台线程释放。
             // ts_tree_delete() 为 O(tree.nodes) — 同步释放 200 个大文件的
             // 树会阻塞合并循环 10 秒以上。后台释放可以在
@@ -124,6 +154,14 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
         "[pipeline] parse+merge done in {:.2}s — {} parsed, {} failed, {} nodes, {} edges",
         parse_elapsed, files_parsed, files_failed, merger.node_count(), merger.graph().edge_count()
     );
+    if !cache_skipped_files.is_empty() {
+        eprintln!(
+            "[pipeline] parse_cache 预算 {}MB 已满: {} 文件未缓存(已缓存 {:.0}MB),下游阶段将盘读回退",
+            cache_budget / (1024 * 1024),
+            cache_skipped_files.len(),
+            cache_bytes as f64 / 1_048_576.0
+        );
+    }
 
     let graph = merger.into_graph();
     let nodes_total = graph.node_count();
@@ -148,6 +186,7 @@ pub fn analyze_project(root: &Path) -> PipelineResult {
         edges_total,
         elapsed_secs: elapsed.as_secs_f64(),
         parse_cache,
+        cache_skipped_files,
         discovered_files: files,
     };
 
@@ -246,6 +285,30 @@ mod tests {
 
         let result = analyze_project(&tmp);
         assert_eq!(result.files_parsed, 2);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// M3 回归:预算 0 时全部文件跳过缓存并记录清单,图结果与全缓存运行一致。
+    #[test]
+    fn test_parse_cache_budget_skips_and_records() {
+        let tmp = std::env::temp_dir().join("hologram_test_cache_budget");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        fs::write(tmp.join("a.py"), "def alpha():\n    pass\n").unwrap();
+        fs::write(tmp.join("b.py"), "def beta():\n    pass\n").unwrap();
+
+        let zero = analyze_project_with_budget(&tmp, 0);
+        assert_eq!(zero.files_parsed, 2);
+        assert!(zero.parse_cache.is_empty(), "预算 0 时缓存应为空");
+        assert_eq!(zero.cache_skipped_files.len(), 2, "跳过清单应记录全部未缓存文件");
+
+        let full = analyze_project(&tmp);
+        assert!(full.cache_skipped_files.is_empty(), "预算充足时不应有跳过");
+        assert_eq!(full.parse_cache.len(), 2);
+        assert_eq!(full.nodes_total, zero.nodes_total, "图节点数不得因缓存门控改变");
+        assert_eq!(full.edges_total, zero.edges_total, "图边数不得因缓存门控改变");
 
         let _ = fs::remove_dir_all(&tmp);
     }

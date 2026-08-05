@@ -241,6 +241,8 @@ impl Engine {
         // ponytail: 先构建 module→source 索引（O(F)），再单次遍历节点
         // （O(N×D)，D = module 深度）。原为 O(F×N) — 1060 文件 × 26293 节点 = 27.8M 次迭代。
         // 2026-08-06: 引用借用代替全量 source clone；rayon 并行（extract_snippet 为纯计算）。
+        // M3: parse_cache 超预算的文件走 path_map 盘读回退（清单精确来自 runner，
+        //     未触发预算时为空 —— 行为与门控前逐位一致）。
         set_progress("源码片段提取", 0, 0, "");
         let stage_start = std::time::Instant::now();
         // 构建文件索引：module_id → source（借用 parse_cache，不做全量 clone）
@@ -249,6 +251,14 @@ impl Engine {
                 let mid = crate::path_utils::normalize_path(fp)
                     .replace(['/', '\\'], ".");
                 (mid, src)
+            })
+            .collect();
+        // M3 盘读回退索引：module_id → 未缓存文件路径
+        let path_map: std::collections::HashMap<String, &String> = result.cache_skipped_files.iter()
+            .map(|fp| {
+                let mid = crate::path_utils::normalize_path(fp)
+                    .replace(['/', '\\'], ".");
+                (mid, fp)
             })
             .collect();
         // 并行遍历节点 — 尝试将 node.id 作为 module 前缀，逐步剥离
@@ -261,6 +271,15 @@ impl Engine {
                         if let Some(snippet) = crate::vector::extract_snippet(source, &node.name, &node.kind) {
                             node.snippet = Some(snippet);
                             return 1;
+                        }
+                        break;
+                    }
+                    if let Some(path) = path_map.get(key) {
+                        if let Ok(source) = std::fs::read_to_string(path) {
+                            if let Some(snippet) = crate::vector::extract_snippet(&source, &node.name, &node.kind) {
+                                node.snippet = Some(snippet);
+                                return 1;
+                            }
                         }
                         break;
                     }

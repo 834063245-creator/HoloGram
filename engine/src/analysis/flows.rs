@@ -323,6 +323,7 @@ mod tests {
             edges_total: 0,
             elapsed_secs: 0.0,
             parse_cache: HashMap::new(),
+            cache_skipped_files: Vec::new(),
             discovered_files: Vec::new(),
         }
     }
