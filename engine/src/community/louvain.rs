@@ -299,11 +299,22 @@ fn detect_hierarchical_from_base(
     let mut current_communities: Vec<Vec<String>> = base.to_vec();
     let mut level = 0usize;
 
+    // result 的 id → 下标索引：父节点回写用 O(1) 查找,替代逐层 O(K²) 线性扫描
+    let mut result_index: HashMap<String, usize> = result
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id.clone(), i))
+        .collect();
+
+    // 层次上限：防止退化输入(大量孤立社区/缓慢合并)下无限造层
+    const MAX_LEVELS: usize = 8;
+
     loop {
+        if level >= MAX_LEVELS { break; }
         let n = current_communities.len();
 
         // 构建 node → community-index 映射
-        let mut node_to_ci: Vec<usize> = vec![0; node_count];
+        let mut node_to_ci: Vec<usize> = vec![usize::MAX; node_count];
         for (ci, members) in current_communities.iter().enumerate() {
             for nid in members {
                 if let Some(&dense) = node_to_dense.get(nid.as_str()) {
@@ -322,7 +333,7 @@ fn detect_hierarchical_from_base(
             let ci = node_to_dense.get(src.as_str()).map(|&d| node_to_ci[d]);
             let cj = node_to_dense.get(dst.as_str()).map(|&d| node_to_ci[d]);
             if let (Some(ci), Some(cj)) = (ci, cj) {
-                if ci != cj {
+                if ci != usize::MAX && cj != usize::MAX && ci != cj {
                     let (a, b) = if ci < cj { (ci, cj) } else { (cj, ci) };
                     edge_pairs.push(((a, b), 1.0));
                 }
@@ -361,6 +372,19 @@ fn detect_hierarchical_from_base(
         let mut next_communities: Vec<Vec<String>> = Vec::new();
 
         for (sc_idx, sc) in super_comms.iter().enumerate() {
+            // 孤立社区(压缩图中度数为 0 的单成员超社区)永远不会合并,
+            // 不为它创建父层节点、也不带入下一层 — 否则每个孤立社区
+            // 每层都白造一个超节点,大量孤立节点时层次完全退化
+            if sc.len() == 1 {
+                let is_isolated = sc[0]
+                    .rsplit("_comm_")
+                    .next()
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .map(|ci| ci >= n || degrees[ci] == 0.0)
+                    .unwrap_or(false);
+                if is_isolated { continue; }
+            }
+
             let parent_id = format!("l{}_comm_{}", parent_level, sc_idx);
             let mut leaf_nodes: Vec<String> = Vec::new();
 
@@ -368,10 +392,10 @@ fn detect_hierarchical_from_base(
                 if let Some(idx_str) = cid_str.rsplit("_comm_").next() {
                     if let Ok(ci) = idx_str.parse::<usize>() {
                         if ci < n {
-                            leaf_nodes.extend(current_communities[ci].clone());
+                            leaf_nodes.extend(current_communities[ci].iter().cloned());
                             let child_id = format!("l{}_comm_{}", level, ci);
-                            if let Some(child) = result.iter_mut().find(|c| c.id == child_id) {
-                                child.parent_id = Some(parent_id.clone());
+                            if let Some(&ri) = result_index.get(&child_id) {
+                                result[ri].parent_id = Some(parent_id.clone());
                             }
                         }
                     }
@@ -382,6 +406,7 @@ fn detect_hierarchical_from_base(
             let leaf_clone = leaf_nodes.clone();
             next_communities.push(leaf_nodes);
 
+            result_index.insert(parent_id.clone(), result.len());
             result.push(HierarchicalCommunity {
                 id: parent_id,
                 label: format!("L{}·{}", parent_level, sc_idx + 1),
@@ -1142,6 +1167,42 @@ mod tests {
         assert_eq!(level0.len(), 20, "20 singletons");
         let supers: Vec<_> = hierarchical.iter().filter(|c| c.level > 0).collect();
         assert_eq!(supers.len(), 0, "no super-communities when all singletons");
+    }
+
+    #[test]
+    fn test_hierarchy_isolated_majority_no_super_explosion() {
+        // 回归:大量孤立节点 + 少量强连通簇(di_syn 垃圾节点事故的退化形态)。
+        // 孤立社区不得每层各造一个超节点 —— 修复前此处高层社区数 ≈ 孤立节点数 × 层数
+        let mut g = Graph::new();
+        for i in 0..200 {
+            g.add_node(Node::new(format!("iso{}", i), format!("Iso{}", i), NodeKind::Symbol));
+        }
+        // 两个 K5 团 + 一条弱桥(保证基线产出 2 个真实社区且有跨社区边)
+        for c in 0..2 {
+            for i in 0..5 {
+                g.add_node(Node::new(format!("c{}n{}", c, i), format!("C{}N{}", c, i), NodeKind::Symbol));
+            }
+            for i in 0..5 {
+                for j in (i + 1)..5 {
+                    g.add_edge_unchecked(Edge::new(
+                        format!("c{}e{}{}", c, i, j),
+                        format!("c{}n{}", c, i),
+                        format!("c{}n{}", c, j),
+                        EdgeKind::Calls,
+                    ));
+                }
+            }
+        }
+        g.add_edge_unchecked(Edge::new("bridge", "c0n0", "c1n0", EdgeKind::Calls));
+
+        let hierarchical = detect_hierarchical_communities(&g, 42);
+        let supers: Vec<_> = hierarchical.iter().filter(|c| c.level > 0).collect();
+        assert!(supers.len() <= 8,
+            "孤立社区不应造超节点:高层社区数 {} 应有界(≤ 最大层数)", supers.len());
+        for sc in &supers {
+            assert!(sc.node_ids.len() >= 2,
+                "高层社区 {} 仅 {} 个叶节点,疑似孤立节点超节点", sc.id, sc.node_ids.len());
+        }
     }
 
     // ── 确定性 ──────────────────────────────────────────────────

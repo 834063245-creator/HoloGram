@@ -347,8 +347,11 @@ fn get_rss_mb() -> f64 {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
+        // 注意:必须显式传本进程 PID —— 直接在被 spawn 的 PowerShell 里用 $pid
+        // 会测到 PowerShell 自己(之前报告恒为 ~60MB 的原因)
+        let self_pid = std::process::id();
         let mut c = Command::new("powershell");
-        c.args(["-NoProfile", "-Command", "(Get-Process -Id $pid).WorkingSet64 / 1MB"]);
+        c.args(["-NoProfile", "-Command", &format!("(Get-Process -Id {}).WorkingSet64 / 1MB", self_pid)]);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

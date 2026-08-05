@@ -1417,10 +1417,11 @@ pub(crate) fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str
         if node.kind() == "method_invocation" {
             let text = node.utf8_text(source.as_bytes()).unwrap_or("");
             let line = node.start_position().row + 1;
-            let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
 
             // Runtime.getRuntime().exec(cmd) / ProcessBuilder.start()
             if text.contains(".exec(") || text.contains("ProcessBuilder") {
+                // 命中后才创建节点,避免为每个调用点造孤立占位节点
+                let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
                 let marker = if text.contains("ProcessBuilder") {
                     "<cross-lang:subprocess:ProcessBuilder>".to_string()
                 } else {
@@ -1469,12 +1470,13 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
             if let Some(func) = node.child_by_field_name("function") {
                 let func_text = func.utf8_text(source.as_bytes()).unwrap_or("");
                 let line = node.start_position().row + 1;
-                let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
 
                 // exec.Command / exec.CommandContext → 子进程
                 let is_exec = func_text == "exec.Command" || func_text == "exec.CommandContext"
                     || func_text.ends_with(".Command") || func_text.ends_with(".CommandContext");
                 if is_exec {
+                    // 命中后才创建节点,避免为每个调用点造孤立占位节点
+                    let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
                     let marker = format!("<cross-lang:subprocess:{}>", func_text);
                     let tgt_id = find_or_create_di_node(graph, &marker, file, line);
                     let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);

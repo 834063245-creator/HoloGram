@@ -662,6 +662,7 @@ impl LspManager {
 
         let root = project_root.to_string();
         let mut handles = Vec::new();
+        let mut already_running = 0usize;
 
         for cfg in SERVER_CONFIGS {
             // 应用扩展名过滤
@@ -669,6 +670,20 @@ impl LspManager {
                 let has_match = ext_filter.iter()
                     .any(|e| cfg.extensions.contains(e));
                 if !has_match { continue; }
+            }
+
+            // 跳过池中已在运行的服务器 —— 与 warm() 行为一致,
+            // 避免压测/重复调用时杀死健康进程并重复全量索引
+            {
+                let pool = mgr.pool.read().unwrap();
+                if let Some(arc) = pool.get(cfg.command) {
+                    if let Ok(guard) = arc.lock() {
+                        if guard.is_some() {
+                            already_running += 1;
+                            continue;
+                        }
+                    }
+                }
             }
 
             let root = Self::resolve_workspace_root(&root, cfg.config_marker);
@@ -713,7 +728,8 @@ impl LspManager {
             }
         }
 
-        (started, failed)
+        // 已在运行的服务器计入成功数(它们确实可用)
+        (started + already_running, failed)
     }
 
     /// 为 LSP 服务器查找正确的工作区根目录。

@@ -708,4 +708,44 @@ func main() {
         let added = langs::detect_py_cross_lang(&mut g, "math.py", source);
         assert_eq!(added, 0, "No cross-lang calls → 0 edges");
     }
+
+    // ── 回归:未命中模式时不得创建任何占位节点(di_syn 垃圾节点事故) ──
+
+    #[test]
+    fn test_go_no_match_creates_no_nodes() {
+        let mut g = Graph::new();
+        let source = r#"
+package main
+import "fmt"
+func main() {
+    fmt.Println("hello")
+    x := add(1, 2)
+    fmt.Sprintf("%d", x)
+}
+func add(a, b int) int { return a + b }
+"#;
+        let added = langs::detect_go_cross_lang(&mut g, "main.go", source);
+        assert_eq!(added, 0);
+        assert_eq!(g.nodes.len(), 0,
+            "未命中时不得创建占位节点, 实际 {} 个", g.nodes.len());
+    }
+
+    #[test]
+    fn test_java_no_match_creates_no_nodes() {
+        let mut g = Graph::new();
+        let source = r#"
+public class Calc {
+    public int add(int a, int b) {
+        return a + b;
+    }
+    public void run() {
+        System.out.println(add(1, 2));
+    }
+}
+"#;
+        let added = langs::detect_java_cross_lang(&mut g, "Calc.java", source);
+        assert_eq!(added, 0);
+        assert_eq!(g.nodes.len(), 0,
+            "未命中时不得创建占位节点, 实际 {} 个", g.nodes.len());
+    }
 }
