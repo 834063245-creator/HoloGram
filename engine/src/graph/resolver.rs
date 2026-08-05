@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use super::{Edge, EdgeKind, Graph};
@@ -15,8 +16,15 @@ fn code_extensions() -> &'static [String] {
     EXT.get_or_init(|| GRAMMAR_LOADER.supported_extensions())
 }
 
+/// 扩展名查找集合，从 code_extensions() 派生。
+/// O(1) 查找，替代对 Vec 的线性扫描（short_name/file_stem 每名字调用）。
+fn code_extension_set() -> &'static HashSet<String> {
+    static SET: OnceLock<HashSet<String>> = OnceLock::new();
+    SET.get_or_init(|| code_extensions().iter().cloned().collect())
+}
+
 fn is_common_extension(s: &str) -> bool {
-    code_extensions().iter().any(|ext| ext == s)
+    code_extension_set().contains(s)
 }
 
 /// 提取文件名主干：不含扩展名的文件名。
@@ -49,31 +57,76 @@ fn file_stem(name: &str) -> String {
 /// 无法解析的边将被记录日志，然后作为孤儿边移除。
 pub struct CrossFileResolver;
 
+/// resolve() 主循环期间保持不变的索引集合。
+/// 在主循环前构建一次 —— 循环内只做边收集，graph.nodes 不变
+///（边增删发生在循环之后），因此索引与 resolve_name 结果均可安全复用。
+struct ResolverIndexes {
+    /// 短名称 → node ID："User" → ["app.models.User", "auth.models.User"]
+    name: HashMap<String, Vec<String>>,
+    /// 文件主干 → node ID（用于 import 解析）："a" → ["a.rs"]
+    stem: HashMap<String, Vec<String>>,
+    /// node ID → 预计算语言。消除候选扫描中每候选一次 infer_language
+    /// 的 to_lowercase 分配与字面量比较。
+    lang: HashMap<String, Option<&'static str>>,
+}
+
+fn build_indexes(graph: &Graph) -> ResolverIndexes {
+    let mut idx = ResolverIndexes {
+        name: HashMap::new(),
+        stem: HashMap::new(),
+        lang: HashMap::new(),
+    };
+    for (id, node) in &graph.nodes {
+        idx.lang.insert(id.clone(), infer_language(id));
+
+        let short = short_name(&node.name);
+        idx.name.entry(short.clone()).or_default().push(id.clone());
+
+        // File / Module 节点：也按主干索引以支持 import 边
+        if node.kind == super::node::NodeKind::File
+            || node.kind == super::node::NodeKind::Module
+        {
+            let stem = file_stem(&node.name);
+            if stem != short {
+                idx.stem.entry(stem).or_default().push(id.clone());
+            }
+        }
+    }
+    idx
+}
+
+/// resolve_name 的记忆化包装。
+/// 键必须包含语言 —— 同名不同语言的引用解析结果不同。
+/// 外层按语言分桶，使命中路径无需为查询分配 String。
+fn cached_resolve_name(
+    name: &str,
+    lang: Option<&'static str>,
+    cache: &mut HashMap<Option<&'static str>, HashMap<String, Option<String>>>,
+    idx: &ResolverIndexes,
+    graph: &Graph,
+) -> Option<String> {
+    let inner = cache.entry(lang).or_default();
+    if let Some(hit) = inner.get(name) {
+        return hit.clone();
+    }
+    let result = resolve_name(name, &idx.name, &idx.stem, &idx.lang, graph, lang);
+    inner.insert(name.to_string(), result.clone());
+    result
+}
+
 impl CrossFileResolver {
     /// 解析图中所有跨文件边。
     /// 返回已解析边的数量（包括孤儿边清理）。
     pub fn resolve(graph: &mut Graph) -> usize {
-        // ── 索引 1：短名称 → node ID ──
-        // "User" → ["app.models.User", "auth.models.User"]
-        let mut name_index: HashMap<String, Vec<String>> = HashMap::new();
-        // ── 索引 2：文件主干 → node ID（用于 import 解析）──
-        // "a" → ["a.rs"], "models" → ["app/models.py"]
-        let mut stem_index: HashMap<String, Vec<String>> = HashMap::new();
-
-        for (id, node) in &graph.nodes {
-            let short = short_name(&node.name);
-            name_index.entry(short.clone()).or_default().push(id.clone());
-
-            // File / Module 节点：也按主干索引以支持 import 边
-            if node.kind == super::node::NodeKind::File
-                || node.kind == super::node::NodeKind::Module
-            {
-                let stem = file_stem(&node.name);
-                if stem != short {
-                    stem_index.entry(stem).or_default().push(id.clone());
-                }
-            }
-        }
+        // 索引（短名/主干/语言）在主循环前构建一次；
+        // 循环内 graph.nodes 不变，因此 resolve_name 是纯函数，
+        // 其结果可按 (名称, 语言) 记忆化 —— 同一热名被 E 条边引用
+        // 时只做一次候选扫描，而非 E 次。
+        let idx = build_indexes(graph);
+        let mut resolve_cache: HashMap<
+            Option<&'static str>,
+            HashMap<String, Option<String>>,
+        > = HashMap::new();
 
         let mut resolved = 0usize;
         let mut unresolved_count = 0usize;
@@ -109,19 +162,21 @@ impl CrossFileResolver {
             let src_id = if graph.nodes.contains_key(&edge.source) {
                 Some(edge.source.clone())
             } else {
-                resolve_name(&edge.source, &name_index, &stem_index, graph, src_lang)
+                cached_resolve_name(&edge.source, src_lang, &mut resolve_cache, &idx, graph)
             };
 
             // 尝试解析 target（如果不在图中）。
             // 使用 source 的语言来优先选择同语言的 target。
-            let tgt_lang = src_id.as_ref()
-                .map(|id| infer_language(id))
-                .flatten()
-                .or(src_lang);
+            // source 已在图中时 src_lang 即 infer_language(src_id)，直接复用；
+            // 仅当 source 被解析到不同 ID 时才需要重新推断。
+            let tgt_lang = match src_id.as_deref() {
+                Some(id) if id != edge.source => infer_language(id).or(src_lang),
+                _ => src_lang,
+            };
             let tgt_id = if graph.nodes.contains_key(&edge.target) {
                 Some(edge.target.clone())
             } else {
-                resolve_name(&edge.target, &name_index, &stem_index, graph, tgt_lang)
+                cached_resolve_name(&edge.target, tgt_lang, &mut resolve_cache, &idx, graph)
             };
 
             let src_ok = src_id.is_some();
@@ -149,8 +204,8 @@ impl CrossFileResolver {
                 if !tgt_ok {
                     let tshort = short_name(&edge.target);
                     let has_dot = edge.target.contains('.');
-                    let in_index = name_index.contains_key(&tshort);
-                    let in_stem = stem_index.contains_key(&file_stem(&edge.target));
+                    let in_index = idx.name.contains_key(&tshort);
+                    let in_stem = idx.stem.contains_key(&file_stem(&edge.target));
                     if !in_index && !in_stem {
                         diag_no_short += 1;
                         if has_dot { diag_dotted_method += 1; }
@@ -335,17 +390,31 @@ pub fn infer_language(id_or_path: &str) -> Option<&'static str> {
     None
 }
 
+/// 查询候选节点的预计算语言。候选项均来自索引（即 graph.nodes 的键），
+/// 必命中预算表；防御性回退到即时推断以保持独立调用时的语义。
+fn candidate_lang(
+    id: &str,
+    lang_map: &HashMap<String, Option<&'static str>>,
+) -> Option<&'static str> {
+    lang_map
+        .get(id)
+        .copied()
+        .flatten()
+        .or_else(|| infer_language(id))
+}
+
 /// 将候选项过滤为匹配给定语言的候选项（如果已知）。
 /// 返回匹配候选项的引用 Vec。
 /// 如果 `lang` 为 None 或没有同语言候选项，则返回所有候选项。
 fn filter_by_language<'a>(
     candidates: &'a [String],
     lang: Option<&str>,
+    lang_map: &HashMap<String, Option<&'static str>>,
 ) -> Vec<&'a String> {
     let all: Vec<&String> = candidates.iter().collect();
     let same_lang: Vec<&String> = candidates
         .iter()
-        .filter(|c| lang == infer_language(c))
+        .filter(|c| lang == candidate_lang(c, lang_map))
         .collect();
     if same_lang.is_empty() { all } else { same_lang }
 }
@@ -355,6 +424,7 @@ fn resolve_name(
     name: &str,
     name_index: &HashMap<String, Vec<String>>,
     stem_index: &HashMap<String, Vec<String>>,
+    lang_map: &HashMap<String, Option<&'static str>>,
     graph: &Graph,
     source_lang: Option<&str>,
 ) -> Option<String> {
@@ -367,7 +437,7 @@ fn resolve_name(
     // 适用于裸 fn/class 名："fn_a" → "a.rs.fn_a"
     let short = short_name(name);
     if let Some(candidates) = name_index.get(&short) {
-        let filtered = filter_by_language(candidates, source_lang);
+        let filtered = filter_by_language(candidates, source_lang, lang_map);
         if filtered.len() == 1 && !name.contains('.') {
             return Some(filtered[0].clone());
         }
@@ -378,7 +448,7 @@ fn resolve_name(
         // ponytail: 裸名无法后缀匹配（match_len < 2）。
         // 回退到启发式：优先 Function/Class，然后最短路径。
         if !name.contains('.') {
-            if let Some(c) = best_bare_match(&filtered, graph, source_lang) {
+            if let Some(c) = best_bare_match(&filtered, graph, source_lang, lang_map) {
                 return Some(c);
             }
         }
@@ -389,7 +459,7 @@ fn resolve_name(
     let stem = file_stem(name);
     if stem != short {
         if let Some(candidates) = stem_index.get(&stem) {
-            let filtered = filter_by_language(candidates, source_lang);
+            let filtered = filter_by_language(candidates, source_lang, lang_map);
             if filtered.len() == 1 {
                 return Some(filtered[0].clone());
             }
@@ -398,7 +468,7 @@ fn resolve_name(
             }
             // 文件主干匹配的裸名回退
             if !name.contains('.') {
-                if let Some(c) = best_bare_match(&filtered, graph, source_lang) {
+                if let Some(c) = best_bare_match(&filtered, graph, source_lang, lang_map) {
                     return Some(c);
                 }
             }
@@ -407,11 +477,17 @@ fn resolve_name(
 
     // ── 策略 4：规范化路径分隔符 ──
     // 处理 Rust 路径中的 "::" 和 import 目标中混合的 "./\"
-    let normalized = name.replace("::", ".").replace(['\\', '/'], ".");
-    if normalized != *name {
+    // contains 守卫：无分隔符时不产生 String 分配（热路径）。
+    let normalized: Cow<'_, str> =
+        if name.contains("::") || name.contains(['\\', '/']) {
+            Cow::Owned(name.replace("::", ".").replace(['\\', '/'], "."))
+        } else {
+            Cow::Borrowed(name)
+        };
+    if normalized.as_ref() != name {
         let short_norm = short_name(&normalized);
         if let Some(candidates) = name_index.get(&short_norm) {
-            let filtered = filter_by_language(candidates, source_lang);
+            let filtered = filter_by_language(candidates, source_lang, lang_map);
             if filtered.len() == 1 {
                 return Some(filtered[0].clone());
             }
@@ -442,7 +518,7 @@ fn resolve_name(
             stripped = stripped[dot_pos + 1..].to_string();
             let short = short_name(&stripped);
             if let Some(candidates) = name_index.get(&short) {
-                let filtered = filter_by_language(candidates, source_lang);
+                let filtered = filter_by_language(candidates, source_lang, lang_map);
                 if filtered.len() == 1 {
                     return Some(filtered[0].clone());
                 }
@@ -450,7 +526,7 @@ fn resolve_name(
                     return Some(c);
                 }
                 if !stripped.contains('.') {
-                    if let Some(c) = best_bare_match(&filtered, graph, source_lang) {
+                    if let Some(c) = best_bare_match(&filtered, graph, source_lang, lang_map) {
                         return Some(c);
                     }
                 }
@@ -495,7 +571,12 @@ fn best_qualified_match(name: &str, candidates: &[&String]) -> Option<String> {
 ///
 /// ponytail: 这是启发式而非保证。精确的 call 解析
 /// 请对单条边使用 hologram_resolve_call（基于 LSP）。
-fn best_bare_match(candidates: &[&String], graph: &Graph, source_lang: Option<&str>) -> Option<String> {
+fn best_bare_match(
+    candidates: &[&String],
+    graph: &Graph,
+    source_lang: Option<&str>,
+    lang_map: &HashMap<String, Option<&'static str>>,
+) -> Option<String> {
     use super::node::NodeKind;
 
     // 评分：lang_match * 100000 + kind_prio * 1000 + 路径深度
@@ -511,7 +592,7 @@ fn best_bare_match(candidates: &[&String], graph: &Graph, source_lang: Option<&s
                 _ => 4,
             };
             let depth = c.split('.').count();
-            let lang_bonus = if source_lang.is_some() && infer_language(c) == source_lang {
+            let lang_bonus = if source_lang.is_some() && candidate_lang(c, lang_map) == source_lang {
                 100000
             } else {
                 0
@@ -1017,5 +1098,74 @@ mod tests {
         let edge = g.get_edge("e1").expect("ambiguous edge should be preserved");
         let meta = edge.metadata.as_ref().expect("ambiguous edge must have metadata");
         assert_eq!(meta["ambiguous"], true, "ambiguous flag must be set");
+    }
+
+    /// 性能回归：resolve_name 记忆化。
+    ///
+    /// 合成 ~2000 节点 / ~20000 边的图：热名 "read" 在 41 个文件中
+    /// 各有一个定义（多候选，触发 filter_by_language + best_bare_match
+    /// 的 O(K) 扫描）。修复前每条边重复全部候选扫描（O(E×K)，秒级）；
+    /// 修复后每个 (名称, 语言) 只扫描一次，其余命中缓存。
+    #[test]
+    fn test_resolve_memoized_hot_name_performance() {
+        use std::time::Instant;
+
+        let mut g = Graph::new();
+        // 热名 "read" 的多候选定义：唯一深度最浅者（w.rs.read，深度 3）
+        // 在 best_bare_match 中胜出；其余 40 个候选深度 4，均为 Rust Function。
+        g.add_node(Node::new("w.rs.read", "read", NodeKind::Function));
+        for i in 0..40 {
+            g.add_node(Node::new(
+                format!("pkg{i}.deep.rs.read"),
+                "read",
+                NodeKind::Function,
+            ));
+        }
+        // 500 个调用方节点
+        for i in 0..500 {
+            g.add_node(Node::new(
+                format!("caller{i}.rs.handler"),
+                "handler",
+                NodeKind::Function,
+            ));
+        }
+        // 填充到 ~2000 节点
+        for i in 0..(2000 - 41 - 500) {
+            g.add_node(Node::new(
+                format!("filler{i}.rs.f{i}"),
+                format!("f{i}"),
+                NodeKind::Function,
+            ));
+        }
+        // 20000 条跨文件边引用同一热名
+        for i in 0..20000 {
+            g.add_edge_unchecked(cross_edge(
+                &format!("hot_e{i}"),
+                &format!("caller{}.rs.handler", i % 500),
+                "read",
+                EdgeKind::Calls,
+            ));
+        }
+
+        // 一致性基准：绕过缓存，用同一索引直接调 resolve_name
+        let idx = build_indexes(&g);
+        let expected = resolve_name("read", &idx.name, &idx.stem, &idx.lang, &g, Some("rust"));
+        assert_eq!(expected.as_deref(), Some("w.rs.read"));
+
+        let start = Instant::now();
+        let resolved = CrossFileResolver::resolve(&mut g);
+        let elapsed = start.elapsed();
+
+        assert_eq!(resolved, 20000, "all hot-name edges should resolve");
+        assert!(
+            elapsed.as_secs() < 2,
+            "resolve() took {:?} — memoization regressed?",
+            elapsed
+        );
+        // 带缓存的解析结果必须与直接调 resolve_name 一致
+        let first = g.get_edge("hot_e0_resolved").expect("first edge resolved");
+        assert_eq!(first.target, expected.unwrap());
+        let last = g.get_edge("hot_e19999_resolved").expect("last edge resolved");
+        assert_eq!(last.target, "w.rs.read");
     }
 }

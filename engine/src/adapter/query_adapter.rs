@@ -12,13 +12,43 @@ use crate::engine::GRAMMAR_LOADER;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 use crate::path_utils::normalize_path;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Parser, Query, QueryCursor};
 
 thread_local! {
     static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = const { RefCell::new(None) };
+}
+
+/// 编译后查询的全局缓存,按查询源码内容索引。
+/// Query::new 开销可观,此前 process_query 每个文件都重新编译一次 ——
+/// 大项目(如 5.1 万文件的 Linux 内核)下等于白耗一个阶段的 CPU;
+/// 对编译失败的查询(如引用了语法中不存在的节点类型)还会逐文件刷屏。
+/// 成功与失败都缓存:失败只报一次错,后续直接走降级路径。
+static QUERY_CACHE: OnceLock<Mutex<HashMap<&'static str, Option<Arc<Query>>>>> = OnceLock::new();
+
+/// 获取编译后的查询,命中缓存则 O(1) 返回。
+/// query_src 必须来自 include_str!( &'static str),保证键稳定。
+fn get_compiled_query(lang: &Language, query_src: &'static str) -> Option<Arc<Query>> {
+    let cache = QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(entry) = guard.get(query_src) {
+        return entry.clone();
+    }
+    let compiled = match Query::new(lang, query_src) {
+        Ok(q) => Some(Arc::new(q)),
+        Err(e) => {
+            eprintln!("[query_adapter] query compile failed (后续不再重复报告): {e}");
+            None
+        }
+    };
+    guard.insert(query_src, compiled.clone());
+    compiled
 }
 
 // ── 作用域边界（Phase 1）──
@@ -135,7 +165,7 @@ impl QueryStructureAdapter {
         }
     }
 
-    fn resolve_query_src(&self, ext: &str) -> &str {
+    fn resolve_query_src(&self, ext: &str) -> &'static str {
         self.query_src.unwrap_or_else(|| {
             // ponytail: TSX 使用独立的语法（LANGUAGE_TSX），支持 JSX。
             // TSX 查询文件包含的 JSX 模式无法在
@@ -209,7 +239,7 @@ fn process_query(
     tree: &tree_sitter::Tree,
     source: &str,
     file_path: &str,
-    query_src: &str,
+    query_src: &'static str,
     lang: &Language,
     func_kinds: &[&str],
     class_kinds: &[&str],
@@ -246,10 +276,8 @@ fn process_query(
             let is_func = func_kinds.contains(&kind);
             let is_class = class_kinds.contains(&kind);
             let scope_name = if is_func || is_class {
-                let mut name = node
-                    .child_by_field_name("name")
-                    .and_then(|n| n.utf8_text(source_bytes).ok())
-                    .map(|s| s.to_string());
+                // name 字段(JS/Go 等)或 C/C++ declarator 链(function_definition)
+                let mut name = extract_def_name(&node, source_bytes);
                 let mut anonymous = name.is_none();
                 // 匿名箭头函数/函数表达式：尝试从 parent 继承名字 —
                 //   const f = () => {}            → variable_declarator
@@ -299,11 +327,10 @@ fn process_query(
     }
     scopes.sort_by_key(|s| s.start);
 
-    // ── Phase 2：运行结构查询 ──
-    let query = match Query::new(lang, query_src) {
-        Ok(q) => q,
-        Err(e) => {
-            eprintln!("[query_adapter] query compile failed: {e}");
+    // ── Phase 2：运行结构查询(编译结果全局缓存,不再逐文件编译) ──
+    let query = match get_compiled_query(lang, query_src) {
+        Some(q) => q,
+        None => {
             return (nodes, edges);
         }
     };
@@ -668,6 +695,39 @@ fn process_query(
 
 /// 解析函数类节点：返回 (name, scope_end_byte)。
 /// 对于 variable_declarator，检查其值是否为函数。
+/// 提取函数/类型定义节点的名字。
+/// 优先 name 字段(JS/Go/Python/Rust 等);其次 C/C++ 的 declarator 链 ——
+/// tree-sitter-c/cpp 的 function_definition 没有 name 字段,名字嵌在
+/// declarator → (function_declarator/pointer_declarator/…) → identifier 中。
+fn extract_def_name(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
+    if let Some(n) = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        .map(|s| s.to_string())
+    {
+        return Some(n);
+    }
+    // C/C++ declarator 链:逐层向下钻,直到 identifier 类叶子
+    let mut cur = *node;
+    loop {
+        cur = cur.child_by_field_name("declarator")?;
+        match cur.kind() {
+            "identifier" | "field_identifier" | "destructor_name" | "operator_name" => {
+                return cur.utf8_text(source).ok().map(|s| s.to_string());
+            }
+            "qualified_identifier" => {
+                // C++ 命名空间限定:优先取末段 name,否则取整段文本
+                return cur
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    .map(|s| s.to_string())
+                    .or_else(|| cur.utf8_text(source).ok().map(|s| s.to_string()));
+            }
+            _ => {} // function_declarator / pointer_declarator 等:继续向下
+        }
+    }
+}
+
 fn resolve_fn(
     node: &tree_sitter::Node,
     source: &[u8],
@@ -675,11 +735,9 @@ fn resolve_fn(
 ) -> (Option<String>, Option<usize>) {
     let kind = node.kind();
     if func_kinds.contains(&kind) {
-        // 直接函数节点：function_declaration、arrow_function 等。
-        let name = node
-            .child_by_field_name("name")
-            .and_then(|n| n.utf8_text(source).ok())
-            .map(|s| s.to_string());
+        // 直接函数节点:function_declaration、arrow_function、
+        // function_definition(C/C++,名字走 declarator 链)等。
+        let name = extract_def_name(node, source);
         if name.is_some() {
             return (name, Some(node.end_byte()));
         }
@@ -1882,5 +1940,46 @@ mod tests {
                 println!("  [{:?}] {} -> {}", e.kind, e.source, e.target);
             }
         }
+    }
+
+    #[test]
+    fn test_c_structure_query_extracts() {
+        // 回归:c_structure.scm 必须能在 tree-sitter-c 上编译。
+        // 曾因引用 C 语法不存在的 throw_statement 导致整个查询编译失败,
+        // C 文件结构提取被静默跳过(内核压测 5.1 万文件只剩文件节点)。
+        let source = r#"
+#include <stdio.h>
+int add(int a, int b) { return a + b; }
+int main(void) {
+    int r = add(1, 2);
+    printf("%d\n", r);
+    return 0;
+}
+"#;
+        let lang = match crate::engine::GRAMMAR_LOADER.get("c") {
+            Some(l) => l,
+            None => { eprintln!("SKIP: no C grammar"); return; }
+        };
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let query_src = include_str!("../../queries/c_structure.scm");
+        let (nodes, edges) = process_query(
+            &tree, source, "test.c", query_src,
+            &lang,
+            &["function_definition"],
+            &["struct_specifier", "union_specifier"],
+        );
+
+        assert!(
+            nodes.iter().any(|n| n.name.contains("add")),
+            "C 函数定义应被提取,实际节点: {:?}",
+            nodes.iter().map(|n| &n.name).collect::<Vec<_>>()
+        );
+        assert!(
+            edges.iter().any(|e| matches!(e.kind, crate::graph::EdgeKind::Calls)),
+            "C 调用边应被提取"
+        );
     }
 }

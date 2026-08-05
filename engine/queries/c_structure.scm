@@ -15,8 +15,9 @@
 ;; ── Writes ──
 (assignment_expression) @write
 
-;; ── Throws ──
-(throw_statement) @throws
+;; C 无异常机制:tree-sitter-c 没有 throw_statement 节点,
+;; 写在这里会导致整个查询编译失败、C 文件结构提取全部跳过。
+;; (throw 查询只应出现在 cpp/java/js/ts 等有此节点的语言文件中。)
 
 ;; ── Usage ──
 (identifier) @usage
