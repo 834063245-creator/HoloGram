@@ -335,10 +335,14 @@ struct GitignoreRules {
 - 超时保险保留(其他语言项目可能真有病态,如巨型数组初始化器)。
 
 **遗留**:
-1. **discovery 两次调用结果不一致**:stress stdout Files=64,466 vs runner
-   batch 分母 69,772,需查 Engine::init vs analyze_project 的 discovery 差异。
-2. **stress 模式 tracing 进 sink**:warn 全丢,调 init_logging 让 stress 写
-   文件日志,便于诊断(本次靠临时诊断 test 绕过)。
+1. ~~**discovery 两次调用结果不一致**:stress stdout Files=64,466 vs runner
+   batch 分母 69,772~~ **已解决(commit `aec3e80`)**:count_source_files/
+   collect_source_files 是独立陈旧副本(无 .gitignore、黑名单缺 tests 等),
+   已改为复用 discover_files,stdout Files 即真实解析数。fs 验证
+   2185→2169(旧口径含 3 个 tests/ 目录 16 文件)。
+2. ~~**stress 模式 tracing 进 sink**:warn 全丢~~ **已解决(commit `aec3e80`)**:
+   --stress-real 分支 init_logging(Some(root)),日志落
+   <project>/.hologram/logs/engine.log。
 3. 超时若遇真病态(单操作过久),tree-sitter 0.25 超时检查在操作边界,
    可能不精确 — 届时可上 `parse_with_options` 的 progress callback。
 4. 解析期内存峰值 11.2GB(16GB 机),继续放一放。
