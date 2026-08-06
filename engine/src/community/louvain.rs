@@ -25,7 +25,22 @@ pub struct HierarchicalCommunity {
 // Graph → 邻接表辅助函数
 // ═══════════════════════════════════════════════════════════════
 
-fn build_adjacency(graph: &Graph) -> Option<(Vec<String>, Vec<Vec<(usize, f64)>>, Vec<f64>, f64)> {
+type Adjacency = (Vec<String>, Vec<Vec<(usize, f64)>>, Vec<f64>, f64);
+
+fn build_adjacency(graph: &Graph) -> Option<Adjacency> {
+    let _t = std::time::Instant::now();
+    let r = build_adjacency_inner(graph);
+    if let Some((ids, adj, _, _)) = &r {
+        let e: usize = adj.iter().map(|v| v.len()).sum::<usize>() / 2;
+        eprintln!("[louvain] build_adjacency {:.2}s (N={}, E={})",
+            _t.elapsed().as_secs_f64(), ids.len(), e);
+    } else {
+        eprintln!("[louvain] build_adjacency {:.2}s (empty)", _t.elapsed().as_secs_f64());
+    }
+    r
+}
+
+fn build_adjacency_inner(graph: &Graph) -> Option<Adjacency> {
     let mut node_ids: Vec<&str> = graph.node_ids().collect();
     node_ids.sort();
     let n = node_ids.len();
@@ -124,6 +139,7 @@ fn local_moving_core(
     m: f64,
     rng: &rand::rngs::StdRng,
 ) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let _t = std::time::Instant::now();
     let mut rng = rng.clone();
     let mut node_to_comm: Vec<usize> = (0..n).collect();
     let mut comm_nodes: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
@@ -210,6 +226,10 @@ fn local_moving_core(
         compact_communities(n, &mut comm_nodes, &mut sigma_tot, &mut node_to_comm);
     }
 
+    if n >= 1000 {
+        eprintln!("[louvain] local-moving {:.2}s ({} iters, N={})",
+            _t.elapsed().as_secs_f64(), iter, n);
+    }
     (comm_nodes, node_to_comm)
 }
 
@@ -271,6 +291,7 @@ fn detect_hierarchical_from_base(
     seed: u64,
     leaf_edges: &[(&str, &str)],
 ) -> Vec<HierarchicalCommunity> {
+    let _t = std::time::Instant::now();
     let mut result: Vec<HierarchicalCommunity> = Vec::new();
     if base.is_empty() { return result; }
 
@@ -372,6 +393,8 @@ fn detect_hierarchical_from_base(
         }
 
         if m == 0.0 { break; }
+        eprintln!("[louvain] hierarchy level {}: {} comms, condense {:.2}s",
+            level + 1, n, _t.elapsed().as_secs_f64());
 
         // 在压缩图上运行 Louvain（非 Leiden — 精化在此处作用不大）
         let condensed_ids: Vec<String> = (0..n)
@@ -435,6 +458,8 @@ fn detect_hierarchical_from_base(
         level = parent_level;
     }
 
+    eprintln!("[louvain] hierarchy total {:.2}s ({} levels, {} base comms)",
+        _t.elapsed().as_secs_f64(), level, base.len());
     result
 }
 
@@ -461,6 +486,7 @@ fn leiden_refinement(
     rng: &mut rand::rngs::StdRng,
     p1_comms: &[Vec<usize>],  // Phase 1: community → node indices
 ) -> Vec<Community> {
+    let _t = std::time::Instant::now();
     // ── 步骤 1：从阶段 1 构建 node→community 映射 ──
     let mut node_to_p1: Vec<usize> = vec![0; n];
     for (ci, comm) in p1_comms.iter().enumerate() {
@@ -469,6 +495,7 @@ fn leiden_refinement(
         }
     }
 
+    eprintln!("[louvain] leiden step1 (map) {:.2}s", _t.elapsed().as_secs_f64());
     // ── 步骤 2：在 P1 社区内部拆分 ──
     // sub_comms：所有子社区的扁平列表，每个为 Vec<usize>
     // sub_parent：每个子社区来自哪个 P1 社区
@@ -536,6 +563,7 @@ fn leiden_refinement(
         }
     }
 
+    eprintln!("[louvain] leiden step2 (split) {:.2}s", _t.elapsed().as_secs_f64());
     // ── 步骤 3：合并子社区 ──
     // 每个子社区可以留在其父 P1 社区，或切换到
     // 相邻的 P1 社区（如果能改善模块度）。
@@ -621,6 +649,8 @@ fn leiden_refinement(
         .map(|nodes| nodes.iter().map(|&idx| node_ids[idx].clone()).collect())
         .collect();
     result.sort_by_key(|c| -(c.len() as i64));
+    eprintln!("[louvain] leiden step3 (merge) {:.2}s | total {:.2}s",
+        _t.elapsed().as_secs_f64(), _t.elapsed().as_secs_f64());
     result
 }
 

@@ -434,6 +434,8 @@ impl MemoryIndex {
         nodes: HashMap<crate::graph::NodeId, Node>,
         edges: HashMap<crate::graph::EdgeId, crate::graph::Edge>,
     ) -> Self {
+        let _t0 = std::time::Instant::now();
+        let _edge_total = edges.len();
         let mut idx = Self::new();
         // 预驻留所有节点 ID
         for node in nodes.values() {
@@ -450,6 +452,8 @@ impl MemoryIndex {
             idx.index_node_file(handle, &node);
             idx.nodes.insert(handle, node);
         }
+        eprintln!("[mem-idx] intern+nodes {:.2}s", _t0.elapsed().as_secs_f64());
+        let _t1 = std::time::Instant::now();
 
         // 构建逐节点桶（临时 —— 被 flatten_buckets 消费）
         idx.rebuild_dense_index();
@@ -474,15 +478,20 @@ impl MemoryIndex {
                 in_buckets[tgt_idx as usize].push((src, kind_u8, edge.coupling_depth, delay_f64));
             }
         }
+        eprintln!("[mem-idx] buckets {:.2}s (E={})", _t1.elapsed().as_secs_f64(), _edge_total);
+        let _t2 = std::time::Instant::now();
 
         // 对每个桶排序 + 去重
         for bucket in out_buckets.iter_mut().chain(in_buckets.iter_mut()) {
             bucket.sort_unstable_by_key(|e| (e.0, e.1, e.2));
             bucket.dedup_by_key(|e| (e.0, e.1, e.2));
         }
+        eprintln!("[mem-idx] sort+dedup {:.2}s", _t2.elapsed().as_secs_f64());
+        let _t3 = std::time::Instant::now();
 
         idx.recompute_degrees(&out_buckets, &in_buckets);
         idx.flatten_buckets(&out_buckets, &in_buckets);
+        eprintln!("[mem-idx] degrees+flatten {:.2}s", _t3.elapsed().as_secs_f64());
         // 全新构建的图尚未写库 —— SQLite fts_nodes 不反映此索引，标记待惰性重建
         idx.fts_dirty.store(true, Ordering::Release);
         idx
