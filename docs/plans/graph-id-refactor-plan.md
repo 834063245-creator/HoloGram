@@ -10,7 +10,9 @@
 > R1~R7 后 fs 契约:155518/426199/28284,resolved 271321,~35s;R8 后复跑同绿(36.5s)。
 > R9 后 fs 契约同绿(35.6s,走 SQLite 旧路);drivers 压测(阈值 4M 强制快照):
 > 快照写入 56.3s(2.44GB,<60s 达标,原 bulk 885.6s),总耗时 1697.6s → 778.2s。
-> 剩余:R10(可选 u32 化,全内核带看门狗压测)。
+> 剩余:R10-deep 已竣工(`66b3698`/`8d717e9`/`88149e0`,规格「容器 u32」修正为「全量句柄化」,
+> 见 handoff「R10-deep 竣工」节)。R10 后全内核瓶颈:from_existing_graph intern 98s、
+> community local-moving 74s(两次)、build_adjacency 27s(两次)、leiden K² 22s(超线性)。
 > R8/R9 实施记录与偏离说明见 perf-stress-handoff.md「R 阶段进度」节。
 
 ## 0. 施工前必读(现状与硬约束)
