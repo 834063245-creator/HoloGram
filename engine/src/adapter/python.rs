@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use crate::adapter::traits::LanguageAdapter;
+use crate::adapter::tree_sitter::PARSE_TIMEOUT_MICROS;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 use std::cell::RefCell;
 use tree_sitter::Parser;
@@ -36,6 +37,7 @@ impl LanguageAdapter for PythonAdapter {
             let mut borrow = cell.borrow_mut();
             let parser = borrow.get_or_insert_with(|| {
                 let mut p = Parser::new();
+                p.set_timeout_micros(PARSE_TIMEOUT_MICROS);
                 p.set_language(&tree_sitter_python::LANGUAGE.into())
                     .expect("failed to load tree-sitter-python grammar");
                 p
@@ -44,7 +46,10 @@ impl LanguageAdapter for PythonAdapter {
         });
         let tree = match tree {
             Some(t) => t,
-            None => return (vec![], vec![], None),
+            None => {
+                tracing::warn!(path = file_path, "[parser] parse returned None (timeout or failure), skipping file (病态文件)");
+                return (vec![], vec![], None);
+            }
         };
 
         let file_id = file_path

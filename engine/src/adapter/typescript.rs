@@ -6,6 +6,7 @@ use std::path::Path;
 use tree_sitter::{Language, Parser};
 
 use crate::adapter::traits::LanguageAdapter;
+use crate::adapter::tree_sitter::PARSE_TIMEOUT_MICROS;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 use crate::path_utils::normalize_path;
 
@@ -50,6 +51,7 @@ impl LanguageAdapter for TypeScriptAdapter {
             let mut borrow = cell.borrow_mut();
             let parser = borrow.get_or_insert_with(|| {
                 let mut p = Parser::new();
+                p.set_timeout_micros(PARSE_TIMEOUT_MICROS);
                 p.set_language(&lang).ok();
                 p
             });
@@ -57,7 +59,10 @@ impl LanguageAdapter for TypeScriptAdapter {
         });
         let tree = match tree {
             Some(t) => t,
-            None => return (vec![], vec![], None),
+            None => {
+                tracing::warn!(path = file_path, "[parser] parse returned None (timeout or failure), skipping file (病态文件)");
+                return (vec![], vec![], None);
+            }
         };
 
         // 完整点分路径作为 module ID（与通用 TreeSitterAdapter 对齐）。

@@ -15,6 +15,13 @@ thread_local! {
     static TL_PARSER: RefCell<Option<(Parser, Language, String)>> = const { RefCell::new(None) };
 }
 
+/// 单文件解析超时 — 病态文件保护。
+/// 个别文件 tree-sitter 解析可达 200s+（kernel batch 45400 同型），
+/// 会卡死整个解析批次。tree-sitter 原生超时：parse 超时返回 None，
+/// 该文件符号丢弃、warn 路径。无需 spawn 线程（Windows 每线程栈
+/// reserve 计入 commit charge，逐文件 spawn 会打穿 commit 限额）。
+pub const PARSE_TIMEOUT_MICROS: u64 = 30_000_000;
+
 /// 通用 tree-sitter 适配器，覆盖 Python 和 JS/TS 之外的所有语言。
 /// 由于各 crate API 不一致，每种语言都显式匹配。
 pub struct TreeSitterAdapter;
@@ -43,6 +50,7 @@ impl TreeSitterAdapter {
                     None => return (vec![], vec![], None),
                 };
                 let mut p = Parser::new();
+                p.set_timeout_micros(PARSE_TIMEOUT_MICROS);
                 if p.set_language(&lang).is_err() {
                     return (vec![], vec![], None);
                 }
@@ -54,7 +62,13 @@ impl TreeSitterAdapter {
                     let (nodes, edges) = generic_walk(&t, source, file_id);
                     (nodes, edges, Some(t))
                 }
-                None => (vec![], vec![], None),
+                None => {
+                    tracing::warn!(
+                        path = file_id,
+                        "[parser] parse returned None (timeout or failure), skipping file (病态文件)"
+                    );
+                    (vec![], vec![], None)
+                }
             }
         })
     }

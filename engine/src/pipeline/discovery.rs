@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -68,10 +68,14 @@ pub fn discover_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
 ///
 /// 旧实现把每条规则取「最后一个路径分量」作全局 basename 排除，导致路径型/
 /// 锚定型规则被错误放大（如 `tools/power/acpi/.gitignore` 的 `/include/` 会
-/// 全局排除所有名为 include 的目录，kernel 整个头文件体系因此缺失）。
+/// 全局排除所有名为 include 的目录）；无斜杠规则也被全局化（`arch/x86/boot/
+/// .gitignore` 的 `tools/` 全局排除所有 tools 目录，94 个真实内核源码目录
+/// 因此丢失）。两者都是把 sub .gitignore 的规则放大到全树的正确性 bug。
 struct GitignoreRules {
-    /// 无斜杠规则（如 `my_build`）→ 任意层级 basename 匹配（兼容旧行为）。
-    global_names: HashSet<String>,
+    /// 无斜杠规则（如 `my_build`、`tools`）→ basename 匹配，按 .gitignore
+    /// 所在目录作用域（git 语义）：root 规则（base=""）任意层级生效，
+    /// sub 规则仅其目录之下任意层级生效。
+    names: HashMap<String, Vec<String>>,
     /// 含斜杠规则（前导 / 或中间 /）→ 相对 root 的路径，按首分量分桶，
     /// 匹配时只查对应桶（平均 <10 条）。
     anchored: HashMap<String, Vec<String>>,
@@ -80,18 +84,27 @@ struct GitignoreRules {
 impl Default for GitignoreRules {
     fn default() -> Self {
         GitignoreRules {
-            global_names: HashSet::new(),
+            names: HashMap::new(),
             anchored: HashMap::new(),
         }
     }
 }
 
 impl GitignoreRules {
-    /// 判断相对路径 rel（`/` 分隔）是否被规则排除。
-    /// name 是最后路径分量，供 global_names 匹配。
+    /// 判断相对路径 rel（`/` 分隔）的目录 entry 是否被规则排除。
+    /// name 是最后路径分量，用于无斜杠规则匹配。
     fn is_excluded(&self, name: &str, rel: &str) -> bool {
-        if self.global_names.contains(name) {
-            return true;
+        if let Some(bases) = self.names.get(name) {
+            for base in bases {
+                if base.is_empty()
+                    || rel == base
+                    || rel
+                        .strip_prefix(base.as_str())
+                        .is_some_and(|rest| rest.starts_with('/'))
+                {
+                    return true;
+                }
+            }
         }
         let key = rel.split('/').next().unwrap_or("");
         if let Some(rules) = self.anchored.get(key) {
@@ -170,7 +183,9 @@ fn collect_gitignore_rules(root: &Path) -> GitignoreRules {
                     let key = full.split('/').next().unwrap_or_default().to_string();
                     rules.anchored.entry(key).or_default().push(full);
                 } else {
-                    rules.global_names.insert(name.to_string());
+                    // 无斜杠规则 → basename 匹配，作用域 = .gitignore 所在目录
+                    // （root 规则 base="" 表示任意层级）
+                    rules.names.entry(name.to_string()).or_default().push(base.clone());
                 }
             }
         }
@@ -181,6 +196,11 @@ fn collect_gitignore_rules(root: &Path) -> GitignoreRules {
 /// 硬编码的通用排除规则（工具链、VCS、构建产物、HoloGram 运行时）。
 /// 由文件发现、watcher 和简报（preflight）共享，确保
 /// 所有子系统中的过滤行为一致。
+///
+/// 注意：不收录 `vendor`（Go/PHP 依赖树）与 `bin`（.NET 输出）——kernel
+/// 实证存在同名的真实源码目录（arch/riscv/include/uapi/asm/vendor、
+/// tools/perf/scripts/*/bin），全局 basename 排除会误伤；这些场景应
+/// 由项目自己的 .gitignore（已按 git 语义生效）处理。
 pub const IGNORED_DIRS: &[&str] = &[
     ".git", "__pycache__", "node_modules", "venv", ".venv", "env",
     ".tox", ".mypy_cache", ".pytest_cache", ".hg", ".svn",
@@ -189,6 +209,7 @@ pub const IGNORED_DIRS: &[&str] = &[
     ".next", ".nuxt", "out", ".angular", ".cache", "coverage",
     "vendored", "generated", "tests",
     ".vscode", ".idea", ".fleet", ".cursor",  // 编辑器
+    "Pods", ".gradle",  // CocoaPods 依赖 / Gradle 缓存 — 语义铁定的依赖目录
 ];
 
 /// 检查目录条目是否应从遍历中排除。
@@ -313,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_global_rule_unchanged() {
-        // 无斜杠规则保持全局 basename 匹配（兼容旧行为）
+        // root .gitignore 的无斜杠规则 → 任意层级生效（git 语义，行为不变）
         let tmp = std::env::temp_dir().join("hologram_test_gitignore_global");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("my_build")).unwrap();
@@ -329,7 +350,35 @@ mod tests {
         let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().replace('\\', "/")).collect();
 
         assert!(names.iter().any(|p| p.ends_with("main.py")), "src/main.py should be found");
-        assert!(names.iter().filter(|p| p.ends_with("gen.py")).count() == 0, "任意层级 my_build 都应被排除");
+        assert!(names.iter().filter(|p| p.ends_with("gen.py")).count() == 0, "root 规则任意层级 my_build 都应被排除");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_gitignore_sub_rule_scoped_to_base() {
+        // sub/.gitignore 的无斜杠规则只排 sub 之下（git 语义），
+        // 同名真实目录在他处必须保留（kernel tools/purgatory 同型回归点）
+        let tmp = std::env::temp_dir().join("hologram_test_gitignore_scope");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("sub").join("gen")).unwrap();
+        fs::create_dir_all(tmp.join("sub").join("src")).unwrap();
+        fs::create_dir_all(tmp.join("other").join("gen")).unwrap();
+        fs::create_dir_all(tmp.join("gen")).unwrap();
+
+        fs::write(tmp.join("sub").join(".gitignore"), "gen/\n").unwrap();
+        fs::write(tmp.join("sub").join("gen").join("drop.py"), "a=1").unwrap();
+        fs::write(tmp.join("sub").join("src").join("keep.py"), "b=2").unwrap();
+        fs::write(tmp.join("other").join("gen").join("keep2.py"), "c=3").unwrap();
+        fs::write(tmp.join("gen").join("keep3.py"), "d=4").unwrap();
+
+        let files = discover_files(&tmp, &["py"]);
+        let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().replace('\\', "/")).collect();
+
+        assert!(!names.iter().any(|p| p.ends_with("drop.py")), "sub/gen 应被 sub/.gitignore 排除");
+        assert!(names.iter().any(|p| p.ends_with("keep.py")), "sub/src should be found");
+        assert!(names.iter().any(|p| p.ends_with("keep2.py")), "other/gen 与 sub 无关，应保留（修复回归点）");
+        assert!(names.iter().any(|p| p.ends_with("keep3.py")), "根 gen 与 sub 无关，应保留（修复回归点）");
 
         let _ = fs::remove_dir_all(&tmp);
     }

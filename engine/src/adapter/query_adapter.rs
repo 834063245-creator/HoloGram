@@ -211,6 +211,7 @@ impl LanguageAdapter for QueryStructureAdapter {
                 .is_some_and(|(_, _, cached_ext)| cached_ext == ext);
             if !reuse {
                 let mut p = Parser::new();
+                p.set_timeout_micros(crate::adapter::tree_sitter::PARSE_TIMEOUT_MICROS);
                 if p.set_language(&lang).is_err() {
                     return (vec![], vec![], None);
                 }
@@ -220,7 +221,13 @@ impl LanguageAdapter for QueryStructureAdapter {
 
             let tree = match parser.parse(source, None) {
                 Some(t) => t,
-                None => return (vec![], vec![], None),
+                None => {
+                    tracing::warn!(
+                        path = file_path,
+                        "[parser] parse returned None (timeout or failure), skipping file (病态文件)"
+                    );
+                    return (vec![], vec![], None);
+                }
             };
 
             let query_src = self.resolve_query_src(ext);
