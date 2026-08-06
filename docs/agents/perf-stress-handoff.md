@@ -236,3 +236,12 @@ Node::file()(只剥纯数字行号)。规范 path:line 下完全等价;fs 契约
 - **R10 偏离/遗留**:规格「IndexMap<NodeId,_> 或 arena+handle 双映射」实际走全局驻留句柄(更强);
   MemoryIndex 仍持独立 StringArena(快照序列化需要),未共享全局驻留器(下一步可消 intern 98s);
   src-tauri shell.rs 既有 E0631 已顺手修复(R10b 内)。
+
+**全内核终审(2026-08-06,存档 stress-real-linux-kernel-r10.txt,RSS-only 看门狗)**:
+**1770.5s(29.5min)全程跑完,RSS 峰值 646 MB** —— R9 时代 1 小时超时死在 community、
+RSS 8.6-10.5GB 换页;现图数字 2486778/7460139/469360,阶段拆分:
+core-parse 432.7s(24%)· db-save 564.0s(32%,from_existing_graph ~311s=intern 244s+buckets 65s,
+快照 ~253s)· **eval 304.5s(17%,drivers 仅 0.7s,超线性 435×,新挖出的隐身墙,528 markers)**
+· community 218.3s(12%,adjacency 59s+local-moving 92s+step3 K² 34s+hierarchy 29s)
+· snippet 37.1s · flows 13.9s。规格「全内核 <15min」未达(29.5min),剩余三座墙:
+db-save(intern 共享+快照)、eval(超线性待查)、community(两次 louvain+adjacency)。
