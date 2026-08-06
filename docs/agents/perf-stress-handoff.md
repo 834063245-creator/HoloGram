@@ -167,7 +167,8 @@ R9 后 fs 契约第三次全绿(35.6s,42.6 万边 < 5M 阈值走 SQLite 旧路,�
 | R6 | `5c7280c` | handlers find_references 图回退迁移 |
 | R7 | `90221ef` | main/engine 迁移;graph_from_index cross_file 推导改 Node::file()(见下注) |
 | R8 | `9b55c8c` | Graph.nodes/edges 改 pub(crate);新增 get_node_mut/get_edge_mut、nodes_map/edges_map(+_mut)、into_parts、take_nodes/take_edges、meta()/meta_mut()、outgoing()/incoming() 迭代器(旧 Vec 版标 deprecated 且调用点迁净);R1~R7 缺口清单 9 项全部收口 |
-| R9 | `cca3e4e` | serde 定型 roundtrip 测试(旧 JSON 双格式零漂移 + SQLite 冷启动读回)+ M7c 快照持久化:新模块 storage/snapshot.rs(bincode 1.3 全量 MemoryIndex,.tmp 原子 rename),阈值 HOLOGRAM_SNAPSHOT_MIN_EDGES 默认 5M 边,GraphStore::save 漏斗分流、open 优先快照(mtime ≥ hologram.db)、损坏删快照回退 SQLite;FTS 惰性重建(见下注) |
+| R9 | `cca3e4e` | serde 定型 roundtrip 测试(旧 JSON 双格式零漂移 + SQLite 冷启动读回)+ M7c 快照持久化:新模块 storage/snapshot.rs(bincode 1.3 全量 MemoryIndex,.tmp 原子 rename),阈值 HOLOGRAM_SNAPSHOT_MIN_EDGES 默认 5M 边,GraphStore::save 漏斗分流、open 优先快照、损坏删快照回退 SQLite;FTS 惰性重建(见下注) |
+| R9b | `0399444` | 快照加载判定 mtime 启发式 → 代际 token(文件头 peek + db meta snapshot_token);to_sqlite 全量保存自动失效快照,FTS/timeline 写 db 不再误伤;新增 5 测试含 checkpoint 核心回归 |
 
 **R9 drivers 验收(阈值 4M 强制快照,存档 stress-real-linux-drivers-r9-snapshot.txt)**:
 图数字与 M4 基线逐项一致(1859750 nodes / 4846727 edges / 384653 communities);
@@ -182,12 +183,16 @@ db-save 阶段 1247.8s → 382.4s(memory-index build 312.7s + swap+snapshot 69.7
 - bincode 不支持 serde_json::Value 的 deserialize_any,Node.properties 以 JSON 文本
   进快照(SnapshotNode 镜像,into_node 解析失败回退空对象)。
 
-**R9 残留风险(规格钉死的 mtime 启发式固有,待规格层面裁决)**:快照模式下任何
-hologram.db 写入(FTS 惰性重建、timeline)在连接关闭触发 WAL checkpoint 时会把
-db mtime 推过快照 → 下次启动走 SQLite 读到 nodes-only 旧图。堵法:meta 表记快照
-代际,或快照加载后对 db 写入做 mtime 补偿。另:engine/mod.rs:503 的
-`.unwrap_or_default()` 会吞掉 FTS 降级 Err 变空结果(批外未动);watcher 增量路径
-from_existing_graph → dirty=true,首个 FTS 查询会触发一次惰性重建(30s 预算兜底,正确但冗余)。
+**R9 残留风险(已于 R9b 修复,commit `0399444`)**:原 mtime 启发式(快照模式下
+db 写入经 WAL checkpoint 推快 db mtime → 下次启动误走 SQLite 读 nodes-only 旧图)
+已由**代际 token** 取代:快照文件头(8B 长度 + token,不必读 2.4GB payload)与
+db meta 表 `snapshot_token` 比对;token 生成式 `{nodes}:{edges}:{millis}`。
+FTS 惰性重建/timeline 写 db 零补偿(核心回归测试:快照后写 db + drop 触发
+checkpoint,重开仍走快照);唯一失效点是 to_sqlite 全量保存成功(含 incremental
+直调),自动清空 token。旧无头部 R9 快照按损坏处理(删除回退 SQLite,可再分析重建)。
+测试 594 → 599。另:engine/mod.rs:503 的 `.unwrap_or_default()` 会吞掉 FTS 降级
+Err 变空结果(批外未动);watcher 增量路径 from_existing_graph → dirty=true,
+首个 FTS 查询会触发一次惰性重建(30s 预算兜底,正确但冗余)。
 
 **R7 行为边缘注记**:engine/mod.rs cross_file 推导从「无条件剥冒号尾段」改为
 Node::file()(只剥纯数字行号)。规范 path:line 下完全等价;fs 契约 resolved
