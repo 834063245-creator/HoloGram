@@ -148,7 +148,7 @@ impl IncrementalUpdater {
                 .added_nodes
                 .iter()
                 .chain(diff.updated_nodes.iter())
-                .map(|n| n.id.clone())
+                .map(|n| n.id.as_str().to_owned())
                 .collect();
             for nid in &changed_node_ids {
                 if let Some(analysis) = file_analyses.get(&diff.path) {
@@ -302,13 +302,13 @@ impl IncrementalUpdater {
                 }
                 updated_nodes.push(updated);
                 matched_old.insert(old_id.clone());
-                matched_new.insert(new_node.id.clone());
+                matched_new.insert(new_node.id.as_str().to_owned());
             }
         }
 
         // 策略 2：同文件 + 同位置（行:列），容差 ≤ 3
         for new_node in &analysis.nodes {
-            if matched_new.contains(&new_node.id) {
+            if matched_new.contains(new_node.id.as_str()) {
                 continue;
             }
             if let Some(ref new_loc) = new_node.location {
@@ -326,7 +326,7 @@ impl IncrementalUpdater {
                                 }
                                 updated_nodes.push(updated);
                                 matched_old.insert(nid.clone());
-                                matched_new.insert(new_node.id.clone());
+                                matched_new.insert(new_node.id.as_str().to_owned());
                                 break;
                             }
                         }
@@ -344,7 +344,7 @@ impl IncrementalUpdater {
 
         // 剩余新节点 → 已新增
         for node in &analysis.nodes {
-            if !matched_new.contains(&node.id) {
+            if !matched_new.contains(node.id.as_str()) {
                 added_nodes.push(node.clone());
             }
         }

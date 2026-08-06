@@ -59,7 +59,7 @@ pub fn explore(
             .or_else(|| results.first().copied());
         if let Some(node) = best {
             ctx.named_nodes.push(node.clone());
-            ctx.named_ids.insert(node.id.clone());
+            ctx.named_ids.insert(node.id.as_str().to_owned());
             if let Some(ref loc) = node.location {
                 ctx.named_files.insert(file_key(loc));
             }
@@ -463,10 +463,10 @@ fn bfs_path(
                     continue;
                 }
             }
-            if !visited.contains(&edge.target) {
-                visited.insert(edge.target.clone());
-                prev.insert(edge.target.clone(), cur.clone());
-                queue.push_back(edge.target.clone());
+            if !visited.contains(edge.target.as_str()) {
+                visited.insert(edge.target.as_str().to_owned());
+                prev.insert(edge.target.as_str().to_owned(), cur.clone());
+                queue.push_back(edge.target.as_str().to_owned());
                 explore_count += 1;
             }
         }
@@ -480,10 +480,10 @@ fn bfs_path(
                     continue;
                 }
             }
-            if !visited.contains(&edge.source) {
-                visited.insert(edge.source.clone());
-                prev.insert(edge.source.clone(), cur.clone());
-                queue.push_back(edge.source.clone());
+            if !visited.contains(edge.source.as_str()) {
+                visited.insert(edge.source.as_str().to_owned());
+                prev.insert(edge.source.as_str().to_owned(), cur.clone());
+                queue.push_back(edge.source.as_str().to_owned());
                 explore_count += 1;
             }
         }
@@ -570,7 +570,7 @@ fn compute_relationships(ctx: &ExploreCtx) -> serde_json::Value {
 
     for node in &ctx.named_nodes {
         for edge in ctx.graph.outgoing(&node.id) {
-            if ctx.named_ids.contains(&edge.target) {
+            if ctx.named_ids.contains(edge.target.as_str()) {
                 let kind = edge.kind.as_str().to_string();
                 by_kind.entry(kind).or_default().push(json!({
                     "source": node.name,
@@ -581,7 +581,7 @@ fn compute_relationships(ctx: &ExploreCtx) -> serde_json::Value {
             }
         }
         for edge in ctx.graph.incoming(&node.id) {
-            if ctx.named_ids.contains(&edge.source) {
+            if ctx.named_ids.contains(edge.source.as_str()) {
                 let kind = edge.kind.as_str().to_string();
                 by_kind.entry(kind).or_default().push(json!({
                     "source": ctx.graph.get_node(&edge.source)

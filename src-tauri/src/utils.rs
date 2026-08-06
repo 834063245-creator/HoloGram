@@ -915,7 +915,7 @@ pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String
         let mut base_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
         for n in g.nodes_map().values() {
             if let Some(cid) = n.community_id {
-                base_map.entry(cid).or_default().push(n.id.clone());
+                base_map.entry(cid).or_default().push(n.id.as_str().to_owned());
             }
         }
         let base: Vec<Vec<String>> = base_map.values().cloned().collect();

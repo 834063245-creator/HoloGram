@@ -462,9 +462,9 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framewo
 
         edge_counter += 1;
         let edge = Edge {
-            id: format!("route_edge_{}", edge_counter),
-            source: route_id.clone(),
-            target: handler_node_id.clone(),
+            id: format!("route_edge_{}", edge_counter).into(),
+            source: route_id.clone().into(),
+            target: handler_node_id.clone().into(),
             kind: EdgeKind::Calls,
             coupling_depth: 1,
             cross_file: is_cross_file(graph, &handler_node_id, file),

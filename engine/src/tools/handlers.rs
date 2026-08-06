@@ -694,7 +694,7 @@ pub(crate) fn handler_clusters(args: &Value) -> ToolResponse {
         let mut has_any = false;
         for node in idx.nodes_iter() {
             if let Some(cid) = node.community_id {
-                comm_map.entry(cid).or_default().push(node.id.clone());
+                comm_map.entry(cid).or_default().push(node.id.as_str().to_owned());
                 has_any = true;
             }
         }
@@ -1166,7 +1166,7 @@ pub(crate) fn handler_rename(args: &Value) -> ToolResponse {
     // dry_run：使用统一 diff 预览
     let (matched_ids, matched_locations): (Vec<String>, Vec<String>) = {
         match engine::engine_read(|idx| {
-            let ids: Vec<String> = idx.nodes_iter().filter(|n| n.name == old_name).map(|n| n.id.clone()).collect();
+            let ids: Vec<String> = idx.nodes_iter().filter(|n| n.name == old_name).map(|n| n.id.as_str().to_owned()).collect();
             let locs: Vec<String> = idx.nodes_iter()
                 .filter(|n| n.name == old_name)
                 .filter_map(|n| n.location.clone())
@@ -2195,7 +2195,7 @@ pub(crate) fn handler_affected_flows(args: &Value) -> ToolResponse {
                         || node_normalized.ends_with(&format!("/{}", query_normalized))
                         || node_normalized.ends_with(&format!("\\{}", file_path))
                     {
-                        changed_set.insert(n.id.clone());
+                        changed_set.insert(n.id.as_str().to_owned());
                     }
                 }
             }

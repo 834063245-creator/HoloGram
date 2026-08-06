@@ -142,7 +142,7 @@ impl CodeVectorIndex {
             let vec = vec.as_ref().expect("所有 snippet 均已嵌入");
             index.add(slot as u64, vec)
                 .map_err(|e| format!("usearch add failed: {e}"))?;
-            slots.push(node_ids[i].clone());
+            slots.push(node_ids[i].as_str().to_owned());
             slot += 1;
         }
 

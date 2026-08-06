@@ -5,10 +5,16 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Edge, Node};
+use super::{Edge, EdgeId, Node, NodeId};
 
 /// 依赖图 — 核心数据结构。
 /// 对应 Python 的 `Graph` 类，修复了 O(V×E) 性能问题。
+///
+/// R10-deep: 容器键从 `String` 改为全局驻留的 `NodeId/EdgeId`(u32 句柄)。
+/// 句柄按内容寻址 —— 同一字符串永远同一句柄,因此 `HashMap<NodeId, _>` 的
+/// 查找/哈希等价于按字符串。字符串本身只存驻留器一份(见 id.rs)。
+/// 所有以 `&str` 为入参的公共访问器(get_node 等)经 `NodeId::lookup`
+/// (驻留器非插入查询)→ 句柄 → 容器 get,签名全程稳定。
 ///
 /// ```
 /// use hologram_engine::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
@@ -27,10 +33,12 @@ use super::{Edge, Node};
 #[serde(default)]
 pub struct Graph {
     // R8: 字段私有化第一步 —— pub(crate),跨 crate 访问一律走访问器。
+    // R10-deep: 键为全局驻留句柄;NodeId/EdgeId serde 序列化为纯字符串,
+    // 故磁盘/线格式(HashMap 字符串键)零漂移。
     #[serde(default)]
-    pub(crate) nodes: HashMap<String, Node>,
+    pub(crate) nodes: HashMap<NodeId, Node>,
     #[serde(default)]
-    pub(crate) edges: HashMap<String, Edge>,
+    pub(crate) edges: HashMap<EdgeId, Edge>,
     #[serde(default)]
     pub meta: serde_json::Value,
 }
@@ -62,13 +70,13 @@ impl Graph {
             if let Some(arr) = nodes_val.as_array() {
                 for n in arr {
                     if let Ok(node) = serde_json::from_value::<Node>(n.clone()) {
-                        g.nodes.insert(node.id.clone(), node);
+                        g.add_node(node);
                     }
                 }
             } else if let Some(map) = nodes_val.as_object() {
                 for (_, n) in map {
                     if let Ok(node) = serde_json::from_value::<Node>(n.clone()) {
-                        g.nodes.insert(node.id.clone(), node);
+                        g.add_node(node);
                     }
                 }
             }
@@ -78,13 +86,13 @@ impl Graph {
             if let Some(arr) = edges_val.as_array() {
                 for e in arr {
                     if let Ok(edge) = serde_json::from_value::<Edge>(e.clone()) {
-                        g.edges.insert(edge.id.clone(), edge);
+                        g.insert_edge_raw(edge);
                     }
                 }
             } else if let Some(map) = edges_val.as_object() {
                 for (_, e) in map {
                     if let Ok(edge) = serde_json::from_value::<Edge>(e.clone()) {
-                        g.edges.insert(edge.id.clone(), edge);
+                        g.insert_edge_raw(edge);
                     }
                 }
             }
@@ -95,37 +103,45 @@ impl Graph {
     // ── Node 操作 ──
 
     pub fn add_node(&mut self, node: Node) {
-        self.nodes.insert(node.id.clone(), node);
+        self.nodes.insert(node.id, node);
+    }
+
+    /// 原样插入边(不更新度数)—— 从 JSON 加载时度数来自序列化值。
+    fn insert_edge_raw(&mut self, edge: Edge) {
+        self.edges.insert(edge.id, edge);
     }
 
     pub fn get_node(&self, id: &str) -> Option<&Node> {
-        self.nodes.get(id)
+        let h = NodeId::lookup(id)?;
+        self.nodes.get(&h)
     }
 
     pub fn get_node_mut(&mut self, id: &str) -> Option<&mut Node> {
-        self.nodes.get_mut(id)
+        let h = NodeId::lookup(id)?;
+        self.nodes.get_mut(&h)
     }
 
     pub fn remove_node(&mut self, id: &str) -> Option<Node> {
-        let edge_ids: Vec<String> = self
+        let handle = NodeId::lookup(id)?;
+        let edge_ids: Vec<EdgeId> = self
             .edges
             .iter()
             .filter(|(_, e)| e.source == id || e.target == id)
-            .map(|(k, _)| k.clone())
+            .map(|(k, _)| *k)
             .collect();
         for eid in edge_ids {
             self.edges.remove(&eid);
         }
-        self.nodes.remove(id)
+        self.nodes.remove(&handle)
     }
 
     // ── Edge 操作 ──
 
     pub fn add_edge(&mut self, edge: Edge) -> Result<(), String> {
-        if !self.nodes.contains_key(&edge.source) {
+        if self.get_node(edge.source.as_str()).is_none() {
             return Err(format!("source node does not exist: {}", edge.source));
         }
-        if !self.nodes.contains_key(&edge.target) {
+        if self.get_node(edge.target.as_str()).is_none() {
             return Err(format!("target node does not exist: {}", edge.target));
         }
         self.add_edge_unchecked(edge);
@@ -141,11 +157,12 @@ impl Graph {
         if let Some(tgt) = self.nodes.get_mut(&edge.target) {
             tgt.in_degree += 1;
         }
-        self.edges.insert(edge.id.clone(), edge);
+        self.edges.insert(edge.id, edge);
     }
 
     pub fn remove_edge(&mut self, id: &str) -> Option<Edge> {
-        let removed = self.edges.remove(id);
+        let handle = EdgeId::lookup(id)?;
+        let removed = self.edges.remove(&handle);
         if let Some(ref edge) = removed {
             if let Some(src) = self.nodes.get_mut(&edge.source) {
                 src.out_degree = src.out_degree.saturating_sub(1);
@@ -158,11 +175,13 @@ impl Graph {
     }
 
     pub fn get_edge(&self, id: &str) -> Option<&Edge> {
-        self.edges.get(id)
+        let h = EdgeId::lookup(id)?;
+        self.edges.get(&h)
     }
 
     pub fn get_edge_mut(&mut self, id: &str) -> Option<&mut Edge> {
-        self.edges.get_mut(id)
+        let h = EdgeId::lookup(id)?;
+        self.edges.get_mut(&h)
     }
 
     /// O(E) 全扫出边,惰性迭代 —— 替代 outgoing_edges 的 Vec 分配。
@@ -203,55 +222,55 @@ impl Graph {
     // 当前容器仍是 HashMap<String, _>,故 yield &str;R8 换容器后签名不变。
 
     pub fn nodes_iter(&self) -> impl Iterator<Item = (&str, &Node)> {
-        self.nodes.iter().map(|(k, v)| (k.as_str(), v))
+        self.nodes.values().map(|v| (v.id.as_str(), v))
     }
 
     pub fn edges_iter(&self) -> impl Iterator<Item = (&str, &Edge)> {
-        self.edges.iter().map(|(k, v)| (k.as_str(), v))
+        self.edges.values().map(|v| (v.id.as_str(), v))
     }
 
     pub fn node_ids(&self) -> impl Iterator<Item = &str> {
-        self.nodes.keys().map(|k| k.as_str())
+        self.nodes.values().map(|v| v.id.as_str())
     }
 
     pub fn edge_ids(&self) -> impl Iterator<Item = &str> {
-        self.edges.keys().map(|k| k.as_str())
+        self.edges.values().map(|v| v.id.as_str())
     }
 
     // ── 表级访问器(R8)—— 字段私有化后的整表出入口 ──
 
     /// 字段级只读借用 —— 供借用分裂场景(如同时 &nodes 与 &mut edges)。
-    pub fn nodes_map(&self) -> &HashMap<String, Node> {
+    pub fn nodes_map(&self) -> &HashMap<NodeId, Node> {
         &self.nodes
     }
 
     /// 字段级只读借用 —— 供借用分裂场景。
-    pub fn edges_map(&self) -> &HashMap<String, Edge> {
+    pub fn edges_map(&self) -> &HashMap<EdgeId, Edge> {
         &self.edges
     }
 
     /// 字段级可变借用 —— 供 rayon par_iter_mut 等批量可变场景。
-    pub fn nodes_map_mut(&mut self) -> &mut HashMap<String, Node> {
+    pub fn nodes_map_mut(&mut self) -> &mut HashMap<NodeId, Node> {
         &mut self.nodes
     }
 
     /// 字段级可变借用 —— 供 rayon par_iter_mut 等批量可变场景。
-    pub fn edges_map_mut(&mut self) -> &mut HashMap<String, Edge> {
+    pub fn edges_map_mut(&mut self) -> &mut HashMap<EdgeId, Edge> {
         &mut self.edges
     }
 
     /// 整表按值取出(消耗 Graph,meta 随壳丢弃)。
-    pub fn into_parts(self) -> (HashMap<String, Node>, HashMap<String, Edge>) {
+    pub fn into_parts(self) -> (HashMap<NodeId, Node>, HashMap<EdgeId, Edge>) {
         (self.nodes, self.edges)
     }
 
     /// std::mem::take 语义 —— 取走节点表,原位留空表。
-    pub fn take_nodes(&mut self) -> HashMap<String, Node> {
+    pub fn take_nodes(&mut self) -> HashMap<NodeId, Node> {
         std::mem::take(&mut self.nodes)
     }
 
     /// std::mem::take 语义 —— 取走边表,原位留空表。
-    pub fn take_edges(&mut self) -> HashMap<String, Edge> {
+    pub fn take_edges(&mut self) -> HashMap<EdgeId, Edge> {
         std::mem::take(&mut self.edges)
     }
 
@@ -288,8 +307,8 @@ impl Graph {
             removed_edges: Vec::new(),
             modified_nodes: Vec::new(),
         };
-        for (id, node) in &other.nodes {
-            if let Some(before) = self.nodes.get(id) {
+        for node in other.nodes.values() {
+            if let Some(before) = self.get_node(node.id.as_str()) {
                 if before.name != node.name
                     || before.kind != node.kind
                     || before.out_degree != node.out_degree
@@ -301,18 +320,18 @@ impl Graph {
                 diff.added_nodes.push(node.clone());
             }
         }
-        for (id, node) in &self.nodes {
-            if !other.nodes.contains_key(id) {
+        for node in self.nodes.values() {
+            if other.get_node(node.id.as_str()).is_none() {
                 diff.removed_nodes.push(node.clone());
             }
         }
-        for (id, edge) in &other.edges {
-            if !self.edges.contains_key(id) {
+        for edge in other.edges.values() {
+            if self.get_edge(edge.id.as_str()).is_none() {
                 diff.added_edges.push(edge.clone());
             }
         }
-        for (id, edge) in &self.edges {
-            if !other.edges.contains_key(id) {
+        for edge in self.edges.values() {
+            if other.get_edge(edge.id.as_str()).is_none() {
                 diff.removed_edges.push(edge.clone());
             }
         }

@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::{EdgeId, NodeId};
+
 /// Edge 类型 — 对依赖的性质进行分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -102,9 +104,12 @@ impl EdgeKind {
 /// 依赖图中的边。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
-    pub id: String,
-    pub source: String,
-    pub target: String,
+    /// 全局驻留句柄(字符串语义,同 NodeId)
+    pub id: EdgeId,
+    /// 源节点 —— 全局驻留句柄(字符串语义)
+    pub source: NodeId,
+    /// 目标节点 —— 全局驻留句柄(字符串语义)
+    pub target: NodeId,
     #[serde(rename = "type")]
     pub kind: EdgeKind,
     /// L1-L4 耦合深度
@@ -140,9 +145,9 @@ impl Edge {
         kind: EdgeKind,
     ) -> Self {
         Self {
-            id: id.into(),
-            source: source.into(),
-            target: target.into(),
+            id: EdgeId::new(id),
+            source: NodeId::new(source),
+            target: NodeId::new(target),
             kind,
             coupling_depth: 0,
             cross_file: false,
@@ -158,7 +163,7 @@ impl Edge {
         target: impl Into<String>, kind: EdgeKind, channel: &str,
     ) -> Self {
         Self {
-            id: id.into(), source: source.into(), target: target.into(), kind,
+            id: EdgeId::new(id), source: NodeId::new(source), target: NodeId::new(target), kind,
             coupling_depth: 3, cross_file: true,
             temporal_delay_sec: None, lsp_resolved: false,
             is_synthesized: true,

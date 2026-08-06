@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::NodeId;
+
 // ── R0 语义访问器的扩展名表 ──
 // 与 resolver.rs 的 code_extension_set() 同源(GRAMMAR_LOADER),
 // 语义逐字等价;R2 迁移 resolver 消费点时统一去重。
@@ -56,7 +58,8 @@ impl NodeKind {
 /// 依赖图中的节点。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
-    pub id: String,
+    /// 全局驻留句柄 —— 对外是字符串语义(`as_str()`/`Deref<Target=str>` 解析回字符串)
+    pub id: NodeId,
     pub name: String,
     #[serde(rename = "type")]
     pub kind: NodeKind,
@@ -86,7 +89,7 @@ pub struct Node {
 impl Node {
     pub fn new(id: impl Into<String>, name: impl Into<String>, kind: NodeKind) -> Self {
         Self {
-            id: id.into(),
+            id: NodeId::new(id),
             name: name.into(),
             kind,
             location: None,

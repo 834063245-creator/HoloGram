@@ -320,7 +320,7 @@ pub(crate) async fn exec_command(
 
 #[tauri::command]
 pub(crate) async fn bash_output(job_id: u32) -> Result<String, String> {
-    crate::utils::read_bg_output(job_id).map(truncate_output)
+    crate::utils::read_bg_output(job_id).map(|s| truncate_output(&s))
 }
 
 #[tauri::command]
@@ -330,7 +330,7 @@ pub(crate) async fn bash_kill(job_id: u32) -> Result<String, String> {
 
 #[tauri::command]
 pub(crate) async fn bash_wait(job_id: u32, timeout_ms: Option<u64>) -> Result<String, String> {
-    crate::utils::wait_bg(job_id, timeout_ms.unwrap_or(60_000)).map(truncate_output)
+    crate::utils::wait_bg(job_id, timeout_ms.unwrap_or(60_000)).map(|s| truncate_output(&s))
 }
 
 #[tauri::command]

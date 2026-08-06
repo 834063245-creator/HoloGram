@@ -66,7 +66,7 @@ pub fn coupling_report_from_index(idx: &MemoryIndex, module: &str) -> serde_json
             if let Some(ref loc) = n.location {
                 let loc_norm = loc.replace('\\', "/").to_lowercase();
                 if loc_norm.ends_with(&lower_module) || loc_norm.contains(&lower_module) {
-                    module_node_ids.push(n.id.clone());
+                    module_node_ids.push(n.id.as_str().to_owned());
                 }
             }
         }
@@ -116,7 +116,7 @@ pub fn count_l4_by_file(idx: &MemoryIndex) -> Vec<(String, usize)> {
         .filter_map(|n| {
             n.location.as_ref().map(|loc| {
                 let file = loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(loc);
-                (n.id.clone(), file.replace('\\', "/"))
+                (n.id.as_str().to_owned(), file.replace('\\', "/"))
             })
         })
         .collect();

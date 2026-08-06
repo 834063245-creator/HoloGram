@@ -26,7 +26,7 @@ pub fn detect_cycles(graph: &Graph) -> Vec<serde_json::Value> {
 }
 
 pub fn detect_cycles_from_index(idx: &MemoryIndex) -> Vec<serde_json::Value> {
-    let node_ids: Vec<String> = idx.nodes_iter().map(|n| n.id.clone()).collect();
+    let node_ids: Vec<String> = idx.nodes_iter().map(|n| n.id.as_str().to_owned()).collect();
     let n = node_ids.len();
     if n == 0 { return vec![]; }
     let id_to_idx: HashMap<&str, usize> = node_ids.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
@@ -80,7 +80,7 @@ fn run_tarjan(node_ids: &[&str], adj: &[Vec<usize>]) -> Vec<serde_json::Value> {
     for v in 0..n { if idx[v] == u32::MAX { strongconnect(v, adj, &mut idx, &mut lowlink, &mut on_stack, &mut stack, &mut index, &mut sccs); } }
 
     sccs.into_iter().filter(|c| c.len() > 1).map(|c| {
-        let node_names: Vec<_> = c.iter().map(|&i| node_ids[i].clone()).collect();
+        let node_names: Vec<&str> = c.iter().map(|&i| node_ids[i]).collect();
         serde_json::json!({ "nodes": node_names, "size": c.len() })
     }).collect()
 }

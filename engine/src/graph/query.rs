@@ -28,9 +28,9 @@ pub fn neighbors(graph: &Graph, node_id: &str, depth: usize) -> Vec<(String, Str
                 None
             };
             if let Some(nb) = neighbor {
-                if visited.insert(nb.clone()) {
-                    result.push((current.clone(), nb.clone(), edge.coupling_depth));
-                    queue.push_back((nb.clone(), cur_depth + 1));
+                if visited.insert(nb.as_str().to_owned()) {
+                    result.push((current.clone(), nb.as_str().to_owned(), edge.coupling_depth));
+                    queue.push_back((nb.as_str().to_owned(), cur_depth + 1));
                 }
             }
         }

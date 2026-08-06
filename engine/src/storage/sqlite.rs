@@ -301,7 +301,7 @@ impl SqliteDb {
                     _ => None,
                 };
                 Ok(Node {
-                    id: row.get(0)?,
+                    id: row.get::<_, String>(0)?.into(),
                     name: row.get(1)?,
                     kind,
                     location: row.get(3)?,
@@ -442,7 +442,7 @@ impl SqliteDb {
                     None => (None, None, None),
                 };
                 let props = serde_json::to_string(&node.properties).unwrap_or_else(|_| "{}".into());
-                params.push(Box::new(node.id.clone()));
+                params.push(Box::new(node.id.as_str().to_owned()));
                 params.push(Box::new(node.name.clone()));
                 params.push(Box::new(node.kind.as_str().to_string()));
                 params.push(Box::new(node.location.clone()));
@@ -554,7 +554,7 @@ impl SqliteDb {
                     community_id=excluded.community_id,
                     non_defines_in_degree=excluded.non_defines_in_degree",
                 params![
-                    node.id,
+                    node.id.as_str(),
                     node.name,
                     node.kind.as_str(),
                     node.location,
@@ -670,7 +670,7 @@ impl SqliteDb {
                     .unwrap_or_else(|_| "{}".into());
                 if let Err(e) = node_stmt.execute(params![
                     rowid,
-                    node.id,
+                    node.id.as_str(),
                     node.name,
                     node.kind.as_str(),
                     node.location,
@@ -687,7 +687,7 @@ impl SqliteDb {
                 }
                 if let Err(e) = fts_stmt.execute(params![
                     rowid,
-                    node.id,
+                    node.id.as_str(),
                     node.name,
                     node.location.as_deref().unwrap_or(""),
                 ]) {

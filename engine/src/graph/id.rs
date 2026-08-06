@@ -66,6 +66,7 @@ impl Interner {
             .unwrap_or("")
     }
 
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.strings.len()
     }
@@ -116,6 +117,7 @@ pub fn resolve(id: u32) -> &'static str {
 }
 
 /// 当前驻留的唯一字符串数(诊断/测试用)。
+#[allow(dead_code)]
 pub fn interned_count() -> usize {
     interner()
         .read()
@@ -336,11 +338,12 @@ mod tests {
 
     #[test]
     fn test_ord_is_lexical_not_handle_order() {
-        // "z" 先驻留(句柄小),"a" 后驻留(句柄大)—— 词法序应 a < z,而非句柄序
+        // 句柄数值序依赖全局驻留顺序(测试间共享驻留器,不可控);
+        // Ord 必须按词法序 —— 无论句柄怎么分配,a < z 恒成立。
         let z = NodeId::new("z");
         let a = NodeId::new("a");
-        assert!(z.handle() < a.handle(), "z 句柄应先分配(更小)");
         assert!(a < z, "词法序 a < z");
+        assert!(z > a, "词法序 z > a");
         let mut v = vec![z, a];
         v.sort();
         assert_eq!(v[0].as_str(), "a");

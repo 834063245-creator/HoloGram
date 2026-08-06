@@ -123,7 +123,7 @@ fn synthesize_setstate_render(graph: &mut Graph, file: &str, source: &str) -> us
         if render_id != setter_id {
             graph.add_edge_unchecked(Edge::synthesized(
                 format!("setstate_{}_{}", setter_id, render_id),
-                &setter_id, &render_id, EdgeKind::Triggers, "react-render",
+                &setter_id, render_id.as_str(), EdgeKind::Triggers, "react-render",
             ));
             added += 1;
         }
@@ -293,7 +293,7 @@ fn find_file_node(graph: &Graph, file: &str) -> Option<String> {
         if node.kind == NodeKind::File {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {
-                    return Some(node.id.clone());
+                    return Some(node.id.as_str().to_owned());
                 }
             }
         }
@@ -306,7 +306,7 @@ fn find_first_in_file(graph: &Graph, file: &str) -> Option<String> {
         if matches!(node.kind, NodeKind::Function | NodeKind::Class | NodeKind::File) {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {
-                    return Some(node.id.clone());
+                    return Some(node.id.as_str().to_owned());
                 }
             }
         }

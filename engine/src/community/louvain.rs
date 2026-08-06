@@ -60,7 +60,7 @@ fn build_adjacency(graph: &Graph) -> Option<(Vec<String>, Vec<Vec<(usize, f64)>>
 }
 
 fn build_adjacency_from_index(idx: &MemoryIndex) -> Option<(Vec<String>, Vec<Vec<(usize, f64)>>, Vec<f64>, f64)> {
-    let mut node_ids: Vec<String> = idx.nodes_iter().map(|n| n.id.clone()).collect();
+    let mut node_ids: Vec<String> = idx.nodes_iter().map(|n| n.id.as_str().to_owned()).collect();
     node_ids.sort();
     let n = node_ids.len();
     if n == 0 { return None; }
@@ -851,17 +851,17 @@ pub fn assign_communities_to_new_nodes(graph: &mut crate::graph::Graph) -> Vec<S
     // 单次遍历边 — 为每个新节点累加社区投票
     let mut votes: HashMap<String, HashMap<usize, usize>> = HashMap::new();
     for (_, edge) in graph.edges_iter() {
-        if new_ids.contains(&edge.source) {
+        if new_ids.contains(edge.source.as_str()) {
             if let Some(nbr) = graph.get_node(&edge.target) {
                 if let Some(cid) = nbr.community_id {
-                    *votes.entry(edge.source.clone()).or_default().entry(cid).or_default() += 1;
+                    *votes.entry(edge.source.as_str().to_owned()).or_default().entry(cid).or_default() += 1;
                 }
             }
         }
-        if new_ids.contains(&edge.target) {
+        if new_ids.contains(edge.target.as_str()) {
             if let Some(nbr) = graph.get_node(&edge.source) {
                 if let Some(cid) = nbr.community_id {
-                    *votes.entry(edge.target.clone()).or_default().entry(cid).or_default() += 1;
+                    *votes.entry(edge.target.as_str().to_owned()).or_default().entry(cid).or_default() += 1;
                 }
             }
         }

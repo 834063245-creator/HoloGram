@@ -316,7 +316,7 @@ impl Engine {
                 .map_err(|e| format!("Store lock poisoned: {}", e))?;
             store_guard.as_ref()
                 .map(|s| s.index.read().nodes_iter()
-                    .filter_map(|n| n.community_id.map(|cid| (n.id.clone(), cid)))
+                    .filter_map(|n| n.community_id.map(|cid| (n.id.as_str().to_owned(), cid)))
                     .collect())
                 .unwrap_or_default()
         };

@@ -42,7 +42,7 @@ pub fn fragile_nodes_from_index(idx: &MemoryIndex, limit: usize) -> Vec<serde_js
             .chain(incoming.iter().map(|(_, _, depth, _)| (*depth as f64).powi(2)))
             .sum::<f64>() / fan.max(1.0);
         let score = fan * (1.0 + coupling_penalty);
-        scored.push((score, node.id.clone()));
+        scored.push((score, node.id.as_str().to_owned()));
     }
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);

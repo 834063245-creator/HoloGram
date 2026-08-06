@@ -209,9 +209,9 @@ impl CrossFileResolver {
                 if s != edge.source || t != edge.target {
                     // 边目标已改变 — 创建解析后的版本
                     let mut new_edge = edge.clone();
-                    new_edge.id = format!("{}_resolved", edge.id);
-                    new_edge.source = s.to_string();
-                    new_edge.target = t.to_string();
+                    new_edge.id = format!("{}_resolved", edge.id).into();
+                    new_edge.source = s.to_string().into();
+                    new_edge.target = t.to_string().into();
                     new_edge.cross_file = true;
                     new_edges.push(new_edge);
                     to_remove.push(eid.to_string());

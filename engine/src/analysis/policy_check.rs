@@ -210,7 +210,7 @@ pub fn policy_check_from_index(
         let mut map = HashMap::new();
         for node in idx.nodes_iter() {
             if let Some(ref loc) = node.location {
-                map.insert(node.id.clone(), extract_file(loc).to_string());
+                map.insert(node.id.as_str().to_owned(), extract_file(loc).to_string());
             }
         }
         map

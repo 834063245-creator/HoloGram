@@ -136,7 +136,7 @@ impl SnapshotNode {
     /// 从 Node 提取快照镜像（properties 序列化为 JSON 文本）。
     pub fn from_node(node: &Node) -> Self {
         Self {
-            id: node.id.clone(),
+            id: node.id.as_str().to_owned(),
             name: node.name.clone(),
             kind: node.kind,
             location: node.location.clone(),
@@ -147,14 +147,14 @@ impl SnapshotNode {
             in_degree: node.in_degree,
             non_defines_in_degree: node.non_defines_in_degree,
             position: node.position,
-            community_id: node.community_id,
+            community_id: node.community_id.into(),
         }
     }
 
     /// 还原为 Node（properties 文本解析失败时回退空对象）。
     pub fn into_node(self) -> Node {
         Node {
-            id: self.id,
+            id: self.id.into(),
             name: self.name,
             kind: self.kind,
             location: self.location,
@@ -164,7 +164,7 @@ impl SnapshotNode {
             in_degree: self.in_degree,
             non_defines_in_degree: self.non_defines_in_degree,
             position: self.position,
-            community_id: self.community_id,
+            community_id: self.community_id.into(),
         }
     }
 }

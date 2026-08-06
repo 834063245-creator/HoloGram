@@ -431,21 +431,21 @@ impl MemoryIndex {
     /// 因此峰值内存约为旧的全量克隆方案的一半。
     /// 6.1M 边 → into_iter() 在处理时逐条释放 Edge。
     pub fn from_existing_graph(
-        nodes: HashMap<String, Node>,
-        edges: HashMap<String, crate::graph::Edge>,
+        nodes: HashMap<crate::graph::NodeId, Node>,
+        edges: HashMap<crate::graph::EdgeId, crate::graph::Edge>,
     ) -> Self {
         let mut idx = Self::new();
         // 预驻留所有节点 ID
-        for id in nodes.keys() {
-            idx.intern(id);
+        for node in nodes.values() {
+            idx.intern(node.id.as_str());
         }
         for edge in edges.values() {
-            idx.intern(&edge.source);
-            idx.intern(&edge.target);
+            idx.intern(edge.source.as_str());
+            idx.intern(edge.target.as_str());
         }
         // 插入节点
-        for (id, node) in nodes {
-            let handle = idx.intern(&id);
+        for (_, node) in nodes {
+            let handle = idx.intern(node.id.as_str());
             idx.index_node_name(handle, &node);
             idx.index_node_file(handle, &node);
             idx.nodes.insert(handle, node);
@@ -458,8 +458,8 @@ impl MemoryIndex {
         let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
 
         for (_eid, edge) in edges {
-            let src = idx.intern(&edge.source);
-            let tgt = idx.intern(&edge.target);
+            let src = idx.intern(edge.source.as_str());
+            let tgt = idx.intern(edge.target.as_str());
             if !idx.nodes.contains_key(&src) || !idx.nodes.contains_key(&tgt) {
                 continue;
             }
@@ -1444,7 +1444,7 @@ pub(crate) fn from_snapshot(snap: MemoryIndexSnapshot) -> MemoryIndex {
 mod tests {
     use super::*;
     use crate::graph::Graph;
-    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
+    use crate::graph::{Edge, EdgeId, EdgeKind, Node, NodeId, NodeKind};
 
     fn test_node(id: &str, name: &str, location: Option<&str>) -> Node {
         let mut n = Node::new(id, name, NodeKind::Symbol);
@@ -1514,7 +1514,7 @@ mod tests {
         nodes.insert("c".into(), test_node("c", "C", None));
         // 强制 b 的值为非零过时值，以证明 recompute 会覆盖（而非保持 0）
         {
-            let nb = nodes.get_mut("b").unwrap();
+            let nb = nodes.get_mut(&NodeId::new("b")).unwrap();
             nb.in_degree = 99;
             nb.out_degree = 99;
         }
@@ -1979,7 +1979,7 @@ mod tests {
         assert!(!loaded.fts_dirty(), "from_sqlite → false");
 
         let idx2 = MemoryIndex::from_existing_graph(
-            HashMap::from([("x".to_string(), test_node("x", "X", None))]),
+            HashMap::from([(NodeId::new("x"), test_node("x", "X", None))]),
             HashMap::new(),
         );
         assert!(idx2.fts_dirty());

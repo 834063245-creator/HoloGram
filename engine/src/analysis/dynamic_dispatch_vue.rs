@@ -190,7 +190,7 @@ fn find_first_in_file(graph: &Graph, file: &str) -> Option<String> {
         if matches!(node.kind, NodeKind::Function | NodeKind::Class | NodeKind::File) {
             if let Some(ref loc) = node.location {
                 if loc.starts_with(file) {
-                    return Some(node.id.clone());
+                    return Some(node.id.as_str().to_owned());
                 }
             }
         }

@@ -40,7 +40,7 @@ fn strip_line_suffix(loc: &str) -> &str {
 /// source+target+edge.id 三个 String（全内核百万级 Calls 边 ≈ 2GB 瞬时）。
 /// 入参取边表（经 `Graph::edges_map()`）而非整个 Graph：返回值借用边表，
 /// 零克隆；借用存活期间调用方只读 Graph，节点写回延至借用结束后统一执行。
-fn build_calls_adjacency(edges: &HashMap<String, crate::graph::Edge>) -> HashMap<&str, Vec<(&str, &str)>> {
+fn build_calls_adjacency(edges: &HashMap<crate::graph::EdgeId, crate::graph::Edge>) -> HashMap<&str, Vec<(&str, &str)>> {
     let mut adj: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
     for edge in edges.values() {
         if edge.kind == EdgeKind::Calls {
@@ -56,7 +56,7 @@ fn build_calls_adjacency(edges: &HashMap<String, crate::graph::Edge>) -> HashMap
 /// 一次遍历 O(E)，供入口点检测 O(1) 查询 —— 替代逐节点全边扫描
 /// （O(N×E) 字符串比较，压测中占 Flow 阶段 80%+ 耗时）。
 /// M6: 同样借用化，不再克隆 target。
-fn build_calls_indegree(edges: &HashMap<String, crate::graph::Edge>) -> HashMap<&str, usize> {
+fn build_calls_indegree(edges: &HashMap<crate::graph::EdgeId, crate::graph::Edge>) -> HashMap<&str, usize> {
     let mut indegree: HashMap<&str, usize> = HashMap::new();
     for edge in edges.values() {
         if edge.kind == EdgeKind::Calls {
@@ -390,7 +390,7 @@ mod tests {
         let count = detect_all_flows(&mut result);
 
         assert_eq!(count, 1, "should detect 1 flow from main");
-        let main_node = result.graph.nodes.get("main").unwrap();
+        let main_node = result.graph.get_node("main").unwrap();
         let flow = main_node.properties.get("flow").unwrap();
         assert_eq!(flow.get("entry_kind").unwrap().as_str().unwrap(), "naming_convention");
         assert_eq!(flow.get("node_count").unwrap().as_u64().unwrap(), 3);
@@ -413,7 +413,7 @@ mod tests {
         let mut result = make_result(graph);
         detect_all_flows(&mut result);
 
-        let handler_node = result.graph.nodes.get("handler").unwrap();
+        let handler_node = result.graph.get_node("handler").unwrap();
         let flow = handler_node.properties.get("flow").unwrap();
         assert_eq!(
             flow.get("entry_kind").unwrap().as_str().unwrap(),
@@ -438,7 +438,7 @@ mod tests {
         let mut result = make_result(graph);
         detect_all_flows(&mut result);
 
-        let orphan = result.graph.nodes.get("orphan_fn").unwrap();
+        let orphan = result.graph.get_node("orphan_fn").unwrap();
         let flow = orphan.properties.get("flow").unwrap();
         assert_eq!(
             flow.get("entry_kind").unwrap().as_str().unwrap(),

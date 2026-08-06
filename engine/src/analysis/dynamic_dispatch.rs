@@ -130,9 +130,9 @@ fn walk_js_ts_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree, sour
                     let edge_id = format!("syn_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                     if graph.get_edge(&edge_id).is_none() {
                         let edge = Edge {
-                            id: edge_id,
-                            source: src_id,
-                            target: tgt_id,
+                            id: edge_id.into(),
+                            source: src_id.into(),
+                            target: tgt_id.into(),
                             kind: EdgeKind::Calls,
                             coupling_depth: 3,
                             cross_file: false,
@@ -294,9 +294,9 @@ fn walk_py_dispatch_tree(graph: &mut Graph, file: &str, tree: &tree_sitter::Tree
                     let edge_id = format!("syn_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                     if graph.get_edge(&edge_id).is_none() {
                         let edge = Edge {
-                            id: edge_id,
-                            source: src_id,
-                            target: tgt_id,
+                            id: edge_id.into(),
+                            source: src_id.into(),
+                            target: tgt_id.into(),
                             kind: EdgeKind::Calls,
                             coupling_depth: 3,
                             cross_file: false,

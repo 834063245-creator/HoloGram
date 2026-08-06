@@ -116,9 +116,9 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                                 if let Ok(base_name) = base.utf8_text(source.as_bytes()) {
                                     edge_counter += 1;
                                     edges.push(Edge {
-                                        id: format!("inh_{}_{}", node_id, edge_counter),
-                                        source: node_id.clone(),
-                                        target: format!("{}.{}", file_id, base_name.trim()),
+                                        id: format!("inh_{}_{}", node_id, edge_counter).into(),
+                                        source: node_id.clone().into(),
+                                        target: format!("{}.{}", file_id, base_name.trim()).into(),
                                         kind: EdgeKind::Inherits,
                                         coupling_depth: 2,
                                         cross_file: false,

@@ -317,7 +317,7 @@ pub(crate) fn resolve_in_graph(g: &Graph, node_id_or_name: &str) -> Option<Strin
     if g.get_node(node_id_or_name).is_some() {
         return Some(node_id_or_name.to_string());
     }
-    query::search_nodes(g, node_id_or_name).first().map(|n| n.id.clone())
+    query::search_nodes(g, node_id_or_name).first().map(|n| n.id.as_str().to_owned())
 }
 
 pub(crate) fn discover_source_files(root: &Path, limit: usize) -> Vec<PathBuf> {
