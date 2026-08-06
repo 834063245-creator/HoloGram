@@ -245,3 +245,4 @@ core-parse 432.7s(24%)· db-save 564.0s(32%,from_existing_graph ~311s=intern 244
 · community 218.3s(12%,adjacency 59s+local-moving 92s+step3 K² 34s+hierarchy 29s)
 · snippet 37.1s · flows 13.9s。规格「全内核 <15min」未达(29.5min),剩余三座墙:
 db-save(intern 共享+快照)、eval(超线性待查)、community(两次 louvain+adjacency)。
+**W 阶段攻坚作战文档**:docs/agents/perf-handoff-walls.md(eval 根因+修复方案定稿 / db-save / community 方向)。
