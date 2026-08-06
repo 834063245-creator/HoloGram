@@ -214,7 +214,25 @@ Node::file()(只剥纯数字行号)。规范 path:line 下完全等价;fs 契约
 
 **R8 后残留死代码**:flows.rs strip_line_suffix(#[allow(dead_code)],测试保留)。
 
-**剩余批次**:
-- R10(可选):Graph 容器内部 u32 interning,NodeId 字符串句柄不变;
-  目标全内核 <15min @16GB,需带看门狗压测。R9 后 db-save 墙已破,
-  全内核瓶颈回到 community(22M 边规模无数据)与 memory-index build(drivers 312.7s)。
+**R10-deep 竣工(2026-08-06,commit `66b3698` id.rs / `8d717e9` 全量句柄化 / `88149e0` 分段计时)**:
+- **方案修正**:规格原版「容器 u32 + 现有 StringArena」经核算为**内存回退**(StringArena 每串存两份,
+  叠加 Node.id 第三份);handoff 原始解法(字符串 interning u32 符号表 + 边压缩存储)才是真目标。
+  据此改做 **R10-deep**:Node.id/Edge.id/Edge.source/target 全量改全局驻留 u32 句柄
+  (graph/id.rs 全局驻留器,Arc<str> 共享字节;serde 线格式仍是纯字符串,零漂移)。
+- **drivers 压测(阈值 4M 快照,存档 stress-real-linux-drivers-r10.txt)**:
+  图数字 1859750/4846727/384653 与 R9 **逐项一致**;
+  **总耗时 778.2s → 667.8s(-14%)**;db-save 382.4s → 260.8s(-32%),
+  from_existing_graph 312.7s → ~138s(intern 98s + buckets 39s + sort 0.3s + flatten 0.75s);
+  **RSS 峰值 6.2GB → 964 MB(-84%)** —— u32 句柄让图在内存瘦 6 倍,全内核换页墙基本消失。
+- **fs 契约三次全绿**:155518/426199/28284,resolved 271321,37.6s(基线 ~48s 内);
+  R10b 后 607 测试全绿(净增 8:id.rs 句柄 10 测 - 旧 2 测),0 warning。
+- **R10 副作用**:cross-file 45.2s vs R9 34.7s(+30%,get_node 句柄两跳);community 156.7s vs
+  141.7s(+11%,见下)。core-parse 146.0s(-11%)。
+- **R10 后全内核瓶颈(分段计时拆分,drivers 实测)**:
+  1. from_existing_graph ~138s(最大单块:intern 98s 是字符串重驻留,MemoryIndex 未共享全局句柄);
+  2. community local-moving ~74s(louvain 核心串行跑两遍 + retain 线性扫描);
+  3. community build_adjacency ~27s(两次字符串→u32 重映射,句柄可直接复用);
+  4. leiden step3 K² 22s(超线性,内核最大风险,fs 0.4s → drivers 22.4s)。
+- **R10 偏离/遗留**:规格「IndexMap<NodeId,_> 或 arena+handle 双映射」实际走全局驻留句柄(更强);
+  MemoryIndex 仍持独立 StringArena(快照序列化需要),未共享全局驻留器(下一步可消 intern 98s);
+  src-tauri shell.rs 既有 E0631 已顺手修复(R10b 内)。
