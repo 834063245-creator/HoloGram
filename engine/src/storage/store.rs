@@ -39,10 +39,6 @@ impl GraphStore {
     /// 3. JSON 迁移（回退）
     pub fn open(project_root: &Path) -> Result<Self, String> {
         let start = std::time::Instant::now();
-        // 快照优先级比较需要 hologram.db 的「真实」mtime ——
-        // SqliteDb::open 会在文件缺失时创建它（mtime 变成现在），必须先取样。
-        let db_path = project_root.join(".hologram").join("hologram.db");
-        let db_mtime = std::fs::metadata(&db_path).and_then(|m| m.modified()).ok();
         let db = SqliteDb::open(project_root)?;
 
         let load_start = chrono::Utc::now().timestamp_millis() as u64;
@@ -62,39 +58,67 @@ impl GraphStore {
             reindex_handle: Mutex::new(None),
         };
 
-        // 快照快速路径（超大图）：快照存在且 mtime ≥ hologram.db 时优先加载；
-        // hologram.db 原本不存在 → 快照存在即优先。
+        // 快照快速路径（超大图）：代际 token 判定 —— 快照头部 token 与
+        // db meta 的 snapshot_token 一致，说明快照落盘后 db 未写入更新的
+        // 全量图（to_sqlite 会清空 token；FTS 惰性重建/timeline 不影响）。
         let snap_path = crate::storage::snapshot::snapshot_path(project_root);
-        if let Ok(snap_meta) = std::fs::metadata(&snap_path) {
-            let prefer = match (snap_meta.modified().ok(), db_mtime) {
-                (Some(snap_ts), Some(db_ts)) => snap_ts >= db_ts,
-                (Some(_), None) => true,
-                _ => false,
-            };
-            if prefer {
-                match MemoryIndex::load_snapshot(project_root) {
-                    Ok(idx) => {
-                        let nodes = idx.node_count();
-                        let edges = idx.edge_count();
-                        *store.index.write() = idx;
-                        let elapsed = start.elapsed().as_millis() as u64;
-                        *store.loading.write() = LoadProgress {
-                            phase: "ready".into(),
-                            nodes_loaded: nodes,
-                            edges_loaded: edges,
-                            nodes_total: nodes,
-                            edges_total: edges,
-                            elapsed_ms: elapsed,
-                        };
-                        info!(
-                            "[store] loaded from snapshot: {} nodes, {} edges in {}ms",
-                            nodes, edges, elapsed
-                        );
-                        return Ok(store);
-                    }
-                    Err(e) => {
-                        warn!("[store] 快照加载失败（{}），删除快照并回退 SQLite", e);
-                        let _ = std::fs::remove_file(&snap_path);
+        if snap_path.exists() {
+            match crate::storage::snapshot::peek_snapshot_token(&snap_path) {
+                Err(e) => {
+                    // 无头部旧格式 / 截断 / 损坏 → 按损坏处理
+                    warn!("[store] 快照头部无效（{}），删除快照并回退 SQLite", e);
+                    let _ = std::fs::remove_file(&snap_path);
+                }
+                Ok(snap_token) => {
+                    let db_token = match store.db.get_meta("snapshot_token") {
+                        Ok(t) => t,
+                        Err(e) => {
+                            warn!("[store] snapshot_token 读取失败（{}），按无 token 处理", e);
+                            None
+                        }
+                    };
+                    let prefer = match db_token.as_deref() {
+                        // 代际一致 → 快照有效；空串 = 已被 to_sqlite 作废
+                        Some(t) if !t.is_empty() => t == snap_token,
+                        // 从未记录 token：仅当 db 为空（全新/被删重建）时兼容加载
+                        None => match store.db.has_any_node() {
+                            Ok(has) => !has,
+                            Err(e) => {
+                                warn!("[store] nodes 探测失败（{}），回退 SQLite", e);
+                                false
+                            }
+                        },
+                        Some(_) => false,
+                    };
+                    if prefer {
+                        match MemoryIndex::load_snapshot(project_root) {
+                            Ok(idx) => {
+                                let nodes = idx.node_count();
+                                let edges = idx.edge_count();
+                                *store.index.write() = idx;
+                                let elapsed = start.elapsed().as_millis() as u64;
+                                *store.loading.write() = LoadProgress {
+                                    phase: "ready".into(),
+                                    nodes_loaded: nodes,
+                                    edges_loaded: edges,
+                                    nodes_total: nodes,
+                                    edges_total: edges,
+                                    elapsed_ms: elapsed,
+                                };
+                                info!(
+                                    "[store] loaded from snapshot: {} nodes, {} edges in {}ms",
+                                    nodes, edges, elapsed
+                                );
+                                return Ok(store);
+                            }
+                            Err(e) => {
+                                warn!("[store] 快照反序列化失败（{}），删除快照并回退 SQLite", e);
+                                let _ = std::fs::remove_file(&snap_path);
+                                if let Err(e2) = store.db.set_meta("snapshot_token", "") {
+                                    warn!("[store] snapshot_token 清除失败: {}", e2);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -179,10 +203,23 @@ impl GraphStore {
     /// edge_count ≥ snapshot_min_edges()（默认 5M，env
     /// HOLOGRAM_SNAPSHOT_MIN_EDGES 覆盖）→ bincode 快照（原子 rename）；
     /// 否则走现有 SQLite 全量重写。
+    /// 快照路径同时写代际 token：文件头部 + db meta 的 snapshot_token，
+    /// open 时两者一致才认快照（FTS 惰性重建/timeline 写 db 不影响）。
     pub fn save(&self) -> Result<(), String> {
         let idx = self.index.read();
         if idx.edge_count() >= crate::storage::snapshot::snapshot_min_edges() {
-            idx.save_snapshot(&self.project_root)
+            let token = format!(
+                "{}:{}:{}",
+                idx.node_count(),
+                idx.edge_count(),
+                chrono::Utc::now().timestamp_millis()
+            );
+            idx.save_snapshot(&self.project_root, &token)?;
+            // token 落库失败只 warn —— 退化为下次启动走 SQLite，安全
+            if let Err(e) = self.db.set_meta("snapshot_token", &token) {
+                warn!("[store] snapshot_token 写入失败（下次启动走 SQLite，安全退化）: {}", e);
+            }
+            Ok(())
         } else {
             idx.to_sqlite(&self.db)
         }
@@ -314,8 +351,10 @@ mod tests {
         MemoryIndex::from_existing_graph(nodes, edges)
     }
 
-    /// 小阈值集成：HOLOGRAM_SNAPSHOT_MIN_EDGES=0 时 save 走快照路径，
-    /// 重开 GraphStore 优先快照加载，FTS 惰性重建后可用。
+    /// 小阈值集成 + 核心回归：HOLOGRAM_SNAPSHOT_MIN_EDGES=0 时 save 走快照路径。
+    /// 快照落盘后再写 db（timeline —— 模拟 FTS 惰性重建/timeline 写入），
+    /// drop store 让连接关闭触发 WAL checkpoint（db mtime 推过快照 ——
+    /// R9 初版 mtime 启发式在此场景翻车），重开仍须走快照加载。
     #[test]
     fn test_store_save_snapshot_path_and_reload() {
         let _guard = SNAPSHOT_ENV_LOCK.lock().unwrap();
@@ -324,18 +363,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // store1 保持存活 —— 关闭最后连接会触发 WAL checkpoint 推高
-        // hologram.db mtime（生产稳定态下 db 无写入、mtime 保持 ≤ 快照），
-        // 测试内用并发连接模拟「快照更新」的前提。
-        let store1 = GraphStore::open(&tmp).unwrap();
-        store1.swap_index(small_index());
-        store1.save().unwrap();
-        assert!(snapshot_path(&tmp).exists(), "阈值 0 → 应生成 graph.snapshot");
+        {
+            let store1 = GraphStore::open(&tmp).unwrap();
+            store1.swap_index(small_index());
+            store1.save().unwrap();
+            assert!(snapshot_path(&tmp).exists(), "阈值 0 → 应生成 graph.snapshot");
+            // 代际 token 同时写入文件头部与 db meta
+            let snap_token =
+                crate::storage::snapshot::peek_snapshot_token(&snapshot_path(&tmp)).unwrap();
+            assert_eq!(
+                store1.db.get_meta("snapshot_token").unwrap(),
+                Some(snap_token)
+            );
+            // 模拟 checkpoint 场景：快照落盘后 db 再有写入
+            store1
+                .db
+                .record_timeline("test_event", None, "simulated post-snapshot write")
+                .unwrap();
+        } // store1 drop → 连接关闭 → WAL checkpoint（db mtime 推过快照）
 
-        // 重开：快照 mtime ≥ hologram.db → 快照优先
+        // 重开：token 一致 → 仍走快照（与 db mtime 无关）
         let store2 = GraphStore::open(&tmp).unwrap();
         store2.read(|idx| {
-            assert_eq!(idx.node_count(), 2);
+            assert_eq!(idx.node_count(), 2, "checkpoint 后仍应加载快照图");
             assert_eq!(idx.edge_count(), 1);
             assert!(idx.fts_dirty(), "快照加载 → dirty=true");
             assert_eq!(idx.get_node("a").unwrap().name, "fn_a");
@@ -349,6 +399,101 @@ mod tests {
         store2.read(|idx| assert!(!idx.fts_dirty()));
 
         std::env::remove_var("HOLOGRAM_SNAPSHOT_MIN_EDGES");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// to_sqlite 失效规则：快照 save 后走一次 SQLite 全量保存 →
+    /// snapshot_token 清空 → 重开走 SQLite（快照文件仍在但被无视）。
+    #[test]
+    fn test_store_to_sqlite_invalidates_snapshot() {
+        let _guard = SNAPSHOT_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HOLOGRAM_SNAPSHOT_MIN_EDGES", "0");
+        let tmp = tmp_project("invalidate");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        {
+            let store1 = GraphStore::open(&tmp).unwrap();
+            store1.swap_index(small_index());
+            store1.save().unwrap();
+            assert!(snapshot_path(&tmp).exists());
+            // 强制一次 SQLite 全量保存（模拟 incremental.rs 直调路径）
+            store1.read(|idx| idx.to_sqlite(&store1.db)).unwrap();
+            assert_eq!(
+                store1.db.get_meta("snapshot_token").unwrap(),
+                Some(String::new()),
+                "to_sqlite 成功应清空 snapshot_token"
+            );
+        }
+
+        let store2 = GraphStore::open(&tmp).unwrap();
+        assert!(snapshot_path(&tmp).exists(), "失效快照不删除，仅无视");
+        store2.read(|idx| {
+            assert_eq!(idx.node_count(), 2, "SQLite 路径同样载回 2 节点");
+            assert_eq!(idx.edge_count(), 1);
+            assert!(!idx.fts_dirty(), "SQLite 加载 → dirty=false（证明未走快照）");
+        });
+
+        std::env::remove_var("HOLOGRAM_SNAPSHOT_MIN_EDGES");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// token 不匹配：db 里的 snapshot_token 被改成别的值 → 重开走 SQLite
+    ///（db 为空 → 0 节点，证明快照未被加载；快照文件保留不删）。
+    #[test]
+    fn test_store_token_mismatch_goes_sqlite() {
+        let _guard = SNAPSHOT_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HOLOGRAM_SNAPSHOT_MIN_EDGES", "0");
+        let tmp = tmp_project("mismatch");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        {
+            let store1 = GraphStore::open(&tmp).unwrap();
+            store1.swap_index(small_index());
+            store1.save().unwrap();
+            store1.db.set_meta("snapshot_token", "999:888:1").unwrap();
+        }
+
+        let store2 = GraphStore::open(&tmp).unwrap();
+        assert!(snapshot_path(&tmp).exists(), "token 不匹配不删快照");
+        store2.read(|idx| {
+            assert_eq!(idx.node_count(), 0, "token 不匹配 → SQLite 空库 → 0 节点");
+            assert_eq!(idx.edge_count(), 0);
+        });
+
+        std::env::remove_var("HOLOGRAM_SNAPSHOT_MIN_EDGES");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 无头部旧格式（R9 初版：裸 bincode payload）→ open 判损坏：
+    /// 删快照、走 SQLite 成功。
+    #[test]
+    fn test_store_open_deletes_legacy_headerless_snapshot() {
+        let _guard = SNAPSHOT_ENV_LOCK.lock().unwrap();
+        std::env::remove_var("HOLOGRAM_SNAPSHOT_MIN_EDGES");
+        let tmp = tmp_project("legacy");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        {
+            let store = GraphStore::open(&tmp).unwrap();
+            store.swap_index(small_index());
+            store.save().unwrap(); // 小图 < 默认阈值 → SQLite 路径，db 有数据
+            // 手写 R9 初版格式：裸 bincode payload（无 token 头部）
+            let legacy = store
+                .read(|idx| bincode::serialize(&crate::storage::memory::to_snapshot(idx)).unwrap());
+            std::fs::write(snapshot_path(&tmp), &legacy).unwrap();
+        }
+
+        let store2 = GraphStore::open(&tmp).unwrap();
+        assert!(!snapshot_path(&tmp).exists(), "无头部旧格式应被删除");
+        store2.read(|idx| {
+            assert_eq!(idx.node_count(), 2, "应回退到 SQLite 数据");
+            assert_eq!(idx.edge_count(), 1);
+            assert!(!idx.fts_dirty(), "SQLite 加载 → dirty=false");
+        });
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -368,7 +513,7 @@ mod tests {
             assert!(!snapshot_path(&tmp).exists(), "小图不应生成快照");
         }
 
-        // 写入垃圾快照（mtime 现在 ≥ db mtime → 会被优先尝试）
+        // 写入垃圾快照（peek 头部失败 → 按损坏处理）
         std::fs::write(snapshot_path(&tmp), b"corrupted garbage bytes").unwrap();
 
         let store2 = GraphStore::open(&tmp).unwrap();

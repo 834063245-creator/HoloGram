@@ -606,20 +606,29 @@ impl MemoryIndex {
         db.bulk_replace_all(&nodes, &edges)?;
         // fts_nodes 已随 bulk 重建并与本索引一致 —— 清除惰性重建标记
         self.fts_dirty.store(false, Ordering::Release);
+        // db 已是最新全量图 —— 任何既有快照即刻作废。
+        // 放这里（而非 GraphStore::save）让 incremental.rs 的直调路径也覆盖。
+        if let Err(e) = db.set_meta("snapshot_token", "") {
+            eprintln!("[sqlite] to_sqlite: snapshot_token 清除失败（非致命）: {}", e);
+        }
         Ok(())
     }
 
     // ── 快照持久化（超大图快速路径，M7c）──
 
     /// 将索引全量快照到 `<project_root>/.hologram/graph.snapshot`（bincode 1.3）。
+    /// 文件 = 头部（代际 token，见 snapshot.rs）+ bincode payload；token 由
+    /// GraphStore 生成并与 db meta 的 snapshot_token 比对判定快照有效性。
     /// 原子落盘：先写 .tmp 再 rename（同 vector/mod.rs 先例，现代 Rust 的
     /// fs::rename 在 Windows 上替换已存在目标）；序列化或写入失败时清理 .tmp。
     /// 成功后 fts_dirty 保持 true —— 快照不写 fts_nodes。
-    pub fn save_snapshot(&self, project_root: &Path) -> Result<(), String> {
+    pub fn save_snapshot(&self, project_root: &Path, token: &str) -> Result<(), String> {
         let t = std::time::Instant::now();
         let snap = to_snapshot(self);
-        let bytes = bincode::serialize(&snap)
+        let payload = bincode::serialize(&snap)
             .map_err(|e| format!("snapshot serialize: {}", e))?;
+        let mut bytes = crate::storage::snapshot::encode_snapshot_header(token);
+        bytes.extend_from_slice(&payload);
         let dir = project_root.join(".hologram");
         std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir .hologram: {}", e))?;
         let path = crate::storage::snapshot::snapshot_path(project_root);
@@ -640,14 +649,16 @@ impl MemoryIndex {
     }
 
     /// 从 `<project_root>/.hologram/graph.snapshot` 读回索引（bincode 反序列化）。
-    /// 文件缺失、读取或反序列化失败均返回 Err —— 调用方（GraphStore::open）
-    /// 负责删除快照并回退 SQLite 路径。
+    /// 跳过头部代际 token（有效性由 GraphStore::open 用 peek_snapshot_token
+    /// 与 db meta 比对判定）；文件缺失、头部非法或反序列化失败均返回 Err ——
+    /// 调用方负责删除快照并回退 SQLite 路径。
     pub fn load_snapshot(project_root: &Path) -> Result<MemoryIndex, String> {
         let t = std::time::Instant::now();
         let path = crate::storage::snapshot::snapshot_path(project_root);
         let bytes = std::fs::read(&path)
             .map_err(|e| format!("snapshot read {}: {}", path.display(), e))?;
-        let snap: MemoryIndexSnapshot = bincode::deserialize(&bytes)
+        let (_token, offset) = crate::storage::snapshot::parse_snapshot_header(&bytes)?;
+        let snap: MemoryIndexSnapshot = bincode::deserialize(&bytes[offset..])
             .map_err(|e| format!("snapshot deserialize: {}", e))?;
         let idx = from_snapshot(snap);
         eprintln!(
@@ -1972,7 +1983,7 @@ mod tests {
             HashMap::new(),
         );
         assert!(idx2.fts_dirty());
-        idx2.save_snapshot(&tmp).unwrap();
+        idx2.save_snapshot(&tmp, "1:0:1785972628368").unwrap();
         assert!(idx2.fts_dirty(), "save_snapshot 后保持 true");
         let loaded2 = MemoryIndex::load_snapshot(&tmp).unwrap();
         assert!(loaded2.fts_dirty(), "from_snapshot → true");

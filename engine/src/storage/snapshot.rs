@@ -7,6 +7,11 @@
 // 启动时一次读回，绕开 SQLite 逐行读写。
 // 折中：快照模式下 fts_nodes 不预建，首个 FTS 查询时惰性重建
 // （见 memory.rs ensure_fts_fresh）；timeline_events 独立表不受影响。
+//
+// 文件格式：小头部 + bincode payload ——
+//   [u64 LE token 字节长度][token 字节][bincode payload]
+// token 是代际标识（"{nodes}:{edges}:{millis}"），与 hologram.db meta 表的
+// snapshot_token 比对决定快照是否有效；peek 头部无需读整个 payload。
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -19,6 +24,9 @@ use crate::graph::{EdgeKind, Node, NodeKind};
 pub const SNAPSHOT_FILE: &str = "graph.snapshot";
 /// 快照临时文件名 —— 先写它再原子 rename 为 SNAPSHOT_FILE。
 pub const SNAPSHOT_TMP_FILE: &str = "graph.snapshot.tmp";
+
+/// 快照头部 token 的最大字节长度。超出即判损坏（合法 token 约 30 字节）。
+const MAX_TOKEN_LEN: u64 = 256;
 
 /// 默认进入快照模式的边数阈值。
 const DEFAULT_SNAPSHOT_MIN_EDGES: usize = 5_000_000;
@@ -40,6 +48,70 @@ pub fn snapshot_min_edges() -> usize {
         Ok(v) => v.trim().parse::<usize>().unwrap_or(DEFAULT_SNAPSHOT_MIN_EDGES),
         Err(_) => DEFAULT_SNAPSHOT_MIN_EDGES,
     }
+}
+
+// ── 快照头部（代际 token）──
+
+/// 编码快照头部：[u64 LE token 长度][token 字节]。
+pub(crate) fn encode_snapshot_header(token: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + token.len());
+    out.extend_from_slice(&(token.len() as u64).to_le_bytes());
+    out.extend_from_slice(token.as_bytes());
+    out
+}
+
+/// 校验 token 形状："{nodes}:{edges}:{millis}" 三段纯数字。
+/// 无头部旧格式（R9 初版，裸 bincode 开头是 arena 长度）或错位数据
+/// 偶尔能通过长度/UTF-8 检查，形状校验把它们挡在「损坏」一侧。
+fn validate_token_shape(token: &str) -> Result<(), String> {
+    let mut parts = token.split(':');
+    let ok = parts.clone().count() == 3
+        && parts.all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit()));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("snapshot token 形状非法: {:?}", token))
+    }
+}
+
+/// 解析快照头部，返回 (token, bincode payload 起始偏移)。
+/// 截断 / 长度非法 / 非 UTF-8 / 形状不符均 Err（调用方按损坏处理）。
+pub(crate) fn parse_snapshot_header(bytes: &[u8]) -> Result<(String, usize), String> {
+    if bytes.len() < 8 {
+        return Err(format!("snapshot header 截断（{} 字节）", bytes.len()));
+    }
+    let len = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    if len == 0 || len > MAX_TOKEN_LEN {
+        return Err(format!("snapshot token 长度 {} 非法", len));
+    }
+    let len = len as usize;
+    if bytes.len() < 8 + len {
+        return Err("snapshot header token 截断".to_string());
+    }
+    let token = std::str::from_utf8(&bytes[8..8 + len])
+        .map_err(|e| format!("snapshot token 非 UTF-8: {}", e))?;
+    validate_token_shape(token)?;
+    Ok((token.to_string(), 8 + len))
+}
+
+/// 只读快照头部取代际 token —— 不触 payload（超大快照几个 GB）。
+pub fn peek_snapshot_token(path: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)
+        .map_err(|e| format!("snapshot open {}: {}", path.display(), e))?;
+    let mut len_buf = [0u8; 8];
+    f.read_exact(&mut len_buf)
+        .map_err(|e| format!("snapshot header 读取失败: {}", e))?;
+    let len = u64::from_le_bytes(len_buf);
+    if len == 0 || len > MAX_TOKEN_LEN {
+        return Err(format!("snapshot token 长度 {} 非法", len));
+    }
+    let mut tok = vec![0u8; len as usize];
+    f.read_exact(&mut tok)
+        .map_err(|e| format!("snapshot token 读取失败: {}", e))?;
+    let token = std::str::from_utf8(&tok).map_err(|e| format!("snapshot token 非 UTF-8: {}", e))?;
+    validate_token_shape(token)?;
+    Ok(token.to_string())
 }
 
 /// Node 的快照镜像 —— 字段一一对应，唯 properties 以 JSON 文本承载：
@@ -212,9 +284,14 @@ mod tests {
 
         let idx = build_rich_index();
         assert!(idx.fts_dirty(), "from_existing_graph 后 dirty=true");
-        idx.save_snapshot(&tmp).unwrap();
+        idx.save_snapshot(&tmp, "3:2:1785972628368").unwrap();
         assert!(snapshot_path(&tmp).exists());
         assert!(!snapshot_tmp_path(&tmp).exists(), "rename 后 .tmp 不应残留");
+        // 头部代际 token 可独立 peek（不读 payload）
+        assert_eq!(
+            peek_snapshot_token(&snapshot_path(&tmp)).unwrap(),
+            "3:2:1785972628368"
+        );
 
         let loaded = MemoryIndex::load_snapshot(&tmp).unwrap();
         assert_eq!(loaded.node_count(), idx.node_count());
@@ -269,6 +346,39 @@ mod tests {
         std::fs::write(snapshot_path(&tmp), b"\xde\xad\xbe\xef garbage not bincode \x00\x01").unwrap();
         let result = MemoryIndex::load_snapshot(&tmp);
         assert!(result.is_err(), "损坏快照应返回 Err");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// peek 只读头部取代际 token：合法快照 → token 一致；
+    /// 垃圾字节 / 无头部旧格式（裸 bincode payload）→ Err（按损坏处理）。
+    #[test]
+    fn test_peek_snapshot_token() {
+        let tmp = unique_tmp("peek");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // 合法快照
+        let idx = build_rich_index();
+        idx.save_snapshot(&tmp, "3:2:1785972628368").unwrap();
+        assert_eq!(
+            peek_snapshot_token(&snapshot_path(&tmp)).unwrap(),
+            "3:2:1785972628368"
+        );
+
+        // 垃圾字节 → Err
+        std::fs::write(snapshot_path(&tmp), b"corrupted garbage bytes").unwrap();
+        assert!(peek_snapshot_token(&snapshot_path(&tmp)).is_err());
+
+        // 无头部旧格式（R9 初版：裸 bincode，开头是 arena 长度 u64）→ Err。
+        // 旧文件前 8 字节被当成 token 长度时偶可读出 NUL 串，
+        // 形状校验必须把它挡在「损坏」一侧。
+        let legacy = bincode::serialize(&crate::storage::memory::to_snapshot(&idx)).unwrap();
+        std::fs::write(snapshot_path(&tmp), &legacy).unwrap();
+        assert!(
+            peek_snapshot_token(&snapshot_path(&tmp)).is_err(),
+            "无头部旧格式应判损坏"
+        );
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

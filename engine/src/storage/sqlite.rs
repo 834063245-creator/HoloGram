@@ -97,6 +97,41 @@ impl SqliteDb {
         &self.db_path
     }
 
+    // ── meta kv（schema_version、snapshot_token 等）──
+
+    /// 读 meta kv。键不存在 → Ok(None)。
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>, String> {
+        self.conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |row| {
+                row.get(0)
+            })
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(format!("meta get {}: {}", key, other)),
+            })
+    }
+
+    /// 写 meta kv（INSERT OR REPLACE）。
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )
+            .map_err(|e| format!("meta set {}: {}", key, e))?;
+        Ok(())
+    }
+
+    /// nodes 表是否有任何行（全新/空库判定 —— 快照兼容加载用）。
+    pub fn has_any_node(&self) -> Result<bool, String> {
+        match self.conn.query_row("SELECT 1 FROM nodes LIMIT 1", [], |_| Ok(())) {
+            Ok(()) => Ok(true),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(format!("nodes probe: {}", e)),
+        }
+    }
+
     /// 用于时间线 I/O 的辅助连接 —— 避免阻塞图存储互斥锁。
     pub fn open_aux_connection(db_path: &Path) -> Result<Connection, String> {
         let conn = Connection::open(db_path)
@@ -1010,6 +1045,33 @@ mod tests {
         ];
         assert!(db.batch_upsert_edges(&dangling).is_err(),
             "FK 恢复后悬挂边插入应被拒绝");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// meta kv 读写往返：未写 → None；写后可读；覆盖写生效；空串是合法值
+    ///（snapshot_token 用空串表示「快照已失效」）。
+    #[test]
+    fn test_meta_roundtrip() {
+        let tmp = std::env::temp_dir().join("hologram_test_meta_kv");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = SqliteDb::open(&tmp).unwrap();
+
+        assert_eq!(db.get_meta("snapshot_token").unwrap(), None);
+        db.set_meta("snapshot_token", "2:1:1785972628368").unwrap();
+        assert_eq!(
+            db.get_meta("snapshot_token").unwrap(),
+            Some("2:1:1785972628368".to_string())
+        );
+        db.set_meta("snapshot_token", "").unwrap();
+        assert_eq!(db.get_meta("snapshot_token").unwrap(), Some(String::new()));
+
+        // 空库探测 → 写入节点后探测翻转
+        assert!(!db.has_any_node().unwrap());
+        let nodes: Vec<Node> = vec![make_test_node("alpha", NodeKind::Function)];
+        db.bulk_replace_all(&nodes.iter().collect::<Vec<_>>(), &[]).unwrap();
+        assert!(db.has_any_node().unwrap());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
