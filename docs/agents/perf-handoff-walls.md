@@ -67,3 +67,50 @@ fs 契约三次全绿,607 测试,0 warning。
 
 优先级建议:W1(eval 超线性,根因明确,收益 305s→<10s)> W2-intern(~200s)> W3(零散,但 local-moving ×2
 复用 + step3 稀疏化各省 ~50-90s)。每改一批跑 fs 契约(快,~37s)保正确;kernel 终验(29.5min)只在批量完成后跑。
+
+---
+
+## W 阶段竣工(2026-08-06,commit `c243d76`)
+
+三座墙全部落地。cargo test 609 绿(fs 契约全绿),kernel 终验(run3):**1341.5s(22.4min, -24.2%)**,
+图数字 **2486778/7460139/469360 与 R10 逐位一致**。
+
+### 实测对账(kernel)
+
+| 阶段 | R10 | 竣工 | 收益 | 对应改动 |
+|---|---|---|---|---|
+| Eval Detection | 304.5s | **2.6s** | -302s | W1 NameIndex(含 rust_eval) |
+| Community (Leiden) | 218.3s | **169.8s** | -49s | W3(step3 34→9s) |
+| DB Save | 564.0s | **301.4s** | -263s | W2(memory build 311→61s, snapshot 237→173s) |
+| **总耗时** | **1770.5s** | **1341.5s** | **-429s** | RSS 1339MB(见遗留) |
+
+### 文档原方案的偏差与实战修正(重要)
+
+1. **W1 热点语言判断错误**:文档假设 eval 热点在 py/js,实际 kernel 528 markers 大头在
+   **detect_rust_eval**(kernel 有 473 个 .rs 文件、0 个 js/ts;rust/ 362 + drivers 87)。第一次终验
+   eval 350.9s 未降,补上 rust_eval 索引后才归零。**教训:超线性根因要先确认热点调用点语言分布**。
+2. **W2 句柄直通牵连快照协议**:MemoryIndex 句柄统一到全局驻留器后,快照字符串表从稠密 `Vec<String>`
+   改 **(u32,String) 句柄对 + version 字段**(v2);读回时 `intern_with_handle` 按写入句柄精确重建
+   (全局驻留器支持稀疏槽,句柄 0 = 空哨兵)。旧 v1 快照按损坏回退 SQLite(既有机制)。
+3. **StringArena 全局化引入锁回归**:GraphMerger 用 StringArena(改全局驻留后),解析期并行 merge
+   全走全局 RwLock 抢锁 → core-parse 432→539s。修复:GraphMerger 改本地无锁 `LocalIntern`
+   (句柄只做去重 key,无需全局一致)。**教训:共享驻留器只给真正需要跨实例共享的消费者**。
+4. **community 差 3 真相**:run2 曾 469357,补 rust_eval 索引后 run3 回到 469360(R10 一致)。
+   super 数仍波动(40814/41089/40927),与 flows 285-329 同类 HashMap 迭代序噪声,不在契约内。
+5. **fs 契约耗时波动**:删预驻留 + buckets 预留 + 快照并行化后 fs DB Save 32.7→23.4s;但带残留
+   快照状态时回到 32s(init 读快照 + SQLite 全量双路径),测前应清 .hologram。
+
+### 遗留问题(下一窗口候选)
+
+1. **batch 45400 病态文件**:tree-sitter 解析某文件 200s+(R10 同文件 223s,run3 248s),core-parse
+   波动主因(432/539/600 三跑不同)。独立性能问题,不在三座墙范围,值得单独定位是哪个文件。
+2. **RSS 翻倍**:646MB(R10) → 1339MB(run3)。可能是快照峰值口径差异或全局驻留累积,待观察。
+3. **super 数波动**:HashMap 迭代序噪声,已知问题。
+4. **cross-lang 6.9s/10.2s**:detect_cross_lang_calls 仍走旧版全图扫描(28 markers,非大头),
+   若 kernel 继续扩大可考虑接入索引。
+
+### 验证脚本与文件
+
+- 终验报告:`test-results/stress-real-linux-kernel-w11-run3.txt`(stdout+stderr 分离捕获)
+- 长任务监控:Start-Process 落文件 + subagent 盯梢回传(本会话验证可行,不再依赖 tty transcript)
+- 快照 token 校验:`{nodes}:{edges}:{millis}` 读文件头 8B 长度 + token,可离线验证图数字
