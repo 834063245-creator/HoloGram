@@ -329,49 +329,6 @@ pub(crate) fn find_or_create_di_node_indexed(
     node_id
 }
 
-/// 旧版全图扫描实现 — 仅供非热点检测器（cs/ruby/php/go/kt/rust/cross-lang）使用。
-pub(crate) fn find_or_create_di_node(graph: &mut Graph, name: &str, file: &str, line: usize) -> String {
-    let file_lang = infer_language(file);
-    // 先尝试精确匹配 — 优先同语言节点
-    for (id, node) in graph.nodes_iter() {
-        if node.name == name && file_lang == infer_language(id) {
-            return id.to_string();
-        }
-    }
-    // 回退：不限语言的精确匹配（合成标记可能无语言）
-    for (id, node) in graph.nodes_iter() {
-        if node.name == name {
-            return id.to_string();
-        }
-    }
-    // 尝试末尾组件匹配（用于限定名）— 优先同语言
-    if let Some(last_part) = name.rsplit('.').next() {
-        if last_part != name {
-            for (id, node) in graph.nodes_iter() {
-                if node.name == last_part && file_lang == infer_language(id) {
-                    return id.to_string();
-                }
-            }
-            // 回退：不限语言的末尾组件匹配
-            for (id, node) in graph.nodes_iter() {
-                if node.name == last_part {
-                    return id.to_string();
-                }
-            }
-        }
-    }
-    // 创建占位节点
-    let node_id = format!("di_syn_{}_{}", file.replace(['.', '/', '\\'], "_"), name);
-    let mut node = Node::new(&node_id, name, NodeKind::Symbol);
-    node.location = Some(format!("{}:{}", file, line));
-    node.properties = serde_json::json!({
-        "kind": "synthesized_target",
-        "provenance": "di_reflection"
-    });
-    graph.add_node(node);
-    node_id
-}
-
 
 pub fn detect_cross_lang_calls(
     graph: &mut Graph,
