@@ -260,3 +260,36 @@ struct GitignoreRules {
 `[sandbox] allow_write = ["D:/HoloGramHG"]`,文件写工具可直接改项目代码,无需再用 bash 绕行。
 
 ---
+
+## gitignore 修复落地 + kernel 基线重校(2026-08-06,commit `cb2073f` + `869233e`)
+
+**实施**(按上文第 5 节清单,`discovery.rs`):
+- `collect_gitignore_dirs` → `GitignoreRules{global_names, anchored}`;anchored 按相对 root
+  路径首分量分桶匹配;`/include/` 等前导斜杠规则必须先判含斜杠再剥前导 `/`(否则退化为
+  全局 basename——首版实现踩坑,单测当场抓出)。
+- 删 `debug_kernel_discovery_amd`,新增 4 单测;`cargo test --lib` 613 绿;
+  fs 契约 155518/426199/28284 复跑逐位一致(锚点保留)。
+- 顺手删 W1 收尾遗留的旧版全图扫描 `find_or_create_di_node`(零调用,消除编译 warning)。
+
+**kernel 终验重校**(run-gitignore-fix,清 3GB 残留快照后单轮,总 1199.0s):
+
+| 项 | run4 旧基线 | 新基线 | 变化 |
+|---|---|---|---|
+| Files | 46,491 | **64,466** | +38.7% |
+| Nodes | 2,486,778 | **2,538,218** | +2.1% |
+| Edges | 7,460,139 | **7,638,419** | +2.4% |
+| Communities | 469,356 | **483,456** | +3.0% |
+| TOTAL | 1235.6s | **1199.0s** | **-3%** |
+
+**实测修正上文预期**:
+1. 「预计 300-400 万节点」过高——实际仅 +2.1%。原因:5MB 阈值真正生效(AMD 7-23MB
+   位掩码头文件此前不在列表,阈值空转;现在被拦),头文件主体是小宏定义符号少。
+2. 总耗时不升反降:边 +2.4% 被 W2/W3 优化吸收;db-save 308.3s(run4 331.6s);
+   core-parse 541s 与 run4 持平(batch 45400 病态文件仍在,新文件未引入新病态)。
+3. **新信号:RSS 解析期峰值 12.3GB**(16GB 机器,结束态仅 1.4GB)。「RSS 结案」当时
+   只采结束态口径;若未来解析更大仓库或并行任务,需关注解析期内存,可考虑
+   按需收集/限流头文件。当前单跑 kernel 可行。
+4. 社区数 483456 为新基线(确定性索引桶序,同代码应稳定复现)。
+5. 验证文件:`test-results/stress-real-linux-kernel-gitignore-fix.txt/.err`。
+
+---
