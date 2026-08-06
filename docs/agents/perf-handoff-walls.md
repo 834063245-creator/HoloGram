@@ -192,4 +192,71 @@ Linux 依赖关系的核心不在图中。fs 契约 155518 同样是残缺图数
   gitignore_dirs 不应含 include/config 等全局误排除)
 - 该测试为临时诊断,修复完成后应删除。
 
+### 实测补充与方案定稿(2026-08-06 深夜;⚠️ 代码未实施 — provider 故障已回滚)
+
+**状态**:方案定稿 + 用户决策已拍板,实现未落地(discovery.rs 已 git checkout 还原,
+无 commit)。**下个 agent 直接按本节实施即可,不需要重新调研。**
+
+**1. 根因坐实**(诊断测试实际输出):
+
+```
+[debug] total=46491 amd_asic_reg=0
+[debug] gitignore_dirs contains include? true   ← /include/ 规则被全局化,铁证
+[debug] gitignore_dirs contains generated? true
+[debug] >1MB in discovery=4                     ← AMD 7-23MB 文件根本不在列表
+```
+
+**2. 影响面实测(修正上文「预计 500 万+」的粗估)**:
+
+| 数据 | 数量 |
+|---|---|
+| 全树 .h 文件 | 26,824 |
+| 其中被误排除(`include/` 6606 + arch/drivers/tools/fs/net 的 include 目录 5889) | **~12,500** |
+| fs 子树受影响? | **0** —— fs 无 include 目录、2 个 .gitignore 均为文件级规则(`/mkutf8data`、`/utf8data.c`) |
+
+**关键修正(推翻上文第 4 条)**:fs 契约 **155518/426199/28284 修复后预计不变**,
+应保留为回归锚点;只有 kernel 基线作废。修复后 kernel 节点预计 248 万 → 300-400 万
+(非 500 万+),parse/内存增幅可控。
+
+**3. 修复设计(已定稿)**:
+
+```rust
+struct GitignoreRules {
+    global_names: HashSet<String>,          // 无斜杠规则 → 任意层级 basename(git 语义,行为不变)
+    anchored: HashMap<String, Vec<String>>, // 前导 / 或含中间 / 的规则 → 相对 root 路径,按首分量分桶
+}
+```
+
+- 收集:每个 .gitignore 记录基目录(相对 root,根 = 空串),规则去尾部 `/` 后:
+  无 `/` → `global_names`;含 `/` → `base + rule` 入桶(首分量为桶 key)。
+  含点判断沿用原逻辑(最后分量含点且无尾部 `/` → 文件规则,跳过)。
+- 匹配:目录 entry 算 rel path → global 查 HashSet(现状)+ 桶内 `rel == rule || rel.strip_prefix(rule) 余下以 / 开头`。
+- 复杂度:每目录 O(桶大小),分桶后平均 <10 条,可忽略。
+- `discover_files` 对外签名不变,调用方(runner/tools)零改动;`is_ignored_path` 不动。
+- 修复后 kernel 文件 46.5K → ~5.8 万,AMD asic_reg 大文件被**现有 5MB 阈值自然拦住**
+  (阈值此前因文件不在列表而失效,修复后开始起作用)。
+
+**4. 用户已拍板决策**:
+- 头文件策略:**全收**,靠现有 5MB 阈值兜底,不加额外头文件阈值;
+- 验证深度:**只做到「修复 + 单测 + fs 契约复跑」**,不跑 kernel 终验(下次窗口再说);
+- 诊断测试:`debug_kernel_discovery_amd` **删除**,改写成不依赖 D:/linux-7.1.0 的等价单测
+  (临时目录模拟 kernel 结构:include/ 目录 + `/include/` 锚定规则 + >5MB 大文件,验证
+  include 目录被收集、大文件被阈值跳过)。
+
+**5. 实施与验收清单**:
+1. discovery.rs:`collect_gitignore_dirs` → `collect_gitignore_rules` + `GitignoreRules`,
+   `is_excluded(entry, &rules, root)`;import 补 `HashMap`。
+2. 单测:锚定规则(`/build/`、`/include/config/` 只排对应路径,同名目录保留)、
+   子目录相对规则(`sub/.gitignore` 的 `out/gen/` 只排 `sub/out/gen`)、全局规则不变;
+   删 `debug_kernel_discovery_amd`。
+3. `cargo test --lib` 全绿(现有 5 个 discovery 测试必须仍过)。
+4. fs 契约复跑:删 `D:/linux-7.1.0/fs/.hologram`(545M 残留,影响 DB Save 计时)后
+   `cargo build --release && ./target/release/hologram-engine.exe --stress-real D:/linux-7.1.0/fs 1`,
+   预期 155518/426199/28284 不变。
+5. 单 commit(如 `fix(engine): gitignore 规则保留路径语义,恢复 include 目录收集`)。
+6. 之后窗口再跑 kernel 终验重校基线(30-40 分钟)。
+
+**6. 环境备注**:Reasonix 侧 `D:\reasonix\reasonix.toml` 已配
+`[sandbox] allow_write = ["D:/HoloGramHG"]`,文件写工具可直接改项目代码,无需再用 bash 绕行。
+
 ---
