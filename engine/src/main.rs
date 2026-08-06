@@ -117,6 +117,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("[stress] Project path not found: {}", path_str);
             std::process::exit(1);
         }
+        // 真实项目基准写文件日志（<project>/.hologram/logs/engine.log），
+        // 否则 tracing 落到 no-op subscriber，[parser] warn（超时/跳过大文件）全丢。
+        let _log_guard = logging::init_logging(Some(&root));
         stress::run_stress_real(&root, iterations);
         return Ok(());
     }

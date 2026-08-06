@@ -638,56 +638,18 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
 /// 过滤掉 .git、node_modules、__pycache__、target 等目录，
 /// 仅统计 37 种支持的源代码扩展名。
 fn count_source_files(root: &Path) -> usize {
-    let exts = ["py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
-        "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
-        "cs","swift","dart","scala","sc","hs","html","htm","css"];
-    let mut count = 0;
-    for entry in walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_str().unwrap_or("");
-            !matches!(name, ".git" | ".hologram" | "node_modules" | "__pycache__"
-                | "target" | ".venv" | "venv" | "dist" | "build" | ".next" | ".nuxt")
-        })
-        .filter_map(|e| e.ok())
-    {
-        if !entry.file_type().is_file() { continue; }
-        if let Some(ext) = entry.path().extension() {
-            if exts.contains(&ext.to_str().unwrap_or("")) {
-                count += 1;
-            }
-        }
-    }
-    count
+    // 与 runner 同口径：复用 discover_files（.gitignore 规则 + 5MB 阈值 + 统一扩展名集），
+    // 避免双口径偏差（旧实现不处理 .gitignore，实测与 runner 差 5306 文件）。
+    collect_source_files(root).len()
 }
 
 /// 收集项目目录中所有源代码文件路径。
 ///
-/// 过滤规则与 count_source_files 相同。
+/// 过滤规则与 count_source_files 相同（同为 discover_files 口径）。
 fn collect_source_files(root: &Path) -> Vec<std::path::PathBuf> {
-    let exts = ["py","pyi","pyx","js","jsx","ts","tsx","mjs","cjs","mts","cts",
-        "go","rs","java","c","h","cpp","hpp","cc","hh","cxx","hxx","rb","lua",
-        "cs","swift","dart","scala","sc","hs","html","htm","css"];
-    let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_str().unwrap_or("");
-            !matches!(name, ".git" | ".hologram" | "node_modules" | "__pycache__"
-                | "target" | ".venv" | "venv" | "dist" | "build" | ".next" | ".nuxt")
-        })
-        .filter_map(|e| e.ok())
-    {
-        if !entry.file_type().is_file() { continue; }
-        if let Some(ext) = entry.path().extension() {
-            if exts.contains(&ext.to_str().unwrap_or("")) {
-                files.push(entry.path().to_path_buf());
-            }
-        }
-    }
-    files
+    let exts: Vec<String> = crate::engine::GRAMMAR_LOADER.supported_extensions();
+    let ext_refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+    crate::pipeline::discovery::discover_files(root, &ext_refs)
 }
 
 // ═══════════════════════════════════════════════════════════════
