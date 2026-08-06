@@ -170,14 +170,20 @@ impl SnapshotNode {
 }
 
 /// MemoryIndex 的纯数据快照 —— bincode 1.3 序列化落盘。
-/// 字段与 MemoryIndex 一一对应；arena 只存字符串表
-/// （lookup 由 StringArena::from_strings 重建）。
-/// fts_dirty 不进快照 —— 反序列化后恒置 true（FTS 惰性重建）。
+/// 字段与 MemoryIndex 一一对应。
+///
+/// **v2 格式(2026-08-06)**:arena 句柄空间与全局驻留器统一后,
+/// 字符串表从稠密 `Vec<String>`(句柄 = 表下标)改为 `Vec<(u32, String)>`
+/// 句柄对 —— 读回时按写入句柄精确重建,保证快照内所有 u32 句柄引用
+/// (nodes key / CSR / pending)自洽。旧 v1 快照反序列化失败 → 按损坏处理回退 SQLite。
+/// fts_dirty 不进快照 —— 反序列化后恒置 true(FTS 惰性重建)。
 #[derive(Serialize, Deserialize)]
 pub struct MemoryIndexSnapshot {
-    /// StringArena 的字符串表（索引 0 = 空哨兵）
-    pub arena_strings: Vec<String>,
-    /// u32 句柄 → Node 快照镜像（properties 为 JSON 文本）
+    /// 快照格式版本(当前 2)。
+    pub version: u32,
+    /// 引用句柄 → 字符串(按句柄排序去重;含索引 0 空哨兵)
+    pub arena_strings: Vec<(u32, String)>,
+    /// u32 句柄 → Node 快照镜像(properties 为 JSON 文本)
     pub nodes: HashMap<u32, SnapshotNode>,
     /// 排序后的节点句柄；索引 = 稠密索引
     pub node_by_idx: Vec<u32>,

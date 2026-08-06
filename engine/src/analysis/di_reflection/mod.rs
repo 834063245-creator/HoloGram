@@ -28,7 +28,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::graph::{Graph, Node, NodeKind};
+use crate::graph::{Graph, Node, NodeId, NodeKind};
 use crate::graph::resolver::infer_language;
 
 /// 管道解析缓存中保存的已解析源码。
@@ -64,6 +64,10 @@ pub fn detect_di_reflection(
         }
     }
 
+    // W1: 名称索引 — 消除 find_or_create_di_node 每次调用 4 次全图扫描
+    // (kernel 2.49M 节点 × ~500 次调用 → 304.5s)
+    let mut index = build_name_index(graph);
+
     for file in &files {
         let lower = file.to_lowercase();
         let abs_key = if file.contains(':') { file.clone() }
@@ -71,25 +75,25 @@ pub fn detect_di_reflection(
 
         if let Some((source, _tree_opt)) = parse_cache.get(&abs_key) {
             let source = source.clone();
-            if lower.ends_with(".py") { added += langs::detect_python_reflection(graph, file, &source); }
-            else if lower.ends_with(".java") { added += langs::detect_java_di(graph, file, &source); }
+            if lower.ends_with(".py") { added += langs::detect_python_reflection(graph, &mut index, file, &source); }
+            else if lower.ends_with(".java") { added += langs::detect_java_di(graph, &mut index, file, &source); }
             else if lower.ends_with(".cs") { added += langs::detect_cs_di(graph, file, &source); }
             else if lower.ends_with(".rb") { added += langs::detect_ruby_di(graph, file, &source); }
             else if lower.ends_with(".php") { added += langs::detect_php_di(graph, file, &source); }
             else if lower.ends_with(".go") { added += langs::detect_go_di(graph, file, &source); }
             else if lower.ends_with(".kt") { added += langs::detect_kotlin_di(graph, file, &source); }
-            else { added += langs::detect_ts_di(graph, file, &source); }
+            else { added += langs::detect_ts_di(graph, &mut index, file, &source); }
         } else {
             let full_path = project_root.join(file);
             if let Ok(source) = std::fs::read_to_string(&full_path) {
-                if lower.ends_with(".py") { added += langs::detect_python_reflection(graph, file, &source); }
-                else if lower.ends_with(".java") { added += langs::detect_java_di(graph, file, &source); }
+                if lower.ends_with(".py") { added += langs::detect_python_reflection(graph, &mut index, file, &source); }
+                else if lower.ends_with(".java") { added += langs::detect_java_di(graph, &mut index, file, &source); }
                 else if lower.ends_with(".cs") { added += langs::detect_cs_di(graph, file, &source); }
                 else if lower.ends_with(".rb") { added += langs::detect_ruby_di(graph, file, &source); }
                 else if lower.ends_with(".php") { added += langs::detect_php_di(graph, file, &source); }
                 else if lower.ends_with(".go") { added += langs::detect_go_di(graph, file, &source); }
                 else if lower.ends_with(".kt") { added += langs::detect_kotlin_di(graph, file, &source); }
-                else { added += langs::detect_ts_di(graph, file, &source); }
+                else { added += langs::detect_ts_di(graph, &mut index, file, &source); }
             }
         }
     }
@@ -117,6 +121,9 @@ pub fn detect_dynamic_imports(
         }
     }
 
+    // W1: 名称索引 — 消除 find_or_create_di_node 全图扫描
+    let mut index = build_name_index(graph);
+
     for file in &files {
         let lower = file.to_lowercase();
         let abs_key = if file.contains(':') {
@@ -139,7 +146,7 @@ pub fn detect_dynamic_imports(
         }
 
         if lower.ends_with(".py") {
-            added += langs::detect_python_dynamic_import(graph, file, source_ref);
+            added += langs::detect_python_dynamic_import(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".cs") {
             added += langs::detect_cs_dynamic_import(graph, file, source_ref);
         } else if lower.ends_with(".rb") {
@@ -147,7 +154,7 @@ pub fn detect_dynamic_imports(
         } else if lower.ends_with(".php") {
             added += langs::detect_php_dynamic_import(graph, file, source_ref);
         } else {
-            added += langs::detect_js_ts_dynamic_import(graph, file, source_ref);
+            added += langs::detect_js_ts_dynamic_import(graph, &mut index, file, source_ref);
         }
     }
 
@@ -206,6 +213,9 @@ pub fn detect_eval(
         }
     }
 
+    // W1: 名称索引 — 消除 find_or_create_di_node 全图扫描
+    let mut index = build_name_index(graph);
+
     for file in &files {
         let lower = file.to_lowercase();
         let abs_key = if file.contains(':') {
@@ -228,7 +238,7 @@ pub fn detect_eval(
         }
 
         if lower.ends_with(".py") {
-            added += langs::detect_python_eval(graph, file, source_ref);
+            added += langs::detect_python_eval(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".cs") {
             added += langs::detect_cs_eval(graph, file, source_ref);
         } else if lower.ends_with(".rb") {
@@ -236,9 +246,9 @@ pub fn detect_eval(
         } else if lower.ends_with(".php") {
             added += langs::detect_php_eval(graph, file, source_ref);
         } else if lower.ends_with(".rs") {
-            added += langs::detect_rust_eval(graph, file, source_ref);
+            added += langs::detect_rust_eval(graph, &mut index, file, source_ref);
         } else {
-            added += langs::detect_js_ts_eval(graph, file, source_ref);
+            added += langs::detect_js_ts_eval(graph, &mut index, file, source_ref);
         }
     }
 
@@ -246,6 +256,80 @@ pub fn detect_eval(
 }
 
 
+/// 名称 → 节点句柄索引。
+///
+/// 消除 `find_or_create_di_node` 每次调用最多 4 次全图 O(N) 扫描的
+/// 超线性根因(kernel 2.49M 节点 × ~500 次调用 → 304.5s)。
+/// 桶内保持 build 时的图遍历序 + 后续创建节点的追加序,
+/// 与旧全图扫描的「首个匹配」语义一致。
+pub(crate) type NameIndex = HashMap<String, Vec<NodeId>>;
+
+/// 遍历图一次构建名称索引。桶内保持遍历序。
+pub(crate) fn build_name_index(graph: &Graph) -> NameIndex {
+    let mut index: NameIndex = HashMap::new();
+    for (id, node) in graph.nodes_iter() {
+        if let Some(h) = NodeId::lookup(id) {
+            index.entry(node.name.clone()).or_default().push(h);
+        }
+    }
+    index
+}
+
+/// 索引版 `find_or_create_di_node` — 精确/末尾组件匹配均走哈希索引,
+/// 只遍历候选(同名节点数,通常 0-3),保留同语言优先语义。
+/// 创建占位节点后同步更新索引(检测器只 `add_edge_unchecked` 不直接
+/// `add_node`,故索引只在创建处更新即保持一致)。
+pub(crate) fn find_or_create_di_node_indexed(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    name: &str,
+    file: &str,
+    line: usize,
+) -> String {
+    let file_lang = infer_language(file);
+    // 先尝试精确匹配 — 优先同语言节点
+    if let Some(cands) = index.get(name) {
+        if let Some(&h) = cands.iter().find(|h| file_lang == infer_language(h.as_str())) {
+            return h.into_string();
+        }
+    }
+    // 回退：不限语言的精确匹配（合成标记可能无语言）
+    if let Some(cands) = index.get(name) {
+        if let Some(&h) = cands.first() {
+            return h.into_string();
+        }
+    }
+    // 尝试末尾组件匹配（用于限定名）— 优先同语言
+    if let Some(last_part) = name.rsplit('.').next() {
+        if last_part != name {
+            if let Some(cands) = index.get(last_part) {
+                if let Some(&h) = cands.iter().find(|h| file_lang == infer_language(h.as_str())) {
+                    return h.into_string();
+                }
+            }
+            // 回退：不限语言的末尾组件匹配
+            if let Some(cands) = index.get(last_part) {
+                if let Some(&h) = cands.first() {
+                    return h.into_string();
+                }
+            }
+        }
+    }
+    // 创建占位节点
+    let node_id = format!("di_syn_{}_{}", file.replace(['.', '/', '\\'], "_"), name);
+    let mut node = Node::new(&node_id, name, NodeKind::Symbol);
+    node.location = Some(format!("{}:{}", file, line));
+    node.properties = serde_json::json!({
+        "kind": "synthesized_target",
+        "provenance": "di_reflection"
+    });
+    graph.add_node(node);
+    // 索引同步：新占位节点追加到桶尾（与遍历序一致）
+    index.entry(name.to_string()).or_default().push(NodeId::new(node_id.clone()));
+    node_id
+}
+
+/// 旧版全图扫描实现 — 仅供非热点检测器（cs/ruby/php/go/kt/rust/cross-lang）使用。
 pub(crate) fn find_or_create_di_node(graph: &mut Graph, name: &str, file: &str, line: usize) -> String {
     let file_lang = infer_language(file);
     // 先尝试精确匹配 — 优先同语言节点
@@ -369,7 +453,7 @@ mod tests {
 def connect():
     db = getattr(settings, 'DATABASE_URL')
 "#;
-        let added = langs::detect_python_reflection(&mut g, "config.py", source);
+        let added = langs::detect_python_reflection(&mut g, &mut NameIndex::new(), "config.py", source);
         assert!(added >= 1, "Should detect getattr with string literal, got {}", added);
     }
 
@@ -380,7 +464,7 @@ def connect():
 def configure():
     setattr(obj, 'timeout', 30)
 "#;
-        let added = langs::detect_python_reflection(&mut g, "setup.py", source);
+        let added = langs::detect_python_reflection(&mut g, &mut NameIndex::new(), "setup.py", source);
         assert!(added >= 1, "Should detect setattr with string literal, got {}", added);
     }
 
@@ -391,7 +475,7 @@ def configure():
 def dynamic_access(obj, attr_name):
     return getattr(obj, attr_name)
 "#;
-        let added = langs::detect_python_reflection(&mut g, "reflect.py", source);
+        let added = langs::detect_python_reflection(&mut g, &mut NameIndex::new(), "reflect.py", source);
         // 变量属性 → 不可解析的标记边
         assert!(added >= 1, "Should create unresolvable marker for variable attr, got {}", added);
     }
@@ -400,7 +484,7 @@ def dynamic_access(obj, attr_name):
     fn test_no_reflection_returns_zero() {
         let mut g = Graph::new();
         let source = "def hello():\n    return 42\n";
-        let added = langs::detect_python_reflection(&mut g, "plain.py", source);
+        let added = langs::detect_python_reflection(&mut g, &mut NameIndex::new(), "plain.py", source);
         assert_eq!(added, 0, "No reflection patterns → 0 edges");
     }
 
@@ -415,7 +499,7 @@ public class UserService {
     private UserRepository userRepo;
 }
 "#;
-        let added = langs::detect_java_di(&mut g, "UserService.java", source);
+        let added = langs::detect_java_di(&mut g, &mut NameIndex::new(), "UserService.java", source);
         assert!(added >= 1, "Should detect @Autowired field, got {}", added);
     }
 
@@ -428,7 +512,7 @@ public class OrderService {
     private PaymentGateway payment;
 }
 "#;
-        let added = langs::detect_java_di(&mut g, "OrderService.java", source);
+        let added = langs::detect_java_di(&mut g, &mut NameIndex::new(), "OrderService.java", source);
         assert!(added >= 1, "Should detect @Inject field, got {}", added);
     }
 
@@ -436,7 +520,7 @@ public class OrderService {
     fn test_no_java_di_returns_zero() {
         let mut g = Graph::new();
         let source = "public class Plain { private int x; }\n";
-        let added = langs::detect_java_di(&mut g, "Plain.java", source);
+        let added = langs::detect_java_di(&mut g, &mut NameIndex::new(), "Plain.java", source);
         assert_eq!(added, 0, "No DI annotations → 0 edges");
     }
 
@@ -451,7 +535,7 @@ export class UserService {
     constructor(private repo: UserRepository) {}
 }
 "#;
-        let added = langs::detect_ts_di(&mut g, "user.service.ts", source);
+        let added = langs::detect_ts_di(&mut g, &mut NameIndex::new(), "user.service.ts", source);
         // 应检测到：Injectable 标记 + 构造函数参数
         assert!(added >= 1, "Should detect @Injectable + constructor DI, got {}", added);
     }
@@ -465,7 +549,7 @@ export class Worker {
     constructor(@Inject('CONFIG') private config: AppConfig) {}
 }
 "#;
-        let added = langs::detect_ts_di(&mut g, "worker.ts", source);
+        let added = langs::detect_ts_di(&mut g, &mut NameIndex::new(), "worker.ts", source);
         assert!(added >= 1, "Should detect @Inject decorated param, got {}", added);
     }
 
@@ -473,7 +557,7 @@ export class Worker {
     fn test_no_ts_di_returns_zero() {
         let mut g = Graph::new();
         let source = "class Plain { doStuff() {} }\n";
-        let added = langs::detect_ts_di(&mut g, "plain.ts", source);
+        let added = langs::detect_ts_di(&mut g, &mut NameIndex::new(), "plain.ts", source);
         assert_eq!(added, 0, "No decorators → 0 edges");
     }
 
@@ -486,9 +570,10 @@ export class Worker {
         let java_src = "public class Svc { @Autowired private Repo r; }\n";
         let ts_src = "@Injectable() export class Svc { constructor(private r: Repo) {} }\n";
 
-        let a1 = langs::detect_python_reflection(&mut g, "app.py", py_src);
-        let a2 = langs::detect_java_di(&mut g, "Svc.java", java_src);
-        let a3 = langs::detect_ts_di(&mut g, "svc.ts", ts_src);
+        let mut idx = build_name_index(&g);
+        let a1 = langs::detect_python_reflection(&mut g, &mut idx, "app.py", py_src);
+        let a2 = langs::detect_java_di(&mut g, &mut idx, "Svc.java", java_src);
+        let a3 = langs::detect_ts_di(&mut g, &mut idx, "svc.ts", ts_src);
 
         assert!(a1 >= 1);
         assert!(a2 >= 1);
@@ -506,7 +591,7 @@ async function loadModule(name) {
     const mod = await import(name);
 }
 "#;
-        let added = langs::detect_js_ts_dynamic_import(&mut g, "loader.js", source);
+        let added = langs::detect_js_ts_dynamic_import(&mut g, &mut NameIndex::new(), "loader.js", source);
         assert!(added >= 1, "Should detect import(variable), got {}", added);
     }
 
@@ -518,7 +603,7 @@ function loadPlugin(path) {
     const plugin = require(path);
 }
 "#;
-        let added = langs::detect_js_ts_dynamic_import(&mut g, "plugins.js", source);
+        let added = langs::detect_js_ts_dynamic_import(&mut g, &mut NameIndex::new(), "plugins.js", source);
         assert!(added >= 1, "Should detect require(variable), got {}", added);
     }
 
@@ -526,7 +611,7 @@ function loadPlugin(path) {
     fn test_require_string_literal_not_flagged() {
         let mut g = Graph::new();
         let source = r#"const fs = require('fs');"#;
-        let added = langs::detect_js_ts_dynamic_import(&mut g, "app.js", source);
+        let added = langs::detect_js_ts_dynamic_import(&mut g, &mut NameIndex::new(), "app.js", source);
         assert_eq!(added, 0, "require('string') should NOT be flagged — static import");
     }
 
@@ -537,7 +622,7 @@ function loadPlugin(path) {
 def load_plugin(name):
     mod = importlib.import_module(name)
 "#;
-        let added = langs::detect_python_dynamic_import(&mut g, "loader.py", source);
+        let added = langs::detect_python_dynamic_import(&mut g, &mut NameIndex::new(), "loader.py", source);
         assert!(added >= 1, "Should detect importlib.import_module, got {}", added);
     }
 
@@ -548,7 +633,7 @@ def load_plugin(name):
 def dynamic_load(name):
     return __import__(name)
 "#;
-        let added = langs::detect_python_dynamic_import(&mut g, "dyn.py", source);
+        let added = langs::detect_python_dynamic_import(&mut g, &mut NameIndex::new(), "dyn.py", source);
         assert!(added >= 1, "Should detect __import__, got {}", added);
     }
 
@@ -562,7 +647,7 @@ function runCode(code) {
     eval(code);
 }
 "#;
-        let added = langs::detect_js_ts_eval(&mut g, "runner.js", source);
+        let added = langs::detect_js_ts_eval(&mut g, &mut NameIndex::new(), "runner.js", source);
         assert!(added >= 1, "Should detect eval(), got {}", added);
     }
 
@@ -574,7 +659,7 @@ function makeFn(body) {
     return new Function(body);
 }
 "#;
-        let added = langs::detect_js_ts_eval(&mut g, "factory.js", source);
+        let added = langs::detect_js_ts_eval(&mut g, &mut NameIndex::new(), "factory.js", source);
         assert!(added >= 1, "Should detect new Function(), got {}", added);
     }
 
@@ -585,7 +670,7 @@ function makeFn(body) {
 def run(code):
     eval(code)
 "#;
-        let added = langs::detect_python_eval(&mut g, "run.py", source);
+        let added = langs::detect_python_eval(&mut g, &mut NameIndex::new(), "run.py", source);
         assert!(added >= 1, "Should detect eval(), got {}", added);
     }
 
@@ -596,7 +681,7 @@ def run(code):
 def execute(code):
     exec(code)
 "#;
-        let added = langs::detect_python_eval(&mut g, "exec.py", source);
+        let added = langs::detect_python_eval(&mut g, &mut NameIndex::new(), "exec.py", source);
         assert!(added >= 1, "Should detect exec(), got {}", added);
     }
 
@@ -604,7 +689,7 @@ def execute(code):
     fn test_no_eval_returns_zero() {
         let mut g = Graph::new();
         let source = "function add(a, b) { return a + b; }\n";
-        let added = langs::detect_js_ts_eval(&mut g, "math.js", source);
+        let added = langs::detect_js_ts_eval(&mut g, &mut NameIndex::new(), "math.js", source);
         assert_eq!(added, 0, "No eval → 0 edges");
     }
 

@@ -4,7 +4,7 @@
 mod node;
 mod edge;
 mod graph;
-mod id;
+pub(crate) mod id;
 pub mod merge;
 pub mod resolver;
 pub mod query;

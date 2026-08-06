@@ -585,20 +585,28 @@ fn leiden_refinement(
         .collect();
 
     // 对每个子社区，尝试移动到相邻的 P1 社区
+    // W3: 稀疏累加器 —— p1_weight 从「每个子社区全量归零 O(K²)」改为
+    // epoch 数组按触碰槽惰性重置(同 local_moving 的 weight_buf 模式)。
+    // 触碰顺序与全量归零版逐位一致(首次触碰即 push),平局打破不变。
+    let mut p1_weight: Vec<f64> = vec![0.0; p1_count];
+    let mut p1_epoch: Vec<u32> = vec![0; p1_count];
+    let mut epoch = 0u32;
     let mut improved = true;
     let mut iter = 0;
     while improved && iter < 10 {
         improved = false;
         iter += 1;
         for si in 0..sub_count {
+            epoch += 1;
             let old_p1 = sub_comm[si];
-            // 累加此子社区到每个 P1 社区的边权重
-            let mut p1_weight: Vec<f64> = vec![0.0; p1_count];
+            // 累加此子社区到每个 P1 社区的边权重(仅触碰槽惰性重置)
             let mut touched: Vec<usize> = Vec::new();
             for &v in &sub_comms[si] {
                 for &(nb, w) in &adj[v] {
                     let p1 = node_to_p1[nb];
-                    if p1_weight[p1] == 0.0 {
+                    if p1_epoch[p1] != epoch {
+                        p1_epoch[p1] = epoch;
+                        p1_weight[p1] = 0.0;
                         touched.push(p1);
                     }
                     p1_weight[p1] += w;
@@ -784,8 +792,32 @@ pub fn detect_communities_and_hierarchy(
     graph: &Graph,
     seed: u64,
 ) -> (Vec<Community>, Vec<HierarchicalCommunity>) {
-    let base = detect_communities(graph, seed);  // Leiden 精化的扁平社区
-    let hier_base = detect_communities_louvain(graph, seed);  // 用于层次化的 Louvain
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    // W3: 邻接建一次、局部移动跑一次 —— 扁平(Leiden)与层次(Louvain)共享。
+    // 等价性:两算法的 build_adjacency 输入相同、local_moving_core 同种子
+    // 同输入 → 结果与原两次独立调用逐位一致(local_moving_core 内部 clone rng,
+    // 不消耗外层 rng;build_community_result 内部过滤空社区,与 p1_comms 等价)。
+    let Some((owned_ids, adj, degrees, m)) = build_adjacency(graph) else {
+        let leaf_edges: Vec<(&str, &str)> = graph.edges_iter()
+            .map(|(_, e)| (e.source.as_str(), e.target.as_str()))
+            .collect();
+        let hierarchical = detect_hierarchical_from_base(&vec![], seed, &leaf_edges);
+        return (vec![], hierarchical);
+    };
+    let n = owned_ids.len();
+    let (base, hier_base) = if m == 0.0 {
+        let mut ids = owned_ids;
+        ids.sort();
+        let singleton: Vec<Community> = ids.into_iter().map(|id| vec![id]).collect();
+        (singleton.clone(), singleton)
+    } else {
+        let (comm_nodes, _) = local_moving_core(n, &adj, &degrees, m, &rng);
+        let p1_comms: Vec<Vec<usize>> =
+            comm_nodes.into_iter().filter(|c| !c.is_empty()).collect();
+        let base = leiden_refinement(&owned_ids, n, &adj, &degrees, m, &mut rng, &p1_comms);
+        let hier_base = build_community_result(&owned_ids, &p1_comms);
+        (base, hier_base)
+    };
     let leaf_edges: Vec<(&str, &str)> = graph.edges_iter()
         .map(|(_, e)| (e.source.as_str(), e.target.as_str()))
         .collect();

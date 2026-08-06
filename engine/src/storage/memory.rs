@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
+use rayon::prelude::*;
+
 use crate::graph::{EdgeKind, Node};
 use crate::storage::snapshot::MemoryIndexSnapshot;
 use crate::storage::sqlite::SqliteDb;
@@ -437,33 +439,29 @@ impl MemoryIndex {
         let _t0 = std::time::Instant::now();
         let _edge_total = edges.len();
         let mut idx = Self::new();
-        // 预驻留所有节点 ID
-        for node in nodes.values() {
-            idx.intern(node.id.as_str());
-        }
-        for edge in edges.values() {
-            idx.intern(edge.source.as_str());
-            idx.intern(edge.target.as_str());
-        }
-        // 插入节点
+        // 句柄直通：NodeId 已在全局驻留器,直接取句柄 —— 零重新哈希。
+        // (消除 MemoryIndex 自持 arena 与全局驻留器的双份驻留)
         for (_, node) in nodes {
-            let handle = idx.intern(node.id.as_str());
+            let handle = node.id.handle();
             idx.index_node_name(handle, &node);
             idx.index_node_file(handle, &node);
             idx.nodes.insert(handle, node);
         }
-        eprintln!("[mem-idx] intern+nodes {:.2}s", _t0.elapsed().as_secs_f64());
+        eprintln!("[mem-idx] nodes {:.2}s", _t0.elapsed().as_secs_f64());
         let _t1 = std::time::Instant::now();
 
-        // 构建逐节点桶（临时 —— 被 flatten_buckets 消费）
+        // 构建逐节点桶（临时 —— 被 flatten_buckets 消费）。
+        // 按平均度预留容量，避免 11M 次 push 的反复 realloc。
         idx.rebuild_dense_index();
         let n = idx.node_by_idx.len();
-        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
-        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+        let est = if n > 0 { (_edge_total / n) + 1 } else { 1 };
+        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
+        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
 
         for (_eid, edge) in edges {
-            let src = idx.intern(edge.source.as_str());
-            let tgt = idx.intern(edge.target.as_str());
+            // 句柄直通：edge.source/target 已是全局驻留 NodeId
+            let src = edge.source.handle();
+            let tgt = edge.target.handle();
             if !idx.nodes.contains_key(&src) || !idx.nodes.contains_key(&tgt) {
                 continue;
             }
@@ -503,14 +501,6 @@ impl MemoryIndex {
         let mut idx = Self::new();
         let db_nodes = db.load_all_nodes()?;
         let db_edges = db.load_all_edges()?;
-        // 预驻留所有内容
-        for node in &db_nodes {
-            idx.intern(&node.id);
-        }
-        for (src, tgt, _, _, _) in &db_edges {
-            idx.intern(src);
-            idx.intern(tgt);
-        }
         for node in db_nodes {
             let handle = idx.intern(&node.id);
             idx.index_node_name(handle, &node);
@@ -518,11 +508,12 @@ impl MemoryIndex {
             idx.nodes.insert(handle, node);
         }
 
-        // 通过临时桶构建 CSR
+        // 通过临时桶构建 CSR（按平均度预留容量，减少 realloc）
         idx.rebuild_dense_index();
         let n = idx.node_by_idx.len();
-        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
-        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+        let est = if n > 0 { (db_edges.len() / n) + 1 } else { 1 };
+        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
+        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
 
         for (source, target, kind, coupling_depth, delay) in db_edges {
             let src = idx.intern(&source);
@@ -551,23 +542,17 @@ impl MemoryIndex {
         let mut idx = Self::new();
         let db_nodes = db.load_all_nodes()?;
         let db_edges = db.load_all_edges()?;
-        for node in &db_nodes {
-            idx.intern(&node.id);
-        }
-        for (src, tgt, _, _, _) in &db_edges {
-            idx.intern(src);
-            idx.intern(tgt);
-        }
         for node in db_nodes {
             let handle = idx.intern(&node.id);
             idx.nodes.insert(handle, node);
         }
 
-        // 通过临时桶构建 CSR（暂不构建辅助索引）
+        // 通过临时桶构建 CSR（暂不构建辅助索引；按平均度预留容量）
         idx.rebuild_dense_index();
         let n = idx.node_by_idx.len();
-        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
-        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::new()).collect();
+        let est = if n > 0 { (db_edges.len() / n) + 1 } else { 1 };
+        let mut out_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
+        let mut in_buckets: Vec<Vec<(u32, u8, u8, f64)>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
 
         for (source, target, kind, coupling_depth, delay) in db_edges {
             let src = idx.intern(&source);
@@ -1381,13 +1366,16 @@ impl Default for MemoryIndex {
 // ── 快照转换（字段私有，必须在模块内）──
 
 /// 提取 MemoryIndex 的纯数据快照（bincode 序列化落盘用）。
-/// 字段一一对应；arena 只导出字符串表，lookup 在重建侧恢复。
+/// 字段一一对应；字符串表导出为引用句柄对（全局驻留空间精确重建）。
 pub(crate) fn to_snapshot(idx: &MemoryIndex) -> MemoryIndexSnapshot {
     MemoryIndexSnapshot {
-        arena_strings: idx.arena.strings().to_vec(),
+        version: 2,
+        arena_strings: collect_arena_entries(idx),
+        // 节点镜像并行化：SnapshotNode::from_node 的 properties JSON 序列化
+        // 是纯 CPU 工作，2.49M 节点串行序列化是快照耗时大头。
         nodes: idx
             .nodes
-            .iter()
+            .par_iter()
             .map(|(&h, n)| (h, crate::storage::snapshot::SnapshotNode::from_node(n)))
             .collect(),
         node_by_idx: idx.node_by_idx.clone(),
@@ -1412,11 +1400,32 @@ pub(crate) fn to_snapshot(idx: &MemoryIndex) -> MemoryIndexSnapshot {
     }
 }
 
+/// 收集快照引用的全部 (句柄, 字符串) 对：nodes key ∪ CSR targets ∪ pending ∪ 合成边。
+/// 按句柄排序去重 —— 读回时按写入句柄精确重建全局驻留空间,
+/// 保证快照内所有 u32 句柄引用 (nodes key / CSR / pending) 自洽。
+fn collect_arena_entries(idx: &MemoryIndex) -> Vec<(u32, String)> {
+    let mut handles: Vec<u32> = idx.nodes.keys().copied().collect();
+    handles.extend(idx.out_targets.iter().copied());
+    handles.extend(idx.in_targets.iter().copied());
+    handles.extend(idx.pending_adds.iter().flat_map(|&(s, t, _, _, _)| [s, t]));
+    handles.extend(idx.pending_removes.iter().flat_map(|&(s, t, _)| [s, t]));
+    handles.extend(idx.synthesized_edges.iter().flat_map(|&(s, t)| [s, t]));
+    handles.sort_unstable();
+    handles.dedup();
+    handles.into_iter().map(|h| (h, idx.get_str(h).to_string())).collect()
+}
+
 /// 从快照重建 MemoryIndex。fts_dirty 恒置 true —— 快照模式下
 /// fts_nodes 不预建，首个 FTS 查询时惰性重建（ensure_fts_fresh）。
 pub(crate) fn from_snapshot(snap: MemoryIndexSnapshot) -> MemoryIndex {
+    // 先按快照句柄精确重建全局驻留空间 —— 必须早于 nodes 反序列化:
+    // SnapshotNode.into_node 的 NodeId::new 需命中已注册句柄。
+    let mut arena = StringArena::new();
+    for (h, s) in &snap.arena_strings {
+        arena.intern_with_handle(s, *h);
+    }
     MemoryIndex {
-        arena: StringArena::from_strings(snap.arena_strings),
+        arena,
         nodes: snap
             .nodes
             .into_iter()
@@ -1453,7 +1462,7 @@ pub(crate) fn from_snapshot(snap: MemoryIndexSnapshot) -> MemoryIndex {
 mod tests {
     use super::*;
     use crate::graph::Graph;
-    use crate::graph::{Edge, EdgeId, EdgeKind, Node, NodeId, NodeKind};
+    use crate::graph::{Edge, EdgeKind, Node, NodeId, NodeKind};
 
     fn test_node(id: &str, name: &str, location: Option<&str>) -> Node {
         let mut n = Node::new(id, name, NodeKind::Symbol);

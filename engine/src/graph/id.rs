@@ -29,19 +29,27 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 /// 驻留表。`strings` 持有唯一的 `Arc<str>`;`lookup` 的 key 是同一份 `Arc` 的 clone
 /// (共享同一块堆分配,只多一个指针),所以字符串字节只存一次。
+///
+/// `strings` 用 `Option` 支持**稀疏句柄**:快照读回时按写入句柄精确重建
+/// (见 `intern_with_handle`),句柄槽可能跳号(槽位为 `None`)。
+/// 索引 0 恒为 `Some("")` 空哨兵 —— 与 StringArena 时代的 `get(0) == ""`
+/// 语义一致,空字符串句柄恒为 0。
 struct Interner {
-    /// 句柄 → 字符串(句柄就是 `strings` 的下标)
-    strings: Vec<Arc<str>>,
+    /// 句柄 → 字符串(句柄就是 `strings` 的下标;None = 未占用的稀疏槽)
+    strings: Vec<Option<Arc<str>>>,
     /// 字符串 → 句柄(内容寻址)
     lookup: HashMap<Arc<str>, u32>,
 }
 
 impl Interner {
     fn new() -> Self {
-        Self {
-            strings: Vec::new(),
-            lookup: HashMap::new(),
-        }
+        let mut strings = Vec::new();
+        let mut lookup = HashMap::new();
+        // 空哨兵:句柄 0 = 空字符串(与 StringArena 历史语义一致)
+        let sentinel: Arc<str> = Arc::from("");
+        strings.push(Some(sentinel.clone()));
+        lookup.insert(sentinel, 0);
+        Self { strings, lookup }
     }
 
     fn intern(&mut self, s: &str) -> u32 {
@@ -49,10 +57,37 @@ impl Interner {
             return id;
         }
         let id = self.strings.len() as u32;
-        self.strings.push(Arc::from(s));
+        self.strings.push(Some(Arc::from(s)));
         // clone 只增加引用计数,共享同一块 str 字节
-        self.lookup.insert(self.strings[id as usize].clone(), id);
+        self.lookup.insert(self.strings[id as usize].as_ref().unwrap().clone(), id);
         id
+    }
+
+    /// 按指定句柄驻留(快照读回精确重建用)。
+    /// - 字符串已驻留 → 返回现有句柄(幂等,不检查 h)。
+    /// - 槽位空闲 → 注册 h ↔ s。
+    /// - 槽位已占用且字符串不同 → panic(快照损坏/冲突,不应发生)。
+    fn intern_with_handle(&mut self, s: &str, h: u32) -> u32 {
+        if let Some(&id) = self.lookup.get(s) {
+            return id;
+        }
+        let slot = self.strings.get(h as usize);
+        match slot {
+            Some(Some(existing)) if existing.as_ref() != s => {
+                panic!(
+                    "intern_with_handle conflict: handle {} already holds {:?}, asked for {:?}",
+                    h, existing, s
+                );
+            }
+            _ => {}
+        }
+        if self.strings.len() <= h as usize {
+            self.strings.resize(h as usize + 1, None);
+        }
+        let arc: Arc<str> = Arc::from(s);
+        self.strings[h as usize] = Some(arc.clone());
+        self.lookup.insert(arc, h);
+        h
     }
 
     fn handle_of(&self, s: &str) -> Option<u32> {
@@ -62,7 +97,7 @@ impl Interner {
     fn get(&self, id: u32) -> &str {
         self.strings
             .get(id as usize)
-            .map(|rc| rc.as_ref())
+            .and_then(|o| o.as_deref())
             .unwrap_or("")
     }
 
@@ -90,6 +125,15 @@ pub fn intern(s: &str) -> u32 {
         .write()
         .unwrap_or_else(|e| e.into_inner())
         .intern(s)
+}
+
+/// 按指定句柄驻留(快照读回精确重建句柄空间用)。
+/// 字符串已驻留时返回现有句柄;槽位冲突时 panic。
+pub fn intern_with_handle(s: &str, h: u32) -> u32 {
+    interner()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .intern_with_handle(s, h)
 }
 
 /// 查询已驻留字符串的句柄(不含驻留副作用)。

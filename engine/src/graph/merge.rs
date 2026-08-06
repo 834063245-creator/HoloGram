@@ -5,7 +5,36 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use super::{Edge, EdgeKind, Graph, Node, NodeKind};
-use crate::storage::string_arena::StringArena;
+
+/// 合并期本地字符串驻留 —— 仅作去重 key,不跨 merger 共享。
+///
+/// 2026-08-06 (W2 修复):原用 StringArena(已改全局驻留器薄封装),解析期
+/// 并行 merge 是热路径,每批文件的 intern 全走全局 RwLock 造成多线程抢锁
+/// (kernel core-parse 432.7s → 539.4s)。GraphMerger 的句柄只在本 merger
+/// 内做 loc/edge 去重 key,不需要全局一致,改回无锁本地实现。
+struct LocalIntern {
+    strings: Vec<String>,
+    lookup: HashMap<String, u32>,
+}
+
+impl LocalIntern {
+    fn new() -> Self {
+        let strings = vec![String::new()];
+        let mut lookup = HashMap::new();
+        lookup.insert(String::new(), 0);
+        Self { strings, lookup }
+    }
+
+    fn intern(&mut self, s: &str) -> u32 {
+        if let Some(&h) = self.lookup.get(s) {
+            return h;
+        }
+        let h = self.strings.len() as u32;
+        self.strings.push(s.to_string());
+        self.lookup.insert(self.strings[h as usize].clone(), h);
+        h
+    }
+}
 
 /// 持久化 Graph 合并器，带增量索引。
 ///
@@ -29,8 +58,8 @@ use crate::storage::string_arena::StringArena;
 /// 索引只存 u32 句柄；arena 随 merger drop，不影响下游类型。
 pub struct GraphMerger {
     graph: Graph,
-    /// 跨合并存活的字符串驻留器（loc/edge 索引共享）。
-    arena: StringArena,
+    /// 跨合并存活的字符串驻留器（loc/edge 索引共享）。本地无锁实现。
+    arena: LocalIntern,
     /// "(location-or-id, name, kind)" 句柄三元组 → node ID 句柄。
     /// 原拼 "location::name::kind" 复合字符串；元组键语义等价，
     /// 且消除了 "::" 分隔符与字段内容碰撞的边界 case。
@@ -63,7 +92,7 @@ impl GraphMerger {
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
-            arena: StringArena::new(),
+            arena: LocalIntern::new(),
             loc_index: HashMap::new(),
             edge_index: HashSet::new(),
         }
@@ -75,7 +104,7 @@ impl GraphMerger {
         graph.edges.reserve(estimated_edges);
         Self {
             graph,
-            arena: StringArena::new(),
+            arena: LocalIntern::new(),
             loc_index: HashMap::with_capacity(estimated_nodes),
             edge_index: HashSet::with_capacity(estimated_edges),
         }

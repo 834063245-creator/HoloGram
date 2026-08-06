@@ -7,10 +7,17 @@ use std::collections::HashSet;
 use crate::engine::GRAMMAR_LOADER;
 use crate::graph::{Edge, EdgeKind, Graph};
 use super::find_or_create_di_node;
+use super::find_or_create_di_node_indexed;
 use super::find_js_enclosing_func;
 use super::is_first_arg_string_literal;
+use super::NameIndex;
 
-pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_python_reflection(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
@@ -45,15 +52,17 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
                             if is_resolved {
                                 // 字符串字面量属性 → 创建具体边
                                 let parent_func = find_py_enclosing_func(&node, source, file);
-                                let src_id = find_or_create_di_node(
+                                let src_id = find_or_create_di_node_indexed(
                                     graph,
+                                    index,
                                     &parent_func,
                                     file,
                                     line,
                                 );
                                 let tgt_name = format!("{}.{}", obj_ref, attr_ref);
-                                let tgt_id = find_or_create_di_node(
+                                let tgt_id = find_or_create_di_node_indexed(
                                     graph,
+                                    index,
                                     &tgt_name,
                                     file,
                                     line,
@@ -85,15 +94,17 @@ pub(crate) fn detect_python_reflection(graph: &mut Graph, file: &str, source: &s
                                 // 变量属性名 → 无法解析，创建标记
                                 let marker_name =
                                     format!("<reflection:{}()>", func_name);
-                                let marker_id = find_or_create_di_node(
+                                let marker_id = find_or_create_di_node_indexed(
                                     graph,
+                                    index,
                                     &marker_name,
                                     file,
                                     line,
                                 );
                                 let parent_func = find_py_enclosing_func(&node, source, file);
-                                let src_id = find_or_create_di_node(
+                                let src_id = find_or_create_di_node_indexed(
                                     graph,
+                                    index,
                                     &parent_func,
                                     file,
                                     line,
@@ -214,7 +225,12 @@ pub(crate) fn find_py_enclosing_func(node: &tree_sitter::Node, source: &str, def
 // Java：@Autowired / @Inject / @Resource DI 注解
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_java_di(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
@@ -261,9 +277,9 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
                         let line = node.start_position().row + 1;
                         let class_name = current_class.as_deref().unwrap_or("<unknown>");
                         let src_id =
-                            find_or_create_di_node(graph, class_name, file, line);
+                            find_or_create_di_node_indexed(graph, index, class_name, file, line);
                         let tgt_id =
-                            find_or_create_di_node(graph, &field_type, file, line);
+                            find_or_create_di_node_indexed(graph, index, &field_type, file, line);
 
                         let edge_id = format!(
                             "di_java_{}_{}_{}",
@@ -304,11 +320,11 @@ pub(crate) fn detect_java_di(graph: &mut Graph, file: &str, source: &str) -> usi
                                     let line = param.start_position().row + 1;
                                     let class_name =
                                         current_class.as_deref().unwrap_or("<unknown>");
-                                    let src_id = find_or_create_di_node(
-                                        graph, class_name, file, line,
+                                    let src_id = find_or_create_di_node_indexed(
+                                        graph, index, class_name, file, line,
                                     );
-                                    let tgt_id = find_or_create_di_node(
-                                        graph, &param_type, file, line,
+                                    let tgt_id = find_or_create_di_node_indexed(
+                                        graph, index, &param_type, file, line,
                                     );
 
                                     let edge_id = format!(
@@ -428,7 +444,12 @@ pub(crate) fn extract_java_param_type(node: &tree_sitter::Node, source: &str) ->
 // TypeScript：@Injectable() / @Inject() 装饰器
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_ts_di(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
@@ -474,8 +495,8 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
                             if deco_injectable {
                                 // 将类标记为 injectable
                                 let marker_name = format!("<Injectable:{}>", class_name);
-                                let src_id = find_or_create_di_node(graph, &class_name, file, line);
-                                let tgt_id = find_or_create_di_node(graph, &marker_name, file, line);
+                                let src_id = find_or_create_di_node_indexed(graph, index, &class_name, file, line);
+                                let tgt_id = find_or_create_di_node_indexed(graph, index, &marker_name, file, line);
                                 let edge_id = format!("di_ts_injectable_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
                                 if graph.get_edge(&edge_id).is_none() {
                                     graph.add_edge_unchecked(Edge {
@@ -496,7 +517,7 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
 
                             // 提取构造函数依赖
                             added += extract_ts_constructor_deps_v2(
-                                ec_node, source, &class_name, file, graph, added,
+                                ec_node, source, &class_name, file, graph, index, added,
                             );
                         }
                     }
@@ -509,7 +530,7 @@ pub(crate) fn detect_ts_di(graph: &mut Graph, file: &str, source: &str) -> usize
                     let class_name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
 
                     added += extract_ts_constructor_deps_v2(
-                        &node, source, &class_name, file, graph, added,
+                        &node, source, &class_name, file, graph, index, added,
                     );
                 }
             }
@@ -528,6 +549,7 @@ pub(crate) fn extract_ts_constructor_deps_v2(
     class_name: &str,
     file: &str,
     graph: &mut Graph,
+    index: &mut NameIndex,
     mut added: usize,
 ) -> usize {
     let mut cursor = class_node.walk();
@@ -552,8 +574,8 @@ pub(crate) fn extract_ts_constructor_deps_v2(
                                     let param_type = extract_ts_param_type_v2(&param, source);
                                     if !param_type.is_empty() {
                                         let line = param.start_position().row + 1;
-                                        let src_id = find_or_create_di_node(graph, class_name, file, line);
-                                        let tgt_id = find_or_create_di_node(graph, &param_type, file, line);
+                                        let src_id = find_or_create_di_node_indexed(graph, index, class_name, file, line);
+                                        let tgt_id = find_or_create_di_node_indexed(graph, index, &param_type, file, line);
 
                                         let edge_id = format!(
                                             "di_ts_param_{}_{}_{}",
@@ -604,7 +626,12 @@ pub(crate) fn extract_ts_param_type_v2(node: &tree_sitter::Node, source: &str) -
 }
 
 // ═══════════════════════════════════════════════════════════════
-pub(crate) fn detect_python_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_python_dynamic_import(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
@@ -645,8 +672,8 @@ pub(crate) fn detect_python_dynamic_import(graph: &mut Graph, file: &str, source
                     } else { "<unknown>".to_string() };
 
                     let marker = format!("<dynamic-import:{}>", module_arg.trim_matches(&['\'', '"'][..]));
-                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
-                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let src_id = find_or_create_di_node_indexed(graph, index, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
 
                     let edge_id = format!("di_dynimp_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                     if graph.get_edge(&edge_id).is_none() {
@@ -668,7 +695,12 @@ pub(crate) fn detect_python_dynamic_import(graph: &mut Graph, file: &str, source
     added
 }
 
-pub(crate) fn detect_js_ts_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_js_ts_dynamic_import(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
@@ -703,8 +735,8 @@ pub(crate) fn detect_js_ts_dynamic_import(graph: &mut Graph, file: &str, source:
                     let desc = if is_dyn_import_keyword { "import()" } else { "require()" };
                     let marker = format!("<dynamic-import:{}>", desc);
 
-                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
-                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let src_id = find_or_create_di_node_indexed(graph, index, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
 
                     let edge_id = format!("di_dynimp_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                     if graph.get_edge(&edge_id).is_none() {
@@ -727,7 +759,12 @@ pub(crate) fn detect_js_ts_dynamic_import(graph: &mut Graph, file: &str, source:
 }
 
 /// 检查 call_expression 的第一个参数是否为字符串字面量。
-pub(crate) fn detect_python_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_python_eval(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
@@ -755,8 +792,8 @@ pub(crate) fn detect_python_eval(graph: &mut Graph, file: &str, source: &str) ->
                     let enclosing = find_py_enclosing_func(&node, source, file);
                     let marker = format!("<{}>", func_name);
 
-                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
-                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let src_id = find_or_create_di_node_indexed(graph, index, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
 
                     let edge_id = format!("di_eval_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                     if graph.get_edge(&edge_id).is_none() {
@@ -778,7 +815,12 @@ pub(crate) fn detect_python_eval(graph: &mut Graph, file: &str, source: &str) ->
     added
 }
 
-pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_js_ts_eval(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
@@ -806,8 +848,8 @@ pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> 
                         let enclosing = find_js_enclosing_func(&node, source, file);
                         let marker = "<eval>".to_string();
 
-                        let src_id = find_or_create_di_node(graph, &enclosing, file, line);
-                        let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                        let src_id = find_or_create_di_node_indexed(graph, index, &enclosing, file, line);
+                        let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
                         let edge_id = format!("di_eval_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                         if graph.get_edge(&edge_id).is_none() {
                             graph.add_edge_unchecked(Edge {
@@ -829,8 +871,8 @@ pub(crate) fn detect_js_ts_eval(graph: &mut Graph, file: &str, source: &str) -> 
                         let enclosing = find_js_enclosing_func(&node, source, file);
                         let marker = "<eval:new-Function>".to_string();
 
-                        let src_id = find_or_create_di_node(graph, &enclosing, file, line);
-                        let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                        let src_id = find_or_create_di_node_indexed(graph, index, &enclosing, file, line);
+                        let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
                         let edge_id = format!("di_eval_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                         if graph.get_edge(&edge_id).is_none() {
                             graph.add_edge_unchecked(Edge {
@@ -1197,7 +1239,12 @@ pub(crate) fn detect_kotlin_cross_lang(graph: &mut Graph, file: &str, source: &s
 // Rust：动态代码 eval（proc macros）
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn detect_rust_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_rust_eval(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1205,8 +1252,8 @@ pub(crate) fn detect_rust_eval(graph: &mut Graph, file: &str, source: &str) -> u
             || t.contains("include_bytes!")
         {
             let m = format!("<eval:Rust:{}>", t.chars().take(30).collect::<String>());
-            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
-            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &m, file, li + 1);
             let eid = format!("di_rsev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
