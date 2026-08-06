@@ -293,3 +293,57 @@ struct GitignoreRules {
 5. 验证文件:`test-results/stress-real-linux-kernel-gitignore-fix.txt/.err`。
 
 ---
+
+## 跨语言隐患排查(kernel run3 终验,2026-08-06,commit `8ae2df0`)
+
+**排查结论**:「换语言项目会不会又爆」→ 发现 **kernel 自身还有 94 处同类伤**,
+全部修复 + 终验。
+
+### 发现与修复
+
+1. **slash-free 规则全局化(与 include 同根型)**:sub .gitignore 的 `tools/`、
+   `purgatory`、`ptrace`、`perf` 等无斜杠规则被全局 basename 化,误伤全树
+   同名真实源码 — kernel 实测 **94 个目录**(arch/*/tools、arch/*/purgatory、
+   arch/powerpc/kernel/ptrace 等)。修复:`names: HashMap<String, Vec<String>>`
+   (name → 生效基目录),root 规则(base="")仍全局,sub 规则仅 base 之下
+   任意层级(git 语义)。新增作用域单测。
+2. **IGNORED_DIRS 决策修正**:补 `Pods`/`.gradle`(语义铁定依赖目录);
+   **不补 `vendor`/`bin`/`obj`** — kernel 实证存在同名真实源码
+   (arch/riscv/include/uapi/asm/vendor、tools/perf/scripts/*/bin),
+   全局 basename 排除必误伤;Go/PHP vendor 场景交给已修好的 .gitignore。
+3. **单文件解析超时保险**:tree-sitter `set_timeout_micros(30s)` 覆盖全部
+   4 个 adapter(TreeSitter/Query/Python/TS)。**勿用逐文件 spawn 线程做超时**:
+   Windows 线程栈 reserve 计入 commit charge,69K 文件 spawn 直接打穿
+   commit 限额(实测 Os error 1455 崩溃 2 次,26K 文件处)。
+
+### kernel run3 终验结果(新基线,含 94 目录)
+
+| 项 | run-gitignore-fix | run3 | 变化 |
+|---|---|---|---|
+| Files | 64,466 | **69,772** | +8.2% |
+| Nodes | 2,538,218 | **2,819,886** | +11.1% |
+| Edges | 7,638,419 | **9,251,210** | +21.1% |
+| Communities | 483,456 | **435,323** | 新基线(节点集变化) |
+| TOTAL | 1199.0s | **1403.6s** | +17%(图更大) |
+
+**调查结论(重要,推翻旧遗留)**:
+- **「batch 45400 病态文件」不存在**:run3 里 batch 59000 的 234s 经定位是
+  **RSS 11.2GB 时的换页事件**(16GB 物理机),非解析病态;batch 59000 全部
+  文件单测 <1s(lib/zstd、mm/ 正常)。core-parse 586.9s 正常。
+- **79 failed = 79 个 1MB-5MB 文件**被 parse 层 1MB 阈值跳过(AMD asic_reg
+  头文件族),非失败。warn 缺失因 stress 模式 tracing 写 sink(见遗留)。
+- 超时保险保留(其他语言项目可能真有病态,如巨型数组初始化器)。
+
+**遗留**:
+1. **discovery 两次调用结果不一致**:stress stdout Files=64,466 vs runner
+   batch 分母 69,772,需查 Engine::init vs analyze_project 的 discovery 差异。
+2. **stress 模式 tracing 进 sink**:warn 全丢,调 init_logging 让 stress 写
+   文件日志,便于诊断(本次靠临时诊断 test 绕过)。
+3. 超时若遇真病态(单操作过久),tree-sitter 0.25 超时检查在操作边界,
+   可能不精确 — 届时可上 `parse_with_options` 的 progress callback。
+4. 解析期内存峰值 11.2GB(16GB 机),继续放一放。
+
+验证文件:`test-results/stress-real-linux-kernel-w12-run3.txt/.err`。
+fs 契约 155518/426199/28284 三次复跑一致(含改动后两次)。
+
+---
