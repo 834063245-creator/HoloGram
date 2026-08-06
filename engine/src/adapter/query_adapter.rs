@@ -211,7 +211,6 @@ impl LanguageAdapter for QueryStructureAdapter {
                 .is_some_and(|(_, _, cached_ext)| cached_ext == ext);
             if !reuse {
                 let mut p = Parser::new();
-                p.set_timeout_micros(crate::adapter::tree_sitter::PARSE_TIMEOUT_MICROS);
                 if p.set_language(&lang).is_err() {
                     return (vec![], vec![], None);
                 }
@@ -219,7 +218,21 @@ impl LanguageAdapter for QueryStructureAdapter {
             }
             let (ref mut parser, _, _) = borrow.as_mut().unwrap();
 
-            let tree = match parser.parse(source, None) {
+            let bytes = source.as_bytes();
+            let len = bytes.len();
+            let t0 = std::time::Instant::now();
+            // tree-sitter C 语义：progress 返回 true=取消（超时）, false=继续
+            let mut progress = |_: &tree_sitter::ParseState| {
+                t0.elapsed().as_micros()
+                    >= crate::adapter::tree_sitter::PARSE_TIMEOUT_MICROS as u128
+            };
+            let mut input =
+                |i: usize, _: tree_sitter::Point| (i < len).then(|| &bytes[i..]).unwrap_or_default();
+            let tree = match parser.parse_with_options(
+                &mut input,
+                None,
+                Some(tree_sitter::ParseOptions::new().progress_callback(&mut progress)),
+            ) {
                 Some(t) => t,
                 None => {
                     tracing::warn!(

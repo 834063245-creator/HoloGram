@@ -50,14 +50,28 @@ impl TreeSitterAdapter {
                     None => return (vec![], vec![], None),
                 };
                 let mut p = Parser::new();
-                p.set_timeout_micros(PARSE_TIMEOUT_MICROS);
                 if p.set_language(&lang).is_err() {
                     return (vec![], vec![], None);
                 }
                 *borrow = Some((p, lang, ext.to_string()));
             }
             let (ref mut parser, _, _) = borrow.as_mut().unwrap();
-            match parser.parse(source, None) {
+            // 病态文件超时保护：progress callback 返回 true 即取消解析
+            // （parse 返回 None，tree-sitter C 语义：true=cancel, false=continue）。
+            // timeout API 已 deprecated，官方路径即此。
+            let bytes = source.as_bytes();
+            let len = bytes.len();
+            let t0 = std::time::Instant::now();
+            let mut progress = |_: &tree_sitter::ParseState| {
+                t0.elapsed().as_micros() >= PARSE_TIMEOUT_MICROS as u128
+            };
+            let mut input =
+                |i: usize, _: tree_sitter::Point| (i < len).then(|| &bytes[i..]).unwrap_or_default();
+            match parser.parse_with_options(
+                &mut input,
+                None,
+                Some(tree_sitter::ParseOptions::new().progress_callback(&mut progress)),
+            ) {
                 Some(t) => {
                     let (nodes, edges) = generic_walk(&t, source, file_id);
                     (nodes, edges, Some(t))

@@ -37,12 +37,24 @@ impl LanguageAdapter for PythonAdapter {
             let mut borrow = cell.borrow_mut();
             let parser = borrow.get_or_insert_with(|| {
                 let mut p = Parser::new();
-                p.set_timeout_micros(PARSE_TIMEOUT_MICROS);
                 p.set_language(&tree_sitter_python::LANGUAGE.into())
                     .expect("failed to load tree-sitter-python grammar");
                 p
             });
-            parser.parse(source, None)
+            let bytes = source.as_bytes();
+            let len = bytes.len();
+            let t0 = std::time::Instant::now();
+            // tree-sitter C 语义：progress 返回 true=取消（超时）, false=继续
+            let mut progress = |_: &tree_sitter::ParseState| {
+                t0.elapsed().as_micros() >= PARSE_TIMEOUT_MICROS as u128
+            };
+            let mut input =
+                |i: usize, _: tree_sitter::Point| (i < len).then(|| &bytes[i..]).unwrap_or_default();
+            parser.parse_with_options(
+                &mut input,
+                None,
+                Some(tree_sitter::ParseOptions::new().progress_callback(&mut progress)),
+            )
         });
         let tree = match tree {
             Some(t) => t,
