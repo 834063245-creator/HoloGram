@@ -77,22 +77,22 @@ pub fn detect_di_reflection(
             let source = source.clone();
             if lower.ends_with(".py") { added += langs::detect_python_reflection(graph, &mut index, file, &source); }
             else if lower.ends_with(".java") { added += langs::detect_java_di(graph, &mut index, file, &source); }
-            else if lower.ends_with(".cs") { added += langs::detect_cs_di(graph, file, &source); }
-            else if lower.ends_with(".rb") { added += langs::detect_ruby_di(graph, file, &source); }
-            else if lower.ends_with(".php") { added += langs::detect_php_di(graph, file, &source); }
-            else if lower.ends_with(".go") { added += langs::detect_go_di(graph, file, &source); }
-            else if lower.ends_with(".kt") { added += langs::detect_kotlin_di(graph, file, &source); }
+            else if lower.ends_with(".cs") { added += langs::detect_cs_di(graph, &mut index, file, &source); }
+            else if lower.ends_with(".rb") { added += langs::detect_ruby_di(graph, &mut index, file, &source); }
+            else if lower.ends_with(".php") { added += langs::detect_php_di(graph, &mut index, file, &source); }
+            else if lower.ends_with(".go") { added += langs::detect_go_di(graph, &mut index, file, &source); }
+            else if lower.ends_with(".kt") { added += langs::detect_kotlin_di(graph, &mut index, file, &source); }
             else { added += langs::detect_ts_di(graph, &mut index, file, &source); }
         } else {
             let full_path = project_root.join(file);
             if let Ok(source) = std::fs::read_to_string(&full_path) {
                 if lower.ends_with(".py") { added += langs::detect_python_reflection(graph, &mut index, file, &source); }
                 else if lower.ends_with(".java") { added += langs::detect_java_di(graph, &mut index, file, &source); }
-                else if lower.ends_with(".cs") { added += langs::detect_cs_di(graph, file, &source); }
-                else if lower.ends_with(".rb") { added += langs::detect_ruby_di(graph, file, &source); }
-                else if lower.ends_with(".php") { added += langs::detect_php_di(graph, file, &source); }
-                else if lower.ends_with(".go") { added += langs::detect_go_di(graph, file, &source); }
-                else if lower.ends_with(".kt") { added += langs::detect_kotlin_di(graph, file, &source); }
+                else if lower.ends_with(".cs") { added += langs::detect_cs_di(graph, &mut index, file, &source); }
+                else if lower.ends_with(".rb") { added += langs::detect_ruby_di(graph, &mut index, file, &source); }
+                else if lower.ends_with(".php") { added += langs::detect_php_di(graph, &mut index, file, &source); }
+                else if lower.ends_with(".go") { added += langs::detect_go_di(graph, &mut index, file, &source); }
+                else if lower.ends_with(".kt") { added += langs::detect_kotlin_di(graph, &mut index, file, &source); }
                 else { added += langs::detect_ts_di(graph, &mut index, file, &source); }
             }
         }
@@ -148,11 +148,11 @@ pub fn detect_dynamic_imports(
         if lower.ends_with(".py") {
             added += langs::detect_python_dynamic_import(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".cs") {
-            added += langs::detect_cs_dynamic_import(graph, file, source_ref);
+            added += langs::detect_cs_dynamic_import(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".rb") {
-            added += langs::detect_ruby_dynamic_import(graph, file, source_ref);
+            added += langs::detect_ruby_dynamic_import(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".php") {
-            added += langs::detect_php_dynamic_import(graph, file, source_ref);
+            added += langs::detect_php_dynamic_import(graph, &mut index, file, source_ref);
         } else {
             added += langs::detect_js_ts_dynamic_import(graph, &mut index, file, source_ref);
         }
@@ -240,11 +240,11 @@ pub fn detect_eval(
         if lower.ends_with(".py") {
             added += langs::detect_python_eval(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".cs") {
-            added += langs::detect_cs_eval(graph, file, source_ref);
+            added += langs::detect_cs_eval(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".rb") {
-            added += langs::detect_ruby_eval(graph, file, source_ref);
+            added += langs::detect_ruby_eval(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".php") {
-            added += langs::detect_php_eval(graph, file, source_ref);
+            added += langs::detect_php_eval(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".rs") {
             added += langs::detect_rust_eval(graph, &mut index, file, source_ref);
         } else {
@@ -394,6 +394,9 @@ pub fn detect_cross_lang_calls(
         }
     }
 
+    // W1 收尾：cross-lang 检测器同样接入 NameIndex(消除全图扫描地雷)
+    let mut index = build_name_index(graph);
+
     for file in &files {
         let lower = file.to_lowercase();
         let abs_key = if file.contains(':') {
@@ -416,21 +419,21 @@ pub fn detect_cross_lang_calls(
         }
 
         if lower.ends_with(".py") {
-            added += langs::detect_py_cross_lang(graph, file, source_ref);
+            added += langs::detect_py_cross_lang(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".js") || lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".mjs") {
-            added += langs::detect_js_cross_lang(graph, file, source_ref);
+            added += langs::detect_js_cross_lang(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".java") {
-            added += langs::detect_java_cross_lang(graph, file, source_ref);
+            added += langs::detect_java_cross_lang(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".go") {
-            added += langs::detect_go_cross_lang(graph, file, source_ref);
+            added += langs::detect_go_cross_lang(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".rb") {
-            added += langs::detect_ruby_cross_lang(graph, file, source_ref);
+            added += langs::detect_ruby_cross_lang(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".cs") {
-            added += langs::detect_cs_cross_lang(graph, file, source_ref);
+            added += langs::detect_cs_cross_lang(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".kt") {
-            added += langs::detect_kotlin_cross_lang(graph, file, source_ref);
+            added += langs::detect_kotlin_cross_lang(graph, &mut index, file, source_ref);
         } else if lower.ends_with(".php") {
-            added += langs::detect_php_cross_lang(graph, file, source_ref);
+            added += langs::detect_php_cross_lang(graph, &mut index, file, source_ref);
         }
     }
 
@@ -703,7 +706,7 @@ def run_shell():
     import subprocess
     proc = subprocess.Popen(['ls', '-la'])
 "#;
-        let added = langs::detect_py_cross_lang(&mut g, "runner.py", source);
+        let added = langs::detect_py_cross_lang(&mut g, &mut NameIndex::new(), "runner.py", source);
         assert!(added >= 1, "Should detect subprocess.Popen, got {}", added);
     }
 
@@ -715,7 +718,7 @@ def fetch_data():
     import requests
     resp = requests.get('https://api.example.com/data')
 "#;
-        let added = langs::detect_py_cross_lang(&mut g, "api.py", source);
+        let added = langs::detect_py_cross_lang(&mut g, &mut NameIndex::new(), "api.py", source);
         assert!(added >= 1, "Should detect requests.get, got {}", added);
     }
 
@@ -727,7 +730,7 @@ def load_native():
     import ctypes
     lib = ctypes.CDLL('./mylib.so')
 "#;
-        let added = langs::detect_py_cross_lang(&mut g, "ffi.py", source);
+        let added = langs::detect_py_cross_lang(&mut g, &mut NameIndex::new(), "ffi.py", source);
         assert!(added >= 1, "Should detect ctypes.CDLL, got {}", added);
     }
 
@@ -740,7 +743,7 @@ function run(cmd) {
     exec(cmd);
 }
 "#;
-        let added = langs::detect_js_cross_lang(&mut g, "process.js", source);
+        let added = langs::detect_js_cross_lang(&mut g, &mut NameIndex::new(), "process.js", source);
         assert!(added >= 1, "Should detect child_process.exec, got {}", added);
     }
 
@@ -753,7 +756,7 @@ async function getData() {
     return resp.json();
 }
 "#;
-        let added = langs::detect_js_cross_lang(&mut g, "fetch.js", source);
+        let added = langs::detect_js_cross_lang(&mut g, &mut NameIndex::new(), "fetch.js", source);
         assert!(added >= 1, "Should detect fetch(), got {}", added);
     }
 
@@ -767,7 +770,7 @@ public class Runner {
     }
 }
 "#;
-        let added = langs::detect_java_cross_lang(&mut g, "Runner.java", source);
+        let added = langs::detect_java_cross_lang(&mut g, &mut NameIndex::new(), "Runner.java", source);
         assert!(added >= 1, "Should detect Runtime.exec, got {}", added);
     }
 
@@ -782,7 +785,7 @@ func main() {
     cmd.Run()
 }
 "#;
-        let added = langs::detect_go_cross_lang(&mut g, "main.go", source);
+        let added = langs::detect_go_cross_lang(&mut g, &mut NameIndex::new(), "main.go", source);
         assert!(added >= 1, "Should detect exec.Command, got {}", added);
     }
 
@@ -790,7 +793,7 @@ func main() {
     fn test_no_cross_lang_returns_zero() {
         let mut g = Graph::new();
         let source = "def add(a, b):\n    return a + b\n";
-        let added = langs::detect_py_cross_lang(&mut g, "math.py", source);
+        let added = langs::detect_py_cross_lang(&mut g, &mut NameIndex::new(), "math.py", source);
         assert_eq!(added, 0, "No cross-lang calls → 0 edges");
     }
 
@@ -809,7 +812,7 @@ func main() {
 }
 func add(a, b int) int { return a + b }
 "#;
-        let added = langs::detect_go_cross_lang(&mut g, "main.go", source);
+        let added = langs::detect_go_cross_lang(&mut g, &mut NameIndex::new(), "main.go", source);
         assert_eq!(added, 0);
         assert_eq!(g.nodes.len(), 0,
             "未命中时不得创建占位节点, 实际 {} 个", g.nodes.len());
@@ -828,7 +831,7 @@ public class Calc {
     }
 }
 "#;
-        let added = langs::detect_java_cross_lang(&mut g, "Calc.java", source);
+        let added = langs::detect_java_cross_lang(&mut g, &mut NameIndex::new(), "Calc.java", source);
         assert_eq!(added, 0);
         assert_eq!(g.nodes.len(), 0,
             "未命中时不得创建占位节点, 实际 {} 个", g.nodes.len());

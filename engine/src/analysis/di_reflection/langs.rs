@@ -6,7 +6,6 @@
 use std::collections::HashSet;
 use crate::engine::GRAMMAR_LOADER;
 use crate::graph::{Edge, EdgeKind, Graph};
-use super::find_or_create_di_node;
 use super::find_or_create_di_node_indexed;
 use super::find_js_enclosing_func;
 use super::is_first_arg_string_literal;
@@ -897,7 +896,12 @@ pub(crate) fn detect_js_ts_eval(
 
 
 // ═══════════════════════════════════════════════════════════════
-pub(crate) fn detect_cs_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_cs_di(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     // C# DI 模式主要是 [FromServices] / 构造函数注入。
     // 静态 tree-sitter 解析能力有限；我们采用基于行的扫描
     // 来查找 Assembly.Load / Type.GetType / Activator.CreateInstance。
@@ -909,8 +913,8 @@ pub(crate) fn detect_cs_di(graph: &mut Graph, file: &str, source: &str) -> usize
         {
             let fname = format!("<fn@{}:{}>", file, line_idx + 1);
             let marker = format!("<reflection:C#:{}>", t.chars().take(40).collect::<String>());
-            let sid = find_or_create_di_node(graph, &fname, file, line_idx + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, line_idx + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, line_idx + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, line_idx + 1);
             let eid = format!("di_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -921,7 +925,12 @@ pub(crate) fn detect_cs_di(graph: &mut Graph, file: &str, source: &str) -> usize
     added
 }
 
-pub(crate) fn detect_cs_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_cs_dynamic_import(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -930,8 +939,8 @@ pub(crate) fn detect_cs_dynamic_import(graph: &mut Graph, file: &str, source: &s
         {
             let fname = format!("<fn@{}:{}>", file, li + 1);
             let marker = "<dynamic-import:C#:Assembly>".to_string();
-            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, li + 1);
             let eid = format!("di_csdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -942,7 +951,12 @@ pub(crate) fn detect_cs_dynamic_import(graph: &mut Graph, file: &str, source: &s
     added
 }
 
-pub(crate) fn detect_cs_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_cs_eval(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -951,8 +965,8 @@ pub(crate) fn detect_cs_eval(graph: &mut Graph, file: &str, source: &str) -> usi
         {
             let fname = format!("<fn@{}:{}>", file, li + 1);
             let marker = "<eval:C#:CodeDom>".to_string();
-            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, li + 1);
             let eid = format!("di_csev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -963,14 +977,19 @@ pub(crate) fn detect_cs_eval(graph: &mut Graph, file: &str, source: &str) -> usi
     added
 }
 
-pub(crate) fn detect_cs_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_cs_cross_lang(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
         if t.contains("Process.Start") {
             let m = "<cross-lang:subprocess:Process.Start>".to_string();
-            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
-            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &m, file, li + 1);
             let eid = format!("di_xlang_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -979,8 +998,8 @@ pub(crate) fn detect_cs_cross_lang(graph: &mut Graph, file: &str, source: &str) 
         }
         if t.contains("HttpClient") || t.contains("GetAsync") || t.contains("PostAsync") {
             let m = format!("<cross-lang:http:{}>", t.chars().take(40).collect::<String>());
-            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
-            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &m, file, li + 1);
             let eid = format!("di_xlang_cs_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -995,7 +1014,12 @@ pub(crate) fn detect_cs_cross_lang(graph: &mut Graph, file: &str, source: &str) 
 // Ruby：send、method_missing、eval、autoload、system
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn detect_ruby_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_ruby_di(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1005,8 +1029,8 @@ pub(crate) fn detect_ruby_di(graph: &mut Graph, file: &str, source: &str) -> usi
         {
             let fname = format!("<fn@{}:{}>", file, li + 1);
             let marker = format!("<reflection:Ruby:{}>", t.chars().take(40).collect::<String>());
-            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, li + 1);
             let eid = format!("di_rb_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1017,7 +1041,12 @@ pub(crate) fn detect_ruby_di(graph: &mut Graph, file: &str, source: &str) -> usi
     added
 }
 
-pub(crate) fn detect_ruby_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_ruby_dynamic_import(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1026,8 +1055,8 @@ pub(crate) fn detect_ruby_dynamic_import(graph: &mut Graph, file: &str, source: 
         {
             let fname = format!("<fn@{}:{}>", file, li + 1);
             let marker = "<dynamic-import:Ruby>".to_string();
-            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, li + 1);
             let eid = format!("di_rbdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1038,7 +1067,12 @@ pub(crate) fn detect_ruby_dynamic_import(graph: &mut Graph, file: &str, source: 
     added
 }
 
-pub(crate) fn detect_ruby_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_ruby_eval(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1046,8 +1080,8 @@ pub(crate) fn detect_ruby_eval(graph: &mut Graph, file: &str, source: &str) -> u
             Some(format!("<eval:Ruby:{}>", t.chars().take(30).collect::<String>()))
         } else { None };
         if let Some(m) = marker {
-            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
-            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &m, file, li + 1);
             let eid = format!("di_rbev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1058,7 +1092,12 @@ pub(crate) fn detect_ruby_eval(graph: &mut Graph, file: &str, source: &str) -> u
     added
 }
 
-pub(crate) fn detect_ruby_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_ruby_cross_lang(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1068,8 +1107,8 @@ pub(crate) fn detect_ruby_cross_lang(graph: &mut Graph, file: &str, source: &str
             Some(format!("<cross-lang:http:{}>", t.chars().take(40).collect::<String>()))
         } else { None };
         if let Some(m) = marker {
-            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
-            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &m, file, li + 1);
             let eid = format!("di_xlang_rb_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1084,7 +1123,12 @@ pub(crate) fn detect_ruby_cross_lang(graph: &mut Graph, file: &str, source: &str
 // PHP：ReflectionClass、eval、require_once(expr)、exec
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn detect_php_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_php_di(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1094,8 +1138,8 @@ pub(crate) fn detect_php_di(graph: &mut Graph, file: &str, source: &str) -> usiz
         {
             let fname = format!("<fn@{}:{}>", file, li + 1);
             let marker = format!("<reflection:PHP:{}>", t.chars().take(40).collect::<String>());
-            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, li + 1);
             let eid = format!("di_php_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1106,7 +1150,12 @@ pub(crate) fn detect_php_di(graph: &mut Graph, file: &str, source: &str) -> usiz
     added
 }
 
-pub(crate) fn detect_php_dynamic_import(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_php_dynamic_import(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1115,8 +1164,8 @@ pub(crate) fn detect_php_dynamic_import(graph: &mut Graph, file: &str, source: &
         {
             let fname = format!("<fn@{}:{}>", file, li + 1);
             let marker = "<dynamic-import:PHP>".to_string();
-            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, li + 1);
             let eid = format!("di_phpdyn_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1127,14 +1176,19 @@ pub(crate) fn detect_php_dynamic_import(graph: &mut Graph, file: &str, source: &
     added
 }
 
-pub(crate) fn detect_php_eval(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_php_eval(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
         if t.contains("eval(") || t.contains("create_function") || t.contains("assert(") {
             let m = format!("<eval:PHP:{}>", t.chars().take(30).collect::<String>());
-            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
-            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &m, file, li + 1);
             let eid = format!("di_phpev_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1145,7 +1199,12 @@ pub(crate) fn detect_php_eval(graph: &mut Graph, file: &str, source: &str) -> us
     added
 }
 
-pub(crate) fn detect_php_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_php_cross_lang(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1155,8 +1214,8 @@ pub(crate) fn detect_php_cross_lang(graph: &mut Graph, file: &str, source: &str)
             Some("<cross-lang:http:PHP>".to_string())
         } else { None };
         if let Some(m) = marker {
-            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
-            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &m, file, li + 1);
             let eid = format!("di_xlang_php_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1171,7 +1230,12 @@ pub(crate) fn detect_php_cross_lang(graph: &mut Graph, file: &str, source: &str)
 // Go：reflect
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn detect_go_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_go_di(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1180,8 +1244,8 @@ pub(crate) fn detect_go_di(graph: &mut Graph, file: &str, source: &str) -> usize
         {
             let fname = format!("<fn@{}:{}>", file, li + 1);
             let marker = format!("<reflection:Go:{}>", t.chars().take(40).collect::<String>());
-            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, li + 1);
             let eid = format!("di_go_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1196,7 +1260,12 @@ pub(crate) fn detect_go_di(graph: &mut Graph, file: &str, source: &str) -> usize
 // Kotlin：@Inject、Koin、ProcessBuilder
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) fn detect_kotlin_di(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_kotlin_di(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
@@ -1205,8 +1274,8 @@ pub(crate) fn detect_kotlin_di(graph: &mut Graph, file: &str, source: &str) -> u
         {
             let fname = format!("<fn@{}:{}>", file, li + 1);
             let marker = format!("<DI:Kotlin:{}>", t.chars().take(40).collect::<String>());
-            let sid = find_or_create_di_node(graph, &fname, file, li + 1);
-            let tid = find_or_create_di_node(graph, &marker, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &fname, file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &marker, file, li + 1);
             let eid = format!("di_kt_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 3, cross_file: false, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1217,14 +1286,19 @@ pub(crate) fn detect_kotlin_di(graph: &mut Graph, file: &str, source: &str) -> u
     added
 }
 
-pub(crate) fn detect_kotlin_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_kotlin_cross_lang(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
     for (li, line) in source.lines().enumerate() {
         let t = line.trim();
         if t.contains("ProcessBuilder") || t.contains("Runtime.getRuntime().exec") {
             let m = "<cross-lang:subprocess:Kotlin>".to_string();
-            let sid = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
-            let tid = find_or_create_di_node(graph, &m, file, li + 1);
+            let sid = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, li + 1), file, li + 1);
+            let tid = find_or_create_di_node_indexed(graph, index, &m, file, li + 1);
             let eid = format!("di_xlang_kt_{}_{}", file.replace(['.', '/', '\\'], "_"), added);
             if graph.get_edge(&eid).is_none() {
                 graph.add_edge_unchecked(Edge { id: eid.into(), source: sid.into(), target: tid.into(), kind: EdgeKind::Calls, coupling_depth: 4, cross_file: true, temporal_delay_sec: None, lsp_resolved: false, is_synthesized: false, metadata: None });
@@ -1265,7 +1339,12 @@ pub(crate) fn detect_rust_eval(
 }
 
 // ═══════════════════════════════════════════════════════════════
-pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_py_cross_lang(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
@@ -1338,8 +1417,8 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                 }
 
                 if is_cross {
-                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
-                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let src_id = find_or_create_di_node_indexed(graph, index, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
                     let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                     if graph.get_edge(&edge_id).is_none() {
                         graph.add_edge_unchecked(Edge {
@@ -1362,7 +1441,12 @@ pub(crate) fn detect_py_cross_lang(graph: &mut Graph, file: &str, source: &str) 
 
 // ── JS/TS：child_process.exec/spawn、fetch、axios ──
 
-pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_js_cross_lang(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let is_ts = file.ends_with(".ts") || file.ends_with(".tsx");
@@ -1420,8 +1504,8 @@ pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                 }
 
                 if !marker.is_empty() {
-                    let src_id = find_or_create_di_node(graph, &enclosing, file, line);
-                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let src_id = find_or_create_di_node_indexed(graph, index, &enclosing, file, line);
+                    let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
                     let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                     if graph.get_edge(&edge_id).is_none() {
                         graph.add_edge_unchecked(Edge {
@@ -1444,7 +1528,12 @@ pub(crate) fn detect_js_cross_lang(graph: &mut Graph, file: &str, source: &str) 
 
 // ── Java：Runtime.exec、ProcessBuilder、HttpClient ──
 
-pub(crate) fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_java_cross_lang(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
@@ -1468,13 +1557,13 @@ pub(crate) fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str
             // Runtime.getRuntime().exec(cmd) / ProcessBuilder.start()
             if text.contains(".exec(") || text.contains("ProcessBuilder") {
                 // 命中后才创建节点,避免为每个调用点造孤立占位节点
-                let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
+                let src_id = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, line), file, line);
                 let marker = if text.contains("ProcessBuilder") {
                     "<cross-lang:subprocess:ProcessBuilder>".to_string()
                 } else {
                     "<cross-lang:subprocess:Runtime.exec>".to_string()
                 };
-                let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
                 let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                 if graph.get_edge(&edge_id).is_none() {
                     graph.add_edge_unchecked(Edge {
@@ -1496,7 +1585,12 @@ pub(crate) fn detect_java_cross_lang(graph: &mut Graph, file: &str, source: &str
 
 // ── Go：exec.Command、os/exec、net/http ──
 
-pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) -> usize {
+pub(crate) fn detect_go_cross_lang(
+    graph: &mut Graph,
+    index: &mut NameIndex,
+    file: &str,
+    source: &str,
+) -> usize {
     let mut added = 0usize;
 
     let mut parser = tree_sitter::Parser::new();
@@ -1523,9 +1617,9 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                     || func_text.ends_with(".Command") || func_text.ends_with(".CommandContext");
                 if is_exec {
                     // 命中后才创建节点,避免为每个调用点造孤立占位节点
-                    let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
+                    let src_id = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, line), file, line);
                     let marker = format!("<cross-lang:subprocess:{}>", func_text);
-                    let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                    let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
                     let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                     if graph.get_edge(&edge_id).is_none() {
                         graph.add_edge_unchecked(Edge {
@@ -1543,8 +1637,8 @@ pub(crate) fn detect_go_cross_lang(graph: &mut Graph, file: &str, source: &str) 
                         || func_text.ends_with(".Do") || func_text.ends_with(".NewRequest"))
                     {
                         let marker = format!("<cross-lang:http:{}>", func_text);
-                        let src_id = find_or_create_di_node(graph, &format!("<fn@{}:{}>", file, line), file, line);
-                        let tgt_id = find_or_create_di_node(graph, &marker, file, line);
+                        let src_id = find_or_create_di_node_indexed(graph, index, &format!("<fn@{}:{}>", file, line), file, line);
+                        let tgt_id = find_or_create_di_node_indexed(graph, index, &marker, file, line);
                         let edge_id = format!("di_xlang_{}_{}_{}", file.replace(['.', '/', '\\'], "_"), added, line);
                         if graph.get_edge(&edge_id).is_none() {
                             graph.add_edge_unchecked(Edge {
