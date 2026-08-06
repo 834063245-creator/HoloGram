@@ -151,3 +151,43 @@ cs/ruby/php/go/kt 及全部 cross-lang(19 个检测器)仍在全图扫描 ——
 故未翻倍(侧面佐证)。**评估结论:1.3GB 跑全 kernel 完全可接受,不做回收**——与 R9 时代
 drivers 6.2GB/内核 OOM 相比已是数量级改善;若未来内存受限,可改串行/限分片 to_snapshot,
 代价是快照慢 ~60-90s。此事项结案,不再跟踪。
+
+---
+
+## ⚠️ 重大发现(2026-08-06):kernel 头文件体系被 .gitignore 误排除(正确性 bug)
+
+**优先级:高于一切性能项。这是图残缺问题,不是性能问题。**
+
+### 根因链
+
+`collect_gitignore_dirs`(pipeline/discovery.rs)对 .gitignore 规则取**最后一个路径分量**
+作为全局 basename 排除,导致路径型/锚定型规则被错误放大:
+
+```
+tools/power/acpi/.gitignore 的 "/include/"  → 全局排除所有名为 include 的目录
+kernel 根 .gitignore 的 "/include/config/"   → 全局排除所有名为 config 的目录
+"/include/generated/" → 全局排除 generated(与 IGNORED_DIRS 重复)
+```
+
+**后果**:kernel 根 include/、arch/*/include/、drivers/*/include/(含 AMD asic_reg)
+全部从未被收集 —— 248 万节点图缺失整个头文件体系(include/linux/*.h 等),
+Linux 依赖关系的核心不在图中。fs 契约 155518 同样是残缺图数字。
+
+**连带影响**:batch 45400 慢文件(229s)并非 AMD 文件(它们从不在流程里),
+真凶是另一个 <1MB 文件,尚未定位;5MB discovery 过滤因 AMD 文件不在列表而无效。
+
+### 修复方向(未实施,需独立窗口)
+
+1. collect_gitignore_dirs 改为保留**路径语义**:规则 = (gitignore 所在目录相对 root + 规则路径),
+   is_excluded 用相对路径前缀匹配,不能降级 basename。
+2. 无前导 / 的简单名规则(如 "my_build")保持任意层级 basename 匹配(git 语义正确)。
+3. 修好后 kernel 图将暴增(头文件节点,预计 500 万+),需配套「头文件按需收集」
+   或阈值策略,否则 parse/内存失控。
+4. **所有基线重校**:fs 契约 155518/426199/28284、kernel 2486778/7460139 均作废。
+
+### 验证脚本
+
+- 诊断测试:`cargo test --lib debug_kernel_discovery_amd -- --ignored --nocapture`
+  (当前输出 total=46491 amd_asic_reg=0;修复后 amd_asic_reg 应 >0,
+  gitignore_dirs 不应含 include/config 等全局误排除)
+- 该测试为临时诊断,修复完成后应删除。

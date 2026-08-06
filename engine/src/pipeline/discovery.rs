@@ -5,6 +5,12 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// 超大文件过滤阈值 — 5MB(≈5 万行)。
+/// 真实源码几乎不可能达到(llama.cpp 级 2-3 万行单文件才 ~2MB);
+/// 达此量级的基本是生成物(如 AMD 寄存器位掩码头文件 7-23MB,纯宏定义,
+/// 对依赖图零价值)。跳过它们:省 tree-sitter 解析时间 + 图不被宏名污染。
+const MAX_SOURCE_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
 /// 发现项目目录中的源文件。
 /// 遵循 .gitignore 模式 + 硬编码的通用排除规则。
 pub fn discover_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
@@ -28,6 +34,16 @@ pub fn discover_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
                 if let Some(ext) = path.extension() {
                     let ext_str = ext.to_str().unwrap_or("");
                     if extensions.contains(&ext_str) {
+                        // 超大生成物文件跳过(阈值见 MAX_SOURCE_FILE_BYTES)
+                        if let Ok(meta) = entry.metadata() {
+                            if meta.len() > MAX_SOURCE_FILE_BYTES {
+                                tracing::info!(
+                                    "[discovery] skip oversized file >5MB: {}",
+                                    path.display()
+                                );
+                                continue;
+                            }
+                        }
                         files.push(path.to_path_buf());
                     }
                 }
@@ -135,6 +151,33 @@ pub fn is_ignored_path(path: &str) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    #[ignore]
+    fn debug_kernel_discovery_amd() {
+        // 临时诊断：验证 kernel 的 discover_files 是否收集 asic_reg 大文件
+        let root = std::path::Path::new(r"D:/linux-7.1.0");
+        let exts = ["c", "h", "rs", "py", "S", "cpp", "hpp"];
+        let files = discover_files(root, &exts);
+        let amd: Vec<_> = files
+            .iter()
+            .filter(|p| p.to_string_lossy().contains("asic_reg"))
+            .collect();
+        eprintln!("[debug] total={} amd_asic_reg={}", files.len(), amd.len());
+        let gi = collect_gitignore_dirs(&root);
+        for key in ["amd", "asic_reg", "include", "generated", "drm"] {
+            eprintln!("[debug] gitignore_dirs contains {}? {}", key, gi.contains(key));
+        }
+        let big: Vec<_> = files
+            .iter()
+            .filter(|p| p.metadata().map(|m| m.len() > 1_048_576).unwrap_or(false))
+            .collect();
+        eprintln!("[debug] >1MB in discovery={}", big.len());
+        for f in big.iter().take(5) {
+            eprintln!("  >1MB: {}", f.display());
+        }
+        assert!(true);
+    }
 
     #[test]
     fn test_discover_python_files() {
