@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as bridge from '../src/bridge';
-import { parseRpcString, persistSecrets, restoreSecrets } from '../src/settings';
+import { loadSettings, parseRpcString, persistSecrets, restoreSecrets } from '../src/settings';
 
 vi.mock('../src/bridge', () => ({ rpc: vi.fn() }));
 
@@ -28,6 +28,13 @@ describe('parseRpcString', () => {
     expect(parseRpcString(null)).toBeNull();
     expect(parseRpcString('{}')).toBeNull();
     expect(parseRpcString(123 as unknown)).toBeNull();
+  });
+
+  it('returns null for JSON-encoded "null" literal (null 复活回归)', () => {
+    // 凭据库里被写入字面量 "null" 后，rpc 返回带引号的 '"null"'——
+    // parse 出字符串 "null" 必须按 null 处理，否则回填后重新写回、删不掉
+    expect(parseRpcString('"null"')).toBeNull();
+    expect(parseRpcString(' "null" ')).toBeNull();
   });
 });
 
@@ -63,6 +70,13 @@ describe('restoreSecrets', () => {
     const out = await restoreSecrets(s);
     expect(out.providers[0].apiKey).toBe('');
   });
+
+  it('ignores stored "null" literal (null 复活回归)', async () => {
+    (bridge.rpc as any).mockResolvedValue('"null"');
+    const s = { activeProvider: 'deepseek', providers: [{ name: 'deepseek', apiKey: '' }] } as any;
+    const out = await restoreSecrets(s);
+    expect(out.providers[0].apiKey).toBe('');
+  });
 });
 
 describe('persistSecrets', () => {
@@ -90,5 +104,30 @@ describe('persistSecrets', () => {
     await persistSecrets(s);
     const calls = (bridge.rpc as any).mock.calls.map((c: unknown[]) => c[0]);
     expect(calls).not.toContain('credential_delete');
+  });
+
+  it('never stores "null" literal (null 复活回归)', async () => {
+    (bridge.rpc as any).mockResolvedValue('null');
+    const s = { activeProvider: 'deepseek', providers: [{ name: 'deepseek', apiKey: 'null' }] } as any;
+    await persistSecrets(s);
+    expect(bridge.rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadSettings', () => {
+  it('sanitizes apiKey:"null" literal from localStorage (毒化残留清洗)', () => {
+    localStorage.setItem(
+      'hologram_settings',
+      JSON.stringify({
+        activeProvider: 'deepseek',
+        providers: [
+          { name: 'deepseek', apiKey: 'null' },
+          { name: 'glm', apiKey: '' },
+        ],
+      }),
+    );
+    const s = loadSettings();
+    expect(s.providers[0].apiKey).toBe('');
+    localStorage.removeItem('hologram_settings');
   });
 });

@@ -27,7 +27,7 @@ import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
 import { createProvider } from './provider';
 import { mergeDynamicModels, getModel } from './provider/catalog';
-import { defaultPricing, getActiveProvider, loadSettingsWithSecrets, persistSecrets, type AppSettings } from './settings';
+import { defaultPricing, getActiveProvider, loadSettingsWithSecrets, type AppSettings } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
 import { useDockStore } from './ui/dock-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
@@ -568,7 +568,10 @@ export class Workspace {
       return;
     }
 
-    persistSecrets(settings).catch((e) => console.error('[workspace] persistSecrets failed:', e));
+    // ⚡ 2026-08-08：删除启动时的 persistSecrets 回写（原在此行）。
+    // 理由：读回→无条件写回是「null 复活」与双重编码放大循环的驱动器——
+    // 任何残留在 state 里的垃圾 key（如字面量 "null"）都会在每次启动时
+    // 被重新写入凭据库。凭据的唯一写入入口 = SettingsPanel 的保存动作。
 
     // 加载记忆（全局 + 项目）
     let memorySection = '';

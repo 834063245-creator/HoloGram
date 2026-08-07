@@ -103,6 +103,16 @@ export function loadSettings(): AppSettings {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
+        // ⚡ 2026-08-08「null 复活」修复：毒化时期 localStorage 可能残留
+        // apiKey:"null" 字面量——它非空、会被当成真 key 展示并回写凭据库。
+        // 加载时即清洗为空，下一次保存自动落回干净状态。
+        if (Array.isArray(parsed?.providers)) {
+          for (const p of parsed.providers) {
+            if (p && typeof p.apiKey === 'string' && p.apiKey.trim() === 'null') {
+              p.apiKey = '';
+            }
+          }
+        }
         return { ...DEFAULTS, ...parsed };
       }
     }
@@ -149,7 +159,8 @@ export async function persistSecrets(s: AppSettings): Promise<void> {
     const { rpc } = await import('./bridge');
     for (const p of s.providers) {
       const key = (p.apiKey || '').trim();
-      if (key) {
+      // 「null」字面量护栏：毒化残留的 apiKey:"null" 绝非真 key，绝不写入凭据库
+      if (key && key !== 'null') {
         try {
           await rpc('credential_store', { provider: p.name, key });
         } catch {
@@ -176,14 +187,20 @@ export async function removeSecret(providerName: string): Promise<void> {
  *  调用方普遍需 JSON.parse；此处兼容两种形态：
  *  - `"sk-xxx"`（JSON 编码）→ 解析出 `sk-xxx`
  *  - `sk-xxx`（纯字符串，未来 Tauri 行为变化）→ 原样返回
- *  - `null` / 非法 JSON → null */
+ *  - `null` / 非法 JSON → null
+ *  ⚡ 2026-08-08「null 复活」修复：凭据库里被写入过字面量 "null" 的 key 时，
+ *  rpc 返回 `"null"`（带引号）——parse 后仍是字符串 "null"，必须按 null 处理，
+ *  否则它会被当成真 key 回填并重新写回凭据库，删不掉。 */
 export function parseRpcString(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (trimmed === 'null' || trimmed === '') return null;
   try {
     const parsed = JSON.parse(trimmed);
-    return typeof parsed === 'string' ? parsed : null;
+    if (typeof parsed !== 'string') return null;
+    // 解析结果是字面量 "null"/空串 —— 同样是「无 key」，不是合法 key
+    if (parsed.trim() === 'null' || parsed.trim() === '') return null;
+    return parsed;
   } catch {
     return trimmed;
   }
