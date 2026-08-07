@@ -31,6 +31,18 @@ fn cred_write_lock() -> &'static Mutex<()> {
     CRED_WRITE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// 单条 key 的长度上限 — 正常 API key < 200 字符，4096 已极宽松。
+/// 2026-08-08 事故：前端双重 JSON 编码反馈循环把 key 膨胀到 128MiB，
+/// 启动时 credential_get 经 IPC 回传 256MB 响应，直接击毁 WebView2 进程栈。
+/// 写入端必须拒绝此类毒值，否则应用会在每次启动时自毁。
+const MAX_KEY_LEN: usize = 4096;
+
+/// 凭证密文文件的大小上限 — 正常文件 < 1KB。
+/// 超过即视为毒化/损坏：读取方报错（前端按无 key 处理），
+/// 写入方走 load_or_backup_cred_map 隔离备份后重建。
+/// 绝不对超大文件执行解密+解析——那正是烧毁 IPC 通道的路径。
+const MAX_CRED_FILE_SIZE: usize = 4 * 1024 * 1024;
+
 // ═══════════════════════════════════════════════════════════════
 // 公共 API — 所有平台相同
 // ═══════════════════════════════════════════════════════════════
@@ -39,6 +51,14 @@ fn cred_write_lock() -> &'static Mutex<()> {
 pub fn store_api_key(provider: &str, key: &str) -> Result<(), String> {
     // 中毒后取回守卫继续工作 —— 写入本身是原子 rename，数据不会因 panic 损坏
     let _guard = cred_write_lock().lock().unwrap_or_else(|e| e.into_inner());
+    // 尺寸护栏：拒绝写入超长 key（双重编码 bug 的产物），防止毒化凭证文件
+    if key.len() > MAX_KEY_LEN {
+        return Err(format!(
+            "credential: key 长度 {} 超过上限 {}，拒绝写入（疑似编码 bug 产生的毒值）",
+            key.len(),
+            MAX_KEY_LEN
+        ));
+    }
     #[cfg(windows)]
     {
         store_windows(provider, key)
@@ -199,6 +219,22 @@ mod windows_impl {
     }
 
     fn load_cred_map() -> Result<serde_json::Map<String, serde_json::Value>, String> {
+        let map = load_cred_map_raw()?;
+        // 尺寸护栏：丢弃超长 value（毒化产物），绝不让其进入 IPC 响应。
+        // 保留正常 key，让应用在文件部分损坏时仍可用。
+        Ok(map
+            .into_iter()
+            .filter(|(k, v)| {
+                let ok = v.as_str().map(|s| s.len() <= MAX_KEY_LEN).unwrap_or(false);
+                if !ok {
+                    tracing::warn!("[credential] 丢弃异常条目 provider={}（value 超限或非字符串）", k);
+                }
+                ok
+            })
+            .collect())
+    }
+
+    fn load_cred_map_raw() -> Result<serde_json::Map<String, serde_json::Value>, String> {
         let encrypted = match std::fs::read(cred_path()) {
             Ok(d) => d,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -206,6 +242,14 @@ mod windows_impl {
             }
             Err(e) => return Err(format!("read credentials: {e}")),
         };
+        // 尺寸护栏：超大密文绝不解密解析（解密 256MB 需数十秒且响应会击毁 IPC）
+        if encrypted.len() > MAX_CRED_FILE_SIZE {
+            return Err(format!(
+                "credentials.enc 大小 {} 字节超过上限 {}，按损坏处理",
+                encrypted.len(),
+                MAX_CRED_FILE_SIZE
+            ));
+        }
         let plain = dpapi_decrypt(&encrypted)?;
         let s = String::from_utf8(plain).map_err(|e| format!("invalid cred: {e}"))?;
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
@@ -747,5 +791,34 @@ mod tests {
                 "并发存储后 prov-{i} 丢失"
             );
         }
+    }
+
+    /// 2026-08-08 事故回归：双重 JSON 编码反馈循环曾把 key 膨胀到 128MiB，
+    /// 256MB IPC 响应击毁 WebView2。写入端必须拒绝超长 key。
+    #[test]
+    #[cfg(windows)]
+    fn test_store_rejects_oversized_key() {
+        let env = TempCredEnv::new("oversized-store");
+        let big = "x".repeat(5000);
+        assert!(super::store_api_key("bigprov", &big).is_err(), "超长 key 必须被拒绝");
+        assert!(!env.cred_file().exists(), "拒绝写入时不应创建文件");
+        // 正常 key 不受影响
+        super::store_api_key("ok", "sk-normal").unwrap();
+        assert_eq!(super::get_api_key("ok").unwrap(), Some("sk-normal".to_string()));
+    }
+
+    /// 毒化文件（超 4MB）场景：get 应快速报错而非解密数百 MB；
+    /// store 应隔离备份后重建干净文件。
+    #[test]
+    #[cfg(windows)]
+    fn test_oversized_file_quarantined_on_store() {
+        let env = TempCredEnv::new("oversized-file");
+        let dir = env.cred_file().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(env.cred_file(), vec![0u8; 5 * 1024 * 1024]).unwrap();
+        assert!(super::get_api_key("any").is_err(), "超大文件应直接报错而非尝试解密");
+        super::store_api_key("newprov", "sk-new").unwrap();
+        assert_eq!(env.corrupt_backups().len(), 1, "毒化文件应被隔离备份");
+        assert_eq!(super::get_api_key("newprov").unwrap(), Some("sk-new".to_string()));
     }
 }

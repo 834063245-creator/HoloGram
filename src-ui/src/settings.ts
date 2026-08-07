@@ -143,7 +143,7 @@ export function onSettingsSaved(cb: () => void): () => void {
  *  ⚡ 2026-08-07 修正：空 key **不再执行 delete**——state 与凭据可能因异步回填
  *  暂时不同步（restoreSecrets 未完成时遍历会把未回填的 provider 误删）。
  *  删除凭据只走两个明确场景：removeProvider（removeSecret）与用户主动清空
- *  输入框（SettingsPanel commitSecret 对空值调 removeSecret）。 */
+ *  输入框（手动落盘后保存空 key 不会删凭据——清空需走 removeProvider）。 */
 export async function persistSecrets(s: AppSettings): Promise<void> {
   try {
     const { rpc } = await import('./bridge');
@@ -198,7 +198,9 @@ export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
         try {
           const stored = await rpc('credential_get', { provider: p.name });
           const key = parseRpcString(stored);
-          if (key?.trim()) {
+          // 长度护栏：>4096 的「key」必是编码 bug 毒值（2026-08-08 事故：128MiB 毒值
+          // 经 IPC 回传 256MB 响应击毁 WebView2）——拒收，按无 key 处理
+          if (key && key.trim() && key.length <= 4096) {
             p.apiKey = key.trim();
           }
         } catch {

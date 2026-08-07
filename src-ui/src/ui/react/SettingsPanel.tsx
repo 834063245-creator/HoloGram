@@ -132,6 +132,7 @@ const SettingsPanelApp: React.FC<{
     }
   }, []);
   const [saved, setSaved] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [addName, setAddName] = useState('');
   const [addKind, setAddKind] = useState<'openai' | 'anthropic'>('openai');
@@ -201,43 +202,35 @@ const SettingsPanelApp: React.FC<{
   }, [activeTab]);
 
   // ── 处理函数 ──
-  // 方案 A（2026-08-07 定稿）：即时保存 — 任何改动立即落盘，无 dirty 状态。
+  // 手动落盘（2026-08-07 回退）：任何改动只进 state 并标 dirty，
+  // 点「保存」才落盘 + 写系统凭据 + 重建 Agent。自动落盘曾导致设置页
+  // 卡死整个软件（每次击键 saveSettings → 通知订阅者 → credential IPC 风暴），已废弃。
 
-  /** 任何 settings 变化立即落盘（saveSettings 内部抹空 apiKey，明文权威在系统凭据）。
-   *  统一收口在此 effect——函数式 setSettings 的 updater 内不可做副作用（React 可能重复调用）。 */
-  useEffect(() => {
-    saveSettings(settings);
-  }, [settings]);
+  const markDirty = useCallback(() => setDirty(true), []);
 
   /** 更新 state（函数式——连续多次调用安全累积，如 ModelSelector 的 model+baseUrl 两连改），
-   *  落盘由上方 effect 负责。 */
-  const updateProvider = useCallback((field: string, value: string | number) => {
-    setSettings((s) => {
-      const next = structuredClone(s);
-      const p = next.providers.find((x) => x.name === next.activeProvider);
-      if (p) (p as any)[field] = value;
-      return next;
-    });
-  }, []);
+   *  落盘由「保存」按钮统一负责。 */
+  const updateProvider = useCallback(
+    (field: string, value: string | number) => {
+      setSettings((s) => {
+        const next = structuredClone(s);
+        const p = next.providers.find((x) => x.name === next.activeProvider);
+        if (p) (p as any)[field] = value;
+        return next;
+      });
+      markDirty();
+    },
+    [markDirty],
+  );
 
-  /** 整体替换（添加/删除/切换等单次操作），落盘由 effect 负责。 */
-  const commit = useCallback((next: AppSettings): void => {
-    setSettings(next);
-  }, []);
-
-  /** apiKey 是敏感字段：输入过程只进 state，失焦时写系统加密凭据。
-   *  只处理当前 provider——空值 = 用户主动清空 → 删凭据；
-   *  非空 → 写凭据（不遍历其他 provider，避免未回填的误删）。 */
-  const commitSecret = useCallback((): void => {
-    const a = settings.providers.find((p) => p.name === settings.activeProvider);
-    if (!a) return;
-    const key = (a.apiKey || '').trim();
-    if (key) {
-      persistSecrets(settings).catch(() => {});
-    } else {
-      removeSecret(a.name).catch(() => {});
-    }
-  }, [settings]);
+  /** 整体替换（添加/删除/切换等单次操作），落盘由「保存」按钮统一负责。 */
+  const commit = useCallback(
+    (next: AppSettings): void => {
+      setSettings(next);
+      markDirty();
+    },
+    [markDirty],
+  );
 
   const handleAddProvider = useCallback(() => {
     const name = addName.trim();
@@ -257,9 +250,8 @@ const SettingsPanelApp: React.FC<{
         if (addBaseUrl.trim()) added.baseUrl = addBaseUrl.trim();
         if (addModel.trim()) added.model = addModel.trim();
       }
-      // 方案 A：确认即落盘 + 写凭据 + 激活
+      // 手动落盘：确认只进 state（dirty），凭据与 localStorage 在「保存」时统一写入
       commit(next);
-      persistSecrets(next).catch(() => {});
       setShowAddForm(false);
       setAddName('');
       setAddKey('');
@@ -285,35 +277,32 @@ const SettingsPanelApp: React.FC<{
   }, [settings, active, commit]);
 
   const handleClose = useCallback(() => {
+    if (dirty && !confirm('有未保存的修改，确定关闭？')) return;
     onClose();
-  }, [onClose]);
+  }, [dirty, onClose]);
 
-  const handleApply = useCallback(() => {
+  /** 保存 = 落盘 + 写系统凭据 + 重建 Agent。改动已即时进 state（dirty），
+   *  保存后才影响磁盘与运行中 Agent——手动落盘的唯一落盘点。 */
+  const handleSave = useCallback(() => {
     const a = settings.providers.find((p) => p.name === settings.activeProvider);
     if (!a) {
       alert(`找不到 Provider "${settings.activeProvider}"`);
       return;
     }
-    // 应用 = 重建 Agent：配置必须可用才放行（改动已即时落盘，无需「仍要保存」）
-    if (!a.apiKey?.trim()) {
-      alert(`Provider "${a.name}" 的 API Key 为空，Agent 无法启动`);
-      return;
-    }
-    if (!a.model?.trim()) {
-      alert(`Provider "${a.name}" 的模型名称为空`);
-      return;
-    }
+    if (!a.apiKey?.trim() && !confirm(`Provider "${a.name}" 的 API Key 为空，仍要保存？`)) return;
+    if (!a.model?.trim() && !confirm(`Provider "${a.name}" 的模型名称为空，仍要保存？`)) return;
 
-    saveSettings(settings); // 确保即时保存的最终状态落盘
+    saveSettings(settings);
     persistSecrets(settings).catch(() => {});
     setLang(settings.display.language);
     bus.emit('lang:changed', { lang: settings.display.language });
+    setDirty(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
     if (onSave) onSave();
   }, [settings, onSave]);
 
-  /** 刷新模型列表 — 用组件 state 快照（方案 A 即时落盘 + 密钥已回填/在输），
+  /** 刷新模型列表 — 用组件 state 快照（改动已进 state + 密钥已回填/在输），
    *  与 handleTestConnection 同一数据源；不再从磁盘重读（快照不一致根因）。 */
   const handleRefreshModels = useCallback(async (): Promise<number> => {
     const activeProvider = getActiveProvider(settings);
@@ -553,8 +542,6 @@ const SettingsPanelApp: React.FC<{
                     onChange={(e) => updateProvider('apiKey', e.target.value)}
                     onBlur={(e) => {
                       e.target.value = e.target.value.replace(/[^\x00-\x7F]/g, '');
-                      // 方案 A：key 输入完成（失焦）即写系统加密凭据
-                      commitSecret();
                     }}
                     placeholder="sk-…"
                   />
@@ -951,13 +938,13 @@ const SettingsPanelApp: React.FC<{
         {/* 底部 */}
         <div className="sp-footer">
           <button className="sp-btn sp-btn-cancel" onClick={handleClose}>
-            关闭
+            取消
           </button>
           <button
             className={`sp-btn sp-btn-save${saved ? ' sp-btn-ok' : ''}`}
-            onClick={handleApply}
+            onClick={handleSave}
             dangerouslySetInnerHTML={{
-              __html: saved ? iconHtml('check-circle', 11) + ' 已应用' : iconHtml('save', 11) + ' 应用',
+              __html: saved ? iconHtml('check-circle', 11) + ' 已保存' : iconHtml('save', 11) + ' 保存',
             }}
           />
         </div>
