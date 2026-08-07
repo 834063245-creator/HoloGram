@@ -4,7 +4,8 @@
 // Settings — API Key 管理、模型选择、provider 配置
 // 存储在 localStorage 中，在可用时由 Tauri store 插件支持
 
-import { getModel } from './provider/catalog';
+import { getCatalogProviders, getDefaultModel, getModel } from './provider/catalog';
+import { ANTHROPIC_DEFAULT_BASE_URL } from './provider/anthropic';
 
 export interface ProviderSettings {
   kind: 'anthropic' | 'openai';
@@ -13,9 +14,6 @@ export interface ProviderSettings {
   baseUrl: string;
   model: string;
   thinking?: string; // Anthropic 扩展思考
-  /** @deprecated 已移除——max_tokens 现在由 provider 默认值 + 模型目录上限自动决定。
-   *  旧 localStorage 数据里的此字段会被忽略。 */
-  maxTokens?: number;
 }
 
 export interface AgentSettings {
@@ -40,11 +38,34 @@ export interface AppSettings {
   projectPath: string;
   agent: AgentSettings;
   display: DisplaySettings;
-  /** @deprecated — 权限规则已迁移到 .hologram/permissions.json，由 Rust 后端管理。此字段仅保留以兼容旧 localStorage 数据，不再被读取。 */
-  permissions?: { defaultMode?: 'allow' | 'ask' | 'deny'; allow?: string[]; deny?: string[] };
 }
 
 const STORAGE_KEY = 'hologram_settings';
+
+/** 协议（kind）→ 默认 Base URL。字面量的唯一事实源——
+ *  新增 provider 无目录条目时的兜底；已知厂商优先用
+ *  defaultBaseUrl()（目录 getDefaultModel(name).baseUrl 优先）。 */
+export const PROVIDER_PROTOCOL_DEFAULTS: Record<ProviderSettings['kind'], string> = {
+  anthropic: ANTHROPIC_DEFAULT_BASE_URL,
+  openai: 'https://api.openai.com/v1',
+};
+
+/** provider 默认 Base URL：目录条目优先（单一事实源在 catalog JSON），
+ *  目录无此厂商时回退协议默认。 */
+export function defaultBaseUrl(name: string, kind: ProviderSettings['kind']): string {
+  return getDefaultModel(name)?.baseUrl ?? PROVIDER_PROTOCOL_DEFAULTS[kind];
+}
+
+/** 是否仍是「出厂默认」Base URL（协议默认或目录厂商默认）——
+ *  设置面板模型切换时的 baseUrl 自动填充判定（用户自定义过就不覆盖）。 */
+export function isFactoryBaseUrl(url: string): boolean {
+  const defaults = new Set<string>(Object.values(PROVIDER_PROTOCOL_DEFAULTS));
+  for (const name of getCatalogProviders()) {
+    const u = getDefaultModel(name)?.baseUrl;
+    if (u) defaults.add(u);
+  }
+  return defaults.has(url);
+}
 
 const DEFAULTS: AppSettings = {
   activeProvider: 'deepseek',
@@ -53,14 +74,14 @@ const DEFAULTS: AppSettings = {
       kind: 'openai',
       name: 'deepseek',
       apiKey: '',
-      baseUrl: 'https://api.deepseek.com/v1',
+      baseUrl: defaultBaseUrl('deepseek', 'openai'),
       model: 'deepseek-v4-pro',
     },
     {
       kind: 'anthropic',
       name: 'anthropic',
       apiKey: '',
-      baseUrl: 'https://api.anthropic.com',
+      baseUrl: PROVIDER_PROTOCOL_DEFAULTS.anthropic,
       model: 'claude-sonnet-4-6',
       thinking: '',
     },
@@ -102,6 +123,19 @@ export function saveSettings(s: AppSettings): void {
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
   }
+  // 通知订阅者（UI 响应式标签 — ChatFooter/ChatBeacon/ChatHint）
+  for (const cb of [..._saveListeners]) cb();
+}
+
+// ── 设置保存订阅（UI 响应式标签用）──
+const _saveListeners = new Set<() => void>();
+
+/** 订阅 saveSettings 完成事件。返回取消订阅函数。 */
+export function onSettingsSaved(cb: () => void): () => void {
+  _saveListeners.add(cb);
+  return () => {
+    _saveListeners.delete(cb);
+  };
 }
 
 /** 将 API Key 持久化到系统加密存储（DPAPI on Windows），防止 localStorage 被清丢 Key。
@@ -180,16 +214,16 @@ export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
   return s;
 }
 
+/** 读取设置并从系统加密凭据回填 API Key —— 读取「含密钥设置」的唯一入口。
+ *  需要 apiKey 的调用方（provider 构建 / 测试连接 / 翻译器等）一律用它，
+ *  禁止自行拼接 loadSettings() + restoreSecrets()。 */
+export async function loadSettingsWithSecrets(): Promise<AppSettings> {
+  return restoreSecrets(loadSettings());
+}
+
 export function getActiveProvider(s: AppSettings): ProviderSettings {
   const active = s.providers.find((p) => p.name === s.activeProvider);
   return active || s.providers[0];
-}
-
-function _setActiveProvider(s: AppSettings, name: string): AppSettings {
-  if (!s.providers.find((p) => p.name === name)) {
-    throw new Error(`Unknown provider: ${name}`);
-  }
-  return { ...s, activeProvider: name };
 }
 
 export function updateProvider(s: AppSettings, name: string, patch: Partial<ProviderSettings>): AppSettings {
@@ -203,7 +237,7 @@ export function addProvider(s: AppSettings, name: string, kind: 'anthropic' | 'o
   if (s.providers.find((p) => p.name === name)) {
     throw new Error(`Provider "${name}" 已存在`);
   }
-  const baseUrl = kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1';
+  const baseUrl = defaultBaseUrl(name, kind);
   return {
     ...s,
     activeProvider: name,

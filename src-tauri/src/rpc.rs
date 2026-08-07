@@ -414,15 +414,25 @@ pub(crate) async fn rpc(
         "credential_store" => {
             let provider = req_str(&params, "provider", "credential_store")?;
             let key = req_str(&params, "key", "credential_store")?;
-            ok_unit(commands::identity::credential_store(provider, key))
+            // 同步 DPAPI/Keychain/secret-tool 操作 — 移到阻塞线程池，避免卡住异步 runtime
+            let r = tokio::task::spawn_blocking(move || commands::identity::credential_store(provider, key))
+                .await
+                .map_err(|e| format!("credential_store 任务失败: {e}"))?;
+            ok_unit(r)
         }
         "credential_get" => {
             let provider = req_str(&params, "provider", "credential_get")?;
-            ok_json(commands::identity::credential_get(provider))
+            let r = tokio::task::spawn_blocking(move || commands::identity::credential_get(provider))
+                .await
+                .map_err(|e| format!("credential_get 任务失败: {e}"))?;
+            ok_json(r)
         }
         "credential_delete" => {
             let provider = req_str(&params, "provider", "credential_delete")?;
-            ok_unit(commands::identity::credential_delete(provider))
+            let r = tokio::task::spawn_blocking(move || commands::identity::credential_delete(provider))
+                .await
+                .map_err(|e| format!("credential_delete 任务失败: {e}"))?;
+            ok_unit(r)
         }
 
         // ═══════════════════════════════════════════════════════

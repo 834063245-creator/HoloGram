@@ -18,7 +18,8 @@ import {
 } from './types';
 
 const ANTHROPIC_VERSION = '2023-06-01';
-const DEFAULT_BASE_URL = 'https://api.anthropic.com';
+/** Anthropic 官方端点 — 字面量唯一事实源；settings.PROVIDER_PROTOCOL_DEFAULTS 引用此值。 */
+export const ANTHROPIC_DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_MAX_TOKENS = 32000; // ponytail：跨提供商的安全上限
 
 interface AnthropicConfig {
@@ -32,7 +33,7 @@ interface AnthropicConfig {
 
 export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
   const name = cfg.name || 'anthropic';
-  const baseUrl = (cfg.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
+  const baseUrl = (cfg.baseUrl || ANTHROPIC_DEFAULT_BASE_URL).replace(/\/$/, '');
   const { model, apiKey, thinking } = cfg;
 
   return {

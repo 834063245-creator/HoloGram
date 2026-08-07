@@ -22,6 +22,8 @@ import { useCoreStore } from './app/chat/core-instance';
 import { useShellStore } from './app/shell-store';
 import { isMockMode, rpc } from './bridge';
 import { setLang } from './i18n';
+import { streamWithIdleTimeout } from './provider/idle-stream';
+import { ChunkType } from './provider/types';
 import { loadSettings } from './settings';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
@@ -580,7 +582,8 @@ async function init(): Promise<void> {
   setDataflowQueryParser(async (nl: string): Promise<string[]> => {
     try {
       if (!workspace?.prov) return [];
-      const gen = workspace.prov.stream(new AbortController().signal, {
+      // 60s 空闲超时守卫（与 Agent 主循环共用）— 挂起/流内错误均视为解析失败
+      const stream = streamWithIdleTimeout(workspace.prov, new AbortController().signal, {
         messages: [
           {
             role: 'user',
@@ -591,10 +594,10 @@ async function init(): Promise<void> {
         temperature: 0,
         max_tokens: 200,
       });
-      const { ChunkType } = await import('./provider/types');
       const parts: string[] = [];
-      for await (const chunk of gen) {
+      for await (const chunk of stream.chunks) {
         if (chunk.type === ChunkType.Text && chunk.text) parts.push(chunk.text);
+        if (chunk.type === ChunkType.Error) throw chunk.err ?? new Error('stream error');
       }
       const text = parts.join('').trim();
       // 从响应中提取 JSON 数组

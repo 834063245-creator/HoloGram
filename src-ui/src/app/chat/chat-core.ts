@@ -259,7 +259,7 @@ export class ChatCore {
   get progressSink(): (data: { step: number; toolName: string }) => void {
     return (data: { step: number; toolName: string }) => this._updateStatusBar('thinking', `${data.toolName}…`);
   }
-  setAgentFactory(fn: () => Promise<OwnedAgentHandle | null>): void {
+  setAgentFactory(fn: (() => Promise<OwnedAgentHandle | null>) | null): void {
     Session.setAgentFactory(this.panelId, fn);
   }
 
@@ -275,7 +275,13 @@ export class ChatCore {
   }
 
   setAgent(agent: OwnedAgentHandle | null): void {
-    if (!agent) return;
+    if (!agent) {
+      // null = 显式拆除（如 API Key 被清空）：注销会话工厂并 dispose 所有
+      // 会话 Agent 句柄 — 否则旧 provider/工厂会继续服务会话（残留 bug）。
+      Session.setAgentFactory(this.panelId, null);
+      Session.clearPanelAgents(this.panelId);
+      return;
+    }
     // 替换所有会话 — setAgent 是启动/设置阶段，非会话管理。
     Session.resetSessionState(this.panelId, agent);
     getChatStore(this.panelId).panel.getState().setTotalTokensUsed(0);

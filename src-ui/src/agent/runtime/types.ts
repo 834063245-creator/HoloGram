@@ -110,7 +110,6 @@ export interface AgentConfig {
   /** Agent 选项 */
   temperature?: number;
   contextWindow?: number;
-  maxTokens?: number;
   pricing?: Pricing;
   /** 协作模式 */
   collaborationMode?: 'normal' | 'plan';

@@ -6,7 +6,7 @@
 import { rpc } from '../bridge';
 import { z } from 'zod';
 import type { Message, Provider, ToolCall, Usage } from '../provider/types';
-import { ChunkType, sanitizeToolPairing } from '../provider/types';
+import { ChunkType } from '../provider/types';
 import type { AgentRecord, AgentStore } from './agent-store';
 // 共享类型 — 本文件内部也使用
 import {
@@ -29,7 +29,8 @@ import { countMessage, countMessages, countText, countTexts, countToolSchemas } 
 import { type ExecStateInstance, createExecState, execState } from './execution-state';
 import { createProvider } from '../provider';
 import { getAllModels } from '../provider/catalog';
-import { loadSettings } from '../settings';
+import { STREAM_IDLE_TIMEOUT_MS, streamWithIdleTimeout } from '../provider/idle-stream';
+import { loadSettingsWithSecrets } from '../settings';
 import type { GoalManager, GoalRecord } from './goal-manager';
 import { HookRegistry, type PreflightHookRegistry } from './hooks';
 import { log } from './logger';
@@ -73,8 +74,6 @@ export interface AgentOptions {
   compactRatio?: number;
   /** 原文保留的最少近期消息数 */
   recentKeep?: number;
-  /** 每轮最大输出 token 数（0 = provider 默认 32000） */
-  maxTokens?: number;
   /** 用于持久化的会话 ID。未提供则自动生成。 */
   sessionId?: string;
   /** 每次会话保存后调用（fire-and-forget，不阻塞循环）。 */
@@ -112,7 +111,6 @@ export class Agent {
   private session: Message[];
   private temperature: number;
   private pricing: Pricing | undefined;
-  private maxTokens: number;
   private _agentOpts: AgentOptions;
 
   // 上下文管理
@@ -246,7 +244,6 @@ export class Agent {
     this._agentOpts = opts;
     this.temperature = opts.temperature ?? 0.7;
     this.pricing = opts.pricing;
-    this.maxTokens = opts.maxTokens ?? 0;
     this.contextWindow = opts.contextWindow || 1000000; // 1M tokens 默认值; || 捕获零值（设置默认值），使压缩永不被静默禁用
     // ponytail: 0.55 将阈值设在 550K token（1M 窗口）。
     // 0.7 太高 — 最大的真实会话（450-630K）从未触发。
@@ -1444,25 +1441,17 @@ ${resumeNote}
     const payload = this.payloadMessages();
     const fullSession = transientMsgs.length > 0 ? [...payload, ...transientMsgs] : payload;
 
-    // 流空闲超时：60s 无任何 chunk 视为挂起（参照 callSummaryLLM 的同一模式）。
-    // 流仍在产出（thinking/文本/工具参数）就持续重置计时器；超时 abort 后
-    // sendWithRetry/readSSE 抛 aborted，此处转为可读的挂起提示。
-    // 外部 signal 只做转发，不直接传给 stream——避免超时 abort 连累调用方。
-    const STREAM_IDLE_TIMEOUT_MS = 60_000;
-    let idleTimedOut = false;
-    const timeoutCtrl = new AbortController();
-    let timeoutId = setTimeout(() => {
-      idleTimedOut = true;
-      timeoutCtrl.abort();
-    }, STREAM_IDLE_TIMEOUT_MS);
-    const onExternalAbort = () => timeoutCtrl.abort();
-    signal.addEventListener('abort', onExternalAbort, { once: true });
-
-    const gen = this.prov.stream(timeoutCtrl.signal, {
-      messages: sanitizeToolPairing(fullSession),
+    // 流空闲超时：60s 无任何 chunk 视为挂起（与 callSummaryLLM / dataflow NL 解析
+    // 共用 streamWithIdleTimeout）。超时 abort 后 sendWithRetry/readSSE 抛 aborted，
+    // 此处转为可读的挂起提示。外部 signal 只做转发，不直接传给 stream——
+    // 避免超时 abort 连累调用方。
+    // sanitizeToolPairing 不在此调用 — provider（openai/anthropic）是上线前的最终 gate。
+    const stream = streamWithIdleTimeout(this.prov, signal, {
+      messages: fullSession,
       tools: this.tools.schemas(),
       temperature: this.temperature,
-      max_tokens: this.maxTokens,
+      // max_tokens 不开放设置 — 0 = provider 默认 32000，发送前按模型目录上限钳制
+      max_tokens: 0,
     });
 
     let text = '';
@@ -1473,13 +1462,7 @@ ${resumeNote}
     let err: Error | undefined;
 
     try {
-      for await (const chunk of gen) {
-        // 流仍在产出 — 重置空闲计时
-        clearTimeout(timeoutId);
-        timeoutId = setTimeout(() => {
-          idleTimedOut = true;
-          timeoutCtrl.abort();
-        }, STREAM_IDLE_TIMEOUT_MS);
+      for await (const chunk of stream.chunks) {
         switch (chunk.type) {
           case ChunkType.Reasoning:
             reasoning += chunk.text || '';
@@ -1547,14 +1530,11 @@ ${resumeNote}
         if (err) break;
       }
     } catch (e: any) {
-      if (idleTimedOut) {
+      if (stream.idleTimedOut) {
         err = new Error(`模型响应超时（${STREAM_IDLE_TIMEOUT_MS / 1000} 秒无输出），已自动中止`);
       } else {
         err = e instanceof Error ? e : new Error(String(e));
       }
-    } finally {
-      clearTimeout(timeoutId);
-      signal.removeEventListener('abort', onExternalAbort);
     }
 
     if (err) {
@@ -2004,7 +1984,7 @@ ${resumeNote}
       priorSummary = priorSummary.slice(0, (SUMMARY_PROMPT_BUDGET - 1000) * 4);
     }
 
-    const { window } = this.summaryProvider();
+    const { window } = await this.summaryProvider();
     const inputBudget = window - SUMMARY_OUTPUT_BUDGET - SUMMARY_PROMPT_BUDGET;
     if (inputBudget < SUMMARY_MIN_INPUT) {
       log.warn('agent', `summary model window too small (${window}) — 走机械摘要`);
@@ -2059,8 +2039,8 @@ ${resumeNote}
   }
 
   /** 缓存的摘要模型选择。 */
-  private summaryProvider(): { prov: Provider; window: number } {
-    if (!this._summaryProv) this._summaryProv = this.selectSummaryProvider();
+  private async summaryProvider(): Promise<{ prov: Provider; window: number }> {
+    if (!this._summaryProv) this._summaryProv = await this.selectSummaryProvider();
     return this._summaryProv;
   }
 
@@ -2068,11 +2048,13 @@ ${resumeNote}
    *  规则：已配置 key 覆盖的模型中，窗口 ≥ SUMMARY_MIN_WINDOW 且
    *  输入价严格低于主模型者，取价格最低（窗口大者破平）。
    *  主模型自己参与竞选 — 没有严格占优的候选时维持现状。
-   *  只可能在"窗口不小、价格更低"时偏离主模型，永远不会让事情变糟。 */
-  private selectSummaryProvider(): { prov: Provider; window: number } {
+   *  只可能在"窗口不小、价格更低"时偏离主模型，永远不会让事情变糟。
+   *  ⚡ 2026-08-07 修复：必须走 loadSettingsWithSecrets()——localStorage 不落
+   *  key，裸 loadSettings() 让 keyed 永远为空，本特性从未触发过。 */
+  private async selectSummaryProvider(): Promise<{ prov: Provider; window: number }> {
     const fallback = { prov: this.prov, window: this.contextWindow };
     try {
-      const s = loadSettings();
+      const s = await loadSettingsWithSecrets();
       const active = s.providers.find((p) => p.name === s.activeProvider);
       if (!active) return fallback;
       const all = getAllModels();
@@ -2106,34 +2088,24 @@ ${resumeNote}
     }
   }
 
-  /** 单次摘要 LLM 调用 — 60s 空闲超时守卫（挂起判定），
+  /** 单次摘要 LLM 调用 — 60s 空闲超时守卫（挂起判定，streamWithIdleTimeout），
    *  流仍在产出就让它跑完。max_tokens 固定为输出预算，
    *  配合 chunkCap 构成"永不塞爆"的输入/输出硬上界。 */
   private async callSummaryLLM(signal: AbortSignal, systemPrompt: string, userText: string): Promise<string> {
-    const { prov } = this.summaryProvider();
-    const SUMMARIZE_IDLE_TIMEOUT_MS = 60_000;
-    const timeoutCtrl = new AbortController();
-    const onIdleTimeout = () => timeoutCtrl.abort();
-    let timeoutId = setTimeout(onIdleTimeout, SUMMARIZE_IDLE_TIMEOUT_MS);
-    const onExternalAbort = () => timeoutCtrl.abort();
-    signal.addEventListener('abort', onExternalAbort, { once: true });
+    const { prov } = await this.summaryProvider();
+    const stream = streamWithIdleTimeout(prov, signal, {
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userText },
+      ],
+      tools: [], // 摘要不需要工具
+      temperature: 0.3, // 低温用于事实性摘要
+      max_tokens: SUMMARY_OUTPUT_BUDGET,
+    });
 
     try {
-      const gen = prov.stream(timeoutCtrl.signal, {
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userText },
-        ],
-        tools: [], // 摘要不需要工具
-        temperature: 0.3, // 低温用于事实性摘要
-        max_tokens: SUMMARY_OUTPUT_BUDGET,
-      });
-
       let text = '';
-      for await (const chunk of gen) {
-        // 流仍在产出 — 重置空闲计时
-        clearTimeout(timeoutId);
-        timeoutId = setTimeout(onIdleTimeout, SUMMARIZE_IDLE_TIMEOUT_MS);
+      for await (const chunk of stream.chunks) {
         if (chunk.type === ChunkType.Text && chunk.text) {
           text += chunk.text;
         }
@@ -2141,13 +2113,10 @@ ${resumeNote}
       }
       return text.trim();
     } catch (e: any) {
-      if (timeoutCtrl.signal.aborted && !signal.aborted) {
+      if (stream.idleTimedOut && !signal.aborted) {
         log.warn('agent', 'summary LLM call stalled (60s no output) — 该次调用放弃');
       }
       throw e;
-    } finally {
-      clearTimeout(timeoutId);
-      signal.removeEventListener('abort', onExternalAbort);
     }
   }
 

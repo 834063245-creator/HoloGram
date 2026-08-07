@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
-import { loadSettings } from '../../settings';
+import { type AppSettings, getActiveProvider, loadSettings, onSettingsSaved } from '../../settings';
 import * as Session from '../../ui/chat-session';
 import { bumpChat, getChatStore } from '../../ui/chat-store';
 import { type CommandDef, CommandRegistry } from '../../ui/command-registry';
@@ -30,6 +30,13 @@ const MODE_CLASS: Record<string, string> = {
   panel: 'chat-open',
   hud: 'chat-hud',
 };
+
+/** 响应式读取设置 — onSettingsSaved 订阅，saveSettings 后自动重读。 */
+function useSettings(): AppSettings {
+  const [settings, setSettings] = useState(() => loadSettings());
+  useEffect(() => onSettingsSaved(() => setSettings(loadSettings())), []);
+  return settings;
+}
 
 // ── 会话标签行（>1 会话时显示）──
 function SessionTabs({ core }: { core: ChatCore }) {
@@ -72,8 +79,8 @@ function StatusStrip({ core }: { core: ChatCore }) {
   const state = useStore(panel, (s) => s.lastAgentState);
   const detail = useStore(panel, (s) => s.lastAgentDetail);
   const tokens = useStore(panel, (s) => s.totalTokensUsed);
-  const settings = loadSettings();
-  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
+  const settings = useSettings();
+  const active = getActiveProvider(settings);
   let model = '';
   if (active) {
     const ml = active.model || '';
@@ -187,8 +194,8 @@ function ContextView({ core }: { core: ChatCore }) {
   const { panel } = getChatStore(core.panelId);
   const tokensUsed = useStore(panel, (s) => s.totalTokensUsed);
   const toolUsage = useStore(panel, (s) => s.toolUsage);
-  const settings = loadSettings();
-  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
+  const settings = useSettings();
+  const active = getActiveProvider(settings);
   const ctxWin = settings.agent?.contextWindow || 0;
   const pct = ctxWin > 0 ? Math.min((tokensUsed / ctxWin) * 100, 100) : 0;
   const meterClass = pct >= 90 ? 'danger' : pct >= 80 ? 'warn' : 'safe';

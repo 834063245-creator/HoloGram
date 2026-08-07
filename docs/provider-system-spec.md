@@ -1,6 +1,7 @@
 # HoloGram Provider 系统设计定稿
 
 > 生成：2026-08-07 · 状态：定稿基线（施工按本文档执行，改动需回写本文档）
+> 2026-08-07 二次全链路审计 + 收口已完成，见文末「二次审计与收口（P4）」——此后端/前端状态以该节为准。
 > 范围：API Key 加密存储（后端）→ Provider 抽象层 → 模型目录 → 设置 UI 全链路。
 
 ## 一句话
@@ -126,7 +127,7 @@ interface Provider {
 | 8 | runtime.ts 死 import | **删** | runtime.ts |
 | 9 | credential.rs 过时注释 | **修**。对齐「apiKey 权威=加密凭据，localStorage 仅非敏感配置」 | credential.rs |
 | 10 | 无「测试连接」 | **P1 新增**。复用 prewarm/fetchModels 或直接最小 stream 探测 | SettingsPanel.tsx |
-| 11 | 主对话流无空闲超时 | **P1 新增**。参照 callSummaryLLM 60s idle 模式（agent.ts:2085） | agent.ts |
+| 11 | 主对话流无空闲超时 | **P1 新增**。参照 callSummaryLLM 60s idle 模式（agent.ts:2085） | ~~agent.ts~~ → provider/idle-stream.ts（P4 提取，三处复用） |
 | 12 | provider 切换重建链 | **验证项**。确认 main.ts 注入的 `setOnSettingsSave` 重建 agent；文档锁定它为唯一切换入口 | 验收 |
 | 13 | SSE 不解析 `event:`/多行 data | **保持**。所有目标服务商均单行 data；边界写入 shared.ts 注释 | 注释 |
 | 14 | 目录缺 GLM/Ollama | **可选**。ollama 走 `http://localhost:11434/v1` openai 兼容，apiKey 可空；按需手写条目即可 | catalog/*.json |
@@ -223,7 +224,7 @@ interface Provider {
 
 - [x] `defaultPricing` 优先读 catalog（settings.ts：getModel 有 cost 即用，否则回退硬编码）
 - [x] 「测试连接」按钮（SettingsPanel：最小 1-token 流式请求，15s 超时，classifyError 分类提示）
-- [x] 主对话流空闲超时（agent.ts L1447：60s 无 chunk 视为挂起，自动中止并提示；外部 signal 只转发不直传）
+- [x] 主对话流空闲超时（agent.ts L1447：60s 无 chunk 视为挂起，自动中止并提示；外部 signal 只转发不直传）——P4 已提取为 `provider/idle-stream.ts`，主循环/摘要/main.ts 数据流解析三处复用
 - [x] 顺手清理 runtime.ts 死 import（createProvider / defaultPricing，P0 遗留）
 - **验收**：tsc 0 错 + 746 测试全绿；真机 DeepSeek 一轮对话
 
@@ -239,5 +240,58 @@ interface Provider {
 - [ ] DeepSeek（openai 协议）带工具一轮
 - [ ] Claude（anthropic 协议）带 thinking + 工具一轮
 - [ ] 翻译器一轮（disableThinking 路径）
-- [ ] 摘要模型自动选择路径一轮（触发条件：多 provider 有 key）
+- [ ] 摘要模型自动选择路径一轮（触发条件：多 provider 有 key）——P4 已修复该路径的死链（见下），此前从未真正触发过
 - [ ] 设置保存 → provider 切换 → 旧会话继续（重建链验证项 #12）
+
+## 二次审计与收口（P4，2026-08-07 完成）
+
+> 动机：P0–P1 后用户仍反馈「改来改去到处都有问题」。对后端→前端做全链路复审，结论：**协议层健康，病灶在胶水层**——读设置的姿势被复制了 5–6 份且漏了 1 份，造成静默断链。以下为修复定稿。
+
+### 修复的断链级 bug
+
+| 缺陷 | 根因 | 修复 |
+|---|---|---|
+| 摘要模型自动选择从未生效 | `selectSummaryProvider` 读裸 `loadSettings()`，key 不落 localStorage 后 `keyed` 恒空 | 改走 `loadSettingsWithSecrets()`（agent.ts），新增 summary-model-selection.test.ts 钉死 |
+| 清空 key 后旧 agent 仍在服务 | `ChatCore.setAgent(null)` 对 null 早退，旧 factory/provider 保持注册 | setAgent(null) 真正拆除：清 factory 注册 + `clearPanelAgents`（chat-core.ts / chat-session.ts） |
+| 会话工厂双快照拼配置 | factory 用新设置算定价/窗口，却传外层闭包捕获的旧 provider | workspace.ts `_buildProvider()` 唯一创建收口；factory 从自己的新快照构建 provider |
+| main.ts 数据流 NL 解析裸奔 | 无超时、signal 永不中止、忽略 ChunkType.Error | 接入 `streamWithIdleTimeout` + Error chunk 处理 + 静态 import |
+
+### 收口（消除「复制即腐烂」）
+
+- `loadSettingsWithSecrets()` = 读设置（含密钥）的**唯一入口**；`restoreSecrets` 不再被外部直接调用
+- `getActiveProvider` 5 份内联克隆全删，统一 import（保留 agent.ts 无 fallback 变体——语义不同，非克隆）
+- 60s 流式空闲超时提取为 `provider/idle-stream.ts`（主循环 / 摘要 / 数据流解析三处复用）
+- 厂商 URL 字面量唯一化：`ANTHROPIC_DEFAULT_BASE_URL`（anthropic.ts）+ `PROVIDER_PROTOCOL_DEFAULTS` / `defaultBaseUrl()` / `isFactoryBaseUrl()`（settings.ts，catalog 优先）
+- 设置变更响应式：`onSettingsSaved(cb)` 订阅（saveSettings 触发），ChatFooter/ChatBeacon/ChatHint 不再渲染期裸读 localStorage；ChatHint 不再解析 `[Agent] provider=` 日志串
+- `sanitizeToolPairing` 去掉 agent 侧重复调用（provider 线格式关口仍在）
+- SettingsPanel 刷新模型改用组件态快照（与测试连接一致）
+
+### 删除的死代码
+
+`_setActiveProvider` · `ProviderSettings.maxTokens` · `AppSettings.permissions` · `AgentOptions.maxTokens` 全链（option→字段→传参，唯一写入恒 0）· buildToolRegistry→agent-builder→coding.ts 的三层死 `provider` 参数 · `parse_keychain_dump_providers`（macOS 死函数 + 其测试）· identity.rs 三个从未注册的 `#[tauri::command]` 摆设
+
+### 后端加固（credential.rs / rpc.rs）
+
+- **损坏不再静默丢 key**：`credentials.enc` 解密失败先改名备份为 `credentials.enc.corrupt-<ts>` 再重建；备份失败则整体报错，永不覆盖仅存密文
+- **原子写入**：tmp + rename（Win 覆盖语义兜底），崩溃不留半截文件
+- **进程级写锁**：store/delete 串行化，8 线程并发测试不丢 key；get 无锁（原子 rename 保证一致读）
+- **不堵 executor**：rpc 三个 credential 分支改 `spawn_blocking`
+- **错误不再混淆**：macOS get 区分「未找到(44)」与真错误；macOS/Linux delete 幂等但真错误上抛
+- `com.hologram.app`（cred_path）vs `com.hologram.hg`（tauri identifier）不一致**故意保留**——路径迁移 = 现存用户丢 key，已注释钉死
+
+### 行为变化（有意为之）
+
+- `addProvider` 改 catalog 优先：添加 `deepseek` 带出 DeepSeek 官方端点而非 `api.openai.com`（对齐裁决 #6）
+- ChatHint 在 key 配好即显示就绪（不再等 setupAgent 诊断串）
+- `isFactoryBaseUrl` 识别面扩到 qwen/moonshotai/minimax 出厂 URL（原 3 个 URL 数组的超集，同意图）
+
+### 已知限制（如实记录）
+
+- macOS/Linux 凭据分支在 Windows 主机上 cfg 编译不到，仅走查未真机验证
+- `clearPanelState` 丢弃 exec 状态时未 `stop()`（handle dispose 会中止 runtime 侧，影响小）——既有缺口，列入后续
+- `src-tauri/tests/hologram_dispatch_test.rs` 集成测试编译失败（engine API 漂移）——**既有问题，与 provider 无关**，需单独修
+- biome check 仓库级基线噪音（未触及文件同样失败），构建门禁以 tsc 为准
+
+### P4 验收（2026-08-07 实测）
+
+- `npx tsc --noEmit` 0 错 · `npx vitest run` **771 全绿**（758 既有 + 13 新增）· `cargo test --bin hologram` **196 全绿**（含凭据 9 项）· 全量 diff 第三方复查结论 SHIP

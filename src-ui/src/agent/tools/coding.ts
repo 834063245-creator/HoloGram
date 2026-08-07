@@ -8,7 +8,6 @@
 // ═══════════════════════════════════════════════════════
 
 import { z } from 'zod';
-import type { Provider } from '../../provider/types';
 import type { Tool, ToolExecutor } from '../tool';
 import { defineTool } from './define-tool';
 
@@ -27,7 +26,7 @@ export interface CodingToolsUI {
   askUser?: (req: AskUserRequest) => void;
 }
 
-export function createCodingTools(exec: ToolExecutor, _provider?: Provider, ui?: CodingToolsUI): Tool[] {
+export function createCodingTools(exec: ToolExecutor, ui?: CodingToolsUI): Tool[] {
   return [
     // ── 用户交互 ──
     defineTool({

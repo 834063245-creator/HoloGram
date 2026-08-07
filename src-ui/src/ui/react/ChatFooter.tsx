@@ -6,9 +6,9 @@
 // 纯声明式：订阅 Zustand stores → 自动渲染，零 DOM 操作。
 
 import type React from 'react';
-import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
 import { useStore } from 'zustand';
-import { loadSettings, saveSettings } from '../../settings';
+import { type AppSettings, getActiveProvider, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
 import { useShellStore } from '../../app/shell-store';
 import { getChatStore } from '../chat-store';
 import { iconHtml } from '../icons';
@@ -31,9 +31,10 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
   const lastUsageText = useStore(panelStore, (s) => s.lastUsageText);
   const _projectPath = useShellStore((s) => s.projectPath);
 
-  // 设置非响应式 — 读取一次，store 变化时重新渲染
-  const settings = loadSettings();
-  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
+  // 设置经 onSettingsSaved 订阅响应式更新 — 不再依赖手动 refresh() 催更
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
+  useEffect(() => onSettingsSaved(() => setSettings(loadSettings())), []);
+  const active = getActiveProvider(settings);
   const ctxWin = settings.agent?.contextWindow || 0;
 
   let modelLabel = active?.model || 'unknown';
@@ -168,7 +169,8 @@ function ChatModebar({ panelId }: { panelId: string }) {
 // ── 完整底部组件（P2′-2b：直接挂 ChatBeacon 树，Controller 包装已删）──
 
 export interface ChatFooterHandle {
-  /** settings 变更后调用 —— 设置非响应式，需手动催更重读模型名 */
+  /** 手动催更（token 条等非 settings 内容）—— settings 变更已由
+   *  onSettingsSaved 订阅自动响应，模型名不再依赖此路径。 */
   refresh(): void;
 }
 

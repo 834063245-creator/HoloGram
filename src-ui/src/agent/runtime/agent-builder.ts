@@ -16,7 +16,6 @@ import type { Tool, ToolExecutor } from '../tool';
 import { ToolRegistry, agentInvoke } from '../tool';
 import { rpc, listen } from '../../bridge';
 import { z } from 'zod';
-import type { Provider } from '../../provider/types';
 import { createCompactionTools } from '../compaction-model';
 import type { GraphContext } from '../hooks';
 import { defineTool } from '../tools/define-tool';
@@ -292,7 +291,6 @@ ${modeBlock}`;
 
 export interface ToolRegistryOptions {
   graphData: any;
-  provider: Provider;
   deps: BuilderDeps;
   memoryManager?: MemoryManager;
   skillRegistry?: SkillRegistry;
@@ -309,7 +307,7 @@ import type { TaskManager } from '../task';
 import type { SubAgentSpawner } from '../tools/subagent';
 
 export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<ToolRegistry> {
-  const { graphData, provider, deps, memoryManager: mm, skillRegistry, taskManager, subAgentPool, subAgentSpawner } = opts;
+  const { graphData, deps, memoryManager: mm, skillRegistry, taskManager, subAgentPool, subAgentSpawner } = opts;
   const registry = new ToolRegistry();
 
   // ── Hologram tools ──
@@ -467,7 +465,7 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
     const result = await agentInvoke<string>(name, args);
     return typeof result === 'string' ? result : JSON.stringify(result);
   };
-  for (const tool of createCodingTools(codingExec, provider, { askUser: deps.onAskUser ?? (() => {}) })) registry.register(tool);
+  for (const tool of createCodingTools(codingExec, { askUser: deps.onAskUser ?? (() => {}) })) registry.register(tool);
   registry.alias('read_file', 'read_file_content');
   if (skillRegistry) registry.register(createSkillTool(skillRegistry));
   if (mm) for (const tool of (await import('../memory')).createMemoryTools(mm) as any) registry.register(tool);

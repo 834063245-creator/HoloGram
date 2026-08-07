@@ -10,7 +10,7 @@ import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { createExecState, type ExecStateInstance } from '../agent/execution-state';
 import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
-import { loadSettings } from '../settings';
+import { loadSettings, getActiveProvider } from '../settings';
 import { useAgentPanelStore } from './agent-panel-store';
 import { bumpSession, getChatStore, msgStoreFor } from './chat-store';
 import type { AssistantMessage, ChatMessage, MessageId, SubAgentPart, UserMessage } from './message-model';
@@ -112,6 +112,12 @@ export function hasRunningBackgroundSession(storeId: string): boolean {
 /** 清理已关闭会话的 execState。 */
 export function removeSessionExecState(storeId: string, sessionId: number): void {
   agentSessionState.removeExec(storeId, sessionId);
+}
+
+/** 拆除面板全部 Agent 句柄与 exec 状态（dispose）— ChatCore.setAgent(null) 用，
+ *  API Key 清空后旧 provider/工厂不得继续服务会话。 */
+export function clearPanelAgents(storeId: string): void {
+  agentSessionState.clearPanelState(storeId);
 }
 
 /** 全量重置 — 用于 ChatPanel 中切换工作区时的 setAgent。 */
@@ -1064,7 +1070,7 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
 
   const msgs = agent.getSession();
   const settings = loadSettings();
-  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
+  const active = getActiveProvider(settings);
   const now = new Date();
   const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 

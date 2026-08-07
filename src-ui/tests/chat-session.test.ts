@@ -666,6 +666,35 @@ describe('ChatPanel session persistence', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════
+  // setAgent(null) — 显式拆除（2026-08-07 B2 回归）：
+  // API Key 清空后旧 provider/工厂不得继续服务会话。
+  // 旧实现 `if (!agent) return` 早退 — 工厂与句柄全部残留。
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('setAgent(null) teardown', () => {
+    it('clears the factory and disposes all session agents', () => {
+      panel = createChatPanel();
+      const dispose = vi.fn();
+      const fakeAgent = {
+        getSession: () => [{ role: 'system', content: 'sys' }],
+        setSession: vi.fn(),
+        dispose,
+      };
+      panel.setAgent(fakeAgent as any);
+      panel.setAgentFactory(async () => fakeAgent as any);
+      expect(panel.getAgent()).toBe(fakeAgent);
+      expect(Session.getAgentFactory(panel.panelId)).not.toBeNull();
+
+      panel.setAgent(null);
+
+      // 工厂注销 + 句柄 dispose + 活动 agent 清空
+      expect(Session.getAgentFactory(panel.panelId)).toBeNull();
+      expect(panel.getAgent()).toBeNull();
+      expect(dispose).toHaveBeenCalled();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
   // Internal meta-message filtering on restore
   // Agent injects <system-reminder>, <goal>, <truncated-context> as
   // role=user into the session. These must NOT appear as visible chat

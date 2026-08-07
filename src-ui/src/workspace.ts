@@ -27,7 +27,7 @@ import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
 import { createProvider } from './provider';
 import { mergeDynamicModels, getModel } from './provider/catalog';
-import { defaultPricing, getActiveProvider, loadSettings, persistSecrets, restoreSecrets } from './settings';
+import { defaultPricing, getActiveProvider, loadSettingsWithSecrets, persistSecrets, type AppSettings } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
 import { useDockStore } from './ui/dock-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
@@ -532,11 +532,18 @@ export class Workspace {
     }
   }
 
+  /** 从同一份 settings 快照构建 active provider — createProvider 选项唯一收口处，
+   *  _setupAgentInner 与会话工厂共用，保证两处构建永不分叉。 */
+  private _buildProvider(settings: AppSettings): Provider {
+    return createProvider(getActiveProvider(settings), {
+      disableThinking: settings.agent?.disableThinking,
+    });
+  }
+
   private async _setupAgentInner(chatPanel: ChatCore): Promise<void> {
     this._storeId = chatPanel.panelId;
 
-    let settings = loadSettings();
-    settings = await restoreSecrets(settings);
+    const settings = await loadSettingsWithSecrets();
 
     // 从保存的偏好初始化模式状态
     const sAgent = settings.agent || {};
@@ -598,9 +605,7 @@ export class Workspace {
     }
 
     // ── 创建 Provider ──
-    const prov: Provider = createProvider(active, {
-      disableThinking: settings.agent?.disableThinking,
-    });
+    const prov: Provider = this._buildProvider(settings);
     prov.prewarm?.();
     // 从 API 获取动态模型，合并到目录（尽力而为）
     prov.fetchModels?.()
@@ -636,7 +641,6 @@ export class Workspace {
 
     const registry = await buildToolRegistry({
       graphData: this.graphData,
-      provider: prov,
       deps: builderDeps,
       memoryManager: this.memoryManager,
       skillRegistry: this.skillRegistry,
@@ -660,10 +664,14 @@ export class Workspace {
     // （agentSessionState），会话关闭时由其负责销毁；
     // agentRef/this.agent 仅是借用 raw Agent 引用（spawn 闭包、notifyMemorySaved）。
     const factory = async (): Promise<AgentHandle | null> => {
-      let s = loadSettings();
-      s = await restoreSecrets(s);
+      // 单一新鲜快照 — apiKey 判定 / provider 构建 / 定价 / 窗口全部出自它。
+      // （旧实现用外层 setup 时的 prov 配新鲜 settings 的 key/定价，
+      //  两份快照只靠 setOnSettingsSave 重跑 setupAgent 才不分叉。）
+      const s = await loadSettingsWithSecrets();
       const act = getActiveProvider(s);
       if (!act.apiKey || act.apiKey.trim() === '') return null;
+      const sessProv = this._buildProvider(s);
+      sessProv.prewarm?.(); // 廉价预热（fire-and-forget）；fetchModels 合目录只在 setupAgent 做
 
       const ms = this._modeState();
       const agentOpts = s.agent || {};
@@ -676,7 +684,7 @@ export class Workspace {
         parentId: null,
         projectPath: this.path,
         graphData: this.graphData,
-        provider: prov,
+        provider: sessProv,
         tools: registry,
         memoryManager: this.memoryManager ?? undefined,
         skillRegistry: this.skillRegistry ?? undefined,
@@ -694,8 +702,6 @@ export class Workspace {
         // 0b3e5bf 曾加 Math.min(..., 200000) 硬封顶 — 把动态结果压成 200K，
         // 导致压缩在 110K 就触发；压缩已根治为只影响发送载荷，cap 无必要。
         contextWindow: agentOpts.contextWindow || getModel(act.model)?.contextWindow || 200000,
-        // max_tokens 不再开放给用户设置——provider 默认 32000，发送前按模型目录上限钳制
-        maxTokens: 0,
         preRunHook: this.memoryManager
           ? async (input: string) => {
               if (!this.memoryManager!.auraReady) return null;

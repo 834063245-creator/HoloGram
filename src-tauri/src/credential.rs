@@ -8,7 +8,7 @@
 // Linux:   Secret Service via `secret-tool` CLI (gnome-keyring/kwallet)。
 //
 // 所有平台共享相同的公共 API：
-//   store_api_key(provider, key) / get_api_key(provider) / delete_api_key / clear_credentials
+//   store_api_key(provider, key) / get_api_key(provider) / delete_api_key
 //
 // 当 OS 密钥存储不可用时（无 keyring 守护进程、无 secret-tool），
 // 操作返回 Err — 前端（settings.ts persistSecrets/restoreSecrets）catch 静默忽略。
@@ -21,6 +21,15 @@
 use std::ffi::c_void;
 #[cfg(windows)]
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+
+/// 进程级写锁 — 串行化 store/delete 的「读-改-写」序列，
+/// 防止多窗口/多前端并发写互相覆盖导致丢 key。
+static CRED_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn cred_write_lock() -> &'static Mutex<()> {
+    CRED_WRITE_LOCK.get_or_init(|| Mutex::new(()))
+}
 
 // ═══════════════════════════════════════════════════════════════
 // 公共 API — 所有平台相同
@@ -28,6 +37,8 @@ use std::path::PathBuf;
 
 /// 为 provider 存储 API key。
 pub fn store_api_key(provider: &str, key: &str) -> Result<(), String> {
+    // 中毒后取回守卫继续工作 —— 写入本身是原子 rename，数据不会因 panic 损坏
+    let _guard = cred_write_lock().lock().unwrap_or_else(|e| e.into_inner());
     #[cfg(windows)]
     {
         store_windows(provider, key)
@@ -60,6 +71,7 @@ pub fn get_api_key(provider: &str) -> Result<Option<String>, String> {
 
 /// 删除单个 provider 的 API key。key 不存在不算错误。
 pub fn delete_api_key(provider: &str) -> Result<(), String> {
+    let _guard = cred_write_lock().lock().unwrap_or_else(|e| e.into_inner());
     #[cfg(windows)]
     {
         delete_windows(provider)
@@ -75,38 +87,7 @@ pub fn delete_api_key(provider: &str) -> Result<(), String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// macOS Keychain dump 解析器 — 从
-// `security dump-keychain` 输出中提取 provider 名称。
-// ═══════════════════════════════════════════════════════════════
-
-/// 解析 `security dump-keychain` 输出，查找所有 Hologram 存储的
-/// provider 名称（账户名）。按空行分割条目，查找
-/// 包含 `"svce"<blob>="hologram"` 的条目，并提取其中所有 `"acct"<blob>`
-/// 值。
-#[cfg(target_os = "macos")]
-fn parse_keychain_dump_providers(dump: &str) -> Vec<String> {
-    let mut providers: Vec<String> = Vec::new();
-
-    // 按块分割 — 每个 keychain 条目由空行分隔
-    for block in dump.split("\n\n") {
-        if !block.contains("\"svce\"<blob>=\"hologram\"") {
-            continue;
-        }
-        for line in block.lines() {
-            if let Some(rest) = line.split("\"acct\"<blob>=").nth(1) {
-                let val = rest.trim().trim_matches('"');
-                if !val.is_empty() && !providers.contains(&val.to_string()) {
-                    providers.push(val.to_string());
-                }
-            }
-        }
-    }
-
-    providers
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Windows — DPAPI (现有实现，未变更)
+// Windows — DPAPI (raw FFI, 用户级加密, 基于文件)
 // ═══════════════════════════════════════════════════════════════
 
 #[cfg(windows)]
@@ -211,6 +192,9 @@ mod windows_impl {
         let base = std::env::var("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."));
+        // 注意：目录名 com.hologram.app 与 tauri.conf.json 的 identifier
+        // (com.hologram.hg) 不一致是**有意保留**的 —— 存量用户的密文
+        // 都在旧路径下，迁移路径等于静默丢 key，因此不得更改。
         base.join("com.hologram.app").join("credentials.enc")
     }
 
@@ -246,17 +230,74 @@ mod windows_impl {
         Ok(map)
     }
 
+    /// 供 store/delete 使用的加载：文件存在但解密/解析失败时，先把
+    /// 损坏的密文备份为 credentials.enc.corrupt-<unix_ts> 再从空 map
+    /// 重新开始 —— 绝不静默丢弃已有密文。备份本身失败则返回错误
+    /// （放弃写入，避免唯一密文被覆盖）。
+    fn load_or_backup_cred_map() -> Result<serde_json::Map<String, serde_json::Value>, String> {
+        match load_cred_map() {
+            Ok(map) => Ok(map),
+            Err(load_err) => {
+                let path = cred_path();
+                if !path.exists() {
+                    // 文件不存在却读失败（权限等）— 非损坏场景，直接上报
+                    return Err(load_err);
+                }
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let backup = path.with_file_name(format!("credentials.enc.corrupt-{ts}"));
+                std::fs::rename(&path, &backup).map_err(|e| {
+                    format!(
+                        "credentials.enc 损坏（{load_err}）且备份失败（{e}）— 已放弃写入以免丢 key"
+                    )
+                })?;
+                tracing::warn!(
+                    "[credential] credentials.enc 损坏（{}），已备份到 {}",
+                    load_err,
+                    backup.display()
+                );
+                Ok(serde_json::Map::new())
+            }
+        }
+    }
+
+    /// 原子写入凭证密文：先写同目录临时文件，再 rename 覆盖，
+    /// 避免写入中途崩溃留下截断/空文件。
+    /// Windows 上 rename 不能覆盖已存在的目标 —— 失败后删除目标重试。
+    fn write_cred_file_atomic(encrypted: &[u8]) -> Result<(), String> {
+        let path = cred_path();
+        let tmp = path.with_extension("enc.tmp");
+        std::fs::write(&tmp, encrypted).map_err(|e| format!("write credentials tmp: {e}"))?;
+        match std::fs::rename(&tmp, &path) {
+            Ok(()) => Ok(()),
+            Err(first) => {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(format!(
+                            "覆盖 credentials.enc 失败（删除旧文件: {e}; rename: {first}）"
+                        ))
+                    }
+                }
+                std::fs::rename(&tmp, &path)
+                    .map_err(|e| format!("覆盖 credentials.enc 失败（rename: {e}）"))
+            }
+        }
+    }
+
     pub(super) fn store_windows(provider: &str, key: &str) -> Result<(), String> {
         let dir = cred_path().parent()
             .ok_or_else(|| "无法确定凭证目录的父路径".to_string())?
             .to_path_buf();
-        std::fs::create_dir_all(&dir).ok();
-        let mut map = load_cred_map().unwrap_or_default();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create credentials dir: {e}"))?;
+        let mut map = load_or_backup_cred_map()?;
         map.insert(provider.to_string(), serde_json::Value::String(key.to_string()));
         let data = serde_json::Value::Object(map).to_string();
         let encrypted = dpapi_encrypt(data.as_bytes())?;
-        std::fs::write(cred_path(), encrypted)
-            .map_err(|e| format!("write credentials: {e}"))
+        write_cred_file_atomic(&encrypted)
     }
 
     pub(super) fn get_windows(provider: &str) -> Result<Option<String>, String> {
@@ -268,15 +309,14 @@ mod windows_impl {
     }
 
     pub(super) fn delete_windows(provider: &str) -> Result<(), String> {
-        let mut map = load_cred_map().unwrap_or_default();
+        let mut map = load_or_backup_cred_map()?;
         if !map.contains_key(provider) {
             return Ok(());
         }
         map.remove(provider);
         let data = serde_json::Value::Object(map).to_string();
         let encrypted = dpapi_encrypt(data.as_bytes())?;
-        std::fs::write(cred_path(), encrypted)
-            .map_err(|e| format!("write credentials: {e}"))
+        write_cred_file_atomic(&encrypted)
     }
 }
 
@@ -331,17 +371,31 @@ mod macos_impl {
             } else {
                 Ok(Some(key.to_string()))
             }
-        } else {
-            // 退出码 44 = 未找到条目
+        } else if output.status.code() == Some(44) {
+            // 退出码 44 = errSecItemNotFound — 未存储，不算错误
             Ok(None)
+        } else {
+            Err(format!(
+                "Keychain lookup failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
         }
     }
 
     pub(super) fn delete_macos(provider: &str) -> Result<(), String> {
-        let _ = std::process::Command::new("security")
+        let output = std::process::Command::new("security")
             .args(["delete-generic-password", "-s", SERVICE, "-a", provider])
-            .output();
-        Ok(())
+            .output()
+            .map_err(|e| format!("security CLI not available: {e}"))?;
+        // 幂等删除：条目不存在（errSecItemNotFound=44）不算错误，其余失败上报
+        if output.status.success() || output.status.code() == Some(44) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Keychain delete failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
+        }
     }
 }
 
@@ -431,9 +485,17 @@ mod linux_impl {
             return Err("Secret Service 不可用（请确认 gnome-keyring/kwallet 正在运行）".into());
         }
 
-        let _ = std::process::Command::new("secret-tool")
+        let output = std::process::Command::new("secret-tool")
             .args(["clear", "service", SERVICE, "account", provider])
-            .output();
+            .output()
+            .map_err(|e| format!("secret-tool spawn: {e}"))?;
+        // 幂等删除：clear 未匹配到条目时仍返回 0；非零退出码为真实错误，上报
+        if !output.status.success() {
+            return Err(format!(
+                "Secret Service delete failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
         Ok(())
     }
 }
@@ -454,9 +516,6 @@ compile_error!("credential.rs: unsupported platform");
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "macos")]
-    use super::parse_keychain_dump_providers;
-
     // ── JSON map 格式测试（平台无关）──
 
     #[test]
@@ -538,97 +597,155 @@ mod tests {
         );
     }
 
-    // ── Keychain dump 解析器测试 ──
+    // ── Windows 凭证文件行为测试（真实 DPAPI 加解密）──
 
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn test_parse_keychain_dump_multiple_providers() {
-        let dump = "\
-keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
-version: 512
-class: \"genp\"
-attributes:
-    \"labl\"<blob>=\"HoloGram: deepseek\"
-    \"svce\"<blob>=\"hologram\"
-    \"acct\"<blob>=\"deepseek\"
-    \"mdat\"<timedate>=0x...
+    /// 把 LOCALAPPDATA 重定向到临时目录的测试环境。
+    /// set_var 是进程全局的，用进程内互斥锁串行化这些测试；
+    /// Drop 时恢复原值并清理临时目录。
+    #[cfg(windows)]
+    struct TempCredEnv {
+        dir: std::path::PathBuf,
+        orig: Option<std::ffi::OsString>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
 
-keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
-version: 512
-class: \"genp\"
-attributes:
-    \"labl\"<blob>=\"HoloGram: anthropic\"
-    \"svce\"<blob>=\"hologram\"
-    \"acct\"<blob>=\"anthropic\"
-    \"mdat\"<timedate>=0x...
-";
+    #[cfg(windows)]
+    impl TempCredEnv {
+        fn new(name: &str) -> Self {
+            static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let dir = std::env::temp_dir().join(format!(
+                "hologram-cred-test-{}-{}-{}",
+                name,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let orig = std::env::var_os("LOCALAPPDATA");
+            std::env::set_var("LOCALAPPDATA", &dir);
+            TempCredEnv { dir, orig, _guard: guard }
+        }
 
-        let providers = parse_keychain_dump_providers(dump);
-        assert_eq!(providers.len(), 2);
-        assert!(providers.contains(&"deepseek".to_string()));
-        assert!(providers.contains(&"anthropic".to_string()));
+        fn cred_file(&self) -> std::path::PathBuf {
+            self.dir.join("com.hologram.app").join("credentials.enc")
+        }
+
+        /// 目录下所有 credentials.enc.corrupt-* 备份文件
+        fn corrupt_backups(&self) -> Vec<std::path::PathBuf> {
+            let dir = match self.cred_file().parent() {
+                Some(d) => d.to_path_buf(),
+                None => return Vec::new(),
+            };
+            let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().starts_with("credentials.enc.corrupt-"))
+                        .unwrap_or(false)
+                })
+                .collect()
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for TempCredEnv {
+        fn drop(&mut self) {
+            match &self.orig {
+                Some(v) => std::env::set_var("LOCALAPPDATA", v),
+                None => std::env::remove_var("LOCALAPPDATA"),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn test_parse_keychain_dump_no_match() {
-        let dump = "\
-keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
-class: \"genp\"
-attributes:
-    \"svce\"<blob>=\"other-app\"
-    \"acct\"<blob>=\"user1\"
-";
+    #[cfg(windows)]
+    fn test_store_get_delete_roundtrip() {
+        let env = TempCredEnv::new("roundtrip");
+        super::store_api_key("testprov", "sk-test-123").unwrap();
+        // 覆盖写入第二个 key —— 走 rename 覆盖已存在文件的路径
+        super::store_api_key("testprov2", "sk-test-456").unwrap();
 
-        let providers = parse_keychain_dump_providers(dump);
-        assert!(providers.is_empty());
+        assert_eq!(
+            super::get_api_key("testprov").unwrap(),
+            Some("sk-test-123".to_string())
+        );
+        assert_eq!(
+            super::get_api_key("testprov2").unwrap(),
+            Some("sk-test-456".to_string())
+        );
+        // 原子写入不应残留临时文件
+        assert!(!env.cred_file().with_extension("enc.tmp").exists());
+
+        super::delete_api_key("testprov").unwrap();
+        assert_eq!(super::get_api_key("testprov").unwrap(), None);
+        assert_eq!(
+            super::get_api_key("testprov2").unwrap(),
+            Some("sk-test-456".to_string())
+        );
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn test_parse_keychain_dump_empty() {
-        let providers = parse_keychain_dump_providers("");
-        assert!(providers.is_empty());
+    #[cfg(windows)]
+    fn test_corrupt_file_backed_up_on_store() {
+        let env = TempCredEnv::new("corrupt-store");
+        let dir = env.cred_file().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        // 无法 DPAPI 解密的垃圾内容 —— 模拟损坏的密文
+        std::fs::write(env.cred_file(), b"not-dpapi-garbage").unwrap();
+
+        super::store_api_key("newprov", "sk-new").unwrap();
+
+        // 原密文必须被备份，而不是被静默覆盖
+        let backups = env.corrupt_backups();
+        assert_eq!(backups.len(), 1, "损坏文件应被备份而非静默丢弃");
+        assert_eq!(std::fs::read(&backups[0]).unwrap(), b"not-dpapi-garbage");
+        // 新 key 正常写入可读
+        assert_eq!(
+            super::get_api_key("newprov").unwrap(),
+            Some("sk-new".to_string())
+        );
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn test_parse_keychain_dump_duplicate_accounts() {
-        // 同一账户出现在多个条目中 — 只返回一次。
-        let dump = "\
-keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
-class: \"genp\"
-attributes:
-    \"svce\"<blob>=\"hologram\"
-    \"acct\"<blob>=\"deepseek\"
+    #[cfg(windows)]
+    fn test_corrupt_file_backed_up_on_delete() {
+        let env = TempCredEnv::new("corrupt-delete");
+        let dir = env.cred_file().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(env.cred_file(), b"garbage").unwrap();
 
-keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
-class: \"genp\"
-attributes:
-    \"svce\"<blob>=\"hologram\"
-    \"acct\"<blob>=\"deepseek\"
-";
-
-        let providers = parse_keychain_dump_providers(dump);
-        assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0], "deepseek");
+        // 损坏文件备份后视为空 map：删除不存在的 key 不算错误，也不重写文件
+        super::delete_api_key("whatever").unwrap();
+        assert_eq!(env.corrupt_backups().len(), 1);
+        assert!(!env.cred_file().exists());
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn test_parse_keychain_dump_acct_before_svce() {
-        // 属性顺序不保证 — acct 可能出现在 svce 之前。
-        let dump = "\
-keychain: \"/Users/test/Library/Keychains/login.keychain-db\"
-class: \"genp\"
-attributes:
-    \"acct\"<blob>=\"openai\"
-    \"labl\"<blob>=\"HoloGram: openai\"
-    \"svce\"<blob>=\"hologram\"
-";
-
-        let providers = parse_keychain_dump_providers(dump);
-        assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0], "openai");
+    #[cfg(windows)]
+    fn test_concurrent_stores_do_not_lose_keys() {
+        let _env = TempCredEnv::new("concurrent");
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            handles.push(std::thread::spawn(move || {
+                super::store_api_key(&format!("prov-{i}"), &format!("key-{i}")).unwrap();
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // 进程级写锁保证读-改-写串行：8 个并发写入一个都不能丢
+        for i in 0..8 {
+            assert_eq!(
+                super::get_api_key(&format!("prov-{i}")).unwrap(),
+                Some(format!("key-{i}")),
+                "并发存储后 prov-{i} 丢失"
+            );
+        }
     }
 }

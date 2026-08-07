@@ -34,17 +34,16 @@ pub(crate) async fn permission_ask_response(
     Ok(())
 }
 
-#[tauri::command]
+// 注意：以下三个 credential 函数不经 #[tauri::command] 注册，
+// 仅由 rpc.rs 的单一 RPC 分发器以普通函数调用（invoke_handler 只注册 rpc::rpc）。
 pub(crate) fn credential_store(provider: String, key: String) -> Result<(), String> {
     crate::credential::store_api_key(&provider, &key)
 }
 
-#[tauri::command]
 pub(crate) fn credential_get(provider: String) -> Result<Option<String>, String> {
     crate::credential::get_api_key(&provider)
 }
 
-#[tauri::command]
 pub(crate) fn credential_delete(provider: String) -> Result<(), String> {
     crate::credential::delete_api_key(&provider)
 }

@@ -14,7 +14,7 @@ import { setLang } from '../../i18n';
 import { getCatalogProviders, getDefaultModel, mergeDynamicModels } from '../../provider/catalog';
 import { ChunkType, type ModelDescriptor } from '../../provider/types';
 import type { AppSettings } from '../../settings';
-import { addProvider, loadSettings, persistSecrets, removeProvider, removeSecret, restoreSecrets, saveSettings } from '../../settings';
+import { addProvider, defaultBaseUrl, isFactoryBaseUrl, loadSettings, loadSettingsWithSecrets, persistSecrets, removeProvider, removeSecret, saveSettings } from '../../settings';
 import { createProvider } from '../../provider';
 import { getActiveProvider } from '../../settings';
 import { getOnSettingsSave } from '../dock-config';
@@ -62,7 +62,7 @@ const SettingsPanelApp: React.FC<{
   // 会整体覆盖 state，把刚填的 key 冲掉（「key 填进去没被保存」根因之一）。
   useEffect(() => {
     let alive = true;
-    restoreSecrets(loadSettings())
+    loadSettingsWithSecrets()
       .then((filled) => {
         if (!alive) return;
         setSettings((s) => {
@@ -157,7 +157,7 @@ const SettingsPanelApp: React.FC<{
   const [addBaseUrl, setAddBaseUrl] = useState('');
   const [addModel, setAddModel] = useState('');
 
-  const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
+  const active = getActiveProvider(settings);
   const isAnthropic = active?.kind === 'anthropic';
 
   // ── 语言依赖标签页打开时加载 LSP 状态 ──
@@ -313,9 +313,10 @@ const SettingsPanelApp: React.FC<{
     if (onSave) onSave();
   }, [settings, onSave]);
 
+  /** 刷新模型列表 — 用组件 state 快照（方案 A 即时落盘 + 密钥已回填/在输），
+   *  与 handleTestConnection 同一数据源；不再从磁盘重读（快照不一致根因）。 */
   const handleRefreshModels = useCallback(async (): Promise<number> => {
-    const s = await restoreSecrets(loadSettings());
-    const activeProvider = getActiveProvider(s);
+    const activeProvider = getActiveProvider(settings);
     if (!activeProvider.apiKey?.trim()) return 0;
     const prov = createProvider(activeProvider);
     const models = (await prov.fetchModels?.()) ?? [];
@@ -323,7 +324,7 @@ const SettingsPanelApp: React.FC<{
       mergeDynamicModels(activeProvider.name, models);
     }
     return models.length;
-  }, []);
+  }, [settings]);
 
   /** 测试连接：真实发一次最小流式请求（1 token），验证 key/baseUrl/model 三者。
    *  错误消息已由 classifyError 分类（sendWithRetry 内应用）。 */
@@ -477,7 +478,7 @@ const SettingsPanelApp: React.FC<{
                   <input
                     type="text"
                     className="sp-input sp-add-baseurl"
-                    placeholder="Base URL（如 https://api.deepseek.com/v1）"
+                    placeholder={`Base URL（如 ${defaultBaseUrl('deepseek', 'openai')}）`}
                     style={{ marginBottom: 6 }}
                     value={addBaseUrl}
                     onChange={(e) => setAddBaseUrl(e.target.value)}
@@ -574,15 +575,10 @@ const SettingsPanelApp: React.FC<{
                   onRefreshModels={handleRefreshModels}
                   onChange={(modelId, desc) => {
                     updateProvider('model', modelId);
-                    // 如果为空或用户未自定义，自动填充 baseUrl
+                    // 如果为空或仍是出厂默认 URL（用户未自定义过），自动填充 baseUrl
                     if (desc) {
                       const currentBase = active?.baseUrl || '';
-                      const defaults = [
-                        'https://api.deepseek.com/v1',
-                        'https://api.anthropic.com',
-                        'https://api.openai.com/v1',
-                      ];
-                      if (!currentBase || defaults.includes(currentBase)) {
+                      if (!currentBase || isFactoryBaseUrl(currentBase)) {
                         updateProvider('baseUrl', desc.baseUrl);
                       }
                     }
@@ -599,7 +595,7 @@ const SettingsPanelApp: React.FC<{
                   onBlur={(e) => {
                     e.target.value = e.target.value.replace(/[^\x00-\x7F]/g, '');
                   }}
-                  placeholder="https://api.deepseek.com/v1"
+                  placeholder={defaultBaseUrl('deepseek', 'openai')}
                 />
               </div>
               <div className="sp-field">
