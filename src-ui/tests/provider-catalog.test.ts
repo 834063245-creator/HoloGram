@@ -9,8 +9,10 @@ import {
   getCatalogProviders,
   getDefaultModel,
   getModel,
+  mergeDynamicModels,
   searchModels,
 } from '../src/provider/catalog';
+import { guessReasoning } from '../src/provider/openai';
 
 describe('catalog', () => {
   it('loads models from all 6 providers', () => {
@@ -113,5 +115,54 @@ describe('catalog', () => {
       expect(typeof m.cost.output).toBe('number');
       expect(typeof m.cost.cacheRead).toBe('number');
     }
+  });
+
+  it('no model declares image input (P0: 多模态未落地，禁止假声明)', () => {
+    for (const m of getAllModels()) {
+      expect(m.input.includes('image'), `${m.id} declares image input`).toBe(false);
+    }
+  });
+
+  it('mergeDynamicModels adds out-of-catalog ids, skips existing ones', () => {
+    mergeDynamicModels('testprov', [
+      {
+        id: 'brand-new-model-x',
+        name: 'Brand New',
+        kind: 'openai',
+        provider: 'testprov',
+        baseUrl: 'https://api.testprov.com/v1',
+        reasoning: true,
+        input: ['text'],
+        cost: { input: 0.1, output: 0.2, cacheRead: 0 },
+        contextWindow: 0,
+        maxTokens: 0,
+      },
+      {
+        id: 'deepseek-v4-pro', // 静态目录已有 — 应被跳过（静态元数据优先）
+        name: 'stale',
+        kind: 'openai',
+        provider: 'testprov',
+        baseUrl: 'https://stale.invalid/v1',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0 },
+        contextWindow: 0,
+        maxTokens: 0,
+      },
+    ]);
+    const added = getModel('brand-new-model-x');
+    expect(added).toBeDefined();
+    expect(added?.provider).toBe('testprov');
+    // 静态条目未被覆盖
+    const staticOne = getModel('deepseek-v4-pro');
+    expect(staticOne?.baseUrl).toBe('https://api.deepseek.com/v1');
+  });
+
+  it('guessReasoning heuristic (P0: 动态模型 reasoning 启发式)', () => {
+    expect(guessReasoning('deepseek-v4-pro')).toBe(true);
+    expect(guessReasoning('deepseek-reasoner')).toBe(true);
+    expect(guessReasoning('kimi-k2-thinking')).toBe(true);
+    expect(guessReasoning('gpt-4o')).toBe(false);
+    expect(guessReasoning('claude-3-5-sonnet')).toBe(false);
   });
 });

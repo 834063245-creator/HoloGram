@@ -87,7 +87,9 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
           provider: name,
           baseUrl,
           reasoning: m.id.includes('sonnet') || m.id.includes('opus') || m.id.includes('haiku'),
-          input: ['text', 'image'] as ('text' | 'image')[],
+          // 定稿（P0）：只声明 text——Message 是纯字符串，请求构建器无图像块；
+          // 多模态等真实传图入口出现后再做（breaking change，单独立项）。
+          input: ['text'] as ('text' | 'image')[],
           cost: { input: 0, output: 0, cacheRead: 0 },
           contextWindow: 0,
           maxTokens: 0,
@@ -291,8 +293,10 @@ function buildRequest(
       if (!Number.isNaN(budget) && budget > 0) {
         r.thinking = { type: 'enabled', budget_tokens: Math.min(budget, 32000) };
       } else {
-        // "auto" 或任意非 off 字符串 → 自动模式
-        r.thinking = { type: 'auto', display: 'summarized' as const };
+        // "auto" 或任意非 off 字符串 → 自动模式。
+        // 显式带 budget_tokens（16000 = API 默认预算）——部分 API 版本
+        // 缺该字段直接 400（2026-08-07 真机复现风险点）。
+        r.thinking = { type: 'auto', display: 'summarized' as const, budget_tokens: 16000 };
       }
     }
   }
@@ -410,6 +414,8 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
         total_tokens: inTok + outTok,
         cache_hit_tokens: cacheRead,
         cache_miss_tokens: inTok - cacheRead,
+        // Anthropic Messages API 的 usage 不提供 reasoning_tokens 字段——
+        // 0 是事实正确，不是缺实现（openai 协议才有该拆解）。
         reasoning_tokens: 0,
         finish_reason: mapStopReason(finishReason),
       },

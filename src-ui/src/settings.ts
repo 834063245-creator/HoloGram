@@ -4,6 +4,8 @@
 // Settings — API Key 管理、模型选择、provider 配置
 // 存储在 localStorage 中，在可用时由 Tauri store 插件支持
 
+import { getModel } from './provider/catalog';
+
 export interface ProviderSettings {
   kind: 'anthropic' | 'openai';
   name: string;
@@ -103,8 +105,11 @@ export function saveSettings(s: AppSettings): void {
 }
 
 /** 将 API Key 持久化到系统加密存储（DPAPI on Windows），防止 localStorage 被清丢 Key。
- *  ⚡ 2026-08-04：apiKey 唯一权威在此 — 保存设置时同步写入凭据；
- *  用户清空 key 时删除对应凭据，防止 restoreSecrets 复活旧密钥。 */
+ *  ⚡ 2026-08-04：apiKey 唯一权威在此 — 保存设置时同步写入凭据。
+ *  ⚡ 2026-08-07 修正：空 key **不再执行 delete**——state 与凭据可能因异步回填
+ *  暂时不同步（restoreSecrets 未完成时遍历会把未回填的 provider 误删）。
+ *  删除凭据只走两个明确场景：removeProvider（removeSecret）与用户主动清空
+ *  输入框（SettingsPanel commitSecret 对空值调 removeSecret）。 */
 export async function persistSecrets(s: AppSettings): Promise<void> {
   try {
     const { rpc } = await import('./bridge');
@@ -115,12 +120,6 @@ export async function persistSecrets(s: AppSettings): Promise<void> {
           await rpc('credential_store', { provider: p.name, key });
         } catch {
           /* 非关键 — 凭据写入失败不影响本次会话 */
-        }
-      } else {
-        try {
-          await rpc('credential_delete', { provider: p.name });
-        } catch {
-          /* 无凭据或删除失败 — 忽略 */
         }
       }
     }
@@ -139,6 +138,23 @@ export async function removeSecret(providerName: string): Promise<void> {
   }
 }
 
+/** 解析 rpc 返回值中的字符串。rpc 返回 JSON 编码字符串（`"sk-xxx"` 或 `null`），
+ *  调用方普遍需 JSON.parse；此处兼容两种形态：
+ *  - `"sk-xxx"`（JSON 编码）→ 解析出 `sk-xxx`
+ *  - `sk-xxx`（纯字符串，未来 Tauri 行为变化）→ 原样返回
+ *  - `null` / 非法 JSON → null */
+export function parseRpcString(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (trimmed === 'null' || trimmed === '') return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return typeof parsed === 'string' ? parsed : null;
+  } catch {
+    return trimmed;
+  }
+}
+
 /** 从系统加密存储恢复 API Key（仅填充 apiKey 为空的 provider）。loadSettings 后用。 */
 export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
   try {
@@ -146,9 +162,10 @@ export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
     for (const p of s.providers) {
       if (!p.apiKey || p.apiKey.trim() === '') {
         try {
-          const stored: string | null = await rpc('credential_get', { provider: p.name });
-          if (stored?.trim()) {
-            p.apiKey = stored.trim();
+          const stored = await rpc('credential_get', { provider: p.name });
+          const key = parseRpcString(stored);
+          if (key?.trim()) {
+            p.apiKey = key.trim();
           }
         } catch {
           /* 无加密存储或解密失败 */
@@ -214,7 +231,12 @@ export function removeProvider(s: AppSettings, name: string): AppSettings {
 
 // ---- 定价（每百万 token）----
 
+/** 解析显示定价：优先模型目录（权威 USD 数据），读不到才回退硬编码。 */
 export function defaultPricing(kind: string, model: string) {
+  const m = getModel(model);
+  if (m && m.cost && m.cost.input > 0) {
+    return { cache_hit: m.cost.cacheRead, input: m.cost.input, output: m.cost.output, currency: '$' };
+  }
   if (kind === 'anthropic') {
     // Claude Sonnet 4 定价
     return { cache_hit: 0.3, input: 3, output: 15, currency: '$' };

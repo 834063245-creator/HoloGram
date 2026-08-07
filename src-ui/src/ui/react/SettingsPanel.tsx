@@ -11,12 +11,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '../../bridge';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
-import { getCatalogProviders, getDefaultModel } from '../../provider/catalog';
-import type { ModelDescriptor } from '../../provider/types';
+import { getCatalogProviders, getDefaultModel, mergeDynamicModels } from '../../provider/catalog';
+import { ChunkType, type ModelDescriptor } from '../../provider/types';
 import type { AppSettings } from '../../settings';
 import { addProvider, loadSettings, persistSecrets, removeProvider, removeSecret, restoreSecrets, saveSettings } from '../../settings';
 import { createProvider } from '../../provider';
-import { mergeDynamicModels } from '../../provider/catalog';
 import { getActiveProvider } from '../../settings';
 import { getOnSettingsSave } from '../dock-config';
 import { useDockStore } from '../dock-store';
@@ -58,11 +57,24 @@ const SettingsPanelApp: React.FC<{
   const [appVersion, setAppVersion] = useState('…');
   // ⚡ 2026-08-04 状态治理：apiKey 权威在系统加密凭据 —
   // localStorage 无明文，打开面板时异步回填密钥供表单展示。
+  // ⚡ 2026-08-07 竞态修复：回填用函数式合并、只填充仍为空的 key——
+  // 旧实现 restoreSecrets(loadSettings()) 的快照在用户已输入后到达，
+  // 会整体覆盖 state，把刚填的 key 冲掉（「key 填进去没被保存」根因之一）。
   useEffect(() => {
     let alive = true;
     restoreSecrets(loadSettings())
-      .then((s) => {
-        if (alive) setSettings(s);
+      .then((filled) => {
+        if (!alive) return;
+        setSettings((s) => {
+          const next = structuredClone(s);
+          for (const p of next.providers) {
+            if (!p.apiKey || p.apiKey.trim() === '') {
+              const f = filled.providers.find((x) => x.name === p.name);
+              if (f?.apiKey?.trim()) p.apiKey = f.apiKey.trim();
+            }
+          }
+          return next;
+        });
       })
       .catch(() => {});
     return () => {
@@ -119,9 +131,7 @@ const SettingsPanelApp: React.FC<{
       setUpdateMsg(e?.message || String(e));
     }
   }, []);
-  const [dirty, setDirty] = useState(false);
-
-  // Provider 添加表单
+  const [saved, setSaved] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [addName, setAddName] = useState('');
   const [addKind, setAddKind] = useState<'openai' | 'anthropic'>('openai');
@@ -131,6 +141,10 @@ const SettingsPanelApp: React.FC<{
   // API Key 可见性
   const [keyVisible, setKeyVisible] = useState(false);
 
+  // 测试连接
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const [testMsg, setTestMsg] = useState('');
+
   // LSP 状态
   const [lspStatus, setLspStatus] = useState<LspData | null>(null);
   const [lspLoading, setLspLoading] = useState(false);
@@ -139,8 +153,9 @@ const SettingsPanelApp: React.FC<{
   // 工具搜索
   const [toolFilter, setToolFilter] = useState('');
 
-  // 保存反馈
-  const [saved, setSaved] = useState(false);
+  // 添加表单（方案 A：一步到位 — name/kind/key/baseUrl/model 全部在此确认）
+  const [addBaseUrl, setAddBaseUrl] = useState('');
+  const [addModel, setAddModel] = useState('');
 
   const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
   const isAnthropic = active?.kind === 'anthropic';
@@ -186,21 +201,43 @@ const SettingsPanelApp: React.FC<{
   }, [activeTab]);
 
   // ── 处理函数 ──
+  // 方案 A（2026-08-07 定稿）：即时保存 — 任何改动立即落盘，无 dirty 状态。
 
-  const markDirty = useCallback(() => setDirty(true), []);
+  /** 任何 settings 变化立即落盘（saveSettings 内部抹空 apiKey，明文权威在系统凭据）。
+   *  统一收口在此 effect——函数式 setSettings 的 updater 内不可做副作用（React 可能重复调用）。 */
+  useEffect(() => {
+    saveSettings(settings);
+  }, [settings]);
 
-  const updateProvider = useCallback(
-    (field: string, value: string | number) => {
-      setSettings((s) => {
-        const next = structuredClone(s);
-        const p = next.providers.find((x) => x.name === next.activeProvider);
-        if (p) (p as any)[field] = value;
-        return next;
-      });
-      markDirty();
-    },
-    [markDirty],
-  );
+  /** 更新 state（函数式——连续多次调用安全累积，如 ModelSelector 的 model+baseUrl 两连改），
+   *  落盘由上方 effect 负责。 */
+  const updateProvider = useCallback((field: string, value: string | number) => {
+    setSettings((s) => {
+      const next = structuredClone(s);
+      const p = next.providers.find((x) => x.name === next.activeProvider);
+      if (p) (p as any)[field] = value;
+      return next;
+    });
+  }, []);
+
+  /** 整体替换（添加/删除/切换等单次操作），落盘由 effect 负责。 */
+  const commit = useCallback((next: AppSettings): void => {
+    setSettings(next);
+  }, []);
+
+  /** apiKey 是敏感字段：输入过程只进 state，失焦时写系统加密凭据。
+   *  只处理当前 provider——空值 = 用户主动清空 → 删凭据；
+   *  非空 → 写凭据（不遍历其他 provider，避免未回填的误删）。 */
+  const commitSecret = useCallback((): void => {
+    const a = settings.providers.find((p) => p.name === settings.activeProvider);
+    if (!a) return;
+    const key = (a.apiKey || '').trim();
+    if (key) {
+      persistSecrets(settings).catch(() => {});
+    } else {
+      removeSecret(a.name).catch(() => {});
+    }
+  }, [settings]);
 
   const handleAddProvider = useCallback(() => {
     const name = addName.trim();
@@ -214,20 +251,25 @@ const SettingsPanelApp: React.FC<{
     }
     try {
       const next = addProvider(settings, name, addKind);
-      if (addKey.trim()) {
-        const added = next.providers.find((p) => p.name === name);
-        if (added) added.apiKey = addKey.trim();
+      const added = next.providers.find((p) => p.name === name);
+      if (added) {
+        if (addKey.trim()) added.apiKey = addKey.trim();
+        if (addBaseUrl.trim()) added.baseUrl = addBaseUrl.trim();
+        if (addModel.trim()) added.model = addModel.trim();
       }
-      setSettings(next);
+      // 方案 A：确认即落盘 + 写凭据 + 激活
+      commit(next);
+      persistSecrets(next).catch(() => {});
       setShowAddForm(false);
       setAddName('');
       setAddKey('');
+      setAddBaseUrl('');
+      setAddModel('');
       setAddError('');
-      setDirty(true);
     } catch (e: any) {
       setAddError(e.message || '添加失败');
     }
-  }, [addName, addKind, addKey, settings]);
+  }, [addName, addKind, addKey, addBaseUrl, addModel, settings, commit]);
 
   const handleRemoveProvider = useCallback(() => {
     if (settings.providers.length <= 1) {
@@ -239,30 +281,33 @@ const SettingsPanelApp: React.FC<{
     if (!name) return;
     const next = removeProvider(settings, name);
     removeSecret(name).catch(() => {});
-    setSettings(next);
-    setDirty(true);
-  }, [settings, active]);
+    commit(next);
+  }, [settings, active, commit]);
 
   const handleClose = useCallback(() => {
-    if (dirty && !confirm('有未保存的修改，确定关闭？')) return;
     onClose();
-  }, [dirty, onClose]);
+  }, [onClose]);
 
-  const handleSave = useCallback(() => {
-    const s = structuredClone(settings);
-    const a = s.providers.find((p) => p.name === s.activeProvider);
+  const handleApply = useCallback(() => {
+    const a = settings.providers.find((p) => p.name === settings.activeProvider);
     if (!a) {
-      alert(`找不到 Provider "${s.activeProvider}"`);
+      alert(`找不到 Provider "${settings.activeProvider}"`);
       return;
     }
-    if (!a.apiKey?.trim() && !confirm(`Provider "${a.name}" 的 API Key 为空，仍要保存？`)) return;
-    if (!a.model?.trim() && !confirm(`Provider "${a.name}" 的模型名称为空，仍要保存？`)) return;
+    // 应用 = 重建 Agent：配置必须可用才放行（改动已即时落盘，无需「仍要保存」）
+    if (!a.apiKey?.trim()) {
+      alert(`Provider "${a.name}" 的 API Key 为空，Agent 无法启动`);
+      return;
+    }
+    if (!a.model?.trim()) {
+      alert(`Provider "${a.name}" 的模型名称为空`);
+      return;
+    }
 
-    saveSettings(s);
-    persistSecrets(s).catch(() => {});
-    setLang(s.display.language);
-    bus.emit('lang:changed', { lang: s.display.language });
-    setDirty(false);
+    saveSettings(settings); // 确保即时保存的最终状态落盘
+    persistSecrets(settings).catch(() => {});
+    setLang(settings.display.language);
+    bus.emit('lang:changed', { lang: settings.display.language });
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
     if (onSave) onSave();
@@ -279,6 +324,51 @@ const SettingsPanelApp: React.FC<{
     }
     return models.length;
   }, []);
+
+  /** 测试连接：真实发一次最小流式请求（1 token），验证 key/baseUrl/model 三者。
+   *  错误消息已由 classifyError 分类（sendWithRetry 内应用）。 */
+  const handleTestConnection = useCallback(async () => {
+    const a = settings.providers.find((p) => p.name === settings.activeProvider);
+    if (!a) return;
+    if (!a.apiKey?.trim()) {
+      setTestStatus('fail');
+      setTestMsg('请先填写 API Key');
+      return;
+    }
+    if (!a.model?.trim()) {
+      setTestStatus('fail');
+      setTestMsg('请先填写模型名称');
+      return;
+    }
+    setTestStatus('testing');
+    setTestMsg('');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const prov = createProvider(a, { disableThinking: true });
+      const gen = prov.stream(ctrl.signal, {
+        messages: [{ role: 'user', content: 'ping' }],
+        tools: [],
+        temperature: 0,
+        max_tokens: 1,
+      });
+      let received = false;
+      for await (const chunk of gen) {
+        if (chunk.type === ChunkType.Error) throw chunk.err ?? new Error('流错误');
+        if (chunk.type === ChunkType.Text && chunk.text) {
+          received = true;
+          break;
+        }
+      }
+      setTestStatus('ok');
+      setTestMsg(received ? '连接成功' : '连接成功（无文本返回，请检查模型行为）');
+    } catch (e: any) {
+      setTestStatus('fail');
+      setTestMsg(e?.message || String(e));
+    } finally {
+      clearTimeout(timer);
+    }
+  }, [settings]);
 
   // ── 渲染 ──
 
@@ -337,8 +427,7 @@ const SettingsPanelApp: React.FC<{
                     style={{ flex: 1 }}
                     value={settings.activeProvider}
                     onChange={(e) => {
-                      setSettings((s) => ({ ...s, activeProvider: e.target.value }));
-                      markDirty();
+                      commit({ ...settings, activeProvider: e.target.value });
                     }}
                   >
                     {settings.providers.map((p) => (
@@ -385,6 +474,24 @@ const SettingsPanelApp: React.FC<{
                     onChange={(e) => setAddKey(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAddProvider()}
                   />
+                  <input
+                    type="text"
+                    className="sp-input sp-add-baseurl"
+                    placeholder="Base URL（如 https://api.deepseek.com/v1）"
+                    style={{ marginBottom: 6 }}
+                    value={addBaseUrl}
+                    onChange={(e) => setAddBaseUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddProvider()}
+                  />
+                  <input
+                    type="text"
+                    className="sp-input sp-add-model"
+                    placeholder="模型名称（如 deepseek-v4-pro）"
+                    style={{ marginBottom: 6 }}
+                    value={addModel}
+                    onChange={(e) => setAddModel(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddProvider()}
+                  />
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <select
                       className="sp-input sp-add-kind"
@@ -418,6 +525,9 @@ const SettingsPanelApp: React.FC<{
                           onClick={() => {
                             setAddName(provName);
                             setAddKind(defaultModel.kind);
+                            // 方案 A：chips 一步带出 baseUrl + 默认模型，确认即完成
+                            setAddBaseUrl(defaultModel.baseUrl);
+                            setAddModel(defaultModel.id);
                           }}
                         >
                           {provName}
@@ -442,6 +552,8 @@ const SettingsPanelApp: React.FC<{
                     onChange={(e) => updateProvider('apiKey', e.target.value)}
                     onBlur={(e) => {
                       e.target.value = e.target.value.replace(/[^\x00-\x7F]/g, '');
+                      // 方案 A：key 输入完成（失焦）即写系统加密凭据
+                      commitSecret();
                     }}
                     placeholder="sk-…"
                   />
@@ -490,6 +602,28 @@ const SettingsPanelApp: React.FC<{
                   placeholder="https://api.deepseek.com/v1"
                 />
               </div>
+              <div className="sp-field">
+                <div className="sp-test-row">
+                  <button
+                    type="button"
+                    className={`sp-btn-sm sp-btn-test${testStatus === 'testing' ? ' disabled' : ''}`}
+                    disabled={testStatus === 'testing'}
+                    onClick={handleTestConnection}
+                    dangerouslySetInnerHTML={{
+                      __html: iconHtml(testStatus === 'testing' ? 'loading' : 'refresh', 11) + ' 测试连接',
+                    }}
+                  />
+                  {testStatus !== 'idle' && (
+                    <span
+                      className={`sp-test-msg ${testStatus}`}
+                      style={{ color: testStatus === 'ok' ? 'var(--obs-pass)' : testStatus === 'fail' ? 'var(--obs-warn)' : undefined }}
+                    >
+                      {testMsg}
+                    </span>
+                  )}
+                </div>
+                <div className="sp-hint-sub">发送最小请求验证 Key / Base URL / 模型三者可用。错误会自动分类提示。</div>
+              </div>
               {isAnthropic && (
                 <div className="sp-field">
                   <label className="sp-label">思考努力等级</label>
@@ -535,8 +669,7 @@ const SettingsPanelApp: React.FC<{
                       const v = parseFloat(e.target.value);
                       const pct = Math.round((v / 2) * 100);
                       (e.target as any).style.setProperty('--pct', `${pct}%`);
-                      setSettings((s) => ({ ...s, agent: { ...s.agent, temperature: v } }));
-                      markDirty();
+                      commit({ ...settings, agent: { ...settings.agent, temperature: v } });
                     }}
                   />
                   <span className="sp-slider-end">2</span>
@@ -549,13 +682,15 @@ const SettingsPanelApp: React.FC<{
                     type="checkbox"
                     checked={!settings.agent.disableThinking}
                     onChange={(e) => {
-                      setSettings((s) => ({ ...s, agent: { ...s.agent, disableThinking: !e.target.checked } }));
-                      markDirty();
+                      commit({ ...settings, agent: { ...settings.agent, disableThinking: !e.target.checked } });
                     }}
                   />
                   深度思考 (DeepSeek Think 模式)
                 </label>
-                <div className="sp-hint-sub">启用后模型先思考再回答。仅 DeepSeek v4/v3 有效，关掉直接输出。</div>
+                <div className="sp-hint-sub">
+                  关闭 = 强制直出（Anthropic / OpenAI 兼容两种协议都生效）。Anthropic 思考强度在
+                  Provider 页设置；DeepSeek 当前仅支持开关（effort 待 API 支持后开放）。
+                </div>
               </div>
               <div className="sp-field">
                 <label className="sp-label">上下文窗口（0=不限制）</label>
@@ -566,11 +701,10 @@ const SettingsPanelApp: React.FC<{
                   min={0}
                   step={1000}
                   onChange={(e) => {
-                    setSettings((s) => ({
-                      ...s,
-                      agent: { ...s.agent, contextWindow: parseInt(e.target.value, 10) || 0 },
-                    }));
-                    markDirty();
+                    commit({
+                      ...settings,
+                      agent: { ...settings.agent, contextWindow: parseInt(e.target.value, 10) || 0 },
+                    });
                   }}
                   placeholder="0 = 不限制"
                 />
@@ -612,8 +746,7 @@ const SettingsPanelApp: React.FC<{
                       value={l.id}
                       checked={settings.display.language === l.id}
                       onChange={() => {
-                        setSettings((s) => ({ ...s, display: { ...s.display, language: l.id as Lang } }));
-                        markDirty();
+                        commit({ ...settings, display: { ...settings.display, language: l.id as Lang } });
                       }}
                     />
                     <span className="sp-radio-label">{l.label}</span>
@@ -635,8 +768,7 @@ const SettingsPanelApp: React.FC<{
                   style={{ flex: 1, height: 4, accentColor: 'var(--obs-blue)' }}
                   onChange={(e) => {
                     const v = parseFloat(e.target.value);
-                    setSettings((s) => ({ ...s, display: { ...s.display, fontScale: v } }));
-                    markDirty();
+                    commit({ ...settings, display: { ...settings.display, fontScale: v } });
                   }}
                 />
                 <span
@@ -823,13 +955,13 @@ const SettingsPanelApp: React.FC<{
         {/* 底部 */}
         <div className="sp-footer">
           <button className="sp-btn sp-btn-cancel" onClick={handleClose}>
-            取消
+            关闭
           </button>
           <button
             className={`sp-btn sp-btn-save${saved ? ' sp-btn-ok' : ''}`}
-            onClick={handleSave}
+            onClick={handleApply}
             dangerouslySetInnerHTML={{
-              __html: saved ? iconHtml('check-circle', 11) + ' 已保存' : iconHtml('save', 11) + ' 保存',
+              __html: saved ? iconHtml('check-circle', 11) + ' 已应用' : iconHtml('save', 11) + ' 应用',
             }}
           />
         </div>

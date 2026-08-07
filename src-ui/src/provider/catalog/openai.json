@@ -7,8 +7,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.25,
@@ -26,8 +25,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.25,
@@ -45,8 +43,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.25,
@@ -64,8 +61,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.05,
@@ -83,8 +79,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 15,
@@ -102,8 +97,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.25,
@@ -121,8 +115,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.25,
@@ -140,8 +133,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.25,
@@ -159,8 +151,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.25,
@@ -178,8 +169,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.75,
@@ -197,8 +187,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.75,
@@ -216,8 +205,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 21,
@@ -235,8 +223,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.75,
@@ -254,8 +241,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.75,
@@ -273,8 +259,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 2.5,
@@ -292,8 +277,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.75,
@@ -311,8 +295,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.2,
@@ -330,8 +313,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 30,
@@ -349,8 +331,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 5,
@@ -368,8 +349,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 30,
@@ -387,8 +367,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1,
@@ -406,8 +385,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 5,
@@ -425,8 +403,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 2.5,
@@ -444,8 +421,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 2,
@@ -463,8 +439,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 10,
@@ -500,8 +475,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 20,
@@ -519,8 +493,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.1,
@@ -538,8 +511,7 @@
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 2,

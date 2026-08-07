@@ -43,8 +43,7 @@
     "baseUrl": "https://api.minimax.io/anthropic",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.3,

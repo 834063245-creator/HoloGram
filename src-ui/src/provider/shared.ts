@@ -55,7 +55,12 @@ export async function fetchJsonWithTimeout(
 }
 
 /** 解析 SSE 流并 yield 解码后的 JSON 事件。处理 reader/decoder/buffer
- *  管理和尾部数据刷新。调用方按各 provider 格式处理每个事件。 */
+ *  管理和尾部数据刷新。调用方按各 provider 格式处理每个事件。
+ *
+ *  边界（P0 定稿）：只解析单行 `data:` 事件——所有目标服务商
+ *  （Anthropic/DeepSeek/Moonshot/Minimax/Qwen/OpenAI 兼容）均以单行
+ *  data 发送 JSON，`[DONE]` 为流结束标记。不支持 `event:` 字段与
+ *  多行 data（SSE 规范特性），无需求不做。 */
 export async function* sseEvents(
   body: ReadableStream<Uint8Array>,
   name: string,

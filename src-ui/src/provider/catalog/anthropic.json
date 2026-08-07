@@ -7,8 +7,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 10,
@@ -26,8 +25,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1,
@@ -45,8 +43,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1,
@@ -64,8 +61,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 15,
@@ -83,8 +79,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 15,
@@ -102,8 +97,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 5,
@@ -121,8 +115,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 5,
@@ -140,8 +133,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 5,
@@ -159,8 +151,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 5,
@@ -178,8 +169,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 5,
@@ -197,8 +187,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 3,
@@ -216,8 +205,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 3,
@@ -235,8 +223,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 3,
@@ -254,8 +241,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 2,

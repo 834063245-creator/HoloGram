@@ -11,7 +11,9 @@
 //   store_api_key(provider, key) / get_api_key(provider) / delete_api_key / clear_credentials
 //
 // 当 OS 密钥存储不可用时（无 keyring 守护进程、无 secret-tool），
-// 操作返回 Err — 前端回退到 localStorage 明文存储。
+// 操作返回 Err — 前端（settings.ts persistSecrets/restoreSecrets）catch 静默忽略。
+// ⚡ 2026-08-04 治理后 apiKey 权威=系统加密凭据，localStorage 不存明文，
+// 不存在「回退到 localStorage 明文存储」路径。
 
 #![allow(non_snake_case)] // Win32 FFI 命名规范
 

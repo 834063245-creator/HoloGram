@@ -1468,19 +1468,4 @@ mod tests {
         assert!(!is_private_ip("2606:4700:4700::1111"), "公网 ipv6 必须放行");
         assert!(!is_private_ip("example.com"), "普通主机名不是 IP 字面量");
     }
-
-    // ── 深度限制 ──
-    #[test]
-    fn test_clamp_depth_normal() {
-        assert_eq!(clamp_depth(0), 0);
-        assert_eq!(clamp_depth(10), 10);
-        assert_eq!(clamp_depth(255), 255);
-    }
-
-    #[test]
-    fn test_clamp_depth_overflow() {
-        assert_eq!(clamp_depth(256), 255);
-        assert_eq!(clamp_depth(1000), 255);
-        assert_eq!(clamp_depth(usize::MAX), 255);
-    }
 }

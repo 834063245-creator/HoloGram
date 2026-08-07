@@ -13,9 +13,7 @@
 // UI 层通过 setNotifier() 注入通知器，Runtime 通过它路由事件。
 
 import { rpc } from '../../bridge';
-import { createProvider } from '../../provider';
 import type { Message, Provider } from '../../provider/types';
-import { defaultPricing } from '../../settings';
 import { Agent } from '../agent';
 import type { AgentStore } from '../agent-store';
 import type { AgentEvent, AgentUINotifier, EventSink } from '../agent-types';

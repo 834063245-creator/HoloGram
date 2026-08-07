@@ -21,7 +21,9 @@ export function createProvider(settings: ProviderSettings, options?: CreateProvi
       apiKey: settings.apiKey,
       baseUrl: settings.baseUrl,
       model: settings.model,
-      thinking: settings.thinking || undefined,
+      // disableThinking 语义统一到两种协议：true → 强制关闭扩展思考。
+      // 翻译器/摘要路径都传 disableThinking: true，anthropic 在此同样关闭。
+      thinking: options?.disableThinking ? 'off' : settings.thinking || undefined,
     });
   }
   return createOpenAIProvider({

@@ -1444,7 +1444,21 @@ ${resumeNote}
     const payload = this.payloadMessages();
     const fullSession = transientMsgs.length > 0 ? [...payload, ...transientMsgs] : payload;
 
-    const gen = this.prov.stream(signal, {
+    // 流空闲超时：60s 无任何 chunk 视为挂起（参照 callSummaryLLM 的同一模式）。
+    // 流仍在产出（thinking/文本/工具参数）就持续重置计时器；超时 abort 后
+    // sendWithRetry/readSSE 抛 aborted，此处转为可读的挂起提示。
+    // 外部 signal 只做转发，不直接传给 stream——避免超时 abort 连累调用方。
+    const STREAM_IDLE_TIMEOUT_MS = 60_000;
+    let idleTimedOut = false;
+    const timeoutCtrl = new AbortController();
+    let timeoutId = setTimeout(() => {
+      idleTimedOut = true;
+      timeoutCtrl.abort();
+    }, STREAM_IDLE_TIMEOUT_MS);
+    const onExternalAbort = () => timeoutCtrl.abort();
+    signal.addEventListener('abort', onExternalAbort, { once: true });
+
+    const gen = this.prov.stream(timeoutCtrl.signal, {
       messages: sanitizeToolPairing(fullSession),
       tools: this.tools.schemas(),
       temperature: this.temperature,
@@ -1460,6 +1474,12 @@ ${resumeNote}
 
     try {
       for await (const chunk of gen) {
+        // 流仍在产出 — 重置空闲计时
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+          idleTimedOut = true;
+          timeoutCtrl.abort();
+        }, STREAM_IDLE_TIMEOUT_MS);
         switch (chunk.type) {
           case ChunkType.Reasoning:
             reasoning += chunk.text || '';
@@ -1527,7 +1547,14 @@ ${resumeNote}
         if (err) break;
       }
     } catch (e: any) {
-      err = e instanceof Error ? e : new Error(String(e));
+      if (idleTimedOut) {
+        err = new Error(`模型响应超时（${STREAM_IDLE_TIMEOUT_MS / 1000} 秒无输出），已自动中止`);
+      } else {
+        err = e instanceof Error ? e : new Error(String(e));
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      signal.removeEventListener('abort', onExternalAbort);
     }
 
     if (err) {

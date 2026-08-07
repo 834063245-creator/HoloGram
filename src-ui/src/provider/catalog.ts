@@ -3,6 +3,12 @@
 
 // 模型目录 — 来自 Pi 的 provider 注册表的静态模型数据，已适配 HoloGram。
 // 提供数据驱动的模型发现，用户无需手动输入模型名称。
+//
+// ⚡ 2026-08-07 定稿（docs/provider-system-spec.md 裁决 #15）：
+//   目录 = 开箱体验优化，非必需——所有消费点均有 fallback。
+//   目录 JSON 里的 `kind` 是【协议】（anthropic/openai），不是厂商：
+//   DeepSeek Beta 端点挂 kind=anthropic 是特性（官方提供 Anthropic 兼容 API）。
+//   JSON 不支持注释，模型条目的协议归属以本文件与 tests/provider-catalog.test.ts 为准。
 
 import anthropicJson from './catalog/anthropic.json';
 import deepseekJson from './catalog/deepseek.json';

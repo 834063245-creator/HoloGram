@@ -29,6 +29,13 @@ interface OpenAIConfig {
   disableThinking?: boolean;
 }
 
+/** 动态模型 reasoning 启发式（P0 定稿）：
+ *  静态目录元数据优先（mergeDynamicModels 跳过已收录 id），此函数只服务
+ *  目录外的新模型。匹配 id 中的 think/reason 等关键词。 */
+export function guessReasoning(id: string): boolean {
+  return /think|reason|r1|deepseek-v[34]|kimi-k2-thinking/i.test(id);
+}
+
 export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
   const name = cfg.name || 'openai';
   const baseUrl = cfg.baseUrl.replace(/\/$/, ''); // 用户在 baseUrl 中控制 v1 前缀
@@ -38,7 +45,6 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
     name() {
       return name;
     },
-
     async *stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk> {
       const body = buildChatRequest(
         sanitizeToolPairing(req.messages),
@@ -88,7 +94,7 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
           kind: 'openai' as const,
           provider: name,
           baseUrl,
-          reasoning: false,
+          reasoning: guessReasoning(m.id),
           input: ['text'] as ('text' | 'image')[],
           cost: { input: 0, output: 0, cacheRead: 0 },
           contextWindow: 0,

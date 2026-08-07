@@ -97,8 +97,7 @@
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.6,
@@ -116,8 +115,7 @@
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.95,
@@ -135,8 +133,7 @@
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.95,
@@ -154,8 +151,7 @@
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 1.9,
@@ -173,8 +169,7 @@
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 3,
