@@ -11,6 +11,7 @@ import { useStore } from 'zustand';
 import { type AppSettings, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
 import { useShellStore } from '../../app/shell-store';
 import { getChatStore } from '../chat-store';
+import { getOnSettingsSave } from '../dock-config';
 import { iconHtml } from '../icons';
 import type { CollaborationMode, PermissionMode } from '../panel-store';
 import { ModelSwitcher } from './ModelSwitcher';
@@ -99,6 +100,12 @@ function ChatModebar({ panelId }: { panelId: string }) {
       const s = loadSettings();
       s.agent = { ...s.agent, collaborationMode: mode };
       saveSettings(s);
+      // 模式切换与设置面板保存同链：触发 Agent 重建（否则按钮高亮但 Agent 不生效）
+      try {
+        getOnSettingsSave()?.();
+      } catch (e) {
+        console.warn('[ChatFooter] plan mode rebuild failed:', e);
+      }
     },
     [panelStore],
   );
