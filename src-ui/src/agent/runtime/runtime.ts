@@ -583,17 +583,19 @@ export class AgentRuntime implements RuntimePort {
     const preflightHooks = new PreflightHookRegistry();
     if (config.graphContext) {
       loadEngineSnapshot(config.graphContext, config.projectPath).catch(() => {});
-      hooks.register(createGraphContextHook(config.graphContext));
-      if (this._diagSource) {
-        hooks.register(createStateReadHook(config.projectPath, this._diagSource));
+      if (config.hooksEnabled !== false) {
+        hooks.register(createGraphContextHook(config.graphContext));
+        if (this._diagSource) {
+          hooks.register(createStateReadHook(config.projectPath, this._diagSource));
+        }
+        preflightHooks.register(createGraphPreflightHook(config.graphContext));
+        if (this._diagSource) {
+          preflightHooks.register(createStatePreflightHook(this._diagSource));
+        }
+        // Plan 模式图增强 hook — 探索时注入影响面，写计划时追加分析
+        hooks.register(createPlanExploreHook(config.graphContext, planState));
+        hooks.register(createPlanWriteHook(config.graphContext, planState));
       }
-      preflightHooks.register(createGraphPreflightHook(config.graphContext));
-      if (this._diagSource) {
-        preflightHooks.register(createStatePreflightHook(this._diagSource));
-      }
-      // Plan 模式图增强 hook — 探索时注入影响面，写计划时追加分析
-      hooks.register(createPlanExploreHook(config.graphContext, planState));
-      hooks.register(createPlanWriteHook(config.graphContext, planState));
     }
     // Board 追踪 hook — board 可用时始终注册
     hooks.register(createBoardTrackingHook(agentId, taskProxy as any));

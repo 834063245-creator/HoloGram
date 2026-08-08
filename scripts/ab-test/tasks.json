@@ -1,0 +1,30 @@
+[
+  {
+    "id": "store-save-threshold",
+    "prompt": "阅读 engine/src/storage/store.rs 中 save() 函数的实现（不需要运行任何命令），回答：边的数量达到多少时才走 bincode 快照路径？用中文直接给出数值。",
+    "verdict": {
+      "mustContain": ["5m", "5000000", "500 万", "500万", "五百万"]
+    }
+  },
+  {
+    "id": "hook-crash-behavior",
+    "prompt": "阅读 src-ui/src/agent/hooks.ts 中 HookRegistry.apply() 的实现，回答：当某个 hook 的 enrich 抛出异常时会发生什么？工具结果会不会因此失败？用中文简要回答。",
+    "verdict": {
+      "mustContain": ["不影响", "静默", "降级", "忽略", "吞掉"]
+    }
+  },
+  {
+    "id": "ping-module",
+    "prompt": "在 engine/src/ 目录下新建文件 ping_util.rs，内容为：\n\npub fn ping_u32() -> u32 { 7 }\n\n写完后用 read_file 读回确认内容正确，然后简短确认完成。不要运行 cargo 或任何构建命令。",
+    "verdict": {
+      "fileCheck": { "path": "engine/src/ping_util.rs", "contains": "ping_u32" }
+    }
+  },
+  {
+    "id": "hooks-file-search",
+    "prompt": "用 search_content 在 src-ui/src/agent 目录下搜索文本 'HookRegistry'，然后回答：搜索命中了哪些文件？请列出至少一个具体的文件路径。",
+    "verdict": {
+      "mustContain": ["hooks.ts"]
+    }
+  }
+]

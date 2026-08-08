@@ -105,6 +105,9 @@ export interface AgentConfig {
   eventSink?: EventSink;
   /** 图上下文（用于 hooks） */
   graphContext?: GraphContext | null;
+  /** 提示注入类 hooks 总开关（false = 关闭 graph-context / preflight / state / plan 注入；
+   *  默认开启。board-tracking 等有实际副作用的 hook 不受影响） */
+  hooksEnabled?: boolean;
   /** 隔离 ID（worktree） */
   isolationId?: string;
   /** Agent 选项 */
