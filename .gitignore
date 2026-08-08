@@ -183,3 +183,6 @@ engine-bin/
 
 # WorkBuddy local memory (never commit)
 .workbuddy/
+
+# Reasonix local agent state (never commit)
+.reasonix/

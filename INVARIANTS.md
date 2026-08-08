@@ -199,6 +199,34 @@ io: 'input' 视图必须保留：让 defaulted 字段不进 required，
 
 ---
 
+## 11. IPC 响应必须设尺寸护栏；用户级数据文件是排查盲区
+
+**文件**: `src-tauri/src/credential.rs`（凭据读写）、`src-tauri/src/commands/graph.rs` / `hologram.rs`（大响应命令）、`src-ui/src/settings.ts`（restoreSecrets）、`src-tauri/src/utils.rs`（guard_ipc_size）
+
+```
+⚠️ 1. 任何经 IPC 的命令响应必须有尺寸护栏（guard_ipc_size 128MB / truncate_output 32K），
+   禁止无界响应。256MB 响应进 custom protocol → 返回空（"Unexpected end of JSON input"）
+   → tauri 回退 postMessage → 响应丢失 → 前端 await 永久挂起 → 页面假死
+   → GPU 进程重启即死 → ~150s browser 致命退出 → 白屏。
+
+⚠️ 2. 写入用户级数据文件（%APPDATA% 等，非项目 .hologram）的输入必须校验长度/类型
+   （store 拒绝 >4096 字符 key），防毒化源头；读路径必须容忍毒化数据
+   （丢弃超长条目 + 自动隔离备份重建），不能把"文件已毒化"变成"每次启动必崩"。
+
+⚠️ 3. 排查纪律：当崩溃"与代码版本无关 × 与 WebView2 版本无关 × 对照 app 稳定"时，
+   先检查用户级数据文件（credentials.enc 等）——它是既不在代码也不在环境的第三类变量。
+   2026-08-08 白屏事故：credentials.enc 被双重 JSON 编码循环毒化至 256MB，
+   所有代码版本 × 所有 WebView2 版本全崩（同一毒值进入每条 IPC 路径）；
+   tauri-min/rpc_stub 稳定只是因为毒值从未进入它们的 IPC。
+   排查 4 小时未查 credentials.enc 文件本身——看一眼文件大小就破案。
+```
+
+**炸过**: 1085e75（凭据毒化自毁根治——白屏根因修复）, d18033e（guard_ipc_size 128MB 护栏）, 46a744c（hologram_call async+spawn_blocking）, 0b472c8（null 复活根治）
+
+**守护**: credential.rs 2 个新回归测试（读写长度护栏）、d18033e 5 个测试（截断 head/tail/多字节/护栏放行/护栏拒绝）
+
+---
+
 ## 使用方式
 
 每个 Agent prompt 模板里加一行：
