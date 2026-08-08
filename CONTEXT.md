@@ -10,6 +10,10 @@ HoloGram 是深空代码拓扑观测站：把代码库解析成可对话的依�
 Agent 可用来与模型对话的接入点，由端点、凭据与默认模型构成。代码标识符统一用 Provider；界面中文展示词为「信号源」。
 _Avoid_: 信号源（代码标识符）、服务商、backend
 
+**ProviderId**:
+Provider 的身份标识，唯一且不可变；同时是系统凭据键与动态模型合并键（三合一）。它是身份，不是显示名。
+_Avoid_: name（当身份使用时）、providerName、字符串
+
 **Vendor**:
 提供模型 API 的品牌或组织（如 DeepSeek、Anthropic、GLM）。一个 Provider 通常指向一个 Vendor，但 Vendor 是品牌，不是接入配置。
 _Avoid_: provider、服务商、公司

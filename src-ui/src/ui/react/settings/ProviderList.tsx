@@ -4,15 +4,15 @@
 // Provider 页左侧「信号源列表」：一行一个 provider，
 // 状态点 = 未配置 / 已配置 / 正常 / 异常，当前使用中带「当前」角标。
 
-import type { ProviderSettings } from '../../../settings';
+import type { ProviderId, ProviderSettings } from '../../../settings';
 import { providerStatus, STATUS_LABEL } from './status';
 import { protocolLabel } from './protocol';
 
 interface ProviderListProps {
   providers: ProviderSettings[];
-  selected: string;
-  current: string;
-  onSelect: (name: string) => void;
+  selected: ProviderId;
+  current: ProviderId;
+  onSelect: (name: ProviderId) => void;
   onAdd: () => void;
 }
 

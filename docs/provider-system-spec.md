@@ -420,3 +420,23 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
 
 - `npx tsc --noEmit` 0 错，`ProviderTestResult` / `TestUiState` 零残留
 - provider/settings 相关 48 项测试全绿
+
+## P9 — 按词收敛：ProviderId（2026-08-08 完成）
+
+> 依据 CONTEXT.md「ProviderId」词条：把 Provider 身份从裸 `string` 中救出来，
+> 类型层面钉死「身份 = 系统凭据键 = 动态模型合并键」三合一语义。
+
+- `CONTEXT.md` 新增 **ProviderId** 词条。
+- `settings.ts`：`ProviderId`（branded string）+ `providerId()` 唯一构造入口；
+  `ProviderSettings.name` / `AppSettings.activeProvider` / `removeSecret` /
+  `addProvider` 全部类型化。运行时仍是 string，localStorage 存储键零迁移。
+- `ProviderPage`：`tests` / `keyDirtyMap` / `keyVisibleMap` 从 `Record<string,…>`
+  改为 `Map<ProviderId,…>`；`selected` / `delTarget` / `clearTarget` 类型化。
+- `ProviderList` / `AddProviderSheet` / `ModelSwitcher` 身份相关 props 与 entry 类型化。
+- `SettingsPanel`：`pendingDeletes` / `pendingClears` 改为 `ProviderId[]`。
+
+### 验证
+
+- `npx tsc --noEmit` 0 错
+- provider/settings 相关 48 项测试全绿；全量 798 通过
+- CDP 真机冒烟 8/8：tests Map / keyDirtyMap / keyVisibleMap / 添加 / 删除 / 保存条，零运行时错误

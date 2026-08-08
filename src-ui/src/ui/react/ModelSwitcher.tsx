@@ -7,7 +7,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getAllModels, getDefaultModel } from '../../provider/catalog';
 import type { ModelDescriptor } from '../../provider/types';
-import { getActiveProvider, isFactoryBaseUrl, saveSettings, updateProvider, type AppSettings } from '../../settings';
+import {
+  getActiveProvider,
+  isFactoryBaseUrl,
+  saveSettings,
+  updateProvider,
+  type AppSettings,
+  type ProviderId,
+} from '../../settings';
 import { getOnSettingsSave } from '../dock-config';
 import { iconHtml } from '../icons';
 import { isAnthropic, protocolLabel } from './settings/protocol';
@@ -68,7 +75,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
   );
 
   const switchProvider = useCallback(
-    (name: string) => {
+    (name: ProviderId) => {
       let next: AppSettings = { ...settings, activeProvider: name };
       const p = next.providers.find((x) => x.name === name);
       if (p && !p.model?.trim()) {

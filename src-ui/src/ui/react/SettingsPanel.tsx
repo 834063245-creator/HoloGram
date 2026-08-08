@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '../../bridge';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
-import type { AppSettings } from '../../settings';
+import type { AppSettings, ProviderId } from '../../settings';
 import { loadSettings, loadSettingsWithSecrets, persistSecrets, removeSecret, saveSettings } from '../../settings';
 import { getOnSettingsSave } from '../dock-config';
 import { useDockStore } from '../dock-store';
@@ -131,8 +131,8 @@ const SettingsPanelApp: React.FC<{
   const [closeConfirm, setCloseConfirm] = useState(false);
   // 凭据暂存：删除 Provider / 清除 Key 只进 state，保存时才删系统凭据——
   // 用户取消/关闭面板不会丢 Key（P0 修复）。
-  const [pendingDeletes, setPendingDeletes] = useState<string[]>([]);
-  const [pendingClears, setPendingClears] = useState<string[]>([]);
+  const [pendingDeletes, setPendingDeletes] = useState<ProviderId[]>([]);
+  const [pendingClears, setPendingClears] = useState<ProviderId[]>([]);
   const [saveVersion, setSaveVersion] = useState(0);
 
   // LSP 状态
@@ -212,15 +212,15 @@ const SettingsPanelApp: React.FC<{
   }, []);
 
   const stageDelete = useCallback(
-    (name: string) => setPendingDeletes((d) => (d.includes(name) ? d : [...d, name])),
+    (name: ProviderId) => setPendingDeletes((d) => (d.includes(name) ? d : [...d, name])),
     [],
   );
   const stageClear = useCallback(
-    (name: string) => setPendingClears((c) => (c.includes(name) ? c : [...c, name])),
+    (name: ProviderId) => setPendingClears((c) => (c.includes(name) ? c : [...c, name])),
     [],
   );
   const unstageClear = useCallback(
-    (name: string) => setPendingClears((c) => c.filter((x) => x !== name)),
+    (name: ProviderId) => setPendingClears((c) => c.filter((x) => x !== name)),
     [],
   );
 

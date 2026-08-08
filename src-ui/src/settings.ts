@@ -20,9 +20,19 @@ export interface ConnectionProbe {
   message?: string;
 }
 
+/** Provider 身份（CONTEXT.md「ProviderId」）：唯一不可变，同时是系统凭据键与
+ *  动态模型合并键（三合一）。运行时就是 string（存储兼容零迁移），
+ *  仅在类型层面与普通字符串隔离——禁止拿任意字符串当 ProviderId 用。 */
+export type ProviderId = string & { readonly __brand?: 'ProviderId' };
+
+/** 在输入边界把已验证的字符串提升为 ProviderId（唯一受信任的构造入口）。 */
+export function providerId(raw: string): ProviderId {
+  return raw as ProviderId;
+}
+
 export interface ProviderSettings {
   kind: Protocol; // 持久化字段名保持 kind（存储遗留名）；领域词见 CONTEXT.md「Protocol」
-  name: string;
+  name: ProviderId;
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -47,7 +57,7 @@ interface DisplaySettings {
 }
 
 export interface AppSettings {
-  activeProvider: string; // provider name
+  activeProvider: ProviderId; // provider 身份（领域词见 CONTEXT.md「ProviderId」）
   providers: ProviderSettings[];
   projectPath: string;
   agent: AgentSettings;
@@ -82,18 +92,18 @@ export function isFactoryBaseUrl(url: string): boolean {
 }
 
 const DEFAULTS: AppSettings = {
-  activeProvider: 'deepseek',
+  activeProvider: providerId('deepseek'),
   providers: [
     {
       kind: 'openai',
-      name: 'deepseek',
+      name: providerId('deepseek'),
       apiKey: '',
       baseUrl: defaultBaseUrl('deepseek', 'openai'),
       model: 'deepseek-v4-pro',
     },
     {
       kind: 'anthropic',
-      name: 'anthropic',
+      name: providerId('anthropic'),
       apiKey: '',
       baseUrl: PROVIDER_PROTOCOL_DEFAULTS.anthropic,
       model: 'claude-sonnet-4-6',
@@ -202,7 +212,7 @@ export async function persistSecrets(s: AppSettings): Promise<string[]> {
 
 /** 删除指定 provider 的 API Key from 系统加密存储（DPAPI）。
  *  调用时机：保存「删除 Provider」或「清除已保存 Key」的暂存操作时。 */
-export async function removeSecret(providerName: string): Promise<void> {
+export async function removeSecret(providerName: ProviderId): Promise<void> {
   try {
     const { rpc } = await import('./bridge');
     await rpc('credential_delete', { provider: providerName });
@@ -280,7 +290,7 @@ export function updateProvider(s: AppSettings, name: string, patch: Partial<Prov
   };
 }
 
-export function addProvider(s: AppSettings, name: string, kind: Protocol): AppSettings {
+export function addProvider(s: AppSettings, name: ProviderId, kind: Protocol): AppSettings {
   if (s.providers.find((p) => p.name === name)) {
     throw new Error(`Provider "${name}" 已存在`);
   }

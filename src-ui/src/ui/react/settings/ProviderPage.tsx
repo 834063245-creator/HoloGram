@@ -14,6 +14,7 @@ import {
   defaultBaseUrl,
   getActiveProvider,
   isFactoryBaseUrl,
+  type ProviderId,
   removeProvider,
   type AppSettings,
   type ConnectionProbe,
@@ -57,13 +58,13 @@ export function ProviderPage({
   providerDirty,
   onSaveProviders,
 }: ProviderPageProps) {
-  const [selected, setSelected] = useState(() => getActiveProvider(settings).name);
-  const [keyDirtyMap, setKeyDirtyMap] = useState<Record<string, boolean>>({});
-  const [keyVisibleMap, setKeyVisibleMap] = useState<Record<string, boolean>>({});
-  const [tests, setTests] = useState<Record<string, ProbeUiState>>({});
+  const [selected, setSelected] = useState<ProviderId>(() => getActiveProvider(settings).name);
+  const [keyDirtyMap, setKeyDirtyMap] = useState<Map<ProviderId, boolean>>(new Map());
+  const [keyVisibleMap, setKeyVisibleMap] = useState<Map<ProviderId, boolean>>(new Map());
+  const [tests, setTests] = useState<Map<ProviderId, ProbeUiState>>(new Map());
   const [addOpen, setAddOpen] = useState(false);
-  const [delTarget, setDelTarget] = useState<string | null>(null);
-  const [clearTarget, setClearTarget] = useState<string | null>(null);
+  const [delTarget, setDelTarget] = useState<ProviderId | null>(null);
+  const [clearTarget, setClearTarget] = useState<ProviderId | null>(null);
   const [focusNonce, setFocusNonce] = useState(0);
   const keyInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -89,7 +90,7 @@ export function ProviderPage({
 
   // 保存成功后：所有 Key 均视为已落凭据库
   useEffect(() => {
-    setKeyDirtyMap({});
+    setKeyDirtyMap(new Map());
   }, [saveVersion]);
 
   const handleFieldChange = useCallback(
@@ -100,7 +101,7 @@ export function ProviderPage({
         } else {
           onStageClear(name); // 手动清空输入框 = 也要真正删除凭据，否则保存后 Key 会「复活」
         }
-        setKeyDirtyMap((m) => ({ ...m, [name]: true }));
+        setKeyDirtyMap((m) => new Map(m).set(name, true));
       }
       const patch = { [field]: value } as Partial<ProviderSettings>;
       onCommitProvider(updateProvider(settings, name, patch));
@@ -134,14 +135,14 @@ export function ProviderPage({
   const handleTest = useCallback(async () => {
     const name = selectedProvider.name;
     if (!selectedProvider.apiKey?.trim()) {
-      setTests((t) => ({ ...t, [name]: { phase: 'fail', msg: '请先填写 API Key' } }));
+    setTests((t) => new Map(t).set(name, { phase: 'fail', msg: '请先填写 API Key' }));
       return;
     }
     if (!selectedProvider.model?.trim()) {
-      setTests((t) => ({ ...t, [name]: { phase: 'fail', msg: '请先填写模型名称' } }));
+    setTests((t) => new Map(t).set(name, { phase: 'fail', msg: '请先填写模型名称' }));
       return;
     }
-    setTests((t) => ({ ...t, [name]: { phase: 'testing', msg: '' } }));
+    setTests((t) => new Map(t).set(name, { phase: 'testing', msg: '' }));
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
     const started = performance.now();
@@ -165,13 +166,13 @@ export function ProviderPage({
       const msg = received ? formatLatency(latencyMs) : '连接成功（无文本返回，请检查模型行为）';
       const result: ConnectionProbe = { status: 'ok', latencyMs, at: Date.now(), message: msg };
       onPersistSettings(updateProvider(settingsRef.current, name, { lastTest: result }));
-      setTests((t) => ({ ...t, [name]: { phase: 'ok', msg } }));
+      setTests((t) => new Map(t).set(name, { phase: 'ok', msg }));
     } catch (e: any) {
       const latencyMs = Math.round(performance.now() - started);
       const msg = e?.message || String(e);
       const result: ConnectionProbe = { status: 'fail', latencyMs, at: Date.now(), message: msg };
       onPersistSettings(updateProvider(settingsRef.current, name, { lastTest: result }));
-      setTests((t) => ({ ...t, [name]: { phase: 'fail', msg } }));
+      setTests((t) => new Map(t).set(name, { phase: 'fail', msg }));
     } finally {
       clearTimeout(timer);
     }
@@ -192,7 +193,7 @@ export function ProviderPage({
           if (entry.model?.trim()) added.model = entry.model.trim();
         }
         if (added?.apiKey?.trim()) {
-          setKeyDirtyMap((m) => ({ ...m, [added.name]: true }));
+          setKeyDirtyMap((m) => new Map(m).set(added.name, true));
         }
         onCommitProvider(next);
         setSelected(entry.name);
@@ -216,16 +217,19 @@ export function ProviderPage({
       setSelected(next.activeProvider);
       setDelTarget(null);
       setTests((t) => {
-        const { [delTarget]: _drop, ...rest } = t;
-        return rest;
+        const next = new Map(t);
+        next.delete(delTarget);
+        return next;
       });
       setKeyDirtyMap((m) => {
-        const { [delTarget]: _drop, ...rest } = m;
-        return rest;
+        const next = new Map(m);
+        next.delete(delTarget);
+        return next;
       });
       setKeyVisibleMap((m) => {
-        const { [delTarget]: _drop, ...rest } = m;
-        return rest;
+        const next = new Map(m);
+        next.delete(delTarget);
+        return next;
       });
     } catch (e: any) {
       console.warn('[provider] 删除失败:', e);
@@ -237,7 +241,7 @@ export function ProviderPage({
     if (!clearTarget) return;
     onCommitProvider(updateProvider(settings, clearTarget, { apiKey: '' }));
     onStageClear(clearTarget);
-    setKeyDirtyMap((m) => ({ ...m, [clearTarget]: true }));
+    setKeyDirtyMap((m) => new Map(m).set(clearTarget, true));
     setClearTarget(null);
   }, [settings, clearTarget, onCommitProvider, onStageClear]);
 
@@ -267,10 +271,10 @@ export function ProviderPage({
           provider={selectedProvider}
           isCurrent={selectedProvider.name === settings.activeProvider}
           canDelete={settings.providers.length > 1}
-          test={tests[selectedProvider.name] ?? { phase: 'idle', msg: '' }}
-          keySaved={!keyDirtyMap[selectedProvider.name] && !!selectedProvider.apiKey?.trim()}
+          test={tests.get(selectedProvider.name) ?? { phase: 'idle', msg: '' }}
+          keySaved={!keyDirtyMap.get(selectedProvider.name) && !!selectedProvider.apiKey?.trim()}
           pendingClear={pendingClears.includes(selectedProvider.name)}
-          keyVisible={!!keyVisibleMap[selectedProvider.name]}
+          keyVisible={!!keyVisibleMap.get(selectedProvider.name)}
           keyInputRef={keyInputRef}
           onFieldChange={(field, value) => handleFieldChange(selectedProvider.name, field, value)}
           onModelChange={(modelId, desc) => handleModelChange(selectedProvider.name, modelId, desc)}
@@ -286,7 +290,7 @@ export function ProviderPage({
             )
           }
           onToggleKeyVisible={() =>
-            setKeyVisibleMap((m) => ({ ...m, [selectedProvider.name]: !m[selectedProvider.name] }))
+            setKeyVisibleMap((m) => new Map(m).set(selectedProvider.name, !m.get(selectedProvider.name)))
           }
           onDelete={() => setDelTarget(selectedProvider.name)}
         />

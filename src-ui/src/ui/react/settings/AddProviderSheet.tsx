@@ -7,10 +7,11 @@
 import { useEffect, useState } from 'react';
 import { getCatalogProviders, getDefaultModel } from '../../../provider/catalog';
 import type { Protocol } from '../../../provider/types';
+import { providerId, type ProviderId } from '../../../settings';
 import { protocolLabel } from './protocol';
 
 export interface AddProviderEntry {
-  name: string;
+  name: ProviderId;
   kind: Protocol;
   apiKey?: string;
   baseUrl?: string;
@@ -19,7 +20,7 @@ export interface AddProviderEntry {
 
 interface AddProviderSheetProps {
   open: boolean;
-  existingNames: string[];
+  existingNames: ProviderId[];
   onClose: () => void;
   onAdd: (entry: AddProviderEntry) => void;
 }
@@ -62,7 +63,7 @@ export function AddProviderSheet({ open, existingNames, onClose, onAdd }: AddPro
       return;
     }
     onAdd({
-      name: n,
+      name: providerId(n),
       kind,
       apiKey: key.trim() || undefined,
       baseUrl: baseUrl.trim() || undefined,
@@ -107,7 +108,7 @@ export function AddProviderSheet({ open, existingNames, onClose, onAdd }: AddPro
                 disabled={used}
                 onClick={() =>
                   onAdd({
-                    name: provName,
+                    name: providerId(provName),
                     kind: defaultModel.kind,
                     baseUrl: defaultModel.baseUrl,
                     model: defaultModel.id,
