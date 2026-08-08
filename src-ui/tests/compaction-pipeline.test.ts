@@ -13,6 +13,8 @@
 //   8. 块数超上限 — 最老块机械消化，LLM 调用数封顶
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
+import { defineTool } from '../src/agent/tools/define-tool';
 
 const mockRpc = vi.fn();
 vi.mock('../src/bridge', () => ({
@@ -305,5 +307,66 @@ describe('compaction pipeline E2E', () => {
     expect(calls[8].user).toContain('早期历史（机械提取）');
     expect(agent.getCompactionStats().events.at(-1)?.outcome).toBe('digest'); // 部分降级
     expect(asAny(agent).compactStuck).toBe(false);
+  });
+
+  it('9. 自动触发链路：maybeCompact 经真实 run 路径触发，载荷缩小且 session 无损', async () => {
+    // 第一轮：tool_calls + usage 90000（90% ≥ 55%）；第二轮：摘要调用；第三轮：主循环收尾纯文本。
+    const calls: string[] = [];
+    let n = 0;
+    const prov: Provider = {
+      name: () => 'mock',
+      prewarm() {},
+      async *stream(_signal: AbortSignal, req: any) {
+        n++;
+        if (n === 1) {
+          calls.push('main-tool');
+          yield { type: ChunkType.ToolCall, tool_call: { id: 'c1', name: 'fake_tool', arguments: '{}' } } as any;
+          yield { type: ChunkType.Usage, usage: USAGE_HIGH } as any;
+          yield { type: ChunkType.Done } as any;
+        } else {
+          // 摘要调用与主循环收尾轮顺序不定 — 返回同一文本，断言与顺序无关
+          calls.push('summary');
+          yield { type: ChunkType.Text, text: '自动触发摘要' } as any;
+          yield { type: ChunkType.Done } as any;
+        }
+      },
+    };
+
+    const registry = new ToolRegistry();
+    registry.register(
+      defineTool({
+        name: 'fake_tool',
+        description: 'fake',
+        schema: z.object({}),
+        readOnly: true,
+        execute: async () => 'fake output',
+      }),
+    );
+    const agent = new Agent(prov, registry, 'You are a test agent.', {
+      contextWindow: 100000,
+      compactRatio: 0.55,
+      execState: createExecState(),
+    });
+    pushPadMessages(agent, 12, 200);
+    const a = asAny(agent);
+    const beforePayloadLen = a.payloadMessages().length;
+    expect(beforePayloadLen).toBe(13); // system + 12
+
+    await agent.run(new AbortController().signal, '继续干活');
+
+    // 第一轮 tool_calls 轮末触发 maybeCompact → 摘要调用已发生
+    expect(calls).toContain('summary');
+    // run 返回后压缩异步飞行 — 等待摘要落地
+    await vi.waitFor(() => expect(a._compactSummary).not.toBeNull(), { timeout: 5000 });
+    expect(a._compactSummary).toContain('自动触发摘要');
+
+    // 载荷缩小：system + 摘要 + 尾部最近消息
+    const payload = a.payloadMessages();
+    expect(payload.length).toBeLessThan(beforePayloadLen);
+    expect(payload[1].content).toContain('<compacted-context>');
+    // session 完整无损：system + 12 + 用户消息 + tool 轮（assistant + tool + 收尾 assistant）
+    expect(agent.getSession().length).toBeGreaterThan(14);
+    expect(agent.getCompactionStats().events.at(-1)?.outcome).toBe('summary');
+    expect(a.compactStuck).toBe(false);
   });
 });
