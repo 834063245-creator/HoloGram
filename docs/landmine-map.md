@@ -25,7 +25,7 @@
 | 8 | `src-ui/src/ui/react/TimelineHUD.tsx:84-92` | **空时间轴无限 IPC 热循环**（唯一确定性风暴源） | 项目无 timeline 事件 → effect 依赖翻转 → 无退避无上限的 hologram_call 循环，速度=IPC 往返速度，永久轰击引擎 | ✅ 已拆（首次立即 + 2/4/6s 退避 ×3 后停止；组件级 fake-timers 回归测试） | S（尝试计数/退避） |
 | 9 | `src-ui/src/settings.ts:134` × `ui/chat-session.ts:429` | localStorage 配额跨存储干扰 | 会话全量备份无界增长 → 配额耗尽 → saveSettings 的 setItem **无 try** 同步抛 → handleSave 在 persistSecrets 之前崩 → key 从未落凭据库 | ✅ 已拆（saveSettings try+warn 不中断；会话备份 >1MB 跳过 localStorage；配额回归测试） | S（上限 + try + 报错） |
 | 10 | `src-ui/src/workspace.ts:622-626` | setupAgent 覆盖 runtime 不 dispose | 每次设置保存新建 AgentRuntime 直接覆盖，旧 runtime 的订阅/防抖 flush 定时器仍活着 → 泄漏 + **旧快照可能回写覆盖新看板** | ✅ 已拆（覆盖前 flushAllBoards + disposeAll，复用销毁路径同一顺序） | S（覆盖前 disposeAll） |
-| 11 | `src-tauri/src/pty_manager.rs:85-99` | PTY 读取线程持全局锁阻塞 read | 终端无输出时 pty_kill/resize/write 全部拿不到锁 → PTY 子系统假死 | 无 | S（read 移出锁） |
+| 11 | `src-tauri/src/pty_manager.rs:85-99` | PTY 读取线程持全局锁阻塞 read | 终端无输出时 pty_kill/resize/write 全部拿不到锁 → PTY 子系统假死 | ✅ 已拆（reader 归读取线程独有 + 顺带根治潜伏 bug：ChildKiller drop 在 Windows 不杀进程，reap 显式 kill + 分离线程 drop；测试×2） | S（read 移出锁） |
 | 12 | `graph.rs:24`、`filesystem.rs:103` 等 10 处 `state.lock().unwrap()` + `BG_JOBS.lock().unwrap()` 集群 | 锁中毒连锁 | 任一持锁点 panic → 整个 IPC 面 / 后台任务系统全部 panic 变砖。项目里已有 map_err 正确范式但未统一 | 不一致 | S（统一 lock_or_err helper） |
 
 ## P1 — 第二批（中等半径或 M 成本）
