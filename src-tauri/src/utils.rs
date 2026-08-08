@@ -1374,7 +1374,12 @@ pub(crate) fn parse_status(raw: &str) -> serde_json::Value {
 /// 使用 io_retry 处理瞬时错误。
 /// 调用方必须已通过权限检查 — 此函数仅做纯 I/O。
 pub(crate) fn write_atomic(file_path: &str, content: &str) -> Result<(), String> {
-    let tmp_path = format!("{}.tmp", file_path);
+    // tmp 路径带进程内唯一后缀 — 固定 ".tmp" 会让并发写同一文件的调用
+    // 互相覆盖临时文件，rename 时触发 "系统找不到指定的文件"（os error 2）
+    // 或写入内容错乱（后写覆盖先写的 tmp 再 rename）。
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp_path = format!("{}.tmp.{}", file_path, seq);
     let bak_path = format!("{}.bak", file_path);
 
     // 重试临时文件写入（NFS 等的瞬时 I/O 错误）

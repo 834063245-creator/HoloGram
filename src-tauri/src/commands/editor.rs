@@ -44,20 +44,33 @@ pub(crate) async fn edit_file(
                         { matched = false; break; }
                     }
                     if matched && start + old_lines.len() <= file_lines.len() {
-                        let prefix = file_lines[start]
-                            .chars().take_while(|c| c.is_whitespace()).collect::<String>();
+                        // 写回时 new_string 按调用者原样（每行保留自身缩进），
+                        // 不再做「首行补 prefix、后续行 trim」的不可预测改写。
                         let new_ls: Vec<&str> = new_string.lines().collect();
                         let mut out = String::new();
                         for l in &file_lines[..start] { out.push_str(l); out.push('\n'); }
-                        for (k, nl) in new_ls.iter().enumerate() {
-                            if k == 0 { out.push_str(&prefix); }
-                            out.push_str(nl); out.push('\n');
-                        }
+                        for nl in &new_ls { out.push_str(nl); out.push('\n'); }
                         for l in &file_lines[start + old_lines.len()..] {
                             out.push_str(l); out.push('\n');
                         }
-                        let trimmed = out.trim_end_matches('\n').to_string();
-                        crate::utils::write_atomic(&file_path, &trimmed)?;
+                        // 保持原文件的末尾换行状态：原文件无末尾换行则不补。
+                        // （此前 trim_end_matches('\n') 会删掉所有末尾换行，
+                        //   导致每次容错编辑后文件变成 no-newline-at-EOF。）
+                        if !content.ends_with('\n') && out.ends_with('\n') {
+                            out.pop();
+                        }
+                        // 写前乐观并发检查 — 读取后被并发修改则拒绝写入
+                        // （read-modify-write 竞态：两个并发 edit 基于同一旧内容
+                        //  各自替换，后写者会覆盖先写者的改动）。
+                        if let Ok(current) = std::fs::read_to_string(&file_path) {
+                            if current != content {
+                                return Err(format!(
+                                    "文件在编辑过程中被并发修改，请重试（old_string 基于旧内容）: {}",
+                                    file_path
+                                ));
+                            }
+                        }
+                        crate::utils::write_atomic(&file_path, &out)?;
                         if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
                             if !is_ignored_path(&file_path) {
                                 let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
@@ -75,8 +88,8 @@ pub(crate) async fn edit_file(
                             if i < file_lines.len() { ds.push_str(&format!("  {}\n", file_lines[i])); }
                         }
                         for ol in &old_lines { ds.push_str(&format!("- {}\n", ol)); }
-                        for (k, nl) in new_ls.iter().enumerate() {
-                            ds.push_str(&format!("+ {}{}\n", if k == 0 { &prefix } else { "" }, nl));
+                        for nl in &new_ls {
+                            ds.push_str(&format!("+ {}\n", nl));
                         }
                         for i in (start + old_lines.len())..ctx_end {
                             if i < file_lines.len() { ds.push_str(&format!("  {}\n", file_lines[i])); }
@@ -114,6 +127,16 @@ pub(crate) async fn edit_file(
     } else {
         content.replacen(&old_string, &new_string, 1)
     };
+
+    // 写前乐观并发检查 — 读取后被并发修改则拒绝写入
+    if let Ok(current) = std::fs::read_to_string(&file_path) {
+        if current != content {
+            return Err(format!(
+                "文件在编辑过程中被并发修改，请重试（old_string 基于旧内容）: {}",
+                file_path
+            ));
+        }
+    }
 
     crate::utils::write_atomic(&file_path, &new_content)?;
 
