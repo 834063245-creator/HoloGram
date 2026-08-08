@@ -619,6 +619,18 @@ export class Workspace {
     this.prov = prov;
 
     // ── 创建 Runtime + UI 适配器 ──
+    // P0-10：覆盖旧 runtime 前必须走完整拆除（与下方销毁路径同一顺序：
+    // flushAllBoards → disposeAll）——否则旧 runtime 的订阅与防抖 flush
+    // 定时器仍然存活，可能回写覆盖新看板（雷区地图 P0-10）
+    if (this.runtime) {
+      try {
+        await this.runtime.flushAllBoards();
+      } catch (e) {
+        console.warn('[workspace] 旧 runtime 看板 flush 失败:', e);
+      }
+      this.runtime.disposeAll();
+      this.runtime = null;
+    }
     const runtime = new AgentRuntime(this.path);
     const adapter = createRuntimeAdapter(this._storeId);
     runtime.setNotifier(adapter);
