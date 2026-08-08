@@ -7,25 +7,7 @@ use std::time::Duration;
 
 use tauri::Emitter;
 
-/// Agent 工具输出上限 — 超长输出进上下文会滚雪球烧 token。
-/// 对齐 DeepSeek-Reasonix 的 32KB（head+tail 各半 + 截断标记）。
-const MAX_TOOL_OUTPUT_CHARS: usize = 32_000;
-
-/// 截断工具输出：head 50% + tail 50%，中间插截断标记。
-/// 按 char 边界切，避免 UTF-8 切坏；保留首尾最有信息量的部分。
-fn truncate_output(s: &str) -> String {
-    let total = s.chars().count();
-    if total <= MAX_TOOL_OUTPUT_CHARS {
-        return s.to_string();
-    }
-    let half = MAX_TOOL_OUTPUT_CHARS / 2;
-    let head: String = s.chars().take(half).collect();
-    let tail: String = s.chars().skip(total - half).collect();
-    let omitted = total - MAX_TOOL_OUTPUT_CHARS;
-    format!(
-        "{head}\n…[output truncated: {omitted} chars omitted — 可拆小命令或加窄参数后重试]…\n{tail}"
-    )
-}
+use crate::utils::truncate_output;
 
 /// 当前 shell 环境 — 前端注入 Agent system prompt 用（见 os_sandbox::shell_env）。
 #[tauri::command]

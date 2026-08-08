@@ -13,8 +13,9 @@ pub(crate) async fn get_full_graph(
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
     let source_root = crate::utils::workspace_path(&state)?;
-    tokio::task::spawn_blocking(move || crate::utils::serialize_cached_graph(&source_root))
-        .await.map_err(|e| format!("任务失败: {e}"))?
+    let serialized = tokio::task::spawn_blocking(move || crate::utils::serialize_cached_graph(&source_root))
+        .await.map_err(|e| format!("任务失败: {e}"))??;
+    crate::utils::guard_ipc_size(serialized, "序列化图")
 }
 
 

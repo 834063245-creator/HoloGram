@@ -62,7 +62,9 @@ pub(crate) async fn git_diff_unstaged(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["diff".to_string(), "--".to_string(), file.clone()]).await
+    crate::utils::run_git(path.clone(), vec!["diff".to_string(), "--".to_string(), file.clone()])
+        .await
+        .map(|s| crate::utils::truncate_output(&s))
 }
 
 #[tauri::command]
@@ -75,7 +77,9 @@ pub(crate) async fn git_diff_staged(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["diff".to_string(), "--cached".to_string(), "--".to_string(), file.clone()]).await
+    crate::utils::run_git(path.clone(), vec!["diff".to_string(), "--cached".to_string(), "--".to_string(), file.clone()])
+        .await
+        .map(|s| crate::utils::truncate_output(&s))
 }
 
 #[tauri::command]
@@ -262,5 +266,8 @@ pub(crate) async fn git_blame(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     crate::utils::require_read(&path, _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["blame".to_string(), "--line-porcelain".to_string(), file.clone()]).await
+    // blame --line-porcelain 每行源码约 10 行输出，中等文件即可达 MB 级，必须截断
+    crate::utils::run_git(path.clone(), vec!["blame".to_string(), "--line-porcelain".to_string(), file.clone()])
+        .await
+        .map(|s| crate::utils::truncate_output(&s))
 }

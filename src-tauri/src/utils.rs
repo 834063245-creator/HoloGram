@@ -1309,6 +1309,45 @@ pub(crate) async fn run_git(dir: String, args: Vec<String>) -> Result<String, St
         .map_err(|e| format!("git 任务失败: {e}"))?
 }
 
+/// 工具/命令输出上限 — 超长输出进 Agent 上下文会滚雪球烧 token，
+/// 经 IPC 回传也有击毁 WebView2 的风险（2026-08-08 事故）。
+/// 对齐 DeepSeek-Reasonix 的 32KB（head+tail 各半 + 截断标记）。
+pub(crate) const MAX_TOOL_OUTPUT_CHARS: usize = 32_000;
+
+/// 截断超长输出：head 50% + tail 50%，中间插截断标记。
+/// 按 char 边界切，避免 UTF-8 切坏；保留首尾最有信息量的部分。
+pub(crate) fn truncate_output(s: &str) -> String {
+    let total = s.chars().count();
+    if total <= MAX_TOOL_OUTPUT_CHARS {
+        return s.to_string();
+    }
+    let half = MAX_TOOL_OUTPUT_CHARS / 2;
+    let head: String = s.chars().take(half).collect();
+    let tail: String = s.chars().skip(total - half).collect();
+    let omitted = total - MAX_TOOL_OUTPUT_CHARS;
+    format!(
+        "{head}\n…[output truncated: {omitted} chars omitted — 可拆小命令或加窄参数后重试]…\n{tail}"
+    )
+}
+
+/// IPC 响应尺寸硬上限 — 2026-08-08 事故：256MB 响应经 IPC 击毁 WebView2 进程栈。
+/// 图 JSON 是唯一合法的大 payload（kernel 级仓库可达数百 MB），
+/// 暂以硬上限换「明确报错」替代「白屏假死」；真正的解法是图分页/流式
+/// （见 docs/landmine-map.md P0-2 → L 级项目）。
+pub(crate) const MAX_IPC_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
+
+/// 大响应护栏：超过 IPC 上限则报错而非静默传输（宪法·错误不静默）。
+pub(crate) fn guard_ipc_size(content: String, what: &str) -> Result<String, String> {
+    if content.len() > MAX_IPC_RESPONSE_BYTES {
+        return Err(format!(
+            "{what} 大小 {}MB 超过 IPC 上限 {}MB——直接传输会击毁 WebView2。需要图分页支持（见 docs/landmine-map.md P0-2）",
+            content.len() / (1024 * 1024),
+            MAX_IPC_RESPONSE_BYTES / (1024 * 1024),
+        ));
+    }
+    Ok(content)
+}
+
 /// 将 `git status --porcelain` 解析为结构化 JSON。
 pub(crate) fn parse_status(raw: &str) -> serde_json::Value {
     let files: Vec<serde_json::Value> = raw
@@ -1467,5 +1506,43 @@ mod tests {
         assert!(!is_private_ip("1.1.1.1"));
         assert!(!is_private_ip("2606:4700:4700::1111"), "公网 ipv6 必须放行");
         assert!(!is_private_ip("example.com"), "普通主机名不是 IP 字面量");
+    }
+
+    // ── P0-2：大响应护栏（2026-08-08 事故的物理通道） ──
+    #[test]
+    fn truncate_output_short_passthrough() {
+        let s = "hello world";
+        assert_eq!(truncate_output(s), s);
+    }
+
+    #[test]
+    fn truncate_output_long_keeps_head_and_tail() {
+        let s: String = (0..MAX_TOOL_OUTPUT_CHARS * 2).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let out = truncate_output(&s);
+        assert!(out.contains("[output truncated:"), "必须带截断标记");
+        assert!(out.starts_with(&s[..100]), "必须保留头部");
+        assert!(out.ends_with(&s[s.len() - 100..]), "必须保留尾部");
+        assert!(out.chars().count() < s.chars().count(), "必须真的变短");
+    }
+
+    #[test]
+    fn truncate_output_multibyte_no_panic() {
+        // 中文 3 字节/字，按 char 边界切绝不能 panic 或切出乱码
+        let s: String = "汉".repeat(MAX_TOOL_OUTPUT_CHARS * 2);
+        let out = truncate_output(&s);
+        assert!(out.contains("[output truncated:"));
+    }
+
+    #[test]
+    fn guard_ipc_size_allows_small() {
+        let s = "x".repeat(1024);
+        assert_eq!(guard_ipc_size(s.clone(), "测试").unwrap(), s);
+    }
+
+    #[test]
+    fn guard_ipc_size_rejects_oversize() {
+        let s = "x".repeat(MAX_IPC_RESPONSE_BYTES + 1);
+        let err = guard_ipc_size(s, "Graph JSON").unwrap_err();
+        assert!(err.contains("超过 IPC 上限"), "报错必须说明原因：{err}");
     }
 }

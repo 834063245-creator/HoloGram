@@ -85,6 +85,15 @@ pub(crate) async fn read_file_base64(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let (_, bytes) = crate::confined_fs::read_bytes(&file_path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
+    // base64 体积膨胀 4/3：8MiB 源文件 → ~11MB IPC 响应，再大就有击毁 WebView2 的风险
+    const MAX_BASE64_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+    if bytes.len() > MAX_BASE64_SOURCE_BYTES {
+        return Err(format!(
+            "文件 {}MiB 超过预览上限 {}MiB——base64 编码后 IPC 传不动",
+            bytes.len() / (1024 * 1024),
+            MAX_BASE64_SOURCE_BYTES / (1024 * 1024),
+        ));
+    }
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 

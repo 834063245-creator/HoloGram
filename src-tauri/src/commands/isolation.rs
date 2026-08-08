@@ -66,7 +66,8 @@ pub(crate) fn agent_isolation_diff(
             worktree_path,
         } => Ok(serde_json::json!({
             "has_changes": true,
-            "diff": diff,
+            // 全量 diff 可能 MB 级（子 Agent 改大文件），截断防 IPC 击毁 WebView2
+            "diff": crate::utils::truncate_output(&diff),
             "worktree_path": worktree_path.to_string_lossy(),
         })
         .to_string()),

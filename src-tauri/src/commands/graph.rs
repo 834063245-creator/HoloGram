@@ -18,14 +18,14 @@ pub(crate) async fn load_graph_json(
         if content.trim().is_empty() {
             return Err(format!("Graph JSON file is empty: {}", p));
         }
-        return Ok(content);
+        return crate::utils::guard_ipc_size(content, "Graph JSON");
     }
 
     if let Some(ref handle) = *state.lock().unwrap() {
         let p = std::path::PathBuf::from(&handle.path).join("hologram_graph.json");
         if let Ok(content) = std::fs::read_to_string(&p) {
             if !content.trim().is_empty() {
-                return Ok(content);
+                return crate::utils::guard_ipc_size(content, "Graph JSON");
             }
         }
     }
@@ -37,7 +37,7 @@ pub(crate) async fn load_graph_json(
             let p = std::path::PathBuf::from(trim).join("hologram_graph.json");
             if let Ok(content) = std::fs::read_to_string(&p) {
                 if !content.trim().is_empty() {
-                    return Ok(content);
+                    return crate::utils::guard_ipc_size(content, "Graph JSON");
                 }
             }
         }
@@ -71,7 +71,7 @@ pub(crate) async fn analyze_and_load(path: String, force: Option<bool>, app: tau
     let serialized = tokio::task::spawn_blocking(move || crate::utils::serialize_cached_graph(&path_clone))
         .await
         .map_err(|e| format!("序列化任务失败: {e}"))??;
-    Ok(serialized)
+    crate::utils::guard_ipc_size(serialized, "序列化图")
 }
 
 // ═══════════════════════════════════════════════════════
