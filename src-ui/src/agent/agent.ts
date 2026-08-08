@@ -224,6 +224,8 @@ export class Agent {
   // 会话持久化
   sessionId: string;
   private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
+  /** 已持久化到 NDJSON 的消息数（P1-15 增量游标）。saveState 只追加此下标之后的消息。 */
+  private _persistedMsgCount = 0;
 
   // 压缩成本模型追踪器
   private compactionTracker = new CompactionTracker();
@@ -322,6 +324,9 @@ export class Agent {
     // 会话被替换（恢复/加载）→ 折叠状态失效，从完整历史重新开始
     this._compactSummary = null;
     this._compactTailStart = -1;
+    // P1-15: 增量游标重置 — 替换进来的消息不在本 Agent 的 NDJSON 里，
+    // 下次 saveState 全量重建，保证磁盘与会话一致。
+    this._persistedMsgCount = 0;
     this._execState.bumpVersion();
     this._ui.sessionReplaced?.(this.session);
   }
@@ -575,22 +580,27 @@ export class Agent {
     this.goalManager = mgr;
   }
 
-  /** 将当前状态 + 会话持久化到磁盘。Best-effort — 不抛异常。 */
+  /** 将当前状态 + 会话持久化到磁盘。Best-effort — 不抛异常。
+   *  会话走 NDJSON 增量追加（P1-15）：只写 _persistedMsgCount 之后的新消息，
+   *  消除每轮全量重写 session.json 的 O(全量) 写放大。 */
   async saveState(status: AgentRecord['status'] = 'running'): Promise<void> {
     if (!this.agentStore) return;
     try {
       const planSnapshot = this._planState?.toSnapshot() ?? undefined;
-      await this.agentStore.save(
-        this.id,
-        {
-          parentId: this.parentId,
-          description: this.id === 'main' ? '主Agent' : `子Agent (depth ${this._subagentDepth})`,
-          status,
-          subagentDepth: this._subagentDepth,
-          planSnapshot,
-        },
-        this.session,
-      );
+      await this.agentStore.save(this.id, {
+        parentId: this.parentId,
+        description: this.id === 'main' ? '主Agent' : `子Agent (depth ${this._subagentDepth})`,
+        status,
+        subagentDepth: this._subagentDepth,
+        planSnapshot,
+      });
+      // 会话增量：长度收缩（撤回/替换）→ truncate 全量重建；否则 append 新增段
+      if (this.session.length < this._persistedMsgCount) {
+        await this.agentStore.appendMessages(this.id, this.session, true);
+      } else if (this.session.length > this._persistedMsgCount) {
+        await this.agentStore.appendMessages(this.id, this.session.slice(this._persistedMsgCount));
+      }
+      this._persistedMsgCount = this.session.length;
     } catch {
       /* 持久化是尽力而为 — 绝不阻塞 agent 循环 */
     }

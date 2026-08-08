@@ -562,6 +562,54 @@ pub(crate) async fn rpc(
             ok_unit(Ok(()))
         }
 
+        // P1-15: agent 会话增量追加（NDJSON）— 与 session_append 同构，但写到
+        // .hologram/agents/{agent_id}/session.ndjson。rewrite=true 时 truncate 重写
+        // （会话被撤回/替换后全量重建），否则 append-only（每轮对话只写增量，
+        // 消除旧 saveState 全量重写 session.json 的 O(全量) 写放大）。
+        "agent_session_append" => {
+            let project_path = req_str(&params, "project_path", "agent_session_append")?;
+            let agent_id = req_str(&params, "agent_id", "agent_session_append")?;
+            crate::utils::sanitize_path_id(&agent_id, "agent_id")?;
+            let messages = params.get("messages")
+                .ok_or("agent_session_append: missing 'messages'")?;
+            let rewrite = params.get("rewrite")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let file = std::path::Path::new(&project_path)
+                .join(".hologram/agents")
+                .join(&agent_id)
+                .join("session.ndjson");
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("agent_session_append: cannot create dir: {e}"))?;
+            }
+            let arr = messages.as_array()
+                .ok_or("agent_session_append: 'messages' must be an array")?;
+            use std::io::Write;
+            let mut f = if rewrite {
+                // truncate 重写（撤回/替换后全量重建）
+                std::fs::File::create(&file)
+                    .map_err(|e| format!("agent_session_append: create: {e}"))?
+            } else {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&file)
+                    .map_err(|e| format!("agent_session_append: open: {e}"))?
+            };
+            for msg in arr {
+                let line = serde_json::to_string(msg)
+                    .map_err(|e| format!("agent_session_append: serialize: {e}"))?;
+                f.write_all(line.as_bytes())
+                    .map_err(|e| format!("agent_session_append: write: {e}"))?;
+                f.write_all(b"\n")
+                    .map_err(|e| format!("agent_session_append: write: {e}"))?;
+            }
+            f.flush()
+                .map_err(|e| format!("agent_session_append: flush: {e}"))?;
+            ok_unit(Ok(()))
+        }
+
         // ═══════════════════════════════════════════════════════
         // 约束（2 个命令）
         // ═══════════════════════════════════════════════════════

@@ -53,6 +53,11 @@ export class AgentStore {
     return `${this.baseDir}/${id}/session.json`;
   }
 
+  /** P1-15: 会话增量文件（NDJSON，append-only）。旧 session.json 仅作一次性兼容读取。 */
+  private sessionNdsPath(id: string): string {
+    return `${this.baseDir}/${id}/session.ndjson`;
+  }
+
   private indexPath(): string {
     return `${this.baseDir}/${INDEX_FILE}`;
   }
@@ -80,8 +85,8 @@ export class AgentStore {
 
   // ── CRUD ──
 
-  /** 保存 agent 状态记录 + 可选的会话消息。 */
-  async save(id: string, partial: Partial<AgentRecord>, messages?: Message[]): Promise<void> {
+  /** 保存 agent 状态记录。会话消息走 appendMessages 增量（P1-15），不再全量重写。 */
+  async save(id: string, partial: Partial<AgentRecord>): Promise<void> {
     await this.ensureAgentDir(id);
     const now = Date.now();
     const record: AgentRecord = {
@@ -98,15 +103,25 @@ export class AgentStore {
       filePath: this.statePath(id),
       content: JSON.stringify(record, null, 2),
     });
-    // 会话文件 — 仅在提供了消息时写入
-    if (messages !== undefined) {
-      await rpc('write_file_content', {
-        filePath: this.sessionPath(id),
-        content: JSON.stringify(messages, null, 2),
-      });
-    }
     // 索引 — 总是更新，保持 list() 一致
     await this._upsertIndex(record);
+  }
+
+  /** 增量追加会话消息到 NDJSON（append-only）。rewrite=true 时 truncate 全量重建
+   *  （会话被撤回/替换后长度收缩，append 语义失效）。尽力而为 — 不抛异常。 */
+  async appendMessages(id: string, messages: Message[], rewrite = false): Promise<void> {
+    if (messages.length === 0) return;
+    await this.ensureAgentDir(id);
+    try {
+      await rpc('agent_session_append', {
+        projectPath: this.projectPath,
+        agentId: id,
+        messages,
+        rewrite,
+      });
+    } catch (e) {
+      console.warn(`[AgentStore] ${id} 会话增量写失败:`, e);
+    }
   }
 
   /** 加载 agent 状态 + 会话。未找到 agent 时返回 null。 */
@@ -118,13 +133,24 @@ export class AgentStore {
       });
       const record: AgentRecord = JSON.parse(stripNums(rawState));
       let messages: Message[] = [];
+      // P1-15: 优先读 NDJSON 增量文件（逐行 parse）；回退旧 JSON 数组 session.json
       try {
-        const rawSession = await rpc<string>('read_file_content', {
-          filePath: this.sessionPath(id),
+        const rawNds = await rpc<string>('read_file_content', {
+          filePath: this.sessionNdsPath(id),
         });
-        messages = JSON.parse(stripNums(rawSession));
+        messages = stripNums(rawNds)
+          .split('\n')
+          .filter((l) => l.trim().length > 0)
+          .map((l) => JSON.parse(l) as Message);
       } catch {
-        /* 会话文件可能尚不存在 — 空会话没问题 */
+        try {
+          const rawSession = await rpc<string>('read_file_content', {
+            filePath: this.sessionPath(id),
+          });
+          messages = JSON.parse(stripNums(rawSession));
+        } catch {
+          /* 会话文件可能尚不存在 — 空会话没问题 */
+        }
       }
       return { record, messages };
     } catch {
