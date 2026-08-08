@@ -62,11 +62,6 @@ pub(crate) static COMPLETED_NOTES: std::sync::LazyLock<Mutex<Vec<String>>> =
 
 static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
-/// 将通知消息推入后台通知队列。
-pub(crate) fn push_bg_note(msg: &str) {
-    crate::utils::lock_or_recover(&COMPLETED_NOTES).push(msg.to_string());
-}
-
 /// 排空并返回所有待处理的后台通知（同时清空队列）。
 pub(crate) fn drain_bg_notifications() -> String {
     let mut notes = crate::utils::lock_or_recover(&COMPLETED_NOTES);
@@ -134,7 +129,7 @@ pub(crate) fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
 }
 
 /// 将已启动的 SandboxedChild 注册为后台任务。
-/// 用于前台超时路径，将超时命令转为后台任务。
+/// 由 spawn_bg（runInBackground 路径）调用；前台流式路径用 register_fg_child。
 ///
 /// 必须 take 管道并用 drain 线程排空到 shared Arc:
 ///  1) std 管道是阻塞模式且缓冲极小(Windows 匿名管道默认 4KB),后台任务

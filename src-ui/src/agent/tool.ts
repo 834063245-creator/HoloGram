@@ -25,8 +25,9 @@ export interface Tool {
   /** 只读动作（领域工具在 plan 模式下的白名单） */
   readOnlyActions?(): string[];
   /** 用原始 JSON 参数执行工具。返回结果字符串。
-   *  onProgress 是可选回调，用于在执行期间流式输出部分结果。 */
-  execute(args: Record<string, unknown>, onProgress?: (chunk: string) => void): Promise<string>;
+   *  onProgress 是可选回调，用于在执行期间流式输出部分结果。
+   *  signal 是可选中止信号 — 目前仅 shell 链路消费（abort 时取消排队/终止进程）。 */
+  execute(args: Record<string, unknown>, onProgress?: (chunk: string) => void, signal?: AbortSignal): Promise<string>;
 }
 
 // ---- Tool 注册表 ----
@@ -77,7 +78,7 @@ export class ToolRegistry {
       description: () => original.description(),
       parameters: () => original.parameters(),
       readOnly: () => original.readOnly(),
-      execute: (args, onProgress) => original.execute(args, onProgress),
+      execute: (args, onProgress, signal) => original.execute(args, onProgress, signal),
     };
     this.tools.set(aliasName, wrapper);
   }
@@ -146,11 +147,13 @@ export class ToolRegistry {
 // 两者永远对齐——引擎新增 MCP 工具必须同步在此补硬编码定义。
 
 /** 工具执行器：通过 MCP（快速、长驻）或进程内分发（回退）调用工具。
- *  onProgress 是可选回调，用于在执行期间流式输出部分结果。 */
+ *  onProgress 是可选回调，用于在执行期间流式输出部分结果。
+ *  signal 是可选中止信号 — 目前仅 shell 链路消费。 */
 export type ToolExecutor = (
   toolName: string,
   args: Record<string, unknown>,
   onProgress?: (chunk: string) => void,
+  signal?: AbortSignal,
 ) => Promise<string>;
 
 /** Agent → backend invoke 包装。恒定注入 isAgent:true，让 Rust 命令走权限路径

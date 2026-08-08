@@ -271,7 +271,7 @@ export class StreamingToolExecutor {
             read_only: tool.readOnly(),
           },
         });
-      });
+      }, this.signal ?? undefined);
 
       // ── 工具后钩子：用图上下文富化结果 ──
       if (this.hooks) {

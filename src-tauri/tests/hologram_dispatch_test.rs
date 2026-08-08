@@ -55,28 +55,28 @@ fn test_tools_list_includes_key_explore() {
 fn test_call_unknown_tool_returns_error() {
     let result = hologram_call_impl("nonexistent", &json!({}));
     let v = parse(&result);
-    assert!(v.get("error").is_some(), "unknown tool must return error");
+    assert!(is_errorish(&v), "unknown tool must return error/degraded");
 }
 
 #[test]
 fn test_call_search_missing_query() {
     let result = hologram_call_impl("search_symbols", &json!({}));
     let v = parse(&result);
-    assert!(v.get("error").is_some(), "search without query must error");
+    assert!(is_errorish(&v), "search without query must error/degraded");
 }
 
 #[test]
 fn test_call_neighbors_missing_node_id() {
     let result = hologram_call_impl("get_neighbors", &json!({}));
     let v = parse(&result);
-    assert!(v.get("error").is_some(), "neighbors without node_id must error");
+    assert!(is_errorish(&v), "neighbors without node_id must error/degraded");
 }
 
 #[test]
 fn test_call_preflight_missing_files() {
     let result = hologram_call_impl("preflight_check", &json!({}));
     let v = parse(&result);
-    assert!(v.get("error").is_some(), "preflight without files must error");
+    assert!(is_errorish(&v), "preflight without files must error/degraded");
 }
 
 #[test]
@@ -91,8 +91,10 @@ fn test_call_status_works_without_engine() {
 fn test_call_graph_summary_errors_without_engine() {
     let result = hologram_call_impl("graph_summary", &json!({}));
     let v = parse(&result);
-    // graph_summary needs engine data — should error gracefully
-    assert!(v.get("error").is_some() || v.get("total_nodes").is_some(),
+    // graph_summary needs engine data — should error gracefully。
+    // 成功载荷字段为 nodes_total（曾断言的 total_nodes 已改名）；
+    // 测试并行共享引擎单例，兄弟用例可能已初始化引擎 → 两种形态都接受。
+    assert!(v.get("error").is_some() || v.get("nodes_total").is_some(),
         "graph_summary should not crash without engine");
 }
 
@@ -121,7 +123,8 @@ fn init_test_engine() {
 
 fn clear_test_engine() {
     let _ = engine_api::engine_write(|idx| {
-        let ids: Vec<String> = idx.nodes_iter().map(|n| n.id.clone()).collect();
+        // Node.id 现为 NodeId 句柄（Deref<Target=str>）—— 收集字符串供 remove_node(&str)
+        let ids: Vec<String> = idx.nodes_iter().map(|n| n.id.as_str().to_string()).collect();
         for id in &ids {
             idx.remove_node(id);
         }
@@ -182,6 +185,31 @@ fn hologram_tools_list_impl() -> String {
     serde_json::to_string(&schemas).unwrap_or_default()
 }
 
+/// 与 src-tauri engine_dispatch::dispatch_engine 同构的信封解包：
+/// ToolResponse 迁移后 dispatch() 返回 MCP JSON-RPC 信封
+/// {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"<原始工具JSON>"}]}}，
+/// 断言针对的是信封内的原始载荷；JSON-RPC error 统一折叠为 {"error": ...}。
 fn hologram_call_impl(tool: &str, args: &Value) -> String {
-    ToolRegistry::dispatch(tool, args, &Value::Null).to_string()
+    let result = ToolRegistry::dispatch(tool, args, &Value::Null);
+    if let Some(text) = result
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|item| item.get("text"))
+        .and_then(|t| t.as_str())
+    {
+        return text.to_string();
+    }
+    if let Some(err) = result.get("error") {
+        return json!({ "error": err }).to_string();
+    }
+    String::new()
+}
+
+/// 现代错误表面：处理器级 {"error": ...}（旧）或 ToolResponse::Degraded 的
+/// _isDegraded 标记（新，dispatch 层注入 _guidance/_fallback）。
+fn is_errorish(v: &Value) -> bool {
+    v.get("error").is_some()
+        || v.get("_isDegraded").and_then(|b| b.as_bool()).unwrap_or(false)
 }

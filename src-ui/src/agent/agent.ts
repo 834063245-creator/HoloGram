@@ -2356,14 +2356,14 @@ ${resumeNote}
     if (shellTool) {
       const origShellExec = shellTool.execute.bind(shellTool);
       subTools.unregister('run_shell');
-      subTools.register(wrapTool(shellTool, async (args, onProgress) => {
+      subTools.register(wrapTool(shellTool, async (args, onProgress, signal) => {
         const cmd = (args.command as string) || '';
         if (BUILD_TEST_RE.test(cmd)) {
           return `[已拦截] 子 Agent 不允许执行构建/测试/包管理命令（"${cmd.slice(0, 100)}"）。\n` +
             `原因：并行子 Agent 同时跑这类命令会争抢文件锁（target/、node_modules/、.git/index.lock 等），导致死锁或超时。\n` +
             `请直接完成文件修改，在结论中说明：你改了哪些文件、建议主 Agent 跑什么命令来验证。`;
         }
-        return origShellExec(args, onProgress);
+        return origShellExec(args, onProgress, signal);
       }));
     }
 
@@ -2382,7 +2382,7 @@ ${resumeNote}
         if (!tool) continue;
         const origExec = tool.execute.bind(tool);
         subTools.unregister(toolName);
-        subTools.register(wrapTool(tool, async (args, onProgress) => {
+        subTools.register(wrapTool(tool, async (args, onProgress, signal) => {
           const filePath = extractFilePath(toolName, args);
           if (filePath) {
             const result = ownership.claim(filePath, subAgentId);
@@ -2399,7 +2399,7 @@ ${resumeNote}
               return `[已拒绝] 目标路径 "${args.to}" 正在被另一个子 Agent (${result.owner}) 修改。`;
             }
           }
-          return origExec(args, onProgress);
+          return origExec(args, onProgress, signal);
         }));
       }
     }

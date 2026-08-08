@@ -139,9 +139,8 @@ pub(crate) async fn exec_command(
             })
         });
 
-        // P1-21: 注册进 ledger — 工作区切换 kill_all_bg 能终止运行中的流式命令。
-        // child 进 ledger 后等待线程从 ledger 取 child 轮询；超时转后台时 job 保留
-        // （bash_output/bash_wait/bash_kill 走共享 Arc 输出，无需重新注册）。
+        // P1-21: 注册进 ledger — 工作区切换 kill_all_bg 能终止运行中的流式命令；
+        // 前端 abort 也能按 job_id 调 bash_kill（job_id 经 started 响应暴露给 JS）。
         let job_id = {
             let shared = crate::utils::BgSharedOutput {
                 stdout: Arc::clone(&shared_out),
@@ -151,7 +150,7 @@ pub(crate) async fn exec_command(
             crate::utils::register_fg_child(child, &label, shared)
         };
 
-        // 在后台等待子进程，发送完成事件 / 超时转后台
+        // 在后台等待子进程，发送完成事件 / 超时杀进程树
         let app_done = app.clone();
         let sid_done = stream_id.clone();
         let timeout_ms_val = timeout_ms.unwrap_or(300_000);
@@ -196,13 +195,29 @@ pub(crate) async fn exec_command(
                     }
                     Poll::Running => {
                         if start.elapsed() >= Duration::from_millis(timeout_ms_val) {
-                            // 超时转后台：job 已注册在 ledger（共享 Arc 输出已由 drain
-                            // 线程排空），直接保留并通知，bash_output 等可继续读取。
+                            // 超时杀进程树（不再转后台）——
+                            // 转后台会让进程残留并继续持有构建锁（target/ 等），
+                            // 队列放行的后续命令实际卡在 OS 文件锁上连锁超时。
+                            // 长任务应走 runInBackground: true（工具描述已引导）。
+                            {
+                                let mut jobs = crate::utils::lock_or_recover(&crate::utils::BG_JOBS);
+                                if let Some(job) = jobs.get_mut(&job_id) {
+                                    let _ = job.child.kill_tree();
+                                }
+                            }
+                            // 有界等待输出线程收尾（与 Done 路径一致）：kill 后
+                            // 管道写端随进程树关闭，read_vectored 很快收到 EOF。
+                            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                            while drain_flag.load(Ordering::SeqCst) < 2
+                                && std::time::Instant::now() < deadline
+                            {
+                                thread::sleep(Duration::from_millis(20));
+                            }
+                            crate::utils::lock_or_recover(&crate::utils::BG_JOBS).remove(&job_id);
                             let msg = format!(
-                                "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止。",
-                                timeout_ms_val, job_id, job_id, job_id, job_id
+                                "命令超时 ({}ms)，已终止（进程树已杀）。长任务请用 runInBackground: true 启动后用 bash_wait 等待。",
+                                timeout_ms_val
                             );
-                            crate::utils::push_bg_note(&msg);
                             let _ = app_done.emit("shell:done", serde_json::json!({
                                 "streamId": sid_done,
                                 "exitCode": -1,
@@ -227,7 +242,10 @@ pub(crate) async fn exec_command(
 
         return Ok(serde_json::json!({
             "streamId": stream_id,
-            "status": "started"
+            "status": "started",
+            // 暴露 ledger job_id — 前端 abort 时据此调 bash_kill 终止进程树
+            // （此前流式命令无法按 streamId 终止，abort 后进程变幽灵继续占队列）
+            "job_id": job_id,
         }).to_string());
     }
 

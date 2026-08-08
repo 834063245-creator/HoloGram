@@ -229,7 +229,7 @@ function buildDomainTool(registry: ToolRegistry, spec: DomainSpec): Tool | null 
     domain: () => spec.name,
     actions: () => entries.map(([a]) => a),
     readOnlyActions: () => readOnlyActions,
-    execute: async (args, onProgress) => {
+    execute: async (args, onProgress, signal) => {
       const action = (args as { action?: unknown })?.action;
       const oldName = typeof action === 'string' ? spec.actions[action] : undefined;
       const old = oldName ? registry.get(oldName) : undefined;
@@ -238,7 +238,8 @@ function buildDomainTool(registry: ToolRegistry, spec: DomainSpec): Tool | null 
         return `[${spec.name}] unsupported action "${String(action)}". Available actions: ${available}`;
       }
       const { action: _action, ...rest } = args;
-      return old.execute(normalizeArgs(old, rest), onProgress);
+      // signal 透传 — shell 链路的 abort 取消依赖它（取消排队/终止进程）
+      return old.execute(normalizeArgs(old, rest), onProgress, signal);
     },
   };
 }

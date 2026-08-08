@@ -14,7 +14,7 @@
 
 import type { Tool, ToolExecutor } from '../tool';
 import { ToolRegistry, agentInvoke } from '../tool';
-import { rpc, listen } from '../../bridge';
+import { rpc } from '../../bridge';
 import { z } from 'zod';
 import { createCompactionTools } from '../compaction-model';
 import type { GraphContext } from '../hooks';
@@ -35,8 +35,7 @@ import { createCodingTools } from '../tools/coding';
 import { createSubAgentTool, createAgentKillTool, createAgentStatusTool } from '../tools/subagent';
 import { createSkillTool } from '../skills';
 import { createTaskTools } from '../task';
-import { enqueueShellOp } from './shell-queue';
-import { classifyShellCommand, commandLabel } from './cmd-class';
+import { execQueuedShell, heavyBackgroundConflictWarning } from './queued-shell';
 import { createWaitTool } from '../tools/wait';
 import { convergeRegistry } from '../tools/domains';
 
@@ -350,25 +349,25 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
     );
   }
 
-  // ── Shell 互斥队列 ──
-// 流式 exec_command 同时只跑一个。两个 shell 命令并发(如 cargo test 指定集 + 全量):
-//  1) 旧实现会全局卸载所有 shell listener → 先启动的收不到 shell:done → 卡到 600s 兜底;
-//  2) 两个 cargo 抢同一 target/ 目录锁 → 互相等待 → 双双 hang。
-// 队列已升级为可观察版（shell-queue.ts）：暴露队列长度/位置/预计等待，
-// 排队期间 Agent 收到明确反馈（资源租约层 v1）。仍为全串行 —— v1 安全默认。
+  // ── Shell 队列（分车道） ──
+// 流式 exec_command 经 shell-queue 调度（v2，见 queued-shell.ts / shell-queue.ts）：
+//  1) read 类走只读车道（并发 3）——ls/grep/cat 不再被 cargo build 堵满全程；
+//  2) write/heavy/unknown 走互斥车道（全串行）——避免并发 cargo 互杀 listener / 抢 target 锁;
+//  3) abort 可取消：排队中出队、运行中 bash_kill（修"幽灵命令占排头"）。
+// 后台任务（runInBackground）不入队 —— 与互斥车道 heavy 冲突时给警告（不能持租约）。
 
   // ── Coding tools ──
-  const _shellCleanups = new Map<string, Array<() => void>>();
-  const SHELL_TIMEOUT = 600_000;
   // 后台任务等待总上限:后台 job 若卡死(如 cargo 等待 target 文件锁)可能无限期运行,
   // 无总上限时下面的 for(;;) 循环永远 pending,Agent 会话表现为"无限等待 shell 结果"。
   const BG_WAIT_TIMEOUT = 30 * 60 * 1000;
-  const codingExec: ToolExecutor = async (name, args, onProgress) => {
+  const codingExec: ToolExecutor = async (name, args, onProgress, signal) => {
     if (name === 'run_shell' && args.runInBackground) {
       // 命令名必须是 exec_command(run_shell 不是 Tauri 命令),args 已含 runInBackground: true
       const raw = await agentInvoke<string>('exec_command', args);
       const m = /ID:\s*(\d+)/.exec(raw);
       if (!m) return raw; // 启动失败 — 把 Rust 返回的消息直接给 agent
+      // heavy 后台任务与互斥车道的 heavy 前台命令会抢构建锁 — 信息提示（不阻塞）
+      const bgWarn = heavyBackgroundConflictWarning(String(args.command || ''));
       const jobId = m[1];
       let last = '';
       const bgDeadline = Date.now() + BG_WAIT_TIMEOUT;
@@ -380,62 +379,22 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
           if (msg.includes('等待超时')) {
             // 任务仍在跑 — 检查总超时,超时则放弃等待并把控制权交还 Agent
             if (Date.now() >= bgDeadline) {
-              return `[exit -1] 后台任务已等待 ${BG_WAIT_TIMEOUT / 1000}s 仍未完成,已放弃等待(可能卡在文件锁或等待输入)。当前输出:\n${last}\n可用 bash_output(${jobId}) 查看进度, bash_kill(${jobId}) 终止任务。`;
+              return `[exit -1] 后台任务已等待 ${BG_WAIT_TIMEOUT / 1000}s 仍未完成,已放弃等待(可能卡在文件锁或等待输入)。当前输出:\n${last}\n可用 bash_output(${jobId}) 查看进度, bash_kill(${jobId}) 终止任务。${bgWarn}`;
             }
             if (onProgress) onProgress(`[后台任务运行中, job_id: ${jobId}]`);
             continue;
           }
           // 任务已被清理(完成或 kill)— 带最后已知输出返回
-          return last ? `[后台任务结束]\n${last}` : `后台任务查询失败: ${msg}`;
+          return last ? `[后台任务结束]\n${last}${bgWarn}` : `后台任务查询失败: ${msg}`;
         }
-        if (last.includes('[任务已完成')) return last;
+        if (last.includes('[任务已完成')) return last + bgWarn;
         if (onProgress) onProgress(last); // 每 60s 报一次进度
       }
     }
-    if (name === 'exec_command' && onProgress && !args.runInBackground) {
-      // 互斥队列 + 资源租约反馈:全串行执行(避免并发 cargo 互杀 listener / 抢 target 锁),
-      // 但排队期间通过 onProgress 给 Agent 明确反馈,等待 >500ms 时在结果前缀注明排队时长(模型可见)。
-      const cmd = String(args.command || '');
-      const cls = classifyShellCommand(cmd);
-      const queuedAt = Date.now();
-      const { promise: shellPromise, status } = enqueueShellOp(() => {
-        const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        return new Promise<string>((resolve) => {
-          void (async () => {
-            let fullOutput = ''; let timer: ReturnType<typeof setTimeout> | null = null; let settled = false;
-            const cleanup = () => { if (timer) { clearTimeout(timer); timer = null; } const fns = _shellCleanups.get(streamId); if (fns) { for (const fn of fns) fn(); _shellCleanups.delete(streamId); } };
-            const resolveOnce = (v: string) => { if (settled) return; settled = true; cleanup(); resolve(v); };
-            const unOut = await listen<{ streamId: string; chunk: string }>('shell:output', (e) => { if (e.payload.streamId !== streamId) return; fullOutput += e.payload.chunk; onProgress(e.payload.chunk); });
-            const unDone = await listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (e) => { if (e.payload.streamId !== streamId) return; if (e.payload.error) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}\n${e.payload.error}`); else if (e.payload.exitCode !== 0) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}`); else resolveOnce(fullOutput || '(无输出)'); });
-            _shellCleanups.set(streamId, [unOut, unDone]);
-            timer = setTimeout(() => resolveOnce(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)\n${fullOutput}`), SHELL_TIMEOUT);
-            try { await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId }); } catch (e: any) { resolveOnce(`错误: ${e}`); }
-          })();
-        });
-      }, { cmd, cls });
-
-      // 等待期反馈:仅当排队位置 >0 时启动(3s 间隔刷新,UI 实时可见;执行期流式输出不受影响)
-      let queueTimer: ReturnType<typeof setInterval> | null = null;
-      if (status().length > 1) {
-        queueTimer = setInterval(() => {
-          const s = status();
-          if (!s.running) return;
-          const head = s.running;
-          const budgetNote = head.overBudget ? '（已超过预期，可能卡住，shell 上限 600s）' : '';
-          onProgress(
-            `[shell 队列] 等待中… 前方 ${s.length - 1} 个命令，你排第 ${s.length} 位。当前: "${head.cmd.slice(0, 60)}"（${commandLabel(head.cls)}，已运行 ${Math.floor(head.elapsedMs / 1000)}s，预计还需 ~${Math.ceil(head.remainingMs / 1000)}s）${budgetNote}`,
-          );
-        }, 3000);
-      }
-
-      const out = await shellPromise;
-      if (queueTimer) { clearInterval(queueTimer); queueTimer = null; }
-      const waitMs = Date.now() - queuedAt;
-      // 模型可见反馈:等待 >500ms 时加前缀(不污染快速命令的输出)
-      if (waitMs > 500) {
-        return `[shell 队列] ⏱ 排队 ${(waitMs / 1000).toFixed(1)}s 后执行。\n${out}`;
-      }
-      return out;
+    if (name === 'exec_command' && !args.runInBackground) {
+      // 经队列执行（分车道 + 取消语义）— 实现见 queued-shell.ts。
+      // 无 onProgress 时静默入队（merge-gate 路径经 execQueuedShell 直调，不走这里）。
+      return execQueuedShell(args, onProgress, signal);
     }
     // ── Timeout wrapper for search/list tools — prevent stuck Tauri invokes ──
     const TOOL_TIMEOUT = 120_000;

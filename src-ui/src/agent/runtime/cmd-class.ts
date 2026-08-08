@@ -3,15 +3,14 @@
 
 // Shell 命令分类 —— 资源租约层的"命令知识"。
 //
-// 为 shell 队列提供预计等待估算所需的类别（read/write/heavy/unknown）。
-// 分类只影响估算与展示，不改变调度行为（v1 全串行，见 shell-queue.ts）。
+// 为 shell 队列提供类别（read/write/heavy/unknown），决定两件事：
+//   1. 车道调度：read → read 车道（并发 3）；write/heavy/unknown → exclusive 车道（串行）。
+//      unknown 保守归 exclusive —— 未知命令可能是写操作，并行会撞（见 shell-queue.ts）。
+//   2. 预计等待估算（SHELL_CLASS_ESTIMATE_MS）。
 //
 // 种子来源（先抄再写，不发明新名单）：
-//   - agent.ts:2250 的 BUILD_TEST_RE（子 Agent 禁用的构建/测试命令）
+//   - agent.ts:2338 的 BUILD_TEST_RE（子 Agent 禁用的构建/测试命令）
 //   - src-tauri/src/permissions/git.rs:38-56 的 git 安全子命令清单
-//
-// ⚠️ v2 若引入"只读并行"（按资源类型分队列），unknown 必须归 write（串行）——
-//    未知命令可能是写操作，并行会撞。此注释即未来切换点。
 
 import type { ShellCmdClass } from './shell-queue';
 
@@ -129,7 +128,7 @@ export function classifyShellCommand(cmdline: string): ShellCmdClass {
   // 整体写
   if (WRITE_TOOLS.has(tool)) return 'write';
 
-  // 包管理器剩余子命令（npm ls / cargo metadata 等查询类，保守归写——无行为风险只有估算差异）
+  // 包管理器剩余子命令（npm ls / cargo metadata 等查询类，保守归写——进 exclusive 车道串行，只有等待估算差异）
   if (tool === 'npm' || tool === 'pnpm' || tool === 'yarn' || tool === 'cargo' || tool === 'go' || tool === 'docker') {
     return 'write';
   }
