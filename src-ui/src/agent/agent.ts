@@ -39,7 +39,7 @@ import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
 import { userContext, createStableSchemaSelector, type StableSchemaSelector } from './tool-select';
-import { foldToolResults, DEFAULT_TOOL_RESULT_WINDOW } from './tool-fold';
+import { foldToolResults, nextFoldBoundary, DEFAULT_TOOL_FOLD_BATCH } from './tool-fold';
 import { defineTool } from './tools/define-tool';
 
 /** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
@@ -93,8 +93,10 @@ export interface AgentOptions {
   execState?: ExecStateInstance;
   /** 每轮发给模型的工具 schema 上限（0 = 全量，默认 14）。 */
   visibleToolsLimit?: number;
-  /** 发送载荷中完整保留的最近工具结果条数（-1 = 禁用折叠，默认 40）。
-   *  窗口外的 tool 结果在发送时折叠为占位符（session/UI/存档不受影响）。 */
+  /** 工具结果批量折叠大小（默认 40，<=0 = 禁用）。tool 消息总数每超过
+   *  折叠边界 + batch 时，把最早一批（batch 条）折叠为占位符。
+   *  折叠边界批量前移而非逐轮滚动——保证相邻轮次发送载荷前缀稳定，
+   *  不击穿 DeepSeek 前缀缓存。session/UI/存档不受影响。 */
   toolResultWindow?: number;
   /** UI 通知端口 — 进度 / 工具完成 / 子 Agent 生命周期。
    *  由 workspace 注入；headless Agent 无。 */
@@ -120,6 +122,8 @@ export class Agent {
   private temperature: number;
   private _visibleToolsLimit: number;
   private _toolResultWindow: number;
+  /** 工具结果折叠边界（session tool 消息序号维度）— 批量前移，保持载荷前缀稳定 */
+  private _toolFoldBoundary = 0;
   private pricing: Pricing | undefined;
   private _agentOpts: AgentOptions;
 
@@ -256,7 +260,7 @@ export class Agent {
     this._agentOpts = opts;
     this.temperature = opts.temperature ?? 0.7;
     this._visibleToolsLimit = opts.visibleToolsLimit ?? DEFAULT_VISIBLE_TOOLS_LIMIT;
-    this._toolResultWindow = opts.toolResultWindow ?? DEFAULT_TOOL_RESULT_WINDOW;
+    this._toolResultWindow = opts.toolResultWindow ?? DEFAULT_TOOL_FOLD_BATCH;
     this.pricing = opts.pricing;
     this.contextWindow = opts.contextWindow || 1000000; // 1M tokens 默认值; || 捕获零值（设置默认值），使压缩永不被静默禁用
     // ponytail: 0.55 将阈值设在 550K token（1M 窗口）。
@@ -1727,6 +1731,7 @@ ${resumeNote}
         assistant:    { tokens: assistantTokens, msgs: assistantMsgCount },
         tool_results: { tokens: toolTokens, msgs: toolMsgCount },
         tool_schemas: { tokens: schemaTokens, count: T.length },
+        folded_tool_results: Math.min(this._toolFoldBoundary, toolMsgCount),
         // ── 汇总 ──
         estimated_total: estimatedTotal,
         api_reported: apiUsage ? { prompt: apiUsage.prompt_tokens, completion: apiUsage.completion_tokens, total: apiUsage.total_tokens } : null,
@@ -1791,7 +1796,11 @@ ${resumeNote}
       msgs = [...this.session.slice(0, head), summaryMsg, ...this.session.slice(tailStart)];
     }
     // 窗口外的旧工具结果折叠为占位符 — 保留 tool_call_id 配对，模型需细节时可重新调用工具。
-    return foldToolResults(msgs, this._toolResultWindow);
+    // 折叠边界批量前移（跨整批阈值才动），绝不逐轮滚动——否则前缀每轮漂移击穿缓存。
+    let totalTool = 0;
+    for (const m of this.session) if (m.role === 'tool') totalTool++;
+    this._toolFoldBoundary = nextFoldBoundary(totalTool, this._toolFoldBoundary, this._toolResultWindow);
+    return foldToolResults(msgs, this._toolFoldBoundary);
   }
 
   /** 计算本次要折叠的中间区域。返回 null = 无可折叠内容（stuck）。
