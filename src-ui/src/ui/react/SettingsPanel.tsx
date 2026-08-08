@@ -125,15 +125,15 @@ const SettingsPanelApp: React.FC<{
 
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
+  // Provider 页独立 dirty：与其他 tab 的全局保存互不牵连
+  const [providerDirty, setProviderDirty] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [saveConfirm, setSaveConfirm] = useState<string | null>(null);
   const [closeConfirm, setCloseConfirm] = useState(false);
   // 凭据暂存：删除 Provider / 清除 Key 只进 state，保存时才删系统凭据——
   // 用户取消/关闭面板不会丢 Key（P0 修复）。
   const [pendingDeletes, setPendingDeletes] = useState<string[]>([]);
   const [pendingClears, setPendingClears] = useState<string[]>([]);
   const [saveVersion, setSaveVersion] = useState(0);
-  const forceSaveRef = useRef(false);
 
   // LSP 状态
   const [lspStatus, setLspStatus] = useState<LspData | null>(null);
@@ -199,6 +199,12 @@ const SettingsPanelApp: React.FC<{
     [markDirty],
   );
 
+  /** Provider 页专用提交：只标 providerDirty，不污染其他 tab 的全局 dirty。 */
+  const commitProvider = useCallback((next: AppSettings): void => {
+    setSettings(next);
+    setProviderDirty(true);
+  }, []);
+
   /** 立即落盘但不标 dirty——用于非配置类状态（如测试结果）。 */
   const persistSettings = useCallback((next: AppSettings): void => {
     setSettings(next);
@@ -219,33 +225,15 @@ const SettingsPanelApp: React.FC<{
   );
 
   const handleClose = useCallback(() => {
-    if (dirty) {
+    if (dirty || providerDirty) {
       setCloseConfirm(true);
       return;
     }
     onClose();
-  }, [dirty, onClose]);
+  }, [dirty, providerDirty, onClose]);
 
-  /** 保存 = 落盘 + 写系统凭据 + 删暂存凭据 + 重建 Agent。 */
-  const handleSave = useCallback(async () => {
-    setSaveError('');
-    const a = settings.providers.find((p) => p.name === settings.activeProvider);
-    if (!a) {
-      setSaveError(`找不到 Provider "${settings.activeProvider}"`);
-      return;
-    }
-    if (!forceSaveRef.current) {
-      if (!a.apiKey?.trim()) {
-        setSaveConfirm(`Provider "${a.name}" 的 API Key 为空，仍要保存？`);
-        return;
-      }
-      if (!a.model?.trim()) {
-        setSaveConfirm(`Provider "${a.name}" 的模型名称为空，仍要保存？`);
-        return;
-      }
-    }
-    forceSaveRef.current = false;
-
+  /** 保存管道：落盘 + 删暂存凭据 + 写新 Key + 重建 Agent。返回是否成功。 */
+  const runSavePipeline = useCallback(async (): Promise<boolean> => {
     saveSettings(settings);
     // 1) 先删「清除 Key / 删除 Provider」暂存的系统凭据（removeSecret 幂等、失败静默）
     for (const name of [...new Set([...pendingClears, ...pendingDeletes])]) {
@@ -257,24 +245,42 @@ const SettingsPanelApp: React.FC<{
       setSaveError(
         `API Key 写入系统凭据失败：${failed.join('、')}。\n设置本身已保存，但重启后这些 Key 会丢失，请重试或检查系统加密服务。`,
       );
-      return;
+      return false;
     }
     setPendingClears([]);
     setPendingDeletes([]);
     setLang(settings.display.language);
     bus.emit('lang:changed', { lang: settings.display.language });
-    setDirty(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
-    setSaveVersion((v) => v + 1);
     if (onSave) onSave();
+    return true;
   }, [settings, pendingClears, pendingDeletes, onSave]);
 
-  const handleSaveConfirm = useCallback(() => {
-    setSaveConfirm(null);
-    forceSaveRef.current = true;
-    void handleSave();
-  }, [handleSave]);
+  /** 全局保存（Agent / 显示等 tab） */
+  const handleSave = useCallback(async () => {
+    const ok = await runSavePipeline();
+    if (ok) {
+      setDirty(false);
+      setSaveVersion((v) => v + 1);
+    }
+  }, [runSavePipeline]);
+
+  /** Provider 页独立保存 */
+  const handleSaveProviders = useCallback(async () => {
+    const ok = await runSavePipeline();
+    if (ok) {
+      setProviderDirty(false);
+      setSaveVersion((v) => v + 1);
+    }
+  }, [runSavePipeline]);
+
+  const closeMsg =
+    dirty && providerDirty
+      ? '有未保存的设置与信号源更改，关闭后将全部丢失。确定关闭？'
+      : dirty
+        ? '有未保存的设置更改，关闭后将丢失。确定关闭？'
+        : '有未保存的信号源更改，关闭后将丢失。确定关闭？';
 
   // ── 渲染 ──
 
@@ -325,13 +331,15 @@ const SettingsPanelApp: React.FC<{
           >
             <ProviderPage
               settings={settings}
-              onCommit={commit}
+              onCommitProvider={commitProvider}
               onPersistSettings={persistSettings}
               onStageDelete={stageDelete}
               onStageClear={stageClear}
               onUnstageClear={unstageClear}
               pendingClears={pendingClears}
               saveVersion={saveVersion}
+              providerDirty={providerDirty}
+              onSaveProviders={handleSaveProviders}
             />
           </div>
 
@@ -654,29 +662,24 @@ const SettingsPanelApp: React.FC<{
           <button className="sp-btn sp-btn-cancel" onClick={handleClose}>
             取消
           </button>
-          <button
-            className={`sp-btn sp-btn-save${saved ? ' sp-btn-ok' : ''}`}
-            disabled={!dirty}
-            onClick={handleSave}
-            dangerouslySetInnerHTML={{
-              __html: saved ? iconHtml('check-circle', 11) + ' 已保存' : iconHtml('save', 11) + ' 保存',
-            }}
-          />
+          {/* Provider tab 用页内「保存 Provider」按钮，全局保存只负责其他 tab */}
+          {activeTab !== 'provider' && (
+            <button
+              className={`sp-btn sp-btn-save${saved ? ' sp-btn-ok' : ''}`}
+              disabled={!dirty}
+              onClick={handleSave}
+              dangerouslySetInnerHTML={{
+                __html: saved ? iconHtml('check-circle', 11) + ' 已保存' : iconHtml('save', 11) + ' 保存',
+              }}
+            />
+          )}
         </div>
 
         {/* 面板内确认（替换原生 alert/confirm） */}
         <ConfirmDialog
-          open={saveConfirm !== null}
-          title="保存确认"
-          message={saveConfirm}
-          confirmLabel="仍然保存"
-          onConfirm={handleSaveConfirm}
-          onCancel={() => setSaveConfirm(null)}
-        />
-        <ConfirmDialog
           open={closeConfirm}
           title="放弃未保存更改"
-          message="有未保存的修改，关闭后将丢失。确定关闭？"
+          message={closeMsg}
           confirmLabel="放弃并关闭"
           tone="danger"
           onConfirm={onClose}

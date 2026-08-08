@@ -28,8 +28,8 @@ import { formatLatency } from './status';
 
 interface ProviderPageProps {
   settings: AppSettings;
-  /** 变更只进 state 并标 dirty（保存按钮统一落盘） */
-  onCommit: (next: AppSettings) => void;
+  /** Provider 变更只进 state 并标 providerDirty（与全局保存互不牵连） */
+  onCommitProvider: (next: AppSettings) => void;
   /** 立即落盘但不标 dirty（如测试结果，非配置变更） */
   onPersistSettings: (next: AppSettings) => void;
   /** 暂存「删除 Provider」——保存时才删系统凭据，取消不丢 Key */
@@ -40,17 +40,22 @@ interface ProviderPageProps {
   pendingClears: string[];
   /** 保存成功后自增——用于把「未保存 Key」标记复位为「已保存」 */
   saveVersion: number;
+  providerDirty: boolean;
+  /** Provider 页独立保存（落盘 + 凭据 + 重建 Agent） */
+  onSaveProviders: () => void;
 }
 
 export function ProviderPage({
   settings,
-  onCommit,
+  onCommitProvider,
   onPersistSettings,
   onStageDelete,
   onStageClear,
   onUnstageClear,
   pendingClears,
   saveVersion,
+  providerDirty,
+  onSaveProviders,
 }: ProviderPageProps) {
   const [selected, setSelected] = useState(() => getActiveProvider(settings).name);
   const [keyDirtyMap, setKeyDirtyMap] = useState<Record<string, boolean>>({});
@@ -98,9 +103,9 @@ export function ProviderPage({
         setKeyDirtyMap((m) => ({ ...m, [name]: true }));
       }
       const patch = { [field]: value } as Partial<ProviderSettings>;
-      onCommit(updateProvider(settings, name, patch));
+      onCommitProvider(updateProvider(settings, name, patch));
     },
-    [settings, onCommit, onStageClear, onUnstageClear],
+    [settings, onCommitProvider, onStageClear, onUnstageClear],
   );
 
   const handleModelChange = useCallback(
@@ -112,9 +117,9 @@ export function ProviderPage({
           next = updateProvider(next, name, { baseUrl: desc.baseUrl });
         }
       }
-      onCommit(next);
+      onCommitProvider(next);
     },
-    [settings, onCommit],
+    [settings, onCommitProvider],
   );
 
   const handleRefreshModels = useCallback(async (): Promise<number> => {
@@ -173,8 +178,8 @@ export function ProviderPage({
   }, [selectedProvider, onPersistSettings]);
 
   const handleSetCurrent = useCallback(() => {
-    onCommit({ ...settings, activeProvider: selectedProvider.name });
-  }, [settings, selectedProvider.name, onCommit]);
+    onCommitProvider({ ...settings, activeProvider: selectedProvider.name });
+  }, [settings, selectedProvider.name, onCommitProvider]);
 
   const handleAdd = useCallback(
     (entry: AddProviderEntry) => {
@@ -189,7 +194,7 @@ export function ProviderPage({
         if (added?.apiKey?.trim()) {
           setKeyDirtyMap((m) => ({ ...m, [added.name]: true }));
         }
-        onCommit(next);
+        onCommitProvider(next);
         setSelected(entry.name);
         setAddOpen(false);
         requestFocusKey();
@@ -198,7 +203,7 @@ export function ProviderPage({
         console.warn('[provider] 添加失败:', e);
       }
     },
-    [settings, onCommit, requestFocusKey],
+    [settings, onCommitProvider, requestFocusKey],
   );
 
   const handleDeleteConfirm = useCallback(() => {
@@ -207,7 +212,7 @@ export function ProviderPage({
       const next = removeProvider(settings, delTarget);
       onStageDelete(delTarget);
       onUnstageClear(delTarget);
-      onCommit(next);
+      onCommitProvider(next);
       setSelected(next.activeProvider);
       setDelTarget(null);
       setTests((t) => {
@@ -226,15 +231,15 @@ export function ProviderPage({
       console.warn('[provider] 删除失败:', e);
       setDelTarget(null);
     }
-  }, [settings, delTarget, onCommit, onStageDelete, onUnstageClear]);
+  }, [settings, delTarget, onCommitProvider, onStageDelete, onUnstageClear]);
 
   const handleClearKeyConfirm = useCallback(() => {
     if (!clearTarget) return;
-    onCommit(updateProvider(settings, clearTarget, { apiKey: '' }));
+    onCommitProvider(updateProvider(settings, clearTarget, { apiKey: '' }));
     onStageClear(clearTarget);
     setKeyDirtyMap((m) => ({ ...m, [clearTarget]: true }));
     setClearTarget(null);
-  }, [settings, clearTarget, onCommit, onStageClear]);
+  }, [settings, clearTarget, onCommitProvider, onStageClear]);
 
   return (
     <>
@@ -274,7 +279,7 @@ export function ProviderPage({
           onSetCurrent={handleSetCurrent}
           onClearKey={() => setClearTarget(selectedProvider.name)}
           onResetBaseUrl={() =>
-            onCommit(
+            onCommitProvider(
               updateProvider(settings, selectedProvider.name, {
                 baseUrl: defaultBaseUrl(selectedProvider.name, selectedProvider.kind),
               }),
@@ -286,6 +291,16 @@ export function ProviderPage({
           onDelete={() => setDelTarget(selectedProvider.name)}
         />
       </div>
+
+      {providerDirty && (
+        <div className="pp-save-bar">
+          <span className="pp-save-bar-dot" />
+          <span className="pp-save-bar-text">有未保存的信号源更改</span>
+          <button type="button" className="pp-save-btn" onClick={onSaveProviders}>
+            保存 Provider
+          </button>
+        </div>
+      )}
 
       <AddProviderSheet
         open={addOpen}

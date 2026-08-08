@@ -4480,3 +4480,48 @@ html.no-bf .th-bubble {
   font-size: calc(9.5px * var(--font-scale));
   color: var(--obs-fail);
 }
+
+/* ── Provider 页独立保存条（P11：保存与全局拆域）── */
+.pp-save-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 14px 12px;
+  padding: 8px 12px;
+  border: 1px solid rgba(201, 162, 92, 0.32);
+  border-radius: 7px;
+  background: var(--obs-brass-dim);
+  flex-shrink: 0;
+}
+.pp-save-bar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--obs-brass);
+  box-shadow: 0 0 8px rgba(201, 162, 92, 0.6);
+  animation: pp-pulse 1.6s ease-in-out infinite;
+}
+.pp-save-bar-text {
+  flex: 1;
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text-2);
+}
+.pp-save-btn {
+  flex-shrink: 0;
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: rgba(201, 162, 92, 0.14);
+  border: 1px solid rgba(201, 162, 92, 0.42);
+  color: var(--obs-brass-hi);
+  cursor: pointer;
+  transition: all var(--obs-snap);
+}
+.pp-save-btn:hover {
+  background: rgba(201, 162, 92, 0.24);
+  box-shadow: 0 0 12px rgba(201, 162, 92, 0.12);
+}

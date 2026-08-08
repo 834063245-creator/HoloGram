@@ -351,3 +351,36 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
 - vite dev（浏览器 mock）+ headless Chrome CDP 真机冒烟：13 项交互断言全过
   （初始状态 / 无 Key 测试提示 / 添加弹层 / chips 一键添加 / Key 聚焦 /
   未保存 chip / 删除确认弹窗 / 删除后回落），零运行时错误
+
+## P6 — 保存拆域 + 聊天面板模型切换（2026-08-08 完成）
+
+> 用户反馈三点：① Provider 保存不应与全局设置共用一个事务；② 聊天面板左下角
+> 模型按钮点开直接弹设置面板，不是真正的模型切换；③ 思考强度缺聊天面板入口。
+> 用户明确拒绝自动保存（不接受其复杂度），故采用**手动、按域独立保存**。
+
+### 保存拆域（Provider 独立保存）
+
+- `SettingsPanel` 拆出 `providerDirty` 与全局 `dirty` 两条状态线。
+- Provider 页所有变更走 `onCommitProvider`（只标 providerDirty），
+  页内出现「有未保存的信号源更改 + 保存 Provider」保存条；
+  Provider tab 下隐藏底部全局保存按钮。
+- 全局保存（Agent / 显示等 tab）与 Provider 保存共用 `runSavePipeline()`
+  （落盘 + 删暂存凭据 + 写新 Key + 重建 Agent），但各自复位各自的 dirty。
+- 关闭确认按 dirty 组合给出不同文案；移除全局保存时空 Key/空模型的
+  confirm 拦截（空 Key 是合法状态，如本地端点）。
+
+### 聊天面板模型切换器（ModelSwitcher）
+
+- 左下角模型徽章点击展开弹层（不再直接弹设置面板）：
+  - 当前信号源模型列表（静态目录 + 动态模型，含推理/上下文/价格徽章）
+  - 其他信号源一键切换（空模型自动带出 catalog 默认模型）
+  - 思考强度：Anthropic 信号源 = effort 下拉（自动/低/中/高/极限/关闭）；
+    OpenAI 兼容信号源 = 深度思考开关（全局 disableThinking）
+  - 底部「管理 Provider…」进入完整设置
+- 任何操作立即 `saveSettings` + `getOnSettingsSave()`（与设置面板保存同一重建链）。
+
+### 验证（2026-08-08 实测）
+
+- `npx tsc --noEmit` 0 错
+- `npx vitest run` 全绿
+- CDP 真机冒烟：Provider 页保存条出现/独立保存、聊天面板弹层展开/切模型/切信号源/思考强度

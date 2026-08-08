@@ -8,11 +8,12 @@
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
 import { useStore } from 'zustand';
-import { type AppSettings, getActiveProvider, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
+import { type AppSettings, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
 import { useShellStore } from '../../app/shell-store';
 import { getChatStore } from '../chat-store';
 import { iconHtml } from '../icons';
 import type { CollaborationMode, PermissionMode } from '../panel-store';
+import { ModelSwitcher } from './ModelSwitcher';
 
 // ── 类型 ──
 
@@ -34,13 +35,8 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
   // 设置经 onSettingsSaved 订阅响应式更新 — 不再依赖手动 refresh() 催更
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   useEffect(() => onSettingsSaved(() => setSettings(loadSettings())), []);
-  const active = getActiveProvider(settings);
   const ctxWin = settings.agent?.contextWindow || 0;
 
-  let modelLabel = active?.model || 'unknown';
-  if (modelLabel.length > 18) modelLabel = modelLabel.slice(0, 17) + '\u2026';
-
-  const thinking = active?.thinking ? ' · 思考' : '';
   const usageStr = lastUsageText ? ` · ${lastUsageText}` : '';
 
   // Token 进度条
@@ -61,20 +57,9 @@ function ChatFooterLeft({ panelId, callbacks }: { panelId: string; callbacks: Fo
     );
   }
 
-  const handleModelClick = useCallback(() => {
-    callbacks.onOpenSettings?.();
-  }, [callbacks.onOpenSettings]);
-
   return (
     <div className="chat-footer-left">
-      <button
-        className="chat-model-badge chat-model-clickable"
-        title={`点击切换模型 · ${active?.name} / ${active?.model}`}
-        onClick={handleModelClick}
-      >
-        <span dangerouslySetInnerHTML={{ __html: iconHtml('agent', 10) }} /> {modelLabel}
-        {thinking}
-      </button>
+      <ModelSwitcher settings={settings} onOpenSettings={callbacks.onOpenSettings} />
       {tokenBar}
       <span className="chat-usage-badge">{usageStr}</span>
     </div>
