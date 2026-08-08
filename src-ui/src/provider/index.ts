@@ -7,6 +7,7 @@ import type { ProviderSettings } from '../settings';
 import { createAnthropicProvider } from './anthropic';
 import { createOpenAIProvider } from './openai';
 import type { Provider } from './types';
+import { withThinkingDisabled } from './thinking';
 
 export interface CreateProviderOptions {
   /** Disable reasoning/thinking on OpenAI-compatible providers (e.g. for translation). */
@@ -23,7 +24,7 @@ export function createProvider(settings: ProviderSettings, options?: CreateProvi
       model: settings.model,
       // disableThinking 语义统一到两种协议：true → 强制关闭扩展思考。
       // 翻译器/摘要路径都传 disableThinking: true，anthropic 在此同样关闭。
-      thinking: options?.disableThinking ? 'off' : settings.thinking || undefined,
+      thinking: withThinkingDisabled(settings.thinking, options?.disableThinking),
     });
   }
   return createOpenAIProvider({

@@ -6,6 +6,7 @@
 
 import type React from 'react';
 import { isFactoryBaseUrl, type ConnectionProbe, type ProbeOutcome } from '../../../settings';
+import { THINKING_MODES, type StoredThinking } from '../../../provider/thinking';
 import type { ModelDescriptor, Protocol } from '../../../provider/types';
 import { ModelSelector } from '../ModelSelector';
 import { formatLatency, formatTestAt, providerStatus, STATUS_LABEL } from './status';
@@ -28,7 +29,7 @@ interface ProviderDetailProps {
     apiKey: string;
     baseUrl: string;
     model: string;
-    thinking?: string;
+    thinking?: StoredThinking;
     lastTest?: ConnectionProbe;
   };
   isCurrent: boolean;
@@ -206,12 +207,11 @@ export function ProviderDetail({
               value={provider.thinking || ''}
               onChange={(e) => onFieldChange('thinking', e.target.value)}
             >
-              <option value="">自动（模型自定）</option>
-              <option value="low">低 (low)</option>
-              <option value="medium">中 (medium)</option>
-              <option value="high">高 (high)</option>
-              <option value="max">极限 (max)</option>
-              <option value="off">关闭</option>
+              {THINKING_MODES.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </select>
             <div className="pp-f-hint">等级越高思考越深，也更费 token。与 Agent 页的「深度思考」开关互为补充。</div>
           </div>

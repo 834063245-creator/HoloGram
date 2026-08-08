@@ -6,6 +6,7 @@
 import { clampMaxTokens } from './catalog';
 import { sendWithRetry } from './retry';
 import { extractWritePreview, fetchJsonWithTimeout, prewarmEndpoint, sseEvents } from './shared';
+import { THINKING_EFFORT_BUDGETS, type StoredThinking } from './thinking';
 import {
   type Chunk,
   ChunkType,
@@ -28,7 +29,7 @@ interface AnthropicConfig {
   baseUrl?: string;
   model: string;
   /** "adaptive" 启用扩展思考 */
-  thinking?: string;
+  thinking?: StoredThinking;
 }
 
 export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
@@ -283,9 +284,9 @@ function buildRequest(
   };
 
   if (thinkingCfg && thinkingCfg !== 'off') {
-    // 努力等级 → budget tokens 映射
-    const effortMap: Record<string, number> = { low: 4000, medium: 8000, high: 16000, max: 32000 };
-    const effortBudget = effortMap[thinkingCfg.toLowerCase()];
+    // 努力等级 → budget tokens 映射（唯一事实源在 provider/thinking.ts）
+    const effortBudget =
+      THINKING_EFFORT_BUDGETS[thinkingCfg.toLowerCase() as keyof typeof THINKING_EFFORT_BUDGETS];
     if (effortBudget) {
       r.thinking = { type: 'enabled', budget_tokens: Math.min(effortBudget, 32000) };
     } else {

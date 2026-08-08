@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getAllModels, getDefaultModel } from '../../provider/catalog';
 import type { ModelDescriptor } from '../../provider/types';
+import { DEEP_THINK_LABEL, THINKING_MODES, type StoredThinking } from '../../provider/thinking';
 import {
   getActiveProvider,
   isFactoryBaseUrl,
@@ -88,7 +89,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
   );
 
   const setThinking = useCallback(
-    (v: string) => apply(updateProvider(settings, active.name, { thinking: v }), true),
+    (v: StoredThinking) => apply(updateProvider(settings, active.name, { thinking: v }), true),
     [settings, active.name, apply],
   );
 
@@ -179,19 +180,18 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
               <select
                 className="ms-pop-select"
                 value={active.thinking || ''}
-                onChange={(e) => setThinking(e.target.value)}
+                onChange={(e) => setThinking(e.target.value as StoredThinking)}
               >
-                <option value="">自动（模型自定）</option>
-                <option value="low">低 (low)</option>
-                <option value="medium">中 (medium)</option>
-                <option value="high">高 (high)</option>
-                <option value="max">极限 (max)</option>
-                <option value="off">关闭</option>
+                {THINKING_MODES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
               </select>
             ) : (
               <label className="ms-pop-check">
                 <input type="checkbox" checked={!settings.agent.disableThinking} onChange={toggleDeepThink} />
-                深度思考（DeepSeek Think 模式）
+                {DEEP_THINK_LABEL}
               </label>
             )}
           </div>

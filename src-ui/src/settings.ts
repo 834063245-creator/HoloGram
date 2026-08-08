@@ -6,6 +6,7 @@
 
 import { getCatalogProviders, getDefaultModel, getModel } from './provider/catalog';
 import { ANTHROPIC_DEFAULT_BASE_URL } from './provider/anthropic';
+import type { StoredThinking } from './provider/thinking';
 import type { Protocol } from './provider/types';
 
 /** 连接探针的结果（CONTEXT.md「ConnectionProbe」）— 非敏感，随 localStorage 持久化。 */
@@ -36,7 +37,7 @@ export interface ProviderSettings {
   apiKey: string;
   baseUrl: string;
   model: string;
-  thinking?: string; // Anthropic 扩展思考
+  thinking?: StoredThinking; // 领域词 ThinkingPolicy；存储字段名保持 thinking（遗留名）
   lastTest?: ConnectionProbe; // 存储字段名保持 lastTest（遗留名）；领域词 ConnectionProbe
 }
 

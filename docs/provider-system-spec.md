@@ -440,3 +440,23 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
 - `npx tsc --noEmit` 0 错
 - provider/settings 相关 48 项测试全绿；全量 798 通过
 - CDP 真机冒烟 8/8：tests Map / keyDirtyMap / keyVisibleMap / 添加 / 删除 / 保存条，零运行时错误
+
+## P10 — 按词收敛：ThinkingPolicy（2026-08-08 完成）
+
+> 依据 CONTEXT.md「ThinkingPolicy」词条：把「思考策略」的档位、标签与预算映射
+> 收进单一模块，消除 ProviderDetail / ModelSwitcher 的选项重复与 anthropic.ts 的内联映射。
+
+- 新增 `provider/thinking.ts`：`ThinkingEffort` / `ThinkingMode` / `StoredThinking` 类型、
+  `THINKING_MODES`（档位 + 标签，唯一事实源）、`THINKING_EFFORT_BUDGETS`（档位 → token 预算）、
+  `DEEP_THINK_LABEL`（全局开关文案）、`withThinkingDisabled`（全局开关对单 Provider 的生效语义）。
+- `settings.ts` / `anthropic.ts`：`thinking` 字段类型收敛为 `StoredThinking`
+  （含历史遗留数字预算）；存储字段名与形状不变。
+- `anthropic.ts`：内联 effortMap 删除，改引 `THINKING_EFFORT_BUDGETS`。
+- `provider/index.ts`：`disableThinking → 'off'` 的语义收口到 `withThinkingDisabled`。
+- `ProviderDetail` / `ModelSwitcher`：选项列表改引 `THINKING_MODES`；两处「深度思考」文案统一用 `DEEP_THINK_LABEL`。
+
+### 验证
+
+- `npx tsc --noEmit` 0 错；档位文案零残留（只在 thinking.ts）
+- provider/settings 相关 48 项测试全绿
+- CDP 真机冒烟 11/11：保存拆域 + 聊天面板切换器 + 思考强度写入，零运行时错误

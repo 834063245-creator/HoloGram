@@ -19,6 +19,7 @@ import { bus } from '../events';
 import { iconHtml } from '../icons';
 import { ConfirmDialog } from './settings/ConfirmDialog';
 import { ProviderPage } from './settings/ProviderPage';
+import { DEEP_THINK_LABEL } from '../../provider/thinking';
 
 type Tab = 'provider' | 'agent' | 'display' | 'languages' | 'about';
 
@@ -385,7 +386,7 @@ const SettingsPanelApp: React.FC<{
                       commit({ ...settings, agent: { ...settings.agent, disableThinking: !e.target.checked } });
                     }}
                   />
-                  深度思考 (DeepSeek Think 模式)
+                  {DEEP_THINK_LABEL}
                 </label>
                 <div className="sp-hint-sub">
                   关闭 = 强制直出（Anthropic / OpenAI 兼容两种协议都生效）。Anthropic 思考强度在
