@@ -174,11 +174,7 @@ export function createPlanWriteHook(ctx: GraphContext, planState: PlanStateManag
 
       const analysis = parts.join('\n');
       if (analysis) {
-        return (
-          result +
-          `\n\n---\n📊 [自动影响面分析 — 供写计划时参考]\n${analysis}\n` +
-          `💡 提示: 用 trace_impact / explore_deps / fragile_modules 查看具体文件的详细依赖。`
-        );
+        return result + `\n\n---\n📊 [自动影响面分析 — 供写计划时参考]\n${analysis}\n`;
       }
       return result;
     },

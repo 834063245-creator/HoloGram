@@ -251,18 +251,8 @@ export function buildGraphSnapshot(graphData: any): string {
 export const GRAPH_ENRICH_TOOLS = [
   'read_file_content',
   'read_file',
-  'search_content',
-  'glob',
-  'list_directory',
-  'trace_dataflow',
-  'search_symbols',
-  'inspect_symbol',
   'git_diff',
   'run_shell',
-  'resolve_call',
-  'infer_type',
-  'find_implementations',
-  'find_references',
 ] as const;
 
 /** 触发 preflight 写前影响分析的工具名
@@ -306,11 +296,6 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           const fp = String(args.filePath || args.file_path || '');
           if (fp) {
             snippet = ctx.getImpactSummary(fp);
-            const nodes = ctx.getNodesInFile(fp);
-            const hasFuncs = nodes.some((n) => n.kind === 'function' || n.kind === 'method');
-            if (hasFuncs && snippet) {
-              snippet += ' 共享变量/异步链 → trace_dataflow 追踪。';
-            }
             // 引擎层：脆弱度排名
             if (ctx.engine) {
               const normFp = fp.replace(/\\/g, '/').toLowerCase();
@@ -321,91 +306,10 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               );
               if (rankEntry) {
                 const rank = ctx.engine.fragilityRanks.indexOf(rankEntry) + 1;
-                snippet = (snippet || '') + ` 脆弱度 #${rank} (${rankEntry.score.toFixed(0)}) → 改前调 trace_impact`;
+                snippet = (snippet || '') + ` 脆弱度 #${rank} (${rankEntry.score.toFixed(0)})`;
               }
             }
           }
-          break;
-        }
-        case 'search_content': {
-          // 从匹配行中提取符号名，与 fileIndex 交叉引用
-          const graphSymbols = extractGraphSymbolsFromSearch(result, (fp: string) => ctx.getNodesInFile(fp));
-          if (graphSymbols.length > 0) {
-            const parts = graphSymbols.map((s) => {
-              const info: string[] = [];
-              if (s.fanIn > 0) info.push(`↓${s.fanIn}`);
-              if (s.fanOut > 0) info.push(`↑${s.fanOut}`);
-              return `\`${s.name}\`${info.length > 0 ? ` (${info.join(' ')})` : ''}`;
-            });
-            const highImpact = graphSymbols.filter((s) => s.fanIn >= 5);
-            snippet = `图谱命中: ${parts.join(', ')}。`;
-            if (highImpact.length > 0) {
-              snippet += ` → \`${highImpact[0].name}\` 下游多, 调 trace_impact 看波及`;
-            }
-          } else {
-            const files = extractFilesFromSearchResult(result);
-            if (files.length > 0) {
-              snippet = ctx.getSearchContext(files.slice(0, 3));
-              // 引擎层：标记是否有匹配在高脆弱度文件中
-              if (ctx.engine) {
-                const hot = files.filter((f) => {
-                  const nf = f.replace(/\\/g, '/').toLowerCase();
-                  return ctx.engine?.fragilityRanks.some((r) => r.file.replace(/\\/g, '/').toLowerCase().includes(nf));
-                });
-                if (hot.length > 0) {
-                  snippet = (snippet || '') + ` ⚠ 其中 ${hot.length} 个文件在高脆弱度排名中 → 谨慎修改`;
-                }
-              }
-            }
-          }
-          break;
-        }
-        case 'glob': {
-          const files = extractFilesFromGlobResult(result);
-          if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
-          break;
-        }
-        case 'list_directory': {
-          const files = extractSourceFilesFromDirList(result);
-          if (files.length > 0) snippet = ctx.getSearchContext(files.slice(0, 3));
-          break;
-        }
-        case 'trace_dataflow': {
-          const vars = extractSharedVarsFromDataflow(result);
-          if (vars.length > 0) {
-            snippet = `共享变量: ${vars.map((v) => `\`${v}\``).join(', ')}。→ 用 trace_impact 追踪下游影响`;
-          }
-          break;
-        }
-        case 'search_symbols': {
-          const nodes = extractNodesFromSearchResult(result);
-          if (nodes.length > 0) {
-            const names = nodes.map((n) => `\`${n.name}\``).join(', ');
-            snippet = `命中 ${nodes.length} 个节点（${names}${nodes.length > 3 ? '…' : ''}）。→ 调 get_neighbors 查看依赖`;
-            // 引擎层：在搜索命中中高亮高脆弱度文件
-            if (ctx.engine) {
-              const rankHit = nodes.some((node) =>
-                ctx.engine?.fragilityRanks.some((r) => r.file.toLowerCase().includes(node.name.toLowerCase())),
-              );
-              if (rankHit) {
-                snippet += ` ⚠ 命中了高脆弱度模块 → 调 trace_impact`;
-              }
-            }
-          }
-          break;
-        }
-        case 'inspect_symbol': {
-          try {
-            const parsed = JSON.parse(result);
-            if (parsed.community) {
-              snippet = `社区归属: ${parsed.community}。→ 调 get_community 查看同社区节点`;
-            }
-            // 引擎层：标记合成告警
-            if (ctx.engine && ctx.engine.synthesisAlerts.length > 0) {
-              const alerts = ctx.engine.synthesisAlerts.map((a) => a.type).join(', ');
-              snippet = (snippet || '') + ` 合成标记: ${alerts}`;
-            }
-          } catch {}
           break;
         }
         case 'git_diff': {
@@ -438,7 +342,7 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               // 引擎层：失败时报告脆弱度上下文
               if (parsed.outcome === 'fail' && ctx.engine && ctx.engine.fragilityRanks.length > 0) {
                 const top = ctx.engine.fragilityRanks[0];
-                snippet += ` | 最脆弱模块: ${top.file.split('/').pop()} (${top.score.toFixed(0)}) → 考虑是否本次改动触发了退化`;
+                snippet += ` | 最脆弱模块: ${top.file.split('/').pop()} (${top.score.toFixed(0)})`;
               }
             } else {
               // 回退：无法识别输出格式，缓存通用结果
@@ -449,67 +353,6 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               snippet = `⚠️ 完成，但无法解析输出格式。尾部: ${tail}`;
             }
           }
-          break;
-        }
-        // ── LSP 工具：从解析结果注入图上下文 ──
-        case 'resolve_call': {
-          try {
-            const parsed = JSON.parse(result);
-            if (parsed.resolved && Array.isArray(parsed.resolved) && parsed.resolved.length > 0) {
-              const top = parsed.resolved.slice(0, 3);
-              const names = top.map((r: any) => `\`${r.callee_qn}\``).join(', ');
-              snippet = `解析到 ${parsed.resolved.length} 个调用目标: ${names}${parsed.resolved.length > 3 ? '…' : ''}。`;
-              // 检查图中 callee 的影响
-              const fp = String(args.file_path || '');
-              if (fp && parsed.resolved[0].callee_qn) {
-                snippet += ` → 调 trace_impact "${parsed.resolved[0].callee_qn}" 看下游`;
-              }
-            }
-          } catch {}
-          break;
-        }
-        case 'infer_type': {
-          try {
-            const parsed = JSON.parse(result);
-            if (parsed.type_name) {
-              snippet = `类型: \`${parsed.type_name}\`${parsed.def_module ? ` (${parsed.def_module})` : ''}。→ 调 search_symbols 找同类型相关的符号`;
-            }
-          } catch {}
-          break;
-        }
-        case 'find_implementations': {
-          try {
-            const parsed = JSON.parse(result);
-            const impls = parsed.implementations;
-            if (impls && Array.isArray(impls) && impls.length > 0) {
-              const count = impls.length;
-              const names = impls
-                .slice(0, 3)
-                .map((i: any) => `\`${i.name || i.qualified_name || '?'}\``)
-                .join(', ');
-              snippet = `找到 ${count} 个实现: ${names}${count > 3 ? '…' : ''}。→ 调 get_neighbors 查看完整继承树`;
-            }
-          } catch {}
-          break;
-        }
-        case 'find_references': {
-          try {
-            const parsed = JSON.parse(result);
-            const refs = parsed.references;
-            if (refs && Array.isArray(refs) && refs.length > 0) {
-              const count = refs.length;
-              // 从引用中提取唯一文件
-              const refFiles = new Set<string>();
-              for (const r of refs) {
-                if (r.file) refFiles.add(r.file);
-                if (refFiles.size >= 5) break;
-              }
-              snippet = `找到 ${count} 个引用，分布在 ${refFiles.size} 个文件中。`;
-              if (refFiles.size >= 3) {
-                snippet += ` 跨文件影响面大 → 调 trace_impact 评估变更风险`;
-              }
-            }
-          } catch {}
           break;
         }
       }
@@ -593,7 +436,6 @@ export function createStatePreflightHook(diagSource: DiagnosticsSource): Preflig
 // ── 辅助函数 ──
 
 // ── 构建/测试输出解析器 ──
-
 /** 将构建或测试命令的 stdout/stderr 解析为结构化结果。 */
 function parseBuildOutput(
   cmd: string,
@@ -656,135 +498,7 @@ function parseBuildOutput(
   return null;
 }
 
-// ── search_content → 图谱符号交叉匹配 ──
-
-interface SearchGraphSymbol {
-  name: string;
-  fanIn: number;
-  fanOut: number;
-  file: string;
-}
-
-/** 从代码行中提取类标识符的词。 */
-function extractIdentifiers(text: string): string[] {
-  const m = text.match(/\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b/g);
-  if (!m) return [];
-  return [...new Set(m)];
-}
-
-/** 将 search_content 匹配结果与 fileIndex 交叉引用：哪些匹配的
- *  标识符是已知的图符号？返回按 fanIn 排序的前 5 个匹配。 */
-function extractGraphSymbolsFromSearch(result: string, getNodes: (fp: string) => NodeBrief[]): SearchGraphSymbol[] {
-  try {
-    const parsed = JSON.parse(result);
-    const matches = parsed.matches || parsed.results || [];
-    if (!Array.isArray(matches)) return [];
-
-    const seen = new Set<string>();
-    const symbols: SearchGraphSymbol[] = [];
-
-    for (const m of matches) {
-      const file = m.file || '';
-      if (!file) continue;
-
-      // 从匹配内容中提取标识符
-      const content = m.match_content || m.content || m.line || '';
-      const idents = extractIdentifiers(content);
-
-      // 从内存中的 fileIndex 获取此文件的符号
-      const fileNodes = getNodes(file);
-      if (fileNodes.length === 0) continue;
-
-      // 交叉引用：哪些标识符是实际的图符号？
-      for (const n of fileNodes) {
-        if (idents.includes(n.name) && !seen.has(n.name)) {
-          seen.add(n.name);
-          symbols.push({ name: n.name, fanIn: n.fanIn, fanOut: n.fanOut, file });
-          if (symbols.length >= 5) {
-            symbols.sort((a, b) => b.fanIn - a.fanIn);
-            return symbols;
-          }
-        }
-      }
-    }
-    symbols.sort((a, b) => b.fanIn - a.fanIn);
-    return symbols.slice(0, 5);
-  } catch {
-    return [];
-  }
-}
-
-function extractFilesFromSearchResult(result: string): string[] {
-  try {
-    const parsed = JSON.parse(result);
-    if (parsed.matches && Array.isArray(parsed.matches)) {
-      const files = new Set<string>();
-      for (const m of parsed.matches) {
-        if (m.file) files.add(m.file);
-        if (files.size >= 5) break;
-      }
-      return [...files];
-    }
-  } catch {
-    /* 非 JSON，忽略 */
-  }
-  return [];
-}
-
-// ── 辅助解析函数（供 GraphContextHook enrich 使用）──
-
-function extractFilesFromGlobResult(result: string): string[] {
-  const lines = result
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-  // glob 输出格式：每行一个文件路径
-  return lines.filter((l) => /\.(ts|rs|py|js|tsx|jsx|go|java|cpp|c|h|hpp)$/i.test(l)).slice(0, 5);
-}
-
-function extractSourceFilesFromDirList(result: string): string[] {
-  const files: string[] = [];
-  const lines = result.split('\n');
-  for (const line of lines) {
-    const pathMatch = line.match(/path:\s*(\S+)/i);
-    const typeMatch = line.match(/type:\s*file/i);
-    if (pathMatch && typeMatch) {
-      const fp = pathMatch[1];
-      if (/\.(ts|rs|py|js|tsx|jsx|go|java|cpp|c|h|hpp)$/i.test(fp)) {
-        files.push(fp);
-        if (files.length >= 5) break;
-      }
-    }
-  }
-  return files;
-}
-
-function extractSharedVarsFromDataflow(result: string): string[] {
-  try {
-    const parsed = JSON.parse(result);
-    if (parsed.shared_state && Array.isArray(parsed.shared_state)) {
-      return parsed.shared_state
-        .map((s: any) => s.var || '')
-        .filter(Boolean)
-        .slice(0, 5);
-    }
-  } catch {}
-  return [];
-}
-
-function extractNodesFromSearchResult(result: string): { name: string }[] {
-  try {
-    const parsed = JSON.parse(result);
-    const arr = parsed.results || parsed.matches || [];
-    if (Array.isArray(arr)) {
-      return arr
-        .map((r: any) => ({ name: r.name || r.id || '' }))
-        .filter((n) => n.name)
-        .slice(0, 5);
-    }
-  } catch {}
-  return [];
-}
+// ── git_diff → 变更文件提取 ──
 
 function extractFilesFromDiffResult(result: string): string[] {
   const files = new Set<string>();
@@ -835,9 +549,6 @@ export function createGraphContext(
     if (upstream.length > 0) {
       summary += ` | 依赖上游: ${upstream.map((n) => `\`${n.name}\`(${n.fanOut})`).join(', ')}。`;
     }
-    if (downstream.length > 0) {
-      summary += ` → 改 \`${downstream[0].name}\` 前调 trace_impact`;
-    }
     return summary;
   }
 
@@ -866,7 +577,7 @@ export function createGraphContext(
     if (files.length >= 2) {
       summary += ` ${files.length} 个文件, 扇入合计 ${totalFanIn}, 扇出合计 ${totalFanOut}。`;
       if (totalFanIn >= 10 || totalFanOut >= 10) {
-        summary += ` → 跨文件耦合较高, 调 explore_deps 追踪文件间依赖`;
+        summary += ` 跨文件耦合较高。`;
       }
     }
     return summary;
@@ -900,17 +611,12 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
         return [
           `⚠️ [切换分支] 即将切换到 \`${branch}\`。`,
           `│  切换前请确认当前工作区已提交或暂存，避免丢失未保存的修改。`,
-          `│  → 先用 git_status 确认状态，必要时 git_stash_push 暂存。`,
         ].join('\n');
       }
 
       // ── git_commit: 无具体文件，通用警告 ──
       if (toolName === 'git_commit') {
-        return [
-          `⚠️ [提交] 即将创建提交。`,
-          `│  → 先用 git_diff --staged 确认暂存区变更。`,
-          `│  → 若涉及核心模块，建议调 trace_impact 检查波及范围后再推送。`,
-        ].join('\n');
+        return [`⚠️ [提交] 即将创建提交。`].join('\n');
       }
 
       // ── git_discard: 拼接 repo 根 + 相对路径 ──
@@ -961,11 +667,6 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
 
       lines.push(`│`);
       lines.push(`│  风险等级: ${riskLevel}`);
-
-      if (riskLevel.trim() !== 'LOW') {
-        const topName = topSymbols[0].name;
-        lines.push(`│  → ${verb}前建议调 trace_impact "${topName}" 查看完整波及范围`);
-      }
 
       // ── 引擎层数据：紧凑标签式摘要（原来是 6 个区块，约 20 行）──
       if (ctx.engine) {

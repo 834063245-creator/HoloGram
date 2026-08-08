@@ -186,6 +186,9 @@ describe('P3 reverse: 新加 coding 工具没加 hook 常量 → 炸', () => {
     'agent_isolation_discard', // 隔离管理
     'agent_isolation_status', // 隔离管理
     'git_stage', // 暂存（git_commit 的 preflight 已覆盖风险）
+    'search_content', // A/B 证据：引导采纳率≈0，触发面已收窄（2026-08 止损）
+    'glob', // A/B 证据：引导采纳率≈0，触发面已收窄（2026-08 止损）
+    'list_directory', // A/B 证据：引导采纳率≈0，触发面已收窄（2026-08 止损）
   ]);
 
   it('未归类工具 = 漏加 hook 常量', () => {
@@ -199,7 +202,7 @@ describe('P3 reverse: 新加 coding 工具没加 hook 常量 → 炸', () => {
     if (untracked.length > 0) {
       const lines = untracked.map((n) => {
         // 根据工具类型给建议
-        if (['read_file_content', 'search_content', 'glob', 'list_directory', 'git_diff', 'run_shell'].includes(n))
+        if (['read_file_content', 'git_diff', 'run_shell'].includes(n))
           return `  "${n}" → 加到 GRAPH_ENRICH_TOOLS（读工具应该 enrichment）`;
         if (
           [
@@ -393,7 +396,7 @@ describe('P1: MCP 通路 — frontend dispatch names match engine', () => {
   // 关键约束：hologram_tools_list 返回的 name == GRAPH_ENRICH_TOOLS 中的名字
   // （trace_dataflow, search_symbols, inspect_symbol, resolve_call, ...）
 
-  const engineToolsInEnrichList = [
+  const engineToolsNoLongerEnriched = [
     'trace_dataflow',
     'search_symbols',
     'inspect_symbol',
@@ -403,10 +406,11 @@ describe('P1: MCP 通路 — frontend dispatch names match engine', () => {
     'find_references',
   ];
 
-  it('引擎返回的 hologram_* 工具名在 GRAPH_ENRICH_TOOLS 中', () => {
+  it('引擎 hologram_* 工具已从 GRAPH_ENRICH_TOOLS 收窄（A/B 证据：引导采纳率≈0，只保留 read_file/git_diff/run_shell）', () => {
     const enrichSet = new Set(GRAPH_ENRICH_TOOLS);
-    const missing = engineToolsInEnrichList.filter((n) => !enrichSet.has(n));
-    expect(missing).toEqual([]);
+    const stillHooked = engineToolsNoLongerEnriched.filter((n) => enrichSet.has(n));
+    expect(stillHooked).toEqual([]);
+    expect([...enrichSet].sort()).toEqual(['git_diff', 'read_file', 'read_file_content', 'run_shell'].sort());
   });
 
   it('hologram_call 作为所有 hologram_* 工具的统一分发入口存在', () => {

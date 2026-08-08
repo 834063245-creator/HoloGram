@@ -69,7 +69,8 @@ describe('GraphContext', () => {
     const summary = ctx.getImpactSummary('D:/repo/src/config.ts');
     expect(summary).toContain('parseConfig');
     expect(summary).toContain('2 个符号');
-    expect(summary).toContain('trace_impact');
+    // 命令式引导已移除 — 只保留事实
+    expect(summary).not.toContain('trace_impact');
   });
 
   it('getImpactSummary 不存在文件返回 null', () => {
@@ -93,12 +94,6 @@ describe('GraphContextHook.shouldEnrich', () => {
   const shouldTrigger = [
     'read_file_content',
     'read_file',
-    'search_content',
-    'glob',
-    'list_directory',
-    'trace_dataflow',
-    'search_symbols',
-    'inspect_symbol',
     'git_diff',
     'run_shell',
   ];
@@ -111,6 +106,12 @@ describe('GraphContextHook.shouldEnrich', () => {
     'agent_spawn',
     'ask_user',
     'web_search',
+    'search_content',
+    'glob',
+    'list_directory',
+    'trace_dataflow',
+    'search_symbols',
+    'inspect_symbol',
   ];
 
   for (const name of shouldTrigger) {
@@ -142,12 +143,14 @@ describe('GraphContextHook.enrich', () => {
     expect(out).toContain('line 1');
   });
 
-  it('read_file 有函数时追加 dataflow 提示', async () => {
+  it('read_file 只注入事实，无命令句', async () => {
     const out = await hook.enrich('read_file', { filePath: 'D:/repo/src/config.ts' }, 'some content');
-    expect(out).toContain('trace_dataflow 追踪');
+    expect(out).toContain('📊 [图上下文]');
+    expect(out).not.toContain('trace_dataflow');
+    expect(out).not.toContain('trace_impact');
   });
 
-  it('search_content 注入匹配文件符号', async () => {
+  it('search_content 不再注入图上下文（触发面已收窄）', async () => {
     const result = JSON.stringify({
       matches: [
         { file: 'D:/repo/src/config.ts', line: 10 },
@@ -155,73 +158,38 @@ describe('GraphContextHook.enrich', () => {
       ],
     });
     const out = await hook.enrich('search_content', { directory: 'D:/repo' }, result);
-    expect(out).toContain('📊 [图上下文]');
-    expect(out).toContain('config.ts');
+    expect(out).toBe(result);
   });
 
-  it('glob 注入匹配文件符号', async () => {
-    const out = await hook.enrich(
-      'glob',
-      { pattern: '*.ts' },
-      'D:/repo/src/config.ts\nD:/repo/src/ui/app.tsx\nREADME.md\n',
-    );
-    expect(out).toContain('📊 [图上下文]');
-    expect(out).toContain('config.ts');
-    // 非源文件(README.md)不会被 extractFilesFromGlobResult 提取，
-    // 所以注入摘要中不应出现。但原始 still 在结果体中。
-    const injectedBlock = out.split('─'.repeat(40))[0];
-    expect(injectedBlock).not.toContain('README.md');
+  it('glob 不再注入图上下文', async () => {
+    const result = 'D:/repo/src/config.ts\nD:/repo/src/ui/app.tsx\nREADME.md\n';
+    const out = await hook.enrich('glob', { pattern: '*.ts' }, result);
+    expect(out).toBe(result);
   });
 
-  it('list_directory 注入源文件符号', async () => {
-    const out = await hook.enrich(
-      'list_directory',
-      { path: 'D:/repo' },
-      'path: D:/repo/src/config.ts  type: file\npath: D:/repo/src/ui/app.tsx  type: file\npath: D:/repo/readme.txt  type: file',
-    );
-    expect(out).toContain('📊 [图上下文]');
-    expect(out).toContain('config.ts');
-    // 非源文件(readme.txt)不会被提取，注入块中不应出现
-    const injectedBlock = out.split('─'.repeat(40))[0];
-    expect(injectedBlock).not.toContain('readme.txt');
+  it('list_directory 不再注入图上下文', async () => {
+    const result =
+      'path: D:/repo/src/config.ts  type: file\npath: D:/repo/src/ui/app.tsx  type: file\npath: D:/repo/readme.txt  type: file';
+    const out = await hook.enrich('list_directory', { path: 'D:/repo' }, result);
+    expect(out).toBe(result);
   });
 
-  it('trace_dataflow 注入共享变量', async () => {
-    const out = await hook.enrich(
-      'trace_dataflow',
-      { files: ['src/state.ts'] },
-      JSON.stringify({ shared_state: [{ var: 'store', readers: 6, writers: 1 }] }),
-    );
-    expect(out).toContain('共享变量');
-    expect(out).toContain('store');
-    expect(out).toContain('trace_impact');
+  it('trace_dataflow 不再注入共享变量', async () => {
+    const result = JSON.stringify({ shared_state: [{ var: 'store', readers: 6, writers: 1 }] });
+    const out = await hook.enrich('trace_dataflow', { files: ['src/state.ts'] }, result);
+    expect(out).toBe(result);
   });
 
-  it('trace_dataflow 无共享变量时不注入', async () => {
-    const out = await hook.enrich('trace_dataflow', { files: ['src/state.ts'] }, JSON.stringify({ shared_state: [] }));
-    expect(out).not.toContain('📊 [图上下文]');
+  it('search_symbols 不再注入命中节点', async () => {
+    const result = JSON.stringify({ results: [{ name: 'parseConfig' }, { name: 'applyConfig' }] });
+    const out = await hook.enrich('search_symbols', { query: 'config' }, result);
+    expect(out).toBe(result);
   });
 
-  it('search_symbols 注入命中节点', async () => {
-    const out = await hook.enrich(
-      'search_symbols',
-      { query: 'config' },
-      JSON.stringify({ results: [{ name: 'parseConfig' }, { name: 'applyConfig' }] }),
-    );
-    expect(out).toContain('命中 2 个节点');
-    expect(out).toContain('parseConfig');
-    expect(out).toContain('get_neighbors');
-  });
-
-  it('inspect_symbol 注入社区归属', async () => {
-    const out = await hook.enrich(
-      'inspect_symbol',
-      { nodeId: 'parseConfig' },
-      JSON.stringify({ community: 'core-utils' }),
-    );
-    expect(out).toContain('社区归属');
-    expect(out).toContain('core-utils');
-    expect(out).toContain('get_community');
+  it('inspect_symbol 不再注入社区归属', async () => {
+    const result = JSON.stringify({ community: 'core-utils' });
+    const out = await hook.enrich('inspect_symbol', { nodeId: 'parseConfig' }, result);
+    expect(out).toBe(result);
   });
 
   it('git_diff 注入变更文件符号', async () => {
@@ -341,16 +309,16 @@ describe('GraphPreflightHook.check', () => {
     expect(warn).not.toBeNull();
     expect(warn!).toContain('切换分支');
     expect(warn!).toContain('feature/x');
-    expect(warn!).toContain('git_status');
-    expect(warn!).toContain('git_stash_push');
+    expect(warn!).not.toContain('git_status');
+    expect(warn!).not.toContain('git_stash_push');
   });
 
   it('git_commit 注入通用警告', () => {
     const warn = hook.check('git_commit', { path: 'D:/repo', message: 'fix: stuff' });
     expect(warn).not.toBeNull();
     expect(warn!).toContain('创建提交');
-    expect(warn!).toContain('git_diff');
-    expect(warn!).toContain('trace_impact');
+    expect(warn!).not.toContain('git_diff');
+    expect(warn!).not.toContain('trace_impact');
   });
 });
 
