@@ -991,7 +991,7 @@ mod tests {
     fn clear_graph() {
         // 清空所有图数据，但保持引擎存活（不销毁引擎实例）
         let _ = hologram_engine::engine::engine_write(|idx| {
-            let ids: Vec<String> = { idx.nodes_iter().map(|n| n.id.clone()).collect() };
+            let ids: Vec<String> = { idx.nodes_iter().map(|n| n.id.to_string()).collect() };
             for id in &ids { idx.remove_node(id); }
         });
     }

@@ -304,12 +304,31 @@ where
     }
 }
 
-/// 在 MemoryIndex 中解析节点引用：精确 ID → 精确名称 → 未找到。
+/// 在 MemoryIndex 中解析节点引用。
+/// 解析顺序：精确 ID → 精确名称 → 后缀匹配（处理 LLM 传的带路径前缀
+/// 直觉 ID，如 `D:.HoloGramHG...Agent.setPlanState`）→ 未找到。
+/// 后缀匹配按"最短后缀优先"取，因为最长的精确匹配通常更准。
 pub(crate) fn resolve_in_index(idx: &MemoryIndex, node_id_or_name: &str) -> Option<String> {
     if idx.get_node(node_id_or_name).is_some() {
         return Some(node_id_or_name.to_string());
     }
-    idx.get_nodes_by_name(node_id_or_name).first().cloned()
+    if let Some(hit) = idx.get_nodes_by_name(node_id_or_name).first() {
+        return Some(hit.clone());
+    }
+    // 后缀匹配：节点 ID 通常形如 `D:.HoloGramHG.src-ui.src.agent.ts.Agent.setPlanState`，
+    // LLM 常截取末尾片段（如 `agent.ts.Agent.setPlanState`）。按匹配长度降序取最短命中。
+    let needle = node_id_or_name.to_lowercase();
+    let mut best: Option<(usize, String)> = None;
+    for n in idx.nodes_iter() {
+        let id = n.id.to_string().to_lowercase();
+        if id.ends_with(&needle) {
+            let score = id.len();
+            if best.as_ref().map(|(s, _)| score < *s).unwrap_or(true) {
+                best = Some((score, n.id.to_string()));
+            }
+        }
+    }
+    best.map(|(_, id)| id)
 }
 
 /// 在旧版 Graph 中解析节点引用：精确 ID → 搜索 → 未找到。
@@ -818,5 +837,30 @@ mod tests {
         assert!(read_only_tools.contains(&"get_neighbors"));
         assert!(read_only_tools.contains(&"search_symbols"));
         assert!(read_only_tools.contains(&"engine_status"));
+    }
+
+    #[test]
+    fn test_resolve_in_index_suffix_match() {
+        use crate::graph::{Node, NodeKind};
+        let mut idx = crate::storage::MemoryIndex::default();
+        let mut node = Node::new(
+            "D:.HoloGramHG.src-ui.src.agent.ts.Agent.setPlanState",
+            "setPlanState",
+            NodeKind::Function,
+        );
+        node.location = Some("src/agent/agent.ts:100".into());
+        idx.insert_node(node);
+        // 精确 ID
+        assert_eq!(
+            resolve_in_index(&idx, "D:.HoloGramHG.src-ui.src.agent.ts.Agent.setPlanState").as_deref(),
+            Some("D:.HoloGramHG.src-ui.src.agent.ts.Agent.setPlanState")
+        );
+        // 精确名称
+        assert_eq!(resolve_in_index(&idx, "setPlanState").as_deref(), Some("D:.HoloGramHG.src-ui.src.agent.ts.Agent.setPlanState"));
+        // 后缀匹配（LLM 直觉 ID）
+        assert_eq!(resolve_in_index(&idx, "agent.ts.Agent.setPlanState").as_deref(), Some("D:.HoloGramHG.src-ui.src.agent.ts.Agent.setPlanState"));
+        assert_eq!(resolve_in_index(&idx, "Agent.setPlanState").as_deref(), Some("D:.HoloGramHG.src-ui.src.agent.ts.Agent.setPlanState"));
+        // 无匹配
+        assert_eq!(resolve_in_index(&idx, "nonexistent_symbol"), None);
     }
 }

@@ -39,10 +39,21 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
         let nb = idx.neighbors(&resolved, 1, None);
         let incoming = idx.get_incoming_edges(&resolved);
         let outgoing = idx.get_outgoing_edges(&resolved);
+        // neighbors 附带 name/kind/file —— 只有裸 ID 时 LLM 不知道邻居是谁。
+        let neighbors_value: Vec<Value> = nb.iter().map(|(_, t, d)| {
+            match idx.get_node(t) {
+                Some(n) => {
+                    let raw_loc = n.location.as_deref().unwrap_or("");
+                    let file = raw_loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(raw_loc).to_string();
+                    json!({"id": t, "name": n.name, "kind": n.kind.as_str(), "file": file, "coupling_depth": d})
+                }
+                None => json!({"id": t, "coupling_depth": d}),
+            }
+        }).collect::<Vec<_>>();
         json!({
             "node": node_to_value(&node),
             "neighbor_count": nb.len(),
-            "neighbors": nb.iter().map(|(_, t, d)| json!({"id": t, "coupling_depth": d})).collect::<Vec<_>>(),
+            "neighbors": neighbors_value,
             "incoming": incoming.iter().map(edge_to_value).collect::<Vec<_>>(),
             "outgoing": outgoing.iter().map(edge_to_value).collect::<Vec<_>>(),
         })
@@ -67,10 +78,20 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
         let nb = query::neighbors(g, &resolved, 1);
         let incoming: Vec<_> = g.incoming(&resolved).map(edge_to_value).collect();
         let outgoing: Vec<_> = g.outgoing(&resolved).map(edge_to_value).collect();
+        let neighbors_value: Vec<Value> = nb.iter().map(|(_, t, d)| {
+            match g.get_node(t) {
+                Some(n) => {
+                    let raw_loc = n.location.as_deref().unwrap_or("");
+                    let file = raw_loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(raw_loc).to_string();
+                    json!({"id": t, "name": n.name, "kind": n.kind.as_str(), "file": file, "coupling_depth": d})
+                }
+                None => json!({"id": t, "coupling_depth": d}),
+            }
+        }).collect::<Vec<_>>();
         json!({
             "node": node_to_value(node),
             "neighbor_count": nb.len(),
-            "neighbors": nb.iter().map(|(_, t, d)| json!({"id": t, "coupling_depth": d})).collect::<Vec<_>>(),
+            "neighbors": neighbors_value,
             "incoming": incoming,
             "outgoing": outgoing,
         })
@@ -94,11 +115,32 @@ pub(crate) fn handler_impact(args: &Value) -> ToolResponse {
         };
         let layers = idx.impact(&resolved, depth);
         let total_affected: usize = layers.iter().map(|(_, nodes)| nodes.len()).sum();
+        // 每层节点附带 name/kind/location —— 只有裸 ID 时 LLM 无法
+        // 知道影响的是谁，必须逐个解码（多轮补看）。name+file 让
+        // Agent 一轮就能判断影响面。
+        let layers_value: Vec<Value> = layers.iter().map(|(d, nodes)| {
+            let entries: Vec<Value> = nodes.iter().map(|nid| {
+                match idx.get_node(nid) {
+                    Some(n) => {
+                        let raw_loc = n.location.as_deref().unwrap_or("");
+                        let file = raw_loc.rsplit_once(':').map(|(f, _)| f).unwrap_or(raw_loc).to_string();
+                        json!({
+                            "id": nid,
+                            "name": n.name,
+                            "kind": n.kind.as_str(),
+                            "file": file,
+                        })
+                    }
+                    None => json!({"id": nid}),
+                }
+            }).collect();
+            json!({"depth": d, "nodes": entries})
+        }).collect();
         json!({
             "source_node_id": resolved,
             "max_depth": depth,
             "total_affected_nodes": total_affected.saturating_sub(1),
-            "layers": layers.iter().map(|(d, nodes)| json!({"depth": d, "nodes": nodes})).collect::<Vec<_>>(),
+            "layers": layers_value,
         })
     }))
 }
