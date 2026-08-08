@@ -1255,10 +1255,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // ponytail: 300 个文件使核心解析耗时 100-300ms — 足够让
-        // 取消信号在流水线完成前到达。20 个文件
-        // 10ms 内解析完，太快了。
-        for i in 0..300 {
+        // ponytail: 3000 个文件使核心解析耗时 1-3s — 足够让
+        // 取消信号在流水线完成前到达。300 个文件在开发机
+        // 需 100-300ms，但在 CI runner（windows-latest, release
+        // + 并行解析）上整条流水线 <55ms 就跑完了，取消信号
+        // 到达时分析已 Ok 返回（CI 实测失败）。
+        for i in 0..3000 {
             std::fs::write(
                 tmp.join(format!("mod{}.py", i)),
                 format!("def func{0}():\n    return {0}\n", i),
@@ -1277,15 +1279,15 @@ mod tests {
         let handle = std::thread::spawn(move || e.analyze(&t));
 
         // 等待分析实际开始（其取消令牌在流水线入口处
-        // 发布），然后在流水线中途取消。盲目 50ms
-        // 休眠会与线程调度竞争：在全套件负载下，生成的
-        // 线程往往尚未启动，令牌仍为 None，取消
-        // 静默失败 — 流水线随后运行到完成。
+        // 发布），然后立即取消。盲目固定休眠会与线程调度
+        // 竞争：在全套件负载下，生成的线程往往尚未启动，
+        // 令牌仍为 None，取消静默失败 — 流水线随后运行到
+        // 完成。令牌一发布就置位，留给流水线最长的
+        // 取消窗口（首个检查点在核心解析完成之后）。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while engine.cancel_token.read().is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
         if let Some(token) = engine.cancel_token.read().as_ref() {
             token.store(true, Ordering::SeqCst);
         }
