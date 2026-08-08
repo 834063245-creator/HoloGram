@@ -333,8 +333,8 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         const t = ev.tool;
         ctx._recordToolUsage(t.name, t.args || '');
         ctx._updateStatusBar('running', `执行 ${t.name}`);
-        // agent_spawn 通过 SubAgentBlock 渲染 — 跳过 ToolCard
-        if (t.name !== 'agent_spawn') {
+        // agent_spawn（旧名）与 agent(spawn)（领域工具）都通过 SubAgentBlock 渲染 — 跳过 ToolCard
+        if (!isSubagentSpawnTool(t.name, t.args)) {
           applyEventToParts(_streamingAssistant(ctx).parts, ev);
         }
         _streamingBump(ctx);
@@ -405,6 +405,20 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       console.warn('[chat] renderEvent: unknown event kind', (ev as any).kind);
       break;
   }
+}
+
+/** 判断工具调用是否由子 Agent 专属卡片（SubAgentBlock）渲染，避免与 ToolCard 重复。
+ *  兼容收敛前的旧名 agent_spawn 与收敛后的领域调用 agent(action=spawn)。 */
+export function isSubagentSpawnTool(name: string, argsJson?: string): boolean {
+  if (name === 'agent_spawn') return true;
+  if (name === 'agent') {
+    try {
+      return (JSON.parse(argsJson || '{}') as { action?: unknown })?.action === 'spawn';
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 // ═══════════════════════════════════════════════════════════

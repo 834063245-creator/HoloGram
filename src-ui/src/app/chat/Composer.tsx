@@ -12,6 +12,11 @@ import { showContextMenu } from '../../ui/context-menu';
 import { Icon } from '../Icon';
 import type { ChatCore } from './chat-core';
 
+/** 在文本指定区间插入文本（供右键粘贴使用，保持输入 store 单一数据源）。 */
+export function insertTextAtRange(value: string, start: number, end: number, text: string): string {
+  return value.slice(0, start) + text + value.slice(end);
+}
+
 export function Composer({ core }: { core: ChatCore }) {
   const { input, panel } = getChatStore(core.panelId);
   const value = useStore(input, (s) => s.inputText);
@@ -35,10 +40,10 @@ export function Composer({ core }: { core: ChatCore }) {
     });
   }, [core]);
 
-  const fireChange = (v: string) => {
-    input.getState().setInputText(v);
+  const fireChange = (v: string, posOverride?: number) => {
     const ta = taRef.current;
-    const pos = ta?.selectionStart ?? v.length;
+    const pos = posOverride ?? ta?.selectionStart ?? v.length;
+    input.getState().setInputText(v);
     core.handleAtInput(v.slice(0, pos), pos);
     core.handleSlashInput(v.slice(0, pos));
   };
@@ -59,7 +64,28 @@ export function Composer({ core }: { core: ChatCore }) {
       },
       {
         label: '粘贴',
-        action: () => document.execCommand('paste'),
+        action: () => {
+          const ta = taRef.current;
+          if (!ta) return;
+          void navigator.clipboard
+            .readText()
+            .then((text) => {
+              if (!text) return;
+              const start = ta.selectionStart ?? ta.value.length;
+              const end = ta.selectionEnd ?? ta.value.length;
+              const next = insertTextAtRange(ta.value, start, end, text);
+              const pos = start + text.length;
+              fireChange(next, pos);
+              requestAnimationFrame(() => {
+                ta.focus();
+                ta.selectionStart = ta.selectionEnd = pos;
+              });
+            })
+            .catch(() => {
+              // 剪贴板权限不可用时回退（WebView2 下大概率同样失败，但尽力而为）
+              document.execCommand('paste');
+            });
+        },
       },
       { separator: true, label: '', action: () => {} },
       {
