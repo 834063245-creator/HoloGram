@@ -473,3 +473,79 @@ describe("孤儿检测 — running 条目 → stop + discard", () => {
     expect(discardArgs).toContain("iso-orphan")
   })
 })
+
+// ═══════════════════════════════════════════════════════
+// P0-6 回归 — 瞬时读错误不得删除 inbox（雷区地图）
+// ═══════════════════════════════════════════════════════
+
+describe("P0-6: JsonMessageStore 区分「不存在」与「读错误」", () => {
+  it("瞬时读错误（IPC 抖动）时 inbox.json 必须保留", async () => {
+    mockRpc.mockReset()
+    const deleteCalls: string[] = []
+    mockRpc.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      switch (cmd) {
+        case 'list_directory':
+          return JSON.stringify([{ name: 'agent-x', is_dir: true }])
+        case 'read_file_content':
+          throw new Error('IPC timeout — 瞬时错误')
+        case 'delete_file_or_dir':
+          deleteCalls.push(args.path as string)
+          return 'ok'
+        default:
+          return 'ok'
+      }
+    })
+
+    const store = new JsonMessageStore("/fake/project")
+    const result = await store.restore()
+    expect(result.size).toBe(0) // 读不到就不返回，但绝不可删
+    expect(deleteCalls).toEqual([])
+  })
+
+  it("文件不存在时仍清理孤儿目录", async () => {
+    mockRpc.mockReset()
+    const deleteCalls: string[] = []
+    mockRpc.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      const p = (args.path ?? '') as string
+      switch (cmd) {
+        case 'list_directory':
+          if (p.endsWith('/agents')) return JSON.stringify([{ name: 'agent-x', is_dir: true }])
+          return JSON.stringify([]) // agent 目录列为空 → delete 会继续删目录
+        case 'read_file_content':
+          throw new Error(`路径不存在: ${(args.filePath ?? '') as string}`)
+        case 'delete_file_or_dir':
+          deleteCalls.push(p)
+          return 'ok'
+        default:
+          return 'ok'
+      }
+    })
+
+    const store = new JsonMessageStore("/fake/project")
+    await store.restore()
+    expect(deleteCalls.some((p) => p.includes('inbox.json'))).toBe(true)
+  })
+
+  it("inbox.json 损坏（JSON 解析失败）时保留文件并告警", async () => {
+    mockRpc.mockReset()
+    const deleteCalls: string[] = []
+    mockRpc.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
+      switch (cmd) {
+        case 'list_directory':
+          return JSON.stringify([{ name: 'agent-x', is_dir: true }])
+        case 'read_file_content':
+          return '{{corrupted'
+        case 'delete_file_or_dir':
+          deleteCalls.push(args.path as string)
+          return 'ok'
+        default:
+          return 'ok'
+      }
+    })
+
+    const store = new JsonMessageStore("/fake/project")
+    const result = await store.restore()
+    expect(result.size).toBe(0)
+    expect(deleteCalls).toEqual([])
+  })
+})

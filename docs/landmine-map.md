@@ -20,7 +20,7 @@
 | 3 | `src-tauri/src/utils.rs:1361-1392` | `write_atomic` 的 .bak 残留死锁 | Windows rename 不覆盖：上次崩溃残留 .bak → 对该文件的**所有后续写入永久失败**，直到手工删 .bak | ✅ 已拆（rename 前先删旧 .bak + 回归测试） | S（rename 前先删旧 .bak） |
 | 4 | `src-tauri/src/utils.rs:845` | `hologram_graph.json` 非原子写入 + `let _ =` 吞错 | 大图落盘（数百 MB 窗口长）中途崩溃 → 截断 JSON 被冷启动原样读回 → 解析失败，且无声 | ✅ 已拆（write_atomic + 失败 eprintln 告警） | S（换用现成 write_atomic） |
 | 5 | `src-tauri/src/permissions/rule.rs:204` | `permissions.json` 非原子读-改-写 | 落盘时崩溃 → 加载端静默返回空规则 → **用户自定义 deny 规则全部丢失，安全 fail-open 无告警** | ✅ 已拆（write_atomic + 读/解析失败告警 + 损坏拒绝追加以免清空规则 + 测试×3） | S |
-| 6 | `src-ui/src/agent/message-store.ts:80-83` | **读失败即删数据** | 启动 restore 时 `read_file_content` 因任何瞬时错误失败 → catch 里 delete inbox.json → 跨 Agent 未投递消息静默丢失 | 无 | S（区分「不存在」与「读错误」） |
+| 6 | `src-ui/src/agent/message-store.ts:80-83` | **读失败即删数据** | 启动 restore 时 `read_file_content` 因任何瞬时错误失败 → catch 里 delete inbox.json → 跨 Agent 未投递消息静默丢失 | ✅ 已拆（仅「不存在」才清理，读/解析失败保留 + warn；测试×3） | S（区分「不存在」与「读错误」） |
 | 7 | `src-ui/src/settings.ts:164-168` × `SettingsPanel.tsx:296` | 凭据写失败 UI 报「已保存」 | DPAPI 写失败被两层 catch 吞掉 + 无条件 setSaved(true) → 重启后 key 消失，用户坚信已保存 | 无 | S（失败列表上抛 + UI 据实提示） |
 | 8 | `src-ui/src/ui/react/TimelineHUD.tsx:84-92` | **空时间轴无限 IPC 热循环**（唯一确定性风暴源） | 项目无 timeline 事件 → effect 依赖翻转 → 无退避无上限的 hologram_call 循环，速度=IPC 往返速度，永久轰击引擎 | 仅 8s 超时 | S（尝试计数/退避） |
 | 9 | `src-ui/src/settings.ts:134` × `ui/chat-session.ts:429` | localStorage 配额跨存储干扰 | 会话全量备份无界增长 → 配额耗尽 → saveSettings 的 setItem **无 try** 同步抛 → handleSave 在 persistSecrets 之前崩 → key 从未落凭据库 | 会话备份侧有 catch，设置写入侧无 | S（上限 + try + 报错） |

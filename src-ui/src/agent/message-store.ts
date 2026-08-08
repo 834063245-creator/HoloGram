@@ -77,9 +77,15 @@ export class JsonMessageStore implements MessageStore {
             // 空 inbox.json — 清理孤儿
             await this.delete(agentId)
           }
-        } catch {
-          // inbox.json 不存在或损坏 — 清理孤儿目录
-          await this.delete(agentId)
+        } catch (e) {
+          // 雷区地图 P0-6：只有「文件不存在」才清理孤儿；
+          // 瞬时读错误（IPC 抖动、权限、磁盘）删 inbox = 静默丢未投递消息
+          const msg = e instanceof Error ? e.message : String(e)
+          if (msg.includes('路径不存在') || msg.includes('not found') || msg.includes('NotFound')) {
+            await this.delete(agentId)
+          } else {
+            console.warn(`[message-store] ${agentId} 的 inbox.json 读取/解析失败，已保留待下次恢复:`, msg)
+          }
         }
       }
     } catch {
