@@ -11,6 +11,7 @@ import { rpc } from '../../bridge';
 import { createProvider } from '../../provider';
 import { ChunkType } from '../../provider/types';
 import { getActiveProvider, loadSettingsWithSecrets, type ProviderSettings } from '../../settings';
+import { stripLineNumbers } from '../chat-session';
 import { iconHtml } from '../icons';
 import { escapeAttr } from './helpers';
 import '../file-translator.css';
@@ -301,6 +302,22 @@ export const FileTranslatorApp: React.FC<{
     [],
   );
 
+  // 必须是 useCallback：作为 startTranslation 的依赖，若每次渲染换身份，
+  // 下方 useEffect([filePath, startTranslation]) 会在每次 setState 后重触发 → IPC 热循环（同 P0-8 家族）
+  const computeStats = useCallback((ls: TranslationLine[]) => {
+    let bug = 0,
+      risk = 0,
+      smell = 0,
+      ok = 0;
+    for (const l of ls) {
+      if (l.audit_type === 'bug') bug++;
+      else if (l.audit_type === 'risk') risk++;
+      else if (l.audit_type === 'smell') smell++;
+      else if (l.audit_type === 'ok') ok++;
+    }
+    setIssueStats({ bug, risk, smell, ok });
+  }, []);
+
   // ── 主翻译流程 ──
 
   const startTranslation = useCallback(
@@ -349,7 +366,8 @@ export const FileTranslatorApp: React.FC<{
         const cachePath = `.hologram/translations/${hash}.json`;
         try {
           const raw = await rpc<string>('read_file_content', { filePath: cachePath });
-          const cached: CacheData = JSON.parse(raw);
+          // read_file_content 返回 cat -n 行号格式，解析前须去除（参照 chat-session.ts:363）
+          const cached: CacheData = JSON.parse(stripLineNumbers(raw));
           if (cached.lines && Array.isArray(cached.lines)) {
             const aligned = alignLines(cached.lines, codeLines);
             setLines(aligned);
@@ -407,20 +425,6 @@ export const FileTranslatorApp: React.FC<{
     },
     [getEditorContent, callApi, computeStats],
   );
-
-  function computeStats(ls: TranslationLine[]) {
-    let bug = 0,
-      risk = 0,
-      smell = 0,
-      ok = 0;
-    for (const l of ls) {
-      if (l.audit_type === 'bug') bug++;
-      else if (l.audit_type === 'risk') risk++;
-      else if (l.audit_type === 'smell') smell++;
-      else if (l.audit_type === 'ok') ok++;
-    }
-    setIssueStats({ bug, risk, smell, ok });
-  }
 
   // filePath 变化时触发
   useEffect(() => {
