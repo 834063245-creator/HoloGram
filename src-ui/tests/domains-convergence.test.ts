@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../src/agent/tool';
-import { selectToolSchemas } from '../src/agent/tool-select';
+import { createStableSchemaSelector, selectToolSchemas, userContext } from '../src/agent/tool-select';
 import { StreamingToolExecutor } from '../src/agent/streaming-executor';
 import { defineTool } from '../src/agent/tools/define-tool';
 import {
@@ -269,5 +269,94 @@ describe('selectToolSchemas 每轮注入', () => {
     expect(names).toContain('search');
     expect(names).toContain('memory');
     expect(names).not.toContain('gamma');
+  });
+});
+
+describe('schema 稳定性契约（缓存命中保护）', () => {
+  function buildRegistry(): ToolRegistry {
+    const r = new ToolRegistry();
+    r.register(fakeTool('search', 'search source text'));
+    r.register(fakeTool('memory', 'memory recall and search'));
+    r.register(fakeTool('fileops', 'file system ops'));
+    r.register(fakeTool('grep', 'search source text'));
+    r.register(fakeTool('vcs', 'git operations'));
+    r.register(fakeTool('webfetch', 'fetch a url'));
+    r.register(fakeTool('alpha', 'graph dependency exploration'));
+    r.register(fakeTool('beta', 'commit changes to git repository'));
+    return r;
+  }
+
+  it('userContext 只取 user 消息，工具循环轮次不参与打分', () => {
+    const msgs = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '帮我 commit 到 git' },
+      { role: 'assistant', content: '', tool_calls: [{ name: 'git', arguments: '{}' }] },
+      { role: 'tool', content: 'ok' },
+      { role: 'assistant', content: '继续' },
+    ] as any;
+    const ctx1 = userContext(msgs);
+    const ctx2 = userContext([
+      ...msgs,
+      { role: 'tool', content: 'more results' },
+      { role: 'assistant', content: '再读一个文件' },
+    ] as any);
+    expect(ctx1).toBe('帮我 commit 到 git');
+    expect(ctx2).toBe(ctx1);
+  });
+
+  it('userContext 只保留最近 3 条 user 消息', () => {
+    const msgs = [1, 2, 3, 4].map((i) => ({ role: 'user', content: `msg${i}` }));
+    expect(userContext(msgs as any)).toBe('msg2\nmsg3\nmsg4');
+  });
+
+  it('同一上下文重复 select 返回同一引用（锁存生效）', () => {
+    const r = buildRegistry();
+    const s = createStableSchemaSelector();
+    const a = s.select(r, 4, '帮我 commit 到 git');
+    const b = s.select(r, 4, '帮我 commit 到 git');
+    expect(b).toBe(a);
+  });
+
+  it('工具循环内 schema 保持逐字节一致（消息增长不改变子集）', () => {
+    const r = buildRegistry();
+    const s = createStableSchemaSelector();
+    const ctx = '帮我 commit 到 git';
+    const first = s.select(r, 4, ctx);
+    // 模拟工具循环：10 轮 assistant/tool 消息增长 — userContext 不变
+    const loopCtx = userContext([
+      { role: 'user', content: ctx },
+      ...Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? 'assistant' : 'tool',
+        content: `round ${i} output`,
+      })),
+    ] as any);
+    expect(loopCtx).toBe(ctx);
+    const after = s.select(r, 4, loopCtx);
+    expect(after).toBe(first);
+  });
+
+  it('新用户消息触发重算（子集可随指令变化）', () => {
+    const r = buildRegistry();
+    const s = createStableSchemaSelector();
+    const a = s.select(r, 4, '帮我 commit 到 git');
+    const b = s.select(r, 4, '现在搜索代码里的 bug');
+    expect(b).not.toBe(a);
+  });
+
+  it('registry 引用变化触发重算（plan 模式切换路径）', () => {
+    const r1 = buildRegistry();
+    const r2 = buildRegistry();
+    const s = createStableSchemaSelector();
+    const a = s.select(r1, 4, 'ctx');
+    const b = s.select(r2, 4, 'ctx');
+    expect(b).not.toBe(a);
+  });
+
+  it('limit 变化触发重算', () => {
+    const r = buildRegistry();
+    const s = createStableSchemaSelector();
+    const a = s.select(r, 4, 'ctx');
+    const b = s.select(r, 5, 'ctx');
+    expect(b).not.toBe(a);
   });
 });

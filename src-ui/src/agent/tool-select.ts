@@ -72,3 +72,36 @@ export function selectToolSchemas(registry: ToolRegistry, contextText: string, l
 
   return all.filter((t) => picked.has(t.name));
 }
+
+/** 从会话消息中派生打分上下文 — 只取 user 消息（稳定性契约）。
+ *  工具循环中的 assistant/tool 消息不进打分：同一用户请求的整个
+ *  工具循环内 schema 子集保持逐字节一致，DeepSeek 前缀缓存才能命中
+ *  tools 段（schema 漂移会让 200K+ 输入整段 miss 按全价计费）。 */
+export function userContext(messages: { role: string; content: string }[], maxUserMsgs = 3): string {
+  return messages
+    .filter((m) => m.role === 'user')
+    .slice(-maxUserMsgs)
+    .map((m) => m.content)
+    .join('\n');
+}
+
+export interface StableSchemaSelector {
+  /** 返回工具 schema。仅当 (registry 引用, limit, user 上下文) 任一变化时重算。 */
+  select(registry: ToolRegistry, limit: number, contextText: string): ToolSchema[];
+}
+
+/** 工具 schema 稳定选择器 — 锁存上次结果，避免每轮动态打分击穿缓存。
+ *  plan 模式切换（registry 引用变化）或用户新消息（contextText 变化）时自动失效重算。 */
+export function createStableSchemaSelector(): StableSchemaSelector {
+  let cache: { reg: ToolRegistry; limit: number; key: string; value: ToolSchema[] } | null = null;
+  return {
+    select(registry: ToolRegistry, limit: number, contextText: string): ToolSchema[] {
+      if (cache && cache.reg === registry && cache.limit === limit && cache.key === contextText) {
+        return cache.value;
+      }
+      const value = selectToolSchemas(registry, contextText, limit);
+      cache = { reg: registry, limit, key: contextText, value };
+      return value;
+    },
+  };
+}

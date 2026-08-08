@@ -38,7 +38,7 @@ import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry'
 import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
-import { selectToolSchemas } from './tool-select';
+import { userContext, createStableSchemaSelector, type StableSchemaSelector } from './tool-select';
 import { defineTool } from './tools/define-tool';
 
 /** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
@@ -1661,14 +1661,14 @@ ${resumeNote}
    *  Anthropic 的 tokenizer 略有差异（< 8% 误差），对压缩安全。
    *  按发送载荷（payloadMessages 折叠视图）计数 — 触发判定必须
    *  与真实 API 压力一致，而非完整历史大小。 */
-  /** 每轮发给模型的工具 schema：目录 > limit 时按上下文打分注入子集（见 tool-select.ts）。 */
+  /** 每轮发给模型的工具 schema：目录 > limit 时按上下文打分注入子集（见 tool-select.ts）。
+   *  稳定性契约：子集只由 user 消息驱动（assistant/tool 轮次不参与打分），且带锁存——
+   *  同一用户请求的整个工具循环内 schema 保持逐字节一致。DeepSeek 前缀缓存对
+   *  tools 段敏感，schema 漂移会导致整段历史 miss 按全价计费。 */
+  private _schemaSelector: StableSchemaSelector = createStableSchemaSelector();
+
   private requestToolSchemas(): ToolSchema[] {
-    const ctx = this.session
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(-4)
-      .map((m) => m.content)
-      .join('\n');
-    return selectToolSchemas(this.tools, ctx, this._visibleToolsLimit);
+    return this._schemaSelector.select(this.tools, this._visibleToolsLimit, userContext(this.session));
   }
 
   private tokenCountWithEstimation(): number {
