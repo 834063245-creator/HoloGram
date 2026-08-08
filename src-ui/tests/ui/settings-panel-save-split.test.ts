@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockInvoke = vi.fn();
 const mockRpc = vi.fn(async () => 'null');
-const mockOnSave = vi.fn();
+const mockConfigChanged = vi.fn();
 
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: () => Promise.resolve('9.0.0') }));
 vi.mock('../../src/bridge', () => ({
@@ -21,10 +21,16 @@ vi.mock('../../src/bridge', () => ({
 }));
 vi.mock('../../src/i18n', () => ({ setLang: vi.fn() }));
 vi.mock('../../src/ui/events', () => ({
-  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
+  bus: {
+    emit: (...args: unknown[]) => {
+      if (args[0] === 'agent:config-changed') mockConfigChanged(...args);
+    },
+    on: vi.fn(),
+    off: vi.fn(),
+    withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }),
+  },
 }));
 vi.mock('../../src/ui/icons', () => ({ iconHtml: () => '' }));
-vi.mock('../../src/ui/dock-config', () => ({ getOnSettingsSave: () => mockOnSave }));
 
 import { SettingsPanel } from '../../src/ui/react/SettingsPanel';
 
@@ -52,7 +58,7 @@ describe('SettingsPanel — 保存拆域', () => {
     mockInvoke.mockReset();
     mockRpc.mockReset();
     mockRpc.mockResolvedValue('null');
-    mockOnSave.mockReset();
+    mockConfigChanged.mockReset();
     localStorage.clear();
     document.body.innerHTML = '';
     container = document.createElement('div');
@@ -92,7 +98,8 @@ describe('SettingsPanel — 保存拆域', () => {
     expect(document.querySelector('.pp-save-bar')).toBeNull();
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
     expect(stored.providers.find((p: any) => p.name === 'deepseek').baseUrl).toBe('https://custom.example/v1');
-    expect(mockOnSave).toHaveBeenCalledTimes(1);
+    expect(mockConfigChanged).toHaveBeenCalledTimes(1);
+    expect(mockConfigChanged).toHaveBeenCalledWith('agent:config-changed', { reason: 'settings-saved' });
   });
 
   it('Provider dirty 不点亮全局保存；Provider 保存后全局保存仍禁用', async () => {
@@ -134,6 +141,7 @@ describe('SettingsPanel — 保存拆域', () => {
     save.click();
     await tick();
     expect(save.disabled).toBe(true);
-    expect(mockOnSave).toHaveBeenCalledTimes(1);
+    expect(mockConfigChanged).toHaveBeenCalledTimes(1);
+    expect(mockConfigChanged).toHaveBeenCalledWith('agent:config-changed', { reason: 'settings-saved' });
   });
 });

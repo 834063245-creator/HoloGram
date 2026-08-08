@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 // ModelSwitcher（聊天面板模型切换器）组件测试：
-// 切模型 / 切信号源 / 思考强度 / 深度思考开关 → 立即 saveSettings + 重建 Agent。
+// 切模型 / 切信号源 / 思考强度 / 深度思考开关 → 立即 saveSettings + 发 agent:config-changed
+// （重建由 Workspace.applyAgentConfig 统一处理）。
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -10,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockSave = vi.fn();
-const mockRebuild = vi.fn();
+const mockConfigChanged = vi.fn();
 const mockOpenSettings = vi.fn();
 
 const mockModels = [
@@ -55,6 +56,14 @@ const mockModels = [
 const mockDefaultUrls = new Set(['https://api.deepseek.com/v1', 'https://api.anthropic.com']);
 
 vi.mock('../../src/ui/icons', () => ({ iconHtml: () => '' }));
+vi.mock('../../src/ui/events', () => ({
+  bus: {
+    emit: (...args: unknown[]) => mockConfigChanged(...args),
+    on: vi.fn(),
+    off: vi.fn(),
+    withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }),
+  },
+}));
 vi.mock('../../src/provider/catalog', () => ({
   getAllModels: () => mockModels,
   getDefaultModel: (name: string) => mockModels.find((m) => m.vendor === name) ?? undefined,
@@ -68,7 +77,6 @@ vi.mock('../../src/settings', () => ({
     providers: s.providers.map((p: any) => (p.name === name ? { ...p, ...patch } : p)),
   }),
 }));
-vi.mock('../../src/ui/dock-config', () => ({ getOnSettingsSave: () => mockRebuild }));
 
 import { ModelSwitcher } from '../../src/ui/react/ModelSwitcher';
 import type { AppSettings } from '../../src/settings';
@@ -121,7 +129,7 @@ describe('ModelSwitcher', () => {
 
   beforeEach(() => {
     mockSave.mockReset();
-    mockRebuild.mockReset();
+    mockConfigChanged.mockReset();
     mockOpenSettings.mockReset();
     document.body.innerHTML = '';
   });
@@ -160,7 +168,8 @@ describe('ModelSwitcher', () => {
     const next = mockSave.mock.calls[0][0] as AppSettings;
     expect(next.providers[0].model).toBe('deepseek-v4');
     expect(next.providers[0].baseUrl).toBe('https://api.deepseek.com/v1'); // 出厂 URL 自动带出
-    expect(mockRebuild).toHaveBeenCalledTimes(1);
+    expect(mockConfigChanged).toHaveBeenCalledTimes(1);
+    expect(mockConfigChanged).toHaveBeenCalledWith('agent:config-changed', { reason: 'model-switched' });
     expect(document.querySelector('.ms-pop')).toBeNull(); // 选择后关闭
   });
 
@@ -171,7 +180,8 @@ describe('ModelSwitcher', () => {
 
     expect(mockSave).toHaveBeenCalledTimes(1);
     expect((mockSave.mock.calls[0][0] as AppSettings).activeProvider).toBe('anthropic');
-    expect(mockRebuild).toHaveBeenCalledTimes(1);
+    expect(mockConfigChanged).toHaveBeenCalledTimes(1);
+    expect(mockConfigChanged).toHaveBeenCalledWith('agent:config-changed', { reason: 'model-switched' });
     expect(document.querySelector('.ms-pop')).toBeNull();
   });
 
@@ -190,6 +200,7 @@ describe('ModelSwitcher', () => {
     expect(mockSave).toHaveBeenCalledTimes(1);
     const next = mockSave.mock.calls[0][0] as AppSettings;
     expect(next.providers[1].thinking).toBe('high');
+    expect(mockConfigChanged).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.ms-pop')).not.toBeNull(); // 思考设置不关闭弹层
   });
 
@@ -203,6 +214,7 @@ describe('ModelSwitcher', () => {
     expect(mockSave).toHaveBeenCalledTimes(1);
     const next = mockSave.mock.calls[0][0] as AppSettings;
     expect(next.agent.disableThinking).toBe(true);
+    expect(mockConfigChanged).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.ms-pop')).not.toBeNull();
   });
 });

@@ -23,12 +23,3 @@ export function setDockStarGraph(sg: StarGraph): void {
 export function getDockStarGraph(): StarGraph | null {
   return _dockStarGraph;
 }
-
-/** SettingsPanel：保存后的重建链（main.ts 注入：字体缩放/resize/会话保存/agent 重建） */
-let _onSettingsSave: (() => void) | null = null;
-export function setOnSettingsSave(fn: () => void): void {
-  _onSettingsSave = fn;
-}
-export function getOnSettingsSave(): (() => void) | null {
-  return _onSettingsSave;
-}

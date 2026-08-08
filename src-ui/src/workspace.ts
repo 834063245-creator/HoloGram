@@ -31,7 +31,7 @@ import { defaultPricing, getActiveProvider, loadSettingsWithSecrets, type AppSet
 import { stripLineNumbers } from './ui/chat-session';
 import { useDockStore } from './ui/dock-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
-import { bus } from './ui/events';
+import { bus, type AgentConfigChangeReason } from './ui/events';
 import type { StarGraph } from './ui/graph';
 import type { GraphDiffJson } from './ui/graph-types';
 import { getDiagnosticsForFile } from './ui/lsp-client';
@@ -493,6 +493,33 @@ export class Workspace {
     }
   }
 
+  // ── Agent 配置变更统一入口 ──
+
+  /** 需要重建 Agent 的配置变更原因（权限模式等运行时读取项不在此列，发事件也不会触发重建）。 */
+  private static _AGENT_REBUILD_REASONS: ReadonlySet<AgentConfigChangeReason> = new Set([
+    'settings-saved',
+    'collaboration-mode',
+    'model-switched',
+  ]);
+
+  /**
+   * Agent 配置变更统一入口（由 bus 'agent:config-changed' 驱动）。
+   * workspace 自行决定是否重建；重建前先保存当前会话，避免切换模式/模型丢对话。
+   * 组件不得绕过此方法直接调 setupAgent。
+   */
+  async applyAgentConfig(chatPanel: ChatCore, reason: AgentConfigChangeReason): Promise<void> {
+    if (!Workspace._AGENT_REBUILD_REASONS.has(reason)) return;
+    await chatPanel
+      .saveActiveSession(this.path)
+      .catch((e) => console.error('[agent:config-changed] saveActiveSession failed:', e));
+    await this.setupAgent(chatPanel);
+    if (this.agent) {
+      await chatPanel
+        .autoRestoreLastSession(this.path)
+        .catch((e) => console.error('[agent:config-changed] autoRestoreLastSession failed:', e));
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // setupAgent — 构建带 hologram/coding/memory 工具的 LLM Agent
   // ═══════════════════════════════════════════════════════════════
@@ -681,7 +708,7 @@ export class Workspace {
     const factory = async (): Promise<AgentHandle | null> => {
       // 单一新鲜快照 — apiKey 判定 / provider 构建 / 定价 / 窗口全部出自它。
       // （旧实现用外层 setup 时的 prov 配新鲜 settings 的 key/定价，
-      //  两份快照只靠 setOnSettingsSave 重跑 setupAgent 才不分叉。）
+      //  两份快照只靠 agent:config-changed 重跑 setupAgent 才不分叉。）
       const s = await loadSettingsWithSecrets();
       const act = getActiveProvider(s);
       if (!act.apiKey || act.apiKey.trim() === '') return null;

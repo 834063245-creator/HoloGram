@@ -218,7 +218,7 @@ node scripts/cdp-shot.cjs /tmp/out '[{"js":"...document.querySelector(...).click
 
 **StarGraph 模块地图（P4）**：facade 持全量共享字段，各模块以 `this as unknown as XxxHost` 反查（与 GraphFold/GraphAnalysis/GraphTooltip 同模式）。自有状态的模块：diff-overlay（diffActive/diffAddedIds/diffRemovedIds/diffModifiedIds）、highlight（_fileHighlight/_fileHighlightIndices/_fileOpacityOriginal/_agentHighlightIndices/_hotspotFiles/_trailLine）、focus（focusSubgraphSaved\* 三件/_resettingCamera/_savedFocus\*）、lifecycle（_layoutAbort/_diagMsg/_reveal\*/_bloomFar/_bloomHysteresis/idle 计件）。`_lensActive/_trailActive/_edgeTypeFilter/_nodeKindFilter` 留 facade（TooltipHost/clearGraph/buildLegend 共享）。兄弟互调走 host 上的模块引用（如 lifecycle→_nodes/_edges/_focus，edge-renderer→_focus._buildFocusSubgraphEdges）。
 
-**Dock 面板操作面**（main.ts/actions/workspace 都用 `useDockStore.getState()`）：`openPanel/closePanel/togglePanel/isOpen(id)`、`setProjectPath(p)`、`setCheckResult(r)`（cacheCheckResult + 失败自动展开）、`showCheckHistory(r)`。外部依赖经 `ui/dock-config`：`setDataflowQueryParser`（NL→symbol Agent 兜底）、`setDockStarGraph`、`setOnSettingsSave`（main.ts 的 agent 重建链）。
+**Dock 面板操作面**（main.ts/actions/workspace 都用 `useDockStore.getState()`）：`openPanel/closePanel/togglePanel/isOpen(id)`、`setProjectPath(p)`、`setCheckResult(r)`（cacheCheckResult + 失败自动展开）、`showCheckHistory(r)`。外部依赖经 `ui/dock-config`：`setDataflowQueryParser`（NL→symbol Agent 兜底）、`setDockStarGraph`；agent 重建链统一走 `bus 'agent:config-changed'` → `Workspace.applyAgentConfig`（main.ts 单一监听）。
 
 **bus 高频事件**：`workspace:switched`、`graph:rendered`、`graph:node-clicked`、`check:result/history`、`chat:turn-done`、`agent:diag/event/progress`、`goal:state`、`highlight:file|folder|clear`、`navigate:file`、`prompt:ask`、`timeline:refresh`。最大生产者 workspace.ts，最大消费者（旧 chat.ts 位置）现在是 chat-core。
 

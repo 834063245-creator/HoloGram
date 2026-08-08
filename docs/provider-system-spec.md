@@ -128,7 +128,7 @@ interface Provider {
 | 9 | credential.rs 过时注释 | **修**。对齐「apiKey 权威=加密凭据，localStorage 仅非敏感配置」 | credential.rs |
 | 10 | 无「测试连接」 | **P1 新增**。复用 prewarm/fetchModels 或直接最小 stream 探测 | SettingsPanel.tsx |
 | 11 | 主对话流无空闲超时 | **P1 新增**。参照 callSummaryLLM 60s idle 模式（agent.ts:2085） | ~~agent.ts~~ → provider/idle-stream.ts（P4 提取，三处复用） |
-| 12 | provider 切换重建链 | **验证项**。确认 main.ts 注入的 `setOnSettingsSave` 重建 agent；文档锁定它为唯一切换入口 | 验收 |
+| 12 | provider 切换重建链 | **验证项**。确认 `agent:config-changed` 事件 → `Workspace.applyAgentConfig` 重建 agent；文档锁定它为唯一切换入口 | 验收 |
 | 13 | SSE 不解析 `event:`/多行 data | **保持**。所有目标服务商均单行 data；边界写入 shared.ts 注释 | 注释 |
 | 14 | 目录缺 GLM/Ollama | **可选**。ollama 走 `http://localhost:11434/v1` openai 兼容，apiKey 可空；按需手写条目即可 | catalog/*.json |
 | 15 | 目录数据维护（价格/窗口） | **定稿口径（2026-08-07）**：目录 = 开箱体验优化，非必需。全部消费点已有 fallback（clampMaxTokens 不钳制 / 窗口 fallback 200K / 摘要 fallback 主模型 / 徽章显示 LIVE / defaultPricing 硬编码回退）。厂商不提供元数据接口是行业现状；成熟 agent 软件（Chatbox/Cline/Cherry Studio）同为「手写列表 + /models 拉 ID」。**远程价格表（models.dev / LiteLLM GitHub raw）不做自动拉取**——国内网络 models.dev 不通、GitHub raw 时好时坏，引入启动依赖得不偿失 | 本文档 |
@@ -378,7 +378,7 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
   - 思考强度：Anthropic 信号源 = effort 下拉（自动/低/中/高/极限/关闭）；
     OpenAI 兼容信号源 = 深度思考开关（全局 disableThinking）
   - 底部「管理 Provider…」进入完整设置
-- 任何操作立即 `saveSettings` + `getOnSettingsSave()`（与设置面板保存同一重建链）。
+- 任何操作立即 `saveSettings` + `bus.emit('agent:config-changed', { reason: 'model-switched' })`（与设置面板保存同一重建入口）。
 
 ### 验证（2026-08-08 实测）
 

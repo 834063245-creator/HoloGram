@@ -8,10 +8,10 @@
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
 import { useStore } from 'zustand';
-import { type AppSettings, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
 import { useShellStore } from '../../app/shell-store';
+import { type AppSettings, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
 import { getChatStore } from '../chat-store';
-import { getOnSettingsSave } from '../dock-config';
+import { bus } from '../events';
 import { iconHtml } from '../icons';
 import type { CollaborationMode, PermissionMode } from '../panel-store';
 import { ModelSwitcher } from './ModelSwitcher';
@@ -100,12 +100,9 @@ function ChatModebar({ panelId }: { panelId: string }) {
       const s = loadSettings();
       s.agent = { ...s.agent, collaborationMode: mode };
       saveSettings(s);
-      // 模式切换与设置面板保存同链：触发 Agent 重建（否则按钮高亮但 Agent 不生效）
-      try {
-        getOnSettingsSave()?.();
-      } catch (e) {
-        console.warn('[ChatFooter] plan mode rebuild failed:', e);
-      }
+      // 模式切换只改 panel store + 发显式事件；
+      // 是否重建、重建前先存会话由 Workspace.applyAgentConfig 统一决定。
+      bus.emit('agent:config-changed', { reason: 'collaboration-mode' });
     },
     [panelStore],
   );

@@ -33,7 +33,7 @@ import { ChunkType } from './provider/types';
 import { loadSettings } from './settings';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
-import { setDataflowQueryParser, setDockStarGraph, setOnSettingsSave } from './ui/dock-config';
+import { setDataflowQueryParser, setDockStarGraph } from './ui/dock-config';
 import { useDockStore } from './ui/dock-store';
 import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
@@ -758,19 +758,15 @@ async function init(): Promise<void> {
     { id: 'esc-layer', group: '操作', label: '逐层关闭', icon: 'close', run: escLayer },
   ]);
 
-  // Settings（保存后的 agent 重建链必须保住）
-  setOnSettingsSave(async () => {
+  // Agent 配置变更统一入口：设置面板/模型切换/模式按钮只发事件，
+  // workspace.applyAgentConfig 决定是否重建（重建前先存会话，避免切换丢对话）。
+  bus.on('agent:config-changed', (e) => {
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
     starGraph?.resize();
     if (workspace) {
-      // 在重新初始化 agent 之前保存当前会话 — 避免数据丢失
-      await chatPanel.saveActiveSession(workspace.path).catch((e) => console.error('[settings] saveActiveSession failed:', e));
-      await workspace.setupAgent(chatPanel);
-      if (workspace?.agent) {
-        await chatPanel
-          .autoRestoreLastSession(workspace.path)
-          .catch((e) => console.error('[settings] autoRestoreLastSession failed:', e));
-      }
+      void workspace.applyAgentConfig(chatPanel, e.reason).catch((err) =>
+        console.error('[agent:config-changed] rebuild failed:', err),
+      );
     }
   });
   chatPanel.setOnOpenSettings(() => useDockStore.getState().openPanel('settings'));

@@ -8,11 +8,18 @@ import { dbg } from './debug';
 // 所有事件必须在 BusEvents 中声明类型 — 不再有 any fallback。
 // 新增事件：在 BusEvents 里加一行，编译器自动检查参数类型。
 
+/** 触发 agent:config-changed 的原因。只有需要重建 Agent 的配置变更才发此事件
+ *  （权限模式等运行时读取项不发，workspace 端也有白名单兜底）。 */
+export type AgentConfigChangeReason = 'settings-saved' | 'collaboration-mode' | 'model-switched';
+
 export interface BusEvents {
   // ── Agent ──
   'agent:diag': [d: { text: string; ready: boolean }];
   'agent:status': [data: { agentId: string; status: string }];
   'agent:tool-done': [data: { toolName: string; args: Record<string, unknown>; output: string }];
+  /** Agent 配置变更（设置面板保存 / 模型切换 / 协作模式切换）——
+   *  是否重建由 Workspace.applyAgentConfig 决定。 */
+  'agent:config-changed': [data: { reason: AgentConfigChangeReason }];
   'prompt:ask': [
     data: {
       id: string;

@@ -16,7 +16,7 @@ import {
   type AppSettings,
   type ProviderId,
 } from '../../settings';
-import { getOnSettingsSave } from '../dock-config';
+import { bus } from '../events';
 import { iconHtml } from '../icons';
 import { isAnthropic, protocolLabel } from './settings/protocol';
 
@@ -54,10 +54,10 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
     };
   }, [open]);
 
-  /** 立即落盘 + 触发 Agent 重建（与设置面板保存同一链路） */
+  /** 立即落盘 + 发 agent:config-changed 事件（与设置面板保存同一重建入口） */
   const apply = useCallback((next: AppSettings, keepOpen = false) => {
     saveSettings(next);
-    getOnSettingsSave()?.();
+    bus.emit('agent:config-changed', { reason: 'model-switched' });
     if (!keepOpen) setOpen(false);
   }, []);
 

@@ -13,7 +13,6 @@ import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
 import type { AppSettings, ProviderId } from '../../settings';
 import { loadSettings, loadSettingsWithSecrets, persistSecrets, removeSecret, saveSettings } from '../../settings';
-import { getOnSettingsSave } from '../dock-config';
 import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
@@ -705,5 +704,11 @@ const SettingsPanelApp: React.FC<{
 
 export function SettingsPanel() {
   const closePanel = useDockStore((s) => s.closePanel);
-  return <SettingsPanelApp onClose={() => closePanel('settings')} onSave={getOnSettingsSave()} />;
+  // 保存成功后只发显式事件；重建由 main.ts → Workspace.applyAgentConfig 统一处理。
+  return (
+    <SettingsPanelApp
+      onClose={() => closePanel('settings')}
+      onSave={() => bus.emit('agent:config-changed', { reason: 'settings-saved' })}
+    />
+  );
 }

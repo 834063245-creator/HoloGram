@@ -44,7 +44,7 @@
 | 22 | `agent/board-persistence.ts:57-81` | _ensureDir 失败后照样 `_dirReady=true` → board 永不落盘且永不再试，重启全丢，零信号 | S | ✅ 已拆（后端 create_dir_all 幂等故任何抛错都是真实失败：不置位+下次重试+warn 信号；测试×2） |
 | 23 | `src-tauri/src/audit.rs:34-45` | 审计日志写失败静默 → deny/审批不留痕，安全功能失效无法取证 | S（eprintln + 计数） | ✅ 已拆（eprintln 告警含丢失记录摘要 + AtomicU64 计数；测试×2） |
 | 24 | `ui/FileTranslatorPanel.tsx:352` | read_file_content 缓存路径漏 stripLineNumbers → 翻译缓存 100% 不命中（已在坏，无声烧钱） | S | ✅ 已拆（stripLineNumbers + 顺带拆 computeStats 身份导致的 IPC 热循环；测试×1） |
-| 25 | `ui/react/ChatFooter.tsx:96-104` × `settings.ts:saveSettings` × `dock-config.ts:getOnSettingsSave` | **持久化函数兼职控制总线**：模式按钮靠 saveSettings 生效，但 Agent 重建链挂在独立槽 getOnSettingsSave——两条订阅通道并存，任何新增 saveSettings 调用点都可能漏重建链 | 规划按钮高亮但 Agent 不变只读（已真实引爆）；同类调用点会静默失效，单测全绿拦不住 | ⚠️ 已打补丁（模式按钮补调重建链；回归 835 全绿）。根治待拆：显式 `agent:config-changed` 事件，saveSettings 回归纯持久化 | S~M |
+| 25 | `ui/react/ChatFooter.tsx` × `settings.ts:saveSettings` × `events.ts:agent:config-changed` | **持久化函数兼职控制总线**：模式按钮靠 saveSettings 生效，但 Agent 重建链挂在独立槽 getOnSettingsSave——两条订阅通道并存，任何新增 saveSettings 调用点都可能漏重建链 | 规划按钮高亮但 Agent 不变只读（已真实引爆）；同类调用点会静默失效，单测全绿拦不住 | ✅ 已根治：`saveSettings` 回归纯持久化；设置面板/模型切换/模式按钮统一发 `agent:config-changed`，main.ts 单一监听 → `Workspace.applyAgentConfig` 决定是否重建（重建前先存会话）；权限模式不发事件 | S~M |
 
 ## P2 — 存疑/低危（记录在案，暂不拆）
 
