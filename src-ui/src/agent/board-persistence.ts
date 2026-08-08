@@ -32,6 +32,7 @@ export class BoardPersistence {
   private _dirName: string;
   private _dirReady = false;
   private _destroyed = false;
+  private _flushWarned = false;
   private _flushTimer: ReturnType<typeof setTimeout> | null = null;
   /** 串行写链 — 立即 flush 与防抖 flush 并发时按调用序落盘，后写者赢。 */
   private _writeChain: Promise<void> = Promise.resolve();
@@ -56,17 +57,15 @@ export class BoardPersistence {
 
   private async _ensureDir(): Promise<void> {
     if (this._dirReady) return;
-    try {
-      await rpc('create_directory', {
-        path: normalizePath(this._projectPath) + '/.hologram/' + this._dirName,
-      });
-    } catch {
-      /* 已存在 */
-    }
+    // 后端 create_dir_all 幂等——目录已存在不会报错，任何抛错都是真实失败。
+    // 失败时不置 _dirReady：下次 flush 会重试，而不是永久静默丢盘。
+    await rpc('create_directory', {
+      path: normalizePath(this._projectPath) + '/.hologram/' + this._dirName,
+    });
     this._dirReady = true;
   }
 
-  /** 序列化 entries 并写入磁盘。尽力而为 — 永不抛异常。
+  /** 序列化 entries 并写入磁盘。尽力而为 — 永不抛异常，但失败会 warn 留信号。
    *  写入经 _writeChain 串行化：并发 flush（立即 + 防抖）按调用序落盘，避免旧快照后写覆盖新数据。 */
   async flush(data: string): Promise<void> {
     if (!this._projectPath || this._destroyed) return;
@@ -75,8 +74,13 @@ export class BoardPersistence {
       try {
         await this._ensureDir();
         await rpc('write_file_content', { filePath: this._boardPath, content: snapshot });
-      } catch {
-        /* 尽力而为 */
+        this._flushWarned = false;
+      } catch (e) {
+        // 尽力而为但不静默：每段连续失败只 warn 一次，成功落盘后复位
+        if (!this._flushWarned) {
+          this._flushWarned = true;
+          console.warn(`[BoardPersistence] ${this._dirName}/${this._sessionId} 落盘失败（后续 flush 会重试）:`, e);
+        }
       }
     });
     return this._writeChain;
