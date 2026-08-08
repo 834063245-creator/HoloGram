@@ -37,7 +37,7 @@ Provider 系统 = **两种协议实现**（Anthropic / OpenAI 兼容）+ **一�
 | 文件 | 职责 | 状态 |
 |---|---|---|
 | `settings.ts` (227 行) | ProviderSettings/AppSettings + 密钥落盘治理 + add/remove/update | ✅ 已治理 |
-| `SettingsPanel.tsx` (853 行) | 五 tab 设置面板 | ✅ 可用 |
+| `SettingsPanel.tsx` + `settings/*` | 五 tab 设置面板；Provider 页已拆为信号源控制台 | ✅ 可用（P5 重构） |
 | `ModelSelector.tsx` (233 行) | 可搜索下拉 + 动态刷新 | ✅ 可用 |
 | `runtime.ts` L16 | `createProvider` import | ⚠️ 死代码（未使用） |
 
@@ -295,3 +295,59 @@ interface Provider {
 ### P4 验收（2026-08-07 实测）
 
 - `npx tsc --noEmit` 0 错 · `npx vitest run` **771 全绿**（758 既有 + 13 新增）· `cargo test --bin hologram` **196 全绿**（含凭据 9 项）· 全量 diff 第三方复查结论 SHIP
+
+## P5 — Provider 设置页 UX 重构（2026-08-08 完成）
+
+> 动机：用户反馈 Provider 页「乱七八糟」。把 Provider 标签页从「下拉 + 竖排表单」重构为
+> 「信号源控制台」，并修复两个数据丢失级缺陷（删除/清空 Key 的凭据时序错误）。
+
+### 交互结构
+
+- **左侧信号源列表**：每行一个 provider，状态点 = 未配置 / 已配置 / 正常 / 异常，
+  当前使用中带「当前」角标；底部「＋ 添加信号源」。
+- **右侧调谐控制台**：头部（名称/协议徽章/状态 pill/设为当前）+ 连接配置
+  （API Key / 模型 / Base URL / Anthropic 思考等级）+ 诊断（测试连接 + 上次测试）+ 危险区（删除）。
+- **添加弹层**：目录 chips 一键添加（name/kind/baseUrl/model 全带出，添加后自动聚焦 Key 输入框），
+  或自定义表单（名称/协议/Base URL/模型/Key）。
+- **面板内确认弹窗**（ConfirmDialog）替换原生 alert/confirm——删除、清除 Key、
+  放弃未保存更改、空 Key/空模型强制保存。
+- **保存按钮仅在 dirty 时可用**；dirty 状态在面板头部以「有未保存更改」chip 展示。
+
+### 状态模型
+
+- `ProviderSettings` 新增可选 `lastTest`（`{ status, latencyMs, at, message? }`，
+  非敏感，随 localStorage 持久化）——左侧状态点与「上次测试」行的事实源。
+- 测试结果按 provider 独立存储（`Record<name, phase/msg>`），切换信号源不再串台。
+- `keyDirtyMap`（本会话内 Key 是否未保存）驱动「已保存到系统凭据 / 未保存 · 保存后写入」chip；
+  保存成功后整体复位。
+- `providerStatus()`（settings/status.ts）为状态推导唯一入口。
+
+### 凭据时序（P0 修复）
+
+- **删除 Provider**：只暂存删除（state + dirty），`removeSecret` 移到保存流程——
+  用户取消/关闭面板不再丢 Key。
+- **清除 Key**：显式「清除」按钮或手动清空输入框都会暂存清除；保存时才真正删系统凭据，
+  杜绝「清空后重开面板 Key 复活」。输入新 Key 自动取消清除暂存。
+- **Base URL placeholder / 重置** 按当前 provider 的 catalog 默认值计算，不再写死 deepseek。
+- **模型刷新无 Key** 时明确提示「请先填写 API Key」，不再伪装成「未获取到新模型」。
+
+### 组件拆分（SettingsPanel 单文件瘦身）
+
+```
+SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
+└── settings/
+    ├── ProviderPage.tsx       编排：选中态、测试 Map、添加/删除/清除确认
+    ├── ProviderList.tsx       左侧信号源列表
+    ├── ProviderDetail.tsx     右侧控制台（复用 ModelSelector）
+    ├── AddProviderSheet.tsx   添加弹层（目录 chips + 自定义）
+    ├── ConfirmDialog.tsx      面板内确认弹窗
+    └── status.ts              状态推导 / 延迟 / 时间格式化
+```
+
+### 验证（2026-08-08 实测）
+
+- `npx tsc --noEmit` 0 错
+- `npx vitest run` **798 全绿**
+- vite dev（浏览器 mock）+ headless Chrome CDP 真机冒烟：13 项交互断言全过
+  （初始状态 / 无 Key 测试提示 / 添加弹层 / chips 一键添加 / Key 聚焦 /
+  未保存 chip / 删除确认弹窗 / 删除后回落），零运行时错误

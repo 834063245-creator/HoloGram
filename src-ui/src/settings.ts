@@ -7,6 +7,16 @@
 import { getCatalogProviders, getDefaultModel, getModel } from './provider/catalog';
 import { ANTHROPIC_DEFAULT_BASE_URL } from './provider/anthropic';
 
+/** 最近一次「测试连接」结果 — 非敏感，随 localStorage 持久化（供状态点/历史展示）。 */
+export interface ProviderTestResult {
+  status: 'ok' | 'fail';
+  /** 端到端耗时（毫秒） */
+  latencyMs: number;
+  /** 测试完成时间（epoch ms） */
+  at: number;
+  message?: string;
+}
+
 export interface ProviderSettings {
   kind: 'anthropic' | 'openai';
   name: string;
@@ -14,6 +24,7 @@ export interface ProviderSettings {
   baseUrl: string;
   model: string;
   thinking?: string; // Anthropic 扩展思考
+  lastTest?: ProviderTestResult;
 }
 
 export interface AgentSettings {
@@ -186,7 +197,8 @@ export async function persistSecrets(s: AppSettings): Promise<string[]> {
   return failed;
 }
 
-/** 删除指定 provider 的 API Key from 系统加密存储（DPAPI）。removeProvider 时调用。 */
+/** 删除指定 provider 的 API Key from 系统加密存储（DPAPI）。
+ *  调用时机：保存「删除 Provider」或「清除已保存 Key」的暂存操作时。 */
 export async function removeSecret(providerName: string): Promise<void> {
   try {
     const { rpc } = await import('./bridge');

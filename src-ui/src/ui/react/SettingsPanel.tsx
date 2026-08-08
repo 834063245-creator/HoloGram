@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Settings 面板 — settings-panel.ts 的 React 重写。
-// Provider | Agent | Display | Languages 四个标签页。
-// 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化。
+// Settings 面板 — Provider | Agent | Display | Languages | About 五个标签页。
+// Provider 页已拆为 settings/ProviderPage（信号源控制台），本文件只保留
+// 外壳：tab 切换、dirty 状态、保存/取消、凭据暂存（删除/清除）统一落盘。
 
 import { getVersion } from '@tauri-apps/api/app';
 import type React from 'react';
@@ -11,17 +11,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '../../bridge';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
-import { getCatalogProviders, getDefaultModel, mergeDynamicModels } from '../../provider/catalog';
-import { ChunkType, type ModelDescriptor } from '../../provider/types';
 import type { AppSettings } from '../../settings';
-import { addProvider, defaultBaseUrl, isFactoryBaseUrl, loadSettings, loadSettingsWithSecrets, persistSecrets, removeProvider, removeSecret, saveSettings } from '../../settings';
-import { createProvider } from '../../provider';
-import { getActiveProvider } from '../../settings';
+import { loadSettings, loadSettingsWithSecrets, persistSecrets, removeSecret, saveSettings } from '../../settings';
 import { getOnSettingsSave } from '../dock-config';
 import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
-import { ModelSelector } from './ModelSelector';
+import { ConfirmDialog } from './settings/ConfirmDialog';
+import { ProviderPage } from './settings/ProviderPage';
 
 type Tab = 'provider' | 'agent' | 'display' | 'languages' | 'about';
 
@@ -39,13 +36,6 @@ interface LspData {
   servers: LspServer[];
 }
 
-// ── 辅助函数 ──
-
-const _escapeAttr = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-const _escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
 // ── 主组件 ──
 
 const SettingsPanelApp: React.FC<{
@@ -59,7 +49,7 @@ const SettingsPanelApp: React.FC<{
   // localStorage 无明文，打开面板时异步回填密钥供表单展示。
   // ⚡ 2026-08-07 竞态修复：回填用函数式合并、只填充仍为空的 key——
   // 旧实现 restoreSecrets(loadSettings()) 的快照在用户已输入后到达，
-  // 会整体覆盖 state，把刚填的 key 冲掉（「key 填进去没被保存」根因之一）。
+  // 会整体覆盖 state，把刚填的 key 冲掉。
   useEffect(() => {
     let alive = true;
     loadSettingsWithSecrets()
@@ -86,6 +76,7 @@ const SettingsPanelApp: React.FC<{
       .then(setAppVersion)
       .catch(() => setAppVersion('9.0.1'));
   }, []);
+
   const [updateStatus, setUpdateStatus] = useState<
     'idle' | 'checking' | 'available' | 'downloading' | 'done' | 'error'
   >('idle');
@@ -131,20 +122,18 @@ const SettingsPanelApp: React.FC<{
       setUpdateMsg(e?.message || String(e));
     }
   }, []);
+
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [addName, setAddName] = useState('');
-  const [addKind, setAddKind] = useState<'openai' | 'anthropic'>('openai');
-  const [addKey, setAddKey] = useState('');
-  const [addError, setAddError] = useState('');
-
-  // API Key 可见性
-  const [keyVisible, setKeyVisible] = useState(false);
-
-  // 测试连接
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
-  const [testMsg, setTestMsg] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [saveConfirm, setSaveConfirm] = useState<string | null>(null);
+  const [closeConfirm, setCloseConfirm] = useState(false);
+  // 凭据暂存：删除 Provider / 清除 Key 只进 state，保存时才删系统凭据——
+  // 用户取消/关闭面板不会丢 Key（P0 修复）。
+  const [pendingDeletes, setPendingDeletes] = useState<string[]>([]);
+  const [pendingClears, setPendingClears] = useState<string[]>([]);
+  const [saveVersion, setSaveVersion] = useState(0);
+  const forceSaveRef = useRef(false);
 
   // LSP 状态
   const [lspStatus, setLspStatus] = useState<LspData | null>(null);
@@ -153,13 +142,6 @@ const SettingsPanelApp: React.FC<{
 
   // 工具搜索
   const [toolFilter, setToolFilter] = useState('');
-
-  // 添加表单（方案 A：一步到位 — name/kind/key/baseUrl/model 全部在此确认）
-  const [addBaseUrl, setAddBaseUrl] = useState('');
-  const [addModel, setAddModel] = useState('');
-
-  const active = getActiveProvider(settings);
-  const isAnthropic = active?.kind === 'anthropic';
 
   // ── 语言依赖标签页打开时加载 LSP 状态 ──
   const lspLoaded = useRef(false);
@@ -208,21 +190,6 @@ const SettingsPanelApp: React.FC<{
 
   const markDirty = useCallback(() => setDirty(true), []);
 
-  /** 更新 state（函数式——连续多次调用安全累积，如 ModelSelector 的 model+baseUrl 两连改），
-   *  落盘由「保存」按钮统一负责。 */
-  const updateProvider = useCallback(
-    (field: string, value: string | number) => {
-      setSettings((s) => {
-        const next = structuredClone(s);
-        const p = next.providers.find((x) => x.name === next.activeProvider);
-        if (p) (p as any)[field] = value;
-        return next;
-      });
-      markDirty();
-    },
-    [markDirty],
-  );
-
   /** 整体替换（添加/删除/切换等单次操作），落盘由「保存」按钮统一负责。 */
   const commit = useCallback(
     (next: AppSettings): void => {
@@ -232,138 +199,82 @@ const SettingsPanelApp: React.FC<{
     [markDirty],
   );
 
-  const handleAddProvider = useCallback(() => {
-    const name = addName.trim();
-    if (!name) {
-      setAddError('名称不能为空');
-      return;
-    }
-    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-      setAddError('名称只能包含字母、数字、下划线和连字符');
-      return;
-    }
-    try {
-      const next = addProvider(settings, name, addKind);
-      const added = next.providers.find((p) => p.name === name);
-      if (added) {
-        if (addKey.trim()) added.apiKey = addKey.trim();
-        if (addBaseUrl.trim()) added.baseUrl = addBaseUrl.trim();
-        if (addModel.trim()) added.model = addModel.trim();
-      }
-      // 手动落盘：确认只进 state（dirty），凭据与 localStorage 在「保存」时统一写入
-      commit(next);
-      setShowAddForm(false);
-      setAddName('');
-      setAddKey('');
-      setAddBaseUrl('');
-      setAddModel('');
-      setAddError('');
-    } catch (e: any) {
-      setAddError(e.message || '添加失败');
-    }
-  }, [addName, addKind, addKey, addBaseUrl, addModel, settings, commit]);
+  /** 立即落盘但不标 dirty——用于非配置类状态（如测试结果）。 */
+  const persistSettings = useCallback((next: AppSettings): void => {
+    setSettings(next);
+    saveSettings(next);
+  }, []);
 
-  const handleRemoveProvider = useCallback(() => {
-    if (settings.providers.length <= 1) {
-      alert('至少保留一个 Provider');
-      return;
-    }
-    if (!confirm(`确定删除 Provider "${active?.name}"？此操作不可撤销。`)) return;
-    const name = active?.name;
-    if (!name) return;
-    const next = removeProvider(settings, name);
-    removeSecret(name).catch(() => {});
-    commit(next);
-  }, [settings, active, commit]);
+  const stageDelete = useCallback(
+    (name: string) => setPendingDeletes((d) => (d.includes(name) ? d : [...d, name])),
+    [],
+  );
+  const stageClear = useCallback(
+    (name: string) => setPendingClears((c) => (c.includes(name) ? c : [...c, name])),
+    [],
+  );
+  const unstageClear = useCallback(
+    (name: string) => setPendingClears((c) => c.filter((x) => x !== name)),
+    [],
+  );
 
   const handleClose = useCallback(() => {
-    if (dirty && !confirm('有未保存的修改，确定关闭？')) return;
+    if (dirty) {
+      setCloseConfirm(true);
+      return;
+    }
     onClose();
   }, [dirty, onClose]);
 
-  /** 保存 = 落盘 + 写系统凭据 + 重建 Agent。改动已即时进 state（dirty），
-   *  保存后才影响磁盘与运行中 Agent——手动落盘的唯一落盘点。 */
+  /** 保存 = 落盘 + 写系统凭据 + 删暂存凭据 + 重建 Agent。 */
   const handleSave = useCallback(async () => {
+    setSaveError('');
     const a = settings.providers.find((p) => p.name === settings.activeProvider);
     if (!a) {
-      alert(`找不到 Provider "${settings.activeProvider}"`);
+      setSaveError(`找不到 Provider "${settings.activeProvider}"`);
       return;
     }
-    if (!a.apiKey?.trim() && !confirm(`Provider "${a.name}" 的 API Key 为空，仍要保存？`)) return;
-    if (!a.model?.trim() && !confirm(`Provider "${a.name}" 的模型名称为空，仍要保存？`)) return;
+    if (!forceSaveRef.current) {
+      if (!a.apiKey?.trim()) {
+        setSaveConfirm(`Provider "${a.name}" 的 API Key 为空，仍要保存？`);
+        return;
+      }
+      if (!a.model?.trim()) {
+        setSaveConfirm(`Provider "${a.name}" 的模型名称为空，仍要保存？`);
+        return;
+      }
+    }
+    forceSaveRef.current = false;
 
     saveSettings(settings);
-    // P0-7：凭据写失败必须据实提示——否则用户坚信已保存，重启后 key 消失
+    // 1) 先删「清除 Key / 删除 Provider」暂存的系统凭据（removeSecret 幂等、失败静默）
+    for (const name of [...new Set([...pendingClears, ...pendingDeletes])]) {
+      await removeSecret(name);
+    }
+    // 2) 再写新 Key（P0-7：写失败必须据实提示）
     const failed = await persistSecrets(settings);
     if (failed.length > 0) {
-      alert(`API Key 写入系统凭据失败：${failed.join('、')}。\n设置本身已保存，但重启后这些 Key 会丢失，请重试或检查系统加密服务。`);
+      setSaveError(
+        `API Key 写入系统凭据失败：${failed.join('、')}。\n设置本身已保存，但重启后这些 Key 会丢失，请重试或检查系统加密服务。`,
+      );
       return;
     }
+    setPendingClears([]);
+    setPendingDeletes([]);
     setLang(settings.display.language);
     bus.emit('lang:changed', { lang: settings.display.language });
     setDirty(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
+    setSaveVersion((v) => v + 1);
     if (onSave) onSave();
-  }, [settings, onSave]);
+  }, [settings, pendingClears, pendingDeletes, onSave]);
 
-  /** 刷新模型列表 — 用组件 state 快照（改动已进 state + 密钥已回填/在输），
-   *  与 handleTestConnection 同一数据源；不再从磁盘重读（快照不一致根因）。 */
-  const handleRefreshModels = useCallback(async (): Promise<number> => {
-    const activeProvider = getActiveProvider(settings);
-    if (!activeProvider.apiKey?.trim()) return 0;
-    const prov = createProvider(activeProvider);
-    const models = (await prov.fetchModels?.()) ?? [];
-    if (models.length > 0) {
-      mergeDynamicModels(activeProvider.name, models);
-    }
-    return models.length;
-  }, [settings]);
-
-  /** 测试连接：真实发一次最小流式请求（1 token），验证 key/baseUrl/model 三者。
-   *  错误消息已由 classifyError 分类（sendWithRetry 内应用）。 */
-  const handleTestConnection = useCallback(async () => {
-    const a = settings.providers.find((p) => p.name === settings.activeProvider);
-    if (!a) return;
-    if (!a.apiKey?.trim()) {
-      setTestStatus('fail');
-      setTestMsg('请先填写 API Key');
-      return;
-    }
-    if (!a.model?.trim()) {
-      setTestStatus('fail');
-      setTestMsg('请先填写模型名称');
-      return;
-    }
-    setTestStatus('testing');
-    setTestMsg('');
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    try {
-      const prov = createProvider(a, { disableThinking: true });
-      const gen = prov.stream(ctrl.signal, {
-        messages: [{ role: 'user', content: 'ping' }],
-        tools: [],
-        temperature: 0,
-        max_tokens: 1,
-      });
-      let received = false;
-      for await (const chunk of gen) {
-        if (chunk.type === ChunkType.Error) throw chunk.err ?? new Error('流错误');
-        if (chunk.type === ChunkType.Text && chunk.text) {
-          received = true;
-          break;
-        }
-      }
-      setTestStatus('ok');
-      setTestMsg(received ? '连接成功' : '连接成功（无文本返回，请检查模型行为）');
-    } catch (e: any) {
-      setTestStatus('fail');
-      setTestMsg(e?.message || String(e));
-    } finally {
-      clearTimeout(timer);
-    }
-  }, [settings]);
+  const handleSaveConfirm = useCallback(() => {
+    setSaveConfirm(null);
+    forceSaveRef.current = true;
+    void handleSave();
+  }, [handleSave]);
 
   // ── 渲染 ──
 
@@ -406,233 +317,22 @@ const SettingsPanelApp: React.FC<{
 
         {/* 内容 */}
         <div className="sp-content">
-          {/* ═══ Provider 标签页 ═══ */}
+          {/* ═══ Provider 标签页（信号源控制台）═══ */}
           <div
             className="sp-tab-content"
             data-tab="provider"
             style={{ display: activeTab === 'provider' ? '' : 'none' }}
           >
-            <div className="sp-section">
-              <div className="sp-section-title">当前 Provider</div>
-              <div className="sp-field">
-                <label className="sp-label">Provider</label>
-                <div className="sp-provider-row">
-                  <select
-                    className="sp-select"
-                    style={{ flex: 1 }}
-                    value={settings.activeProvider}
-                    onChange={(e) => {
-                      commit({ ...settings, activeProvider: e.target.value });
-                    }}
-                  >
-                    {settings.providers.map((p) => (
-                      <option key={p.name} value={p.name}>
-                        {p.name} ({p.kind})
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    className="sp-btn-sm sp-btn-add-provider"
-                    title="添加 Provider"
-                    onClick={() => {
-                      setShowAddForm(true);
-                      setAddError('');
-                    }}
-                  >
-                    + 添加
-                  </button>
-                  <button
-                    className="sp-btn-sm sp-btn-rm-provider"
-                    title="删除当前 Provider"
-                    onClick={handleRemoveProvider}
-                  >
-                    删除
-                  </button>
-                </div>
-              </div>
-              {showAddForm && (
-                <div className="sp-add-form">
-                  <input
-                    className="sp-input sp-add-name"
-                    placeholder="Provider 名称（如 glm）"
-                    style={{ marginBottom: 6 }}
-                    value={addName}
-                    onChange={(e) => setAddName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddProvider()}
-                  />
-                  <input
-                    type="password"
-                    className="sp-input sp-add-key"
-                    placeholder="API Key（可选，稍后也能填）"
-                    style={{ marginBottom: 6 }}
-                    value={addKey}
-                    onChange={(e) => setAddKey(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddProvider()}
-                  />
-                  <input
-                    type="text"
-                    className="sp-input sp-add-baseurl"
-                    placeholder={`Base URL（如 ${defaultBaseUrl('deepseek', 'openai')}）`}
-                    style={{ marginBottom: 6 }}
-                    value={addBaseUrl}
-                    onChange={(e) => setAddBaseUrl(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddProvider()}
-                  />
-                  <input
-                    type="text"
-                    className="sp-input sp-add-model"
-                    placeholder="模型名称（如 deepseek-v4-pro）"
-                    style={{ marginBottom: 6 }}
-                    value={addModel}
-                    onChange={(e) => setAddModel(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddProvider()}
-                  />
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <select
-                      className="sp-input sp-add-kind"
-                      style={{ flex: 1 }}
-                      value={addKind}
-                      onChange={(e) => setAddKind(e.target.value as any)}
-                    >
-                      <option value="openai">OpenAI 兼容</option>
-                      <option value="anthropic">Anthropic</option>
-                    </select>
-                    <button className="sp-btn-sm sp-btn-confirm-add" onClick={handleAddProvider}>
-                      确认添加
-                    </button>
-                    <button className="sp-btn-sm sp-btn-cancel-add" onClick={() => setShowAddForm(false)}>
-                      取消
-                    </button>
-                  </div>
-                  <div className="ms-catalog-pick">
-                    <span className="sp-hint-sub" style={{ width: '100%', marginBottom: 2 }}>
-                      从目录快速添加：
-                    </span>
-                    {getCatalogProviders().map((provName) => {
-                      const defaultModel = getDefaultModel(provName);
-                      if (!defaultModel) return null;
-                      return (
-                        <button
-                          type="button"
-                          key={provName}
-                          className="ms-catalog-chip"
-                          title={`${defaultModel.name} · ${defaultModel.baseUrl}`}
-                          onClick={() => {
-                            setAddName(provName);
-                            setAddKind(defaultModel.kind);
-                            // 方案 A：chips 一步带出 baseUrl + 默认模型，确认即完成
-                            setAddBaseUrl(defaultModel.baseUrl);
-                            setAddModel(defaultModel.id);
-                          }}
-                        >
-                          {provName}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {addError && <div style={{ color: '#f66', fontSize: 11, marginTop: 4 }}>{addError}</div>}
-                </div>
-              )}
-            </div>
-
-            <div className="sp-section">
-              <div className="sp-section-title">连接配置</div>
-              <div className="sp-field">
-                <label className="sp-label">API Key</label>
-                <div className="sp-key-row">
-                  <input
-                    type={keyVisible ? 'text' : 'password'}
-                    className="sp-input sp-key-input"
-                    value={active?.apiKey || ''}
-                    onChange={(e) => updateProvider('apiKey', e.target.value)}
-                    onBlur={(e) => {
-                      e.target.value = e.target.value.replace(/[^\x00-\x7F]/g, '');
-                    }}
-                    placeholder="sk-…"
-                  />
-                  <button
-                    className="sp-key-toggle"
-                    title="显示/隐藏"
-                    onClick={() => setKeyVisible((v) => !v)}
-                    dangerouslySetInnerHTML={{ __html: iconHtml('eye', 14) }}
-                  />
-                </div>
-              </div>
-              <div className="sp-field">
-                <label className="sp-label">模型</label>
-                <ModelSelector
-                  value={active?.model || ''}
-                  providerName={active?.name || ''}
-                  kind={active?.kind || 'openai'}
-                  onRefreshModels={handleRefreshModels}
-                  onChange={(modelId, desc) => {
-                    updateProvider('model', modelId);
-                    // 如果为空或仍是出厂默认 URL（用户未自定义过），自动填充 baseUrl
-                    if (desc) {
-                      const currentBase = active?.baseUrl || '';
-                      if (!currentBase || isFactoryBaseUrl(currentBase)) {
-                        updateProvider('baseUrl', desc.baseUrl);
-                      }
-                    }
-                  }}
-                />
-              </div>
-              <div className="sp-field">
-                <label className="sp-label">Base URL</label>
-                <input
-                  type="text"
-                  className="sp-input"
-                  value={active?.baseUrl || ''}
-                  onChange={(e) => updateProvider('baseUrl', e.target.value)}
-                  onBlur={(e) => {
-                    e.target.value = e.target.value.replace(/[^\x00-\x7F]/g, '');
-                  }}
-                  placeholder={defaultBaseUrl('deepseek', 'openai')}
-                />
-              </div>
-              <div className="sp-field">
-                <div className="sp-test-row">
-                  <button
-                    type="button"
-                    className={`sp-btn-sm sp-btn-test${testStatus === 'testing' ? ' disabled' : ''}`}
-                    disabled={testStatus === 'testing'}
-                    onClick={handleTestConnection}
-                    dangerouslySetInnerHTML={{
-                      __html: iconHtml(testStatus === 'testing' ? 'loading' : 'refresh', 11) + ' 测试连接',
-                    }}
-                  />
-                  {testStatus !== 'idle' && (
-                    <span
-                      className={`sp-test-msg ${testStatus}`}
-                      style={{ color: testStatus === 'ok' ? 'var(--obs-pass)' : testStatus === 'fail' ? 'var(--obs-warn)' : undefined }}
-                    >
-                      {testMsg}
-                    </span>
-                  )}
-                </div>
-                <div className="sp-hint-sub">发送最小请求验证 Key / Base URL / 模型三者可用。错误会自动分类提示。</div>
-              </div>
-              {isAnthropic && (
-                <div className="sp-field">
-                  <label className="sp-label">思考努力等级</label>
-                  <select
-                    className="sp-input"
-                    value={active?.thinking || ''}
-                    onChange={(e) => updateProvider('thinking', e.target.value)}
-                  >
-                    <option value="">自动（模型自定）</option>
-                    <option value="low">低 (low)</option>
-                    <option value="medium">中 (medium)</option>
-                    <option value="high">高 (high)</option>
-                    <option value="max">极限 (max)</option>
-                    <option value="off">关闭</option>
-                  </select>
-                  <div className="sp-hint-sub">
-                    Anthropic extended thinking 努力等级。等级越高思考越深（越费 token）。
-                  </div>
-                </div>
-              )}
-            </div>
+            <ProviderPage
+              settings={settings}
+              onCommit={commit}
+              onPersistSettings={persistSettings}
+              onStageDelete={stageDelete}
+              onStageClear={stageClear}
+              onUnstageClear={unstageClear}
+              pendingClears={pendingClears}
+              saveVersion={saveVersion}
+            />
           </div>
 
           {/* ═══ Agent 标签页 ═══ */}
@@ -940,6 +640,15 @@ const SettingsPanelApp: React.FC<{
           </div>
         </div>
 
+        {saveError && (
+          <div className="pp-error-banner">
+            <span className="pp-error-text">{saveError}</span>
+            <button type="button" className="pp-error-close" onClick={() => setSaveError('')} title="关闭">
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* 底部 */}
         <div className="sp-footer">
           <button className="sp-btn sp-btn-cancel" onClick={handleClose}>
@@ -947,12 +656,32 @@ const SettingsPanelApp: React.FC<{
           </button>
           <button
             className={`sp-btn sp-btn-save${saved ? ' sp-btn-ok' : ''}`}
+            disabled={!dirty}
             onClick={handleSave}
             dangerouslySetInnerHTML={{
               __html: saved ? iconHtml('check-circle', 11) + ' 已保存' : iconHtml('save', 11) + ' 保存',
             }}
           />
         </div>
+
+        {/* 面板内确认（替换原生 alert/confirm） */}
+        <ConfirmDialog
+          open={saveConfirm !== null}
+          title="保存确认"
+          message={saveConfirm}
+          confirmLabel="仍然保存"
+          onConfirm={handleSaveConfirm}
+          onCancel={() => setSaveConfirm(null)}
+        />
+        <ConfirmDialog
+          open={closeConfirm}
+          title="放弃未保存更改"
+          message="有未保存的修改，关闭后将丢失。确定关闭？"
+          confirmLabel="放弃并关闭"
+          tone="danger"
+          onConfirm={onClose}
+          onCancel={() => setCloseConfirm(false)}
+        />
 
         {/* 角标 */}
         <div className="corner-brackets">
@@ -965,7 +694,6 @@ const SettingsPanelApp: React.FC<{
 };
 
 // ── 面板根（P3：DockPanel 条件挂载 — 关闭即卸载，重开从 localStorage 重读）──
-// 旧 Controller 外层 overlay/panel 与组件内层同 id 重复嵌套，收编后只保留组件内这一层。
 
 export function SettingsPanel() {
   const closePanel = useDockStore((s) => s.closePanel);
