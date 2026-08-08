@@ -476,6 +476,7 @@ export class AgentRuntime implements RuntimePort {
       pricing: config.pricing,
       temperature: config.temperature ?? 0.7,
       contextWindow: config.contextWindow ?? 0,
+      toolResultWindow: config.toolResultWindow,
       ui: this._wrapNotifier(agentId),
       messageBus: this._bus,
       taskBoard: taskProxy as any as TaskBoard,

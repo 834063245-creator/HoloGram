@@ -39,6 +39,7 @@ import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
 import { userContext, createStableSchemaSelector, type StableSchemaSelector } from './tool-select';
+import { foldToolResults, DEFAULT_TOOL_RESULT_WINDOW } from './tool-fold';
 import { defineTool } from './tools/define-tool';
 
 /** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
@@ -92,6 +93,9 @@ export interface AgentOptions {
   execState?: ExecStateInstance;
   /** 每轮发给模型的工具 schema 上限（0 = 全量，默认 14）。 */
   visibleToolsLimit?: number;
+  /** 发送载荷中完整保留的最近工具结果条数（-1 = 禁用折叠，默认 40）。
+   *  窗口外的 tool 结果在发送时折叠为占位符（session/UI/存档不受影响）。 */
+  toolResultWindow?: number;
   /** UI 通知端口 — 进度 / 工具完成 / 子 Agent 生命周期。
    *  由 workspace 注入；headless Agent 无。 */
   ui?: AgentUINotifier;
@@ -115,6 +119,7 @@ export class Agent {
   private session: Message[];
   private temperature: number;
   private _visibleToolsLimit: number;
+  private _toolResultWindow: number;
   private pricing: Pricing | undefined;
   private _agentOpts: AgentOptions;
 
@@ -251,6 +256,7 @@ export class Agent {
     this._agentOpts = opts;
     this.temperature = opts.temperature ?? 0.7;
     this._visibleToolsLimit = opts.visibleToolsLimit ?? DEFAULT_VISIBLE_TOOLS_LIMIT;
+    this._toolResultWindow = opts.toolResultWindow ?? DEFAULT_TOOL_RESULT_WINDOW;
     this.pricing = opts.pricing;
     this.contextWindow = opts.contextWindow || 1000000; // 1M tokens 默认值; || 捕获零值（设置默认值），使压缩永不被静默禁用
     // ponytail: 0.55 将阈值设在 550K token（1M 窗口）。
@@ -1766,20 +1772,26 @@ ${resumeNote}
     return this.session.length > 0 && this.session[0].role === 'system' ? 1 : 0;
   }
 
-  /** 发送给 LLM 的载荷 — 完整历史 + 折叠（若已有压缩记录）。
-   *  根治: session 永远是完整历史（UI/存档读取），压缩只影响这里。 */
+  /** 发送给 LLM 的载荷 — 完整历史 + 压缩折叠（若已有压缩记录）+ 工具结果滚动折叠。
+   *  根治: session 永远是完整历史（UI/存档读取），压缩与折叠只影响这里。 */
   private payloadMessages(): Message[] {
-    if (!this._compactSummary || this._compactTailStart < 0) return this.session;
-    const head = this._foldHead();
-    const tailStart = Math.min(Math.max(this._compactTailStart, head), this.session.length);
-    const summaryMsg: Message = {
-      role: 'user',
-      content:
-        '<compacted-context>\n以下是对前面讨论的总结（原始消息仍完整保留在会话历史中）:\n\n' +
-        this._compactSummary +
-        '\n</compacted-context>',
-    };
-    return [...this.session.slice(0, head), summaryMsg, ...this.session.slice(tailStart)];
+    let msgs: Message[];
+    if (!this._compactSummary || this._compactTailStart < 0) {
+      msgs = this.session;
+    } else {
+      const head = this._foldHead();
+      const tailStart = Math.min(Math.max(this._compactTailStart, head), this.session.length);
+      const summaryMsg: Message = {
+        role: 'user',
+        content:
+          '<compacted-context>\n以下是对前面讨论的总结（原始消息仍完整保留在会话历史中）:\n\n' +
+          this._compactSummary +
+          '\n</compacted-context>',
+      };
+      msgs = [...this.session.slice(0, head), summaryMsg, ...this.session.slice(tailStart)];
+    }
+    // 窗口外的旧工具结果折叠为占位符 — 保留 tool_call_id 配对，模型需细节时可重新调用工具。
+    return foldToolResults(msgs, this._toolResultWindow);
   }
 
   /** 计算本次要折叠的中间区域。返回 null = 无可折叠内容（stuck）。
