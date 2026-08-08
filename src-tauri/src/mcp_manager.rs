@@ -19,6 +19,9 @@ pub struct McpManager {
     crash_count: u32,
     crash_window_start: Option<Instant>,
     pub degraded: bool,
+    /// 启动纪元——start/stop 都自增。start 的长等待（read_ready 最长 600s）不持锁，
+    /// 完成后比对纪元：已变说明期间被 stop 或被新 start 取代，本进程自杀（P1-19）。
+    epoch: u64,
 }
 
 impl McpManager {
@@ -29,18 +32,23 @@ impl McpManager {
             crash_count: 0,
             crash_window_start: None,
             degraded: false,
+            epoch: 0,
         }
     }
 
-    /// 启动 Rust engine MCP 服务器，等待就绪信号，然后通过
-    /// tools/list 返回工具列表。
-    pub fn start(&mut self, project_root: &str, engine_path: &str) -> Result<String, String> {
+    /// 阶段 1（持锁，短）：杀旧进程、spawn 新进程，返回 (纪元, 子进程)。
+    /// 长等待（wait_ready / tools/list）由调用方在不持锁的情况下完成，
+    /// 然后调 finish_start 安装。
+    /// P1-19：旧实现的 start 持 MCP_MANAGER 锁最长 600s，期间 stop_mcp 的
+    /// try_lock 静默跳过 → 旧 serve 进程残留 + 新 start 卡死（"切换项目卡死"）。
+    pub fn begin_start(&mut self, project_root: &str, engine_path: &str) -> Result<(u64, Child), String> {
         if self.degraded {
             return Err("MCP 已永久降级，请使用 CLI 模式".into());
         }
 
         // 终止任何已有进程
         self.kill_inner();
+        self.epoch += 1;
 
         let root = crate::utils::project_root();
 
@@ -70,23 +78,19 @@ impl McpManager {
         };
 
         crate::os_sandbox::assign_to_job(&child);
+        Ok((self.epoch, child))
+    }
+
+    /// 阶段 3（持锁，短）：长等待通过后安装子进程并重置状态。
+    /// 纪元已变（期间被 stop / 新 start 取代）→ 杀本子进程并报错，不安装。
+    pub fn finish_start(&mut self, epoch: u64, mut child: Child, tools: String) -> Result<String, String> {
+        if epoch != self.epoch {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("MCP 启动期间被停止或取代，子进程已清理".into());
+        }
         self.child = Some(child);
         self.request_id = 0;
-
-        // 等待服务器的就绪信号（分析可能需要一些时间）
-        if let Err(e) = self.read_ready() {
-            self.kill_inner(); // 清理泄漏的子进程
-            return Err(e);
-        }
-
-        // 立即获取工具列表，使前端可以构建动态工具
-        let tools = match self.send_request("tools/list", "{}") {
-            Ok(t) => t,
-            Err(e) => {
-                self.kill_inner(); // 清理泄漏的子进程
-                return Err(e);
-            }
-        };
 
         // 成功启动后重置崩溃追踪
         self.crash_count = 0;
@@ -95,9 +99,11 @@ impl McpManager {
         Ok(tools)
     }
 
-    /// 停止 MCP 服务器并重置状态。
+    /// 停止 MCP 服务器并重置状态。纪元自增——使任何进行中的 start 在
+    /// finish_start 时发现已过期并自杀子进程。
     pub fn stop(&mut self) {
         self.kill_inner();
+        self.epoch += 1;
         self.degraded = false;
         self.crash_count = 0;
         self.crash_window_start = None;
@@ -114,11 +120,12 @@ impl McpManager {
         self.child = None;
     }
 
-    /// 从 stdout 读取 JSON "ready" 通知（启动后）。
+    /// 从子进程 stdout 读取 JSON "ready" 通知（启动后）。
     /// 阻塞直到服务器完成分析并发出就绪信号。
     /// 超时：600 秒（大型项目需要时间进行布局计算）。
-    fn read_ready(&mut self) -> Result<(), String> {
-        let child = self.child.as_mut().ok_or("子进程不存在")?;
+    /// 关联函数操作传入的 child 而非 self——调用方在不持全局锁的情况下等待，
+    /// 失败时由调用方负责 kill 子进程（P1-19）。
+    pub fn wait_ready(child: &mut Child) -> Result<(), String> {
         let stdout = child.stdout.take().ok_or("stdout 不可用")?;
 
         // 启动一个线程读取就绪行，带超时
@@ -140,9 +147,7 @@ impl McpManager {
         match rx.recv_timeout(std::time::Duration::from_secs(600)) {
             Ok(Ok((stdout_back, line))) => {
                 // 将 stdout 放回
-                if let Some(ref mut child) = self.child {
-                    child.stdout = Some(stdout_back);
-                }
+                child.stdout = Some(stdout_back);
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     return Err("MCP Server 启动失败：无就绪信号".into());
@@ -159,7 +164,6 @@ impl McpManager {
             }
             Ok(Err(e)) => Err(e),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                self.kill_inner();
                 Err("MCP Server 启动超时（600秒），项目分析 + 布局计算可能耗时过长".into())
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -169,23 +173,22 @@ impl McpManager {
     }
 
     /// 发送 JSON-RPC 请求（method + params 为 JSON 字符串）并从
-    /// 响应中提取文本内容。
-    fn send_request(&mut self, method: &str, params_json: &str) -> Result<String, String> {
-        let id = self.request_id;
-        self.request_id += 1;
+    /// 响应中提取文本内容。关联函数操作传入的 child（P1-19）。
+    pub fn request_on(child: &mut Child, request_id: &mut u64, method: &str, params_json: &str) -> Result<String, String> {
+        let id = *request_id;
+        *request_id += 1;
 
         let request = format!(
             r#"{{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}}"#,
             id, method, params_json
         );
 
-        self.send_raw(&request)
+        Self::send_raw(child, &request)
     }
 
     /// 向 stdin 写入一行原始 JSON-RPC，从 stdout 读取一行，
     /// 并提取 result 文本。
-    fn send_raw(&mut self, json_line: &str) -> Result<String, String> {
-        let child = self.child.as_mut().ok_or("MCP Server 未启动")?;
+    fn send_raw(child: &mut Child, json_line: &str) -> Result<String, String> {
 
         // 将请求写入 stdin
         {
@@ -249,4 +252,63 @@ impl McpManager {
         Ok(serde_json::to_string(result).unwrap_or_default())
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_child() -> Child {
+        #[cfg(windows)]
+        {
+            Command::new("cmd")
+                .args(["/c", "exit 0"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        }
+        #[cfg(not(windows))]
+        {
+            Command::new("sh")
+                .args(["-c", "exit 0"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        }
+    }
+
+    // P1-19 回归：纪元语义——start 长等待期间的 stop/新 start 必须使旧 start 失效
+    #[test]
+    fn test_finish_start_fresh_epoch_installs() {
+        let mut mgr = McpManager::new();
+        let epoch = mgr.epoch;
+        let tools = mgr.finish_start(epoch, dummy_child(), "[]".into()).unwrap();
+        assert_eq!(tools, "[]");
+        assert!(mgr.child.is_some());
+        mgr.stop();
+        assert!(mgr.child.is_none());
+    }
+
+    #[test]
+    fn test_finish_start_stale_epoch_rejected() {
+        let mut mgr = McpManager::new();
+        let stale = mgr.epoch;
+        // 模拟 start 等待 read_ready 期间被 stop（workspace 切换路径）
+        mgr.stop();
+        let r = mgr.finish_start(stale, dummy_child(), "[]".into());
+        assert!(r.is_err(), "过期纪元必须被拒绝");
+        assert!(mgr.child.is_none(), "过期 start 不得安装子进程");
+    }
+
+    #[test]
+    fn test_stop_bumps_epoch_invalidating_inflight() {
+        let mut mgr = McpManager::new();
+        let e0 = mgr.epoch;
+        mgr.stop();
+        assert_ne!(mgr.epoch, e0, "stop 必须自增纪元");
+    }
 }
