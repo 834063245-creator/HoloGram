@@ -22,13 +22,13 @@ pub(crate) static UNITY_EVENT_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 #[tauri::command]
 pub(crate) async fn start_mcp_server(project_root: String) -> Result<String, String> {
     let engine = crate::utils::engine_binary();
-    let mut mgr = MCP_MANAGER.lock().unwrap();
+    let mut mgr = crate::utils::lock_or_recover(&MCP_MANAGER);
     mgr.start(&project_root, &engine)
 }
 
 #[tauri::command]
 pub(crate) async fn stop_mcp_server() -> Result<String, String> {
-    let mut mgr = MCP_MANAGER.lock().unwrap();
+    let mut mgr = crate::utils::lock_or_recover(&MCP_MANAGER);
     mgr.stop();
     Ok("MCP Server 已停止".into())
 }

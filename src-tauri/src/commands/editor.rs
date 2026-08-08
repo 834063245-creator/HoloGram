@@ -58,7 +58,7 @@ pub(crate) async fn edit_file(
                         }
                         let trimmed = out.trim_end_matches('\n').to_string();
                         crate::utils::write_atomic(&file_path, &trimmed)?;
-                        if let Some(ref handle) = *state.lock().unwrap() {
+                        if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
                             if !is_ignored_path(&file_path) {
                                 let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
                                 let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
@@ -117,7 +117,7 @@ pub(crate) async fn edit_file(
 
     crate::utils::write_atomic(&file_path, &new_content)?;
 
-    if let Some(ref handle) = *state.lock().unwrap() {
+    if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
         if !is_ignored_path(&file_path) {
             let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
             let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));

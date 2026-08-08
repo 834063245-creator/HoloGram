@@ -104,7 +104,7 @@ pub(crate) async fn exec_command(
                         "kind": "stdout",
                         "chunk": chunk,
                     }));
-                    so_clone.lock().unwrap().extend_from_slice(&buf[..n]);
+                    crate::utils::lock_or_recover(&so_clone).extend_from_slice(&buf[..n]);
                 }
                 dd.fetch_add(1, Ordering::SeqCst);
             })
@@ -133,7 +133,7 @@ pub(crate) async fn exec_command(
                         "kind": "stderr",
                         "chunk": chunk,
                     }));
-                    se_clone.lock().unwrap().extend_from_slice(&buf[..n]);
+                    crate::utils::lock_or_recover(&se_clone).extend_from_slice(&buf[..n]);
                 }
                 dd.fetch_add(1, Ordering::SeqCst);
             })

@@ -117,7 +117,7 @@ pub async fn lsp_start(
                     // 通过 oneshot channel 路由带 id 的响应
                     if let Some(resp_id) = msg.get("id").and_then(|v| v.as_u64()) {
                         let rid = resp_id as u32;
-                        let sender = pending_reader.lock().unwrap().remove(&rid);
+                        let sender = crate::utils::lock_or_recover(&pending_reader).remove(&rid);
                         if let Some(tx) = sender {
                             // 不关心接收方是否已丢弃（超时）
                             let _ = tx.send(msg);
@@ -134,7 +134,7 @@ pub async fn lsp_start(
             }
         }
         // Server stdout 已关闭 → 清理
-        sessions.lock().unwrap().remove(&sid);
+        crate::utils::lock_or_recover(&sessions).remove(&sid);
     });
 
     // 发送 initialize 并等待响应后才返回。
@@ -172,12 +172,12 @@ pub async fn lsp_start(
                 }
             }
         });
-        let mut lock = stdin.lock().unwrap();
+        let mut lock = crate::utils::lock_or_recover(&stdin);
         writeln!(lock, "{}", serde_json::to_string(&init).unwrap()).ok();
         lock.flush().ok();
         // 注册一个转发到 mpsc 的 oneshot
         let (otx, orx) = oneshot::channel();
-        pending.lock().unwrap().insert(init_id, otx);
+        crate::utils::lock_or_recover(&pending).insert(init_id, otx);
         // 桥接：tokio oneshot → std mpsc（读取线程解析 tokio oneshot）
         std::thread::spawn(move || {
             let _ = tx.send(orx.blocking_recv());
@@ -196,7 +196,7 @@ pub async fn lsp_start(
         let notif = serde_json::json!({
             "jsonrpc": "2.0", "method": "initialized", "params": {}
         });
-        let mut lock = stdin.lock().unwrap();
+        let mut lock = crate::utils::lock_or_recover(&stdin);
         writeln!(lock, "{}", serde_json::to_string(&notif).unwrap()).ok();
         lock.flush().ok();
     }
@@ -208,7 +208,7 @@ pub async fn lsp_start(
         pending,
     };
 
-    SERVERS.lock().unwrap().insert(id, server);
+    crate::utils::lock_or_recover(&SERVERS).insert(id, server);
 
     Ok(id)
 }
@@ -227,7 +227,7 @@ pub async fn lsp_request(
 
     // --- 准备并发送消息（在 SERVERS 锁内）---
     let (rx, request_id) = {
-        let map = SERVERS.lock().unwrap();
+        let map = crate::utils::lock_or_recover(&SERVERS);
         let server = map.get(&session_id)
             .ok_or("LSP 会话不存在")?;
 
@@ -243,7 +243,7 @@ pub async fn lsp_request(
             serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
         };
 
-        let mut lock = server.stdin.lock().unwrap();
+        let mut lock = crate::utils::lock_or_recover(&server.stdin);
         writeln!(*lock, "{}", serde_json::to_string(&msg).unwrap())
             .map_err(|e| format!("LSP 写入失败: {e}"))?;
         lock.flush().ok();
@@ -254,7 +254,7 @@ pub async fn lsp_request(
             // 在释放 map 锁之前创建 oneshot，使读取
             // 线程即使响应很快也能找到它
             let (tx, rx) = oneshot::channel();
-            server.pending.lock().unwrap().insert(id, tx);
+            crate::utils::lock_or_recover(&server.pending).insert(id, tx);
             (Some(rx), id)
         }
     }; // SERVERS 锁在此释放
@@ -274,17 +274,17 @@ pub async fn lsp_request(
             }
             Ok(Err(_recv_err)) => {
                 // Sender 已丢弃（服务器崩溃？）— 清理过期的 pending 条目
-                let map = SERVERS.lock().unwrap();
+                let map = crate::utils::lock_or_recover(&SERVERS);
                 if let Some(server) = map.get(&session_id) {
-                    server.pending.lock().unwrap().remove(&request_id);
+                    crate::utils::lock_or_recover(&server.pending).remove(&request_id);
                 }
                 Err("LSP 连接已断开".to_string())
             }
             Err(_timeout) => {
                 // 超时 — 清理过期的 pending 条目
-                let map = SERVERS.lock().unwrap();
+                let map = crate::utils::lock_or_recover(&SERVERS);
                 if let Some(server) = map.get(&session_id) {
-                    server.pending.lock().unwrap().remove(&request_id);
+                    crate::utils::lock_or_recover(&server.pending).remove(&request_id);
                 }
                 Err("LSP 请求超时".to_string())
             }
@@ -298,7 +298,7 @@ pub async fn lsp_request(
 /// 停止一个 LSP 服务器。
 #[tauri::command]
 pub async fn lsp_stop(session_id: u32) -> Result<(), String> {
-    let mut map = SERVERS.lock().unwrap();
+    let mut map = crate::utils::lock_or_recover(&SERVERS);
     if let Some(mut server) = map.remove(&session_id) {
         server.child.kill().ok();
     }
@@ -307,7 +307,7 @@ pub async fn lsp_stop(session_id: u32) -> Result<(), String> {
 
 /// 停止所有 LSP 服务器 — 在关闭时由 ResourceLedger 调用。
 pub fn stop_all() {
-    let mut map = SERVERS.lock().unwrap();
+    let mut map = crate::utils::lock_or_recover(&SERVERS);
     for (_, mut server) in map.drain() {
         server.child.kill().ok();
     }

@@ -121,7 +121,7 @@ fn main() {
                         { mc.creation_flags(crate::utils::NO_WINDOW); }
                         // 保留 Child 句柄供 ResourceLedger 在关闭时终止
                         if let Ok(child) = mc.spawn() {
-                            *commands::external::MEMORY_BUNDLE_CHILD.lock().unwrap() = Some(child);
+                            *crate::utils::lock_or_recover(&commands::external::MEMORY_BUNDLE_CHILD) = Some(child);
                         }
                     }
                 }
@@ -175,7 +175,7 @@ mod tests {
         let mut handle = workspace::WorkspaceHandle::new(&tmp.to_string_lossy());
         // deactivate 在无 watcher 运行时不应 panic
         handle.deactivate();
-        assert!(handle.changed_files.lock().unwrap().is_empty());
+        assert!(crate::utils::lock_or_recover(&handle.changed_files).is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

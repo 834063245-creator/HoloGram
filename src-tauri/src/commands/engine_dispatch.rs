@@ -37,7 +37,7 @@ fn dispatch_engine(tool: &str, args: &serde_json::Value) -> Result<String, Strin
 #[tauri::command]
 pub(crate) async fn hologram_call(tool: String, mut args: serde_json::Value, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
     if tool == "validate_project" {
-        let changed_files: Vec<String> = state.lock().unwrap().as_ref()
+        let changed_files: Vec<String> = crate::utils::lock_or_recover(&state).as_ref()
             .and_then(|h| {
                 let mut files = h.changed_files.lock().ok()?;
                 let snapshot = files.clone();

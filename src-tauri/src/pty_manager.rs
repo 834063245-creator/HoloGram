@@ -95,7 +95,7 @@ fn start_session(
 
     {
         let map_ref = pty_sessions();
-        let mut map = map_ref.lock().unwrap();
+        let mut map = crate::utils::lock_or_recover(&map_ref);
         map.insert(id, session);
     }
 
@@ -117,7 +117,7 @@ fn start_session(
             emit(id, buf[..n].to_vec());
         }
         let map_ref = sessions.clone();
-        map_ref.lock().unwrap().remove(&id);
+        crate::utils::lock_or_recover(&map_ref).remove(&id);
     });
 
     Ok((id, pid))
@@ -127,7 +127,7 @@ fn start_session(
 #[tauri::command]
 pub async fn pty_write(session_id: u32, data: String) -> Result<(), String> {
     let map_ref = pty_sessions();
-    let mut map = map_ref.lock().unwrap();
+    let mut map = crate::utils::lock_or_recover(&map_ref);
     if let Some(s) = map.get_mut(&session_id) {
         s.writer.write_all(data.as_bytes())
             .map_err(|e| format!("PTY 写入失败: {}", e))?;
@@ -140,7 +140,7 @@ pub async fn pty_write(session_id: u32, data: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn pty_resize(session_id: u32, cols: u16, rows: u16) -> Result<(), String> {
     let map_ref = pty_sessions();
-    let mut map = map_ref.lock().unwrap();
+    let mut map = crate::utils::lock_or_recover(&map_ref);
     if let Some(s) = map.get_mut(&session_id) {
         s.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| format!("PTY 调整大小失败: {}", e))?;
@@ -163,7 +163,7 @@ fn reap(mut session: PtySession) {
 pub async fn pty_kill(session_id: u32) -> Result<(), String> {
     let session = {
         let map_ref = pty_sessions();
-        let mut guard = map_ref.lock().unwrap();
+        let mut guard = crate::utils::lock_or_recover(&map_ref);
         guard.remove(&session_id)
     };
     if let Some(s) = session {
@@ -176,7 +176,7 @@ pub async fn pty_kill(session_id: u32) -> Result<(), String> {
 pub fn kill_all() {
     let sessions: Vec<PtySession> = {
         let map_ref = pty_sessions();
-        let mut map = map_ref.lock().unwrap();
+        let mut map = crate::utils::lock_or_recover(&map_ref);
         map.drain().map(|(_, s)| s).collect()
     };
     for s in sessions {

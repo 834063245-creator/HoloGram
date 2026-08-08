@@ -60,12 +60,12 @@ static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32:
 
 /// 将通知消息推入后台通知队列。
 pub(crate) fn push_bg_note(msg: &str) {
-    COMPLETED_NOTES.lock().unwrap().push(msg.to_string());
+    crate::utils::lock_or_recover(&COMPLETED_NOTES).push(msg.to_string());
 }
 
 /// 排空并返回所有待处理的后台通知（同时清空队列）。
 pub(crate) fn drain_bg_notifications() -> String {
-    let mut notes = COMPLETED_NOTES.lock().unwrap();
+    let mut notes = crate::utils::lock_or_recover(&COMPLETED_NOTES);
     if notes.is_empty() {
         return String::new();
     }
@@ -85,7 +85,7 @@ fn spawn_monitor(id: u32, label: String) {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
 
-            let mut jobs = BG_JOBS.lock().unwrap();
+            let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
             let job = match jobs.get_mut(&id) {
                 Some(j) => j,
                 None => return, // 任务已被 read_bg_output / kill_bg 移除
@@ -99,7 +99,7 @@ fn spawn_monitor(id: u32, label: String) {
                         "后台任务已完成: {} (exit code: {}, 耗时: {}s)。使用 bash_output({}) 查看输出。",
                         label, ec, elapsed, id
                     );
-                    COMPLETED_NOTES.lock().unwrap().push(msg);
+                    crate::utils::lock_or_recover(&COMPLETED_NOTES).push(msg);
                     return; // 不移除 — read_bg_output 会在 agent 检查时清理
                 }
                 Ok(None) => {
@@ -109,7 +109,7 @@ fn spawn_monitor(id: u32, label: String) {
                             "⚠️ 后台任务可能已停滞: {} 已 {}s 无输出 (job_id: {})。考虑用 bash_output({}) 检查或 bash_kill({}) 终止。",
                             label, stall_elapsed.as_secs(), id, id, id
                         );
-                        COMPLETED_NOTES.lock().unwrap().push(msg);
+                        crate::utils::lock_or_recover(&COMPLETED_NOTES).push(msg);
                         job.last_output_time = std::time::Instant::now(); // 重置以避免重复警告
                     }
                 }
@@ -164,7 +164,7 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
                         Err(_) => break,
                     }
                 };
-                buf.lock().unwrap().extend_from_slice(&chunk[..n]);
+                crate::utils::lock_or_recover(&buf).extend_from_slice(&chunk[..n]);
             }
         });
     }
@@ -182,7 +182,7 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
                         Err(_) => break,
                     }
                 };
-                buf.lock().unwrap().extend_from_slice(&chunk[..n]);
+                crate::utils::lock_or_recover(&buf).extend_from_slice(&chunk[..n]);
             }
         });
     }
@@ -196,7 +196,7 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
         last_output_time: now,
         shared: Some(BgSharedOutput { stdout: stdout_buf, stderr: stderr_buf }),
     };
-    BG_JOBS.lock().unwrap().insert(id, job);
+    crate::utils::lock_or_recover(&BG_JOBS).insert(id, job);
     spawn_monitor(id, label.to_string());
     Ok(id)
 }
@@ -220,19 +220,19 @@ pub(crate) fn spawn_bg_from_child_shared(
         last_output_time: now,
         shared: Some(shared),
     };
-    BG_JOBS.lock().unwrap().insert(id, job);
+    crate::utils::lock_or_recover(&BG_JOBS).insert(id, job);
     spawn_monitor(id, label.to_string());
     Ok(id)
 }
 
 pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
-    let mut jobs = BG_JOBS.lock().unwrap();
+    let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
 
     // ── 流式→后台路径: 从共享 Arc 读取(管道被独立线程持有) ──
     let (stdout_str, stderr_str, new_output) = if let Some(ref shared) = job.shared {
-        let so = shared.stdout.lock().unwrap();
-        let se = shared.stderr.lock().unwrap();
+        let so = crate::utils::lock_or_recover(&shared.stdout);
+        let se = crate::utils::lock_or_recover(&shared.stderr);
         let has_new = so.len() > job.stdout_buf.len() || se.len() > job.stderr_buf.len();
         let s = String::from_utf8_lossy(&so).to_string();
         let t = String::from_utf8_lossy(&se).to_string();
@@ -289,14 +289,14 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
 pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
-        let mut jobs = BG_JOBS.lock().unwrap();
+        let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
         let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
         match job.child.try_wait() {
             Ok(Some(status)) => {
                 let (stdout_str, stderr_str) = if let Some(ref shared) = job.shared {
                     // 流式→后台路径: 读取共享 Arc(管道被独立线程持有)
-                    let so = shared.stdout.lock().unwrap();
-                    let se = shared.stderr.lock().unwrap();
+                    let so = crate::utils::lock_or_recover(&shared.stdout);
+                    let se = crate::utils::lock_or_recover(&shared.stderr);
                     let s = String::from_utf8_lossy(&so).to_string();
                     let t = String::from_utf8_lossy(&se).to_string();
                     (s, t)
@@ -350,14 +350,14 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
 }
 
 pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
-    let mut jobs = BG_JOBS.lock().unwrap();
+    let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
     // 必须 kill_tree:kill() 只杀顶层 bash/cmd,残留的 cargo/rustc 孙进程会继续
     // 占用 target/ 文件锁,导致后续所有 cargo 命令无限等待锁 → "cargo test 卡死"。
     job.child.kill_tree().map_err(|e| format!("无法终止任务: {e}"))?;
     let (stdout, stderr) = if let Some(ref shared) = job.shared {
-        let so = shared.stdout.lock().unwrap();
-        let se = shared.stderr.lock().unwrap();
+        let so = crate::utils::lock_or_recover(&shared.stdout);
+        let se = crate::utils::lock_or_recover(&shared.stderr);
         (String::from_utf8_lossy(&so).to_string(),
          String::from_utf8_lossy(&se).to_string())
     } else {
@@ -371,7 +371,7 @@ pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
 /// 终止全部后台任务（workspace 切换时调用）。
 /// 全部走 kill_tree — 防 cargo/rustc 孙进程残留占用 target/ 锁。
 pub(crate) fn kill_all_bg() {
-    let mut jobs = BG_JOBS.lock().unwrap();
+    let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
     for job in jobs.values_mut() {
         let _ = job.child.kill_tree();
     }
@@ -1352,6 +1352,31 @@ pub(crate) fn guard_ipc_size(content: String, what: &str) -> Result<String, Stri
     Ok(content)
 }
 
+/// 统一加锁：锁中毒（持锁线程 panic）时恢复数据并告警，绝不让 panic
+/// 沿 IPC 面连锁扩散——一处 panic 不得拖死整个命令面（雷区地图 P0-12）。
+pub(crate) fn lock_or_recover<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| {
+        eprintln!("[hologram] Mutex 中毒（持锁线程曾 panic），已恢复继续: {e}");
+        e.into_inner()
+    })
+}
+
+/// RwLock 读版本，语义同 lock_or_recover。
+pub(crate) fn read_or_recover<T>(l: &std::sync::RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(|e| {
+        eprintln!("[hologram] RwLock 读中毒（持锁线程曾 panic），已恢复继续: {e}");
+        e.into_inner()
+    })
+}
+
+/// RwLock 写版本，语义同 lock_or_recover。
+pub(crate) fn write_or_recover<T>(l: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(|e| {
+        eprintln!("[hologram] RwLock 写中毒（持锁线程曾 panic），已恢复继续: {e}");
+        e.into_inner()
+    })
+}
+
 /// 将 `git status --porcelain` 解析为结构化 JSON。
 pub(crate) fn parse_status(raw: &str) -> serde_json::Value {
     let files: Vec<serde_json::Value> = raw
@@ -1571,5 +1596,22 @@ mod tests {
             "成功后 .bak 必须清理"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归 P0-12：锁中毒后 lock_or_recover 恢复数据而非 panic 连锁。
+    #[test]
+    fn lock_or_recover_survives_poisoning() {
+        use std::sync::{Arc, Mutex};
+        let m = Arc::new(Mutex::new(42));
+        let m2 = m.clone();
+        let _ = std::thread::spawn(move || {
+            // 故意持锁 panic 制造中毒（用 expect 避开 lock_or_recover 的 codemod 模式）
+            let mut g = m2.lock().expect("test lock");
+            *g = 43;
+            panic!("boom");
+        })
+        .join();
+        assert!(m.lock().is_err(), "前提：锁必须已中毒");
+        assert_eq!(*lock_or_recover(&m), 43, "中毒后必须恢复数据而非 panic");
     }
 }

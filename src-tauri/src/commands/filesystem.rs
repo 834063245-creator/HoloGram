@@ -109,7 +109,7 @@ pub(crate) async fn write_file_content(
     let real_path = crate::confined_fs::write_text(&file_path, &content, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     let rp = real_path.to_string_lossy().to_string();
 
-    if let Some(ref handle) = *state.lock().unwrap() {
+    if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
         if !is_ignored_path(&rp) {
             let short = rp.rsplit(['/', '\\']).next().unwrap_or(&rp);
             let _ = engine_api::engine_record_timeline("agent_write", Some(&rp), &format!("Agent 写入: {}", short));
@@ -180,7 +180,7 @@ pub(crate) async fn delete_file_or_dir(
 ) -> Result<(), String> {
     let real = crate::confined_fs::delete(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
     let rp = real.to_string_lossy().replace('\\', "/");
-    if let Some(ref handle) = *state.lock().unwrap() {
+    if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
         if !is_ignored_path(&rp) {
             let short = rp.rsplit('/').next().unwrap_or(&rp);
             let _ = engine_api::engine_record_timeline("agent_delete", Some(&rp), &format!("Agent 删除: {}", short));
@@ -213,7 +213,7 @@ pub(crate) async fn rename_file_or_dir(
     };
     let (_, resolved_to) = crate::confined_fs::rename(&file_path, &to, is_agent, _agent_id.as_deref(), &state, &app).await?;
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
-    if let Some(ref handle) = *state.lock().unwrap() {
+    if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
         if !is_ignored_path(&rp) {
             let short = rp.rsplit('/').next().unwrap_or(&rp);
             let _ = engine_api::engine_record_timeline("agent_rename", Some(&rp), &format!("Agent 重命名: {}", short));
@@ -237,7 +237,7 @@ pub(crate) async fn move_file(
     let is_agent = is_agent.unwrap_or(false);
     let (_, resolved_to) = crate::confined_fs::rename(&from, &to, is_agent, _agent_id.as_deref(), &state, &app).await?;
     let rp = resolved_to.to_string_lossy().replace('\\', "/");
-    if let Some(ref handle) = *state.lock().unwrap() {
+    if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
         if !is_ignored_path(&rp) {
             let short = rp.rsplit('/').next().unwrap_or(&rp);
             let _ = engine_api::engine_record_timeline("agent_move", Some(&rp), &format!("Agent 移动: {}", short));

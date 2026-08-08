@@ -153,7 +153,7 @@ impl PermissionContext {
 
     /// 获取规则的读锁以供工具自检。
     pub fn read_rules(&self) -> std::sync::RwLockReadGuard<'_, rule::PermissionRules> {
-        self.rules.read().unwrap()
+        crate::utils::read_or_recover(&self.rules)
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -270,7 +270,7 @@ pub fn has_permission_to_use_tool(
 
     // ① 工具级 Deny — 最高优先级，立即拒绝
     {
-        let rules = ctx.rules.read().unwrap();
+        let rules = crate::utils::read_or_recover(&ctx.rules);
         if let Some(rule) = rules.find_deny(tool_name, None) {
             let reason = format!("{} 工具被规则禁止使用", rule.explain());
             let target = tool
@@ -285,7 +285,7 @@ pub fn has_permission_to_use_tool(
 
     // ② 工具级 Ask — 强制弹窗
     {
-        let rules = ctx.rules.read().unwrap();
+        let rules = crate::utils::read_or_recover(&ctx.rules);
         if let Some(rule) = rules.find_ask(tool_name, None) {
             let suggestion_rule = match &rule.value.content {
                 Some(content) => format!("{}({})", rule.value.tool_name, content),
@@ -344,7 +344,7 @@ pub fn has_permission_to_use_tool(
 
     // ⑤ 工具级 Allow — 不带内容的裸 "Read" / "Bash" 等
     {
-        let rules = ctx.rules.read().unwrap();
+        let rules = crate::utils::read_or_recover(&ctx.rules);
         if rules.find_allow(tool_name, None).is_some() {
             let target = tool.get_path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             ctx.audit_allow(tool_name, &target);

@@ -21,7 +21,7 @@ pub(crate) async fn load_graph_json(
         return crate::utils::guard_ipc_size(content, "Graph JSON");
     }
 
-    if let Some(ref handle) = *state.lock().unwrap() {
+    if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
         let p = std::path::PathBuf::from(&handle.path).join("hologram_graph.json");
         if let Ok(content) = std::fs::read_to_string(&p) {
             if !content.trim().is_empty() {

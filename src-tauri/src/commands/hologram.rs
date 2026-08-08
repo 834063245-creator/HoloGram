@@ -32,7 +32,7 @@ pub(crate) async fn hologram_run_check(
     };
     // 在派生阻塞任务前提取并清除 changed_files。
     // 提前清除可防止检查期间新变更到达时的竞态。
-    let changed_files: Vec<String> = state.lock().unwrap().as_ref()
+    let changed_files: Vec<String> = crate::utils::lock_or_recover(&state).as_ref()
         .and_then(|h| {
             let mut files = h.changed_files.lock().ok()?;
             let snapshot = files.clone();

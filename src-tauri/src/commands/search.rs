@@ -298,12 +298,12 @@ fn append_vector_hits(output_val: &mut serde_json::Value, root: &std::path::Path
         Ok(pair) => pair,
         Err(_) => return,
     };
-    let idx = index.read().unwrap();
+    let idx = crate::utils::read_or_recover(&index);
     let idx = match idx.as_ref() {
         Some(i) => i,
         None => return,
     };
-    let slot_data = slots.read().unwrap();
+    let slot_data = crate::utils::read_or_recover(&slots);
     if slot_data.is_empty() { return; }
 
     let q_vec = vector::embed(pattern);

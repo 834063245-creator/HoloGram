@@ -16,7 +16,7 @@ pub(crate) async fn workspace_activate(
     let handle = crate::workspace::WorkspaceHandle::new(&path);
     handle.activate(&crate::utils::project_root());
 
-    *state.lock().unwrap() = Some(handle);
+    *crate::utils::lock_or_recover(&state) = Some(handle);
     Ok(())
 }
 
@@ -55,7 +55,7 @@ pub(crate) async fn workspace_start_watcher(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<(), String> {
-    if let Some(ref mut handle) = *state.lock().unwrap() {
+    if let Some(ref mut handle) = *crate::utils::lock_or_recover(&state) {
         handle.start_watcher(app);
         Ok(())
     } else {
