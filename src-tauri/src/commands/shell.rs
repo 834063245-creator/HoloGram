@@ -139,17 +139,45 @@ pub(crate) async fn exec_command(
             })
         });
 
+        // P1-21: 注册进 ledger — 工作区切换 kill_all_bg 能终止运行中的流式命令。
+        // child 进 ledger 后等待线程从 ledger 取 child 轮询；超时转后台时 job 保留
+        // （bash_output/bash_wait/bash_kill 走共享 Arc 输出，无需重新注册）。
+        let job_id = {
+            let shared = crate::utils::BgSharedOutput {
+                stdout: Arc::clone(&shared_out),
+                stderr: Arc::clone(&shared_err),
+            };
+            let label: String = command.chars().take(80).collect();
+            crate::utils::register_fg_child(child, &label, shared)
+        };
+
         // 在后台等待子进程，发送完成事件 / 超时转后台
         let app_done = app.clone();
         let sid_done = stream_id.clone();
         let timeout_ms_val = timeout_ms.unwrap_or(300_000);
-        let cmd_for_bg = command.clone();
         let drain_flag = Arc::clone(&drain_done);
         std::thread::spawn(move || {
+            enum Poll {
+                Running,
+                Done(i32),
+                Gone,
+            }
             let start = std::time::Instant::now();
             loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
+                let poll = {
+                    let mut jobs = crate::utils::lock_or_recover(&crate::utils::BG_JOBS);
+                    match jobs.get_mut(&job_id) {
+                        Some(job) => match job.child.try_wait() {
+                            Ok(Some(st)) => Poll::Done(st.code().unwrap_or(-1)),
+                            Ok(None) => Poll::Running,
+                            Err(_) => Poll::Gone,
+                        },
+                        // job 被 bash_kill / kill_all_bg 移除 → 视为已终止
+                        None => Poll::Gone,
+                    }
+                };
+                match poll {
+                    Poll::Done(code) => {
                         // 有界等待输出线程收尾(最多 3s):孙进程短暂持管时
                         // read_vectored 阻塞,但 shell:done 不能因此延迟。
                         // 超时则放弃 — 输出线程在后台自行退出(写端最终关闭)。
@@ -159,51 +187,37 @@ pub(crate) async fn exec_command(
                         {
                             thread::sleep(Duration::from_millis(20));
                         }
+                        crate::utils::lock_or_recover(&crate::utils::BG_JOBS).remove(&job_id);
                         let _ = app_done.emit("shell:done", serde_json::json!({
                             "streamId": sid_done,
-                            "exitCode": status.code().unwrap_or(-1),
+                            "exitCode": code,
                         }));
                         return;
                     }
-                    Ok(None) => {
+                    Poll::Running => {
                         if start.elapsed() >= Duration::from_millis(timeout_ms_val) {
-                            // 转后台:管道被 take 了但输出已通过共享 Arc 保存,
-                            // bg job 从 shared_out/shared_err 读取,不受管道所有权影响。
-                            let label: String = cmd_for_bg.chars().take(80).collect();
-                            let shared = crate::utils::BgSharedOutput {
-                                stdout: Arc::clone(&shared_out),
-                                stderr: Arc::clone(&shared_err),
-                            };
-                            match crate::utils::spawn_bg_from_child_shared(child, &label, shared) {
-                                Ok(job_id) => {
-                                    let msg = format!(
-                                        "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止。",
-                                        timeout_ms_val, job_id, job_id, job_id, job_id
-                                    );
-                                    crate::utils::push_bg_note(&msg);
-                                    let _ = app_done.emit("shell:done", serde_json::json!({
-                                        "streamId": sid_done,
-                                        "exitCode": -1,
-                                        "error": msg,
-                                    }));
-                                }
-                                Err(e) => {
-                                    let _ = app_done.emit("shell:done", serde_json::json!({
-                                        "streamId": sid_done,
-                                        "exitCode": -1,
-                                        "error": format!("命令超时且转后台失败: {}", e),
-                                    }));
-                                }
-                            }
+                            // 超时转后台：job 已注册在 ledger（共享 Arc 输出已由 drain
+                            // 线程排空），直接保留并通知，bash_output 等可继续读取。
+                            let msg = format!(
+                                "命令超时 ({}ms)，已转为后台任务 (ID: {})。使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止。",
+                                timeout_ms_val, job_id, job_id, job_id, job_id
+                            );
+                            crate::utils::push_bg_note(&msg);
+                            let _ = app_done.emit("shell:done", serde_json::json!({
+                                "streamId": sid_done,
+                                "exitCode": -1,
+                                "error": msg,
+                            }));
                             return;
                         }
                         thread::sleep(Duration::from_millis(50));
                     }
-                    Err(_) => {
+                    Poll::Gone => {
+                        crate::utils::lock_or_recover(&crate::utils::BG_JOBS).remove(&job_id);
                         let _ = app_done.emit("shell:done", serde_json::json!({
                             "streamId": sid_done,
                             "exitCode": -1,
-                            "error": "命令执行异常",
+                            "error": "命令执行异常或已被终止",
                         }));
                         return;
                     }
@@ -221,14 +235,30 @@ pub(crate) async fn exec_command(
     let stdout_drainer = pipe_drainer(child.take_stdout());
     let stderr_drainer = pipe_drainer(child.take_stderr());
 
+    // P1-21: 前台命令也注册进 ledger（不 spawn monitor — 本路径自己等待并移除）。
+    // 工作区切换 kill_all_bg 能终止仍在运行的前台命令，避免跨工作区残留进程。
+    use std::sync::{Arc, Mutex};
+    let job_id = {
+        let shared = crate::utils::BgSharedOutput {
+            stdout: Arc::new(Mutex::new(Vec::new())),
+            stderr: Arc::new(Mutex::new(Vec::new())),
+        };
+        let label: String = command.chars().take(80).collect();
+        crate::utils::register_fg_child(child, &label, shared)
+    };
+
     // P1-16：try_wait+sleep 忙等是阻塞循环，移入 spawn_blocking——
     // 否则一条长命令（默认上限 300s）占住一个 tokio worker，并发命令叠加可耗尽线程池。
     let timeout_ms_val = timeout_ms.unwrap_or(300_000);
-    tokio::task::spawn_blocking(move || {
-        wait_child_blocking(child, stdout_drainer, stderr_drainer, timeout, timeout_ms_val)
+    let result = tokio::task::spawn_blocking(move || {
+        let r = wait_child_blocking(job_id, stdout_drainer, stderr_drainer, timeout, timeout_ms_val);
+        // 命令结束（含超时/错误）→ 从 ledger 移除
+        crate::utils::lock_or_recover(&crate::utils::BG_JOBS).remove(&job_id);
+        r
     })
     .await
-    .map_err(|e| format!("命令等待任务异常: {e}"))?
+    .map_err(|e| format!("命令等待任务异常: {e}"))?;
+    result
 }
 
 /// 为子进程管道起 drainer 线程：read_to_end 后经 channel 送回，避免管道写满阻塞子进程。
@@ -248,8 +278,10 @@ fn pipe_drainer(
 
 /// 非流式路径的阻塞等待：轮询子进程退出，收集 drainer 输出，超时杀进程树。
 /// 必须运行在阻塞线程上（spawn_blocking），不得内联在 async worker。
+/// P1-21: child 已注册进 BG_JOBS ledger（register_fg_child），本函数按 job_id
+/// 从 ledger 取 child 轮询 — kill_all_bg（工作区切换）可随时终止它。
 fn wait_child_blocking(
-    mut child: crate::os_sandbox::SandboxedChild,
+    job_id: u32,
     stdout_drainer: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
     stderr_drainer: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
     timeout: Duration,
@@ -257,7 +289,15 @@ fn wait_child_blocking(
 ) -> Result<String, String> {
     let start = std::time::Instant::now();
     loop {
-        match child.try_wait() {
+        let status = {
+            let mut jobs = crate::utils::lock_or_recover(&crate::utils::BG_JOBS);
+            match jobs.get_mut(&job_id) {
+                Some(job) => job.child.try_wait(),
+                // job 被 kill_bg / kill_all_bg 移除 → 视为已终止
+                None => return Err("后台任务不存在或已被终止".into()),
+            }
+        };
+        match status {
             Ok(Some(status)) => {
                 let stdout = stdout_drainer
                     .as_ref()
@@ -290,7 +330,9 @@ fn wait_child_blocking(
                 if start.elapsed() >= timeout {
                     // 终止进程树而非转后台 — 非流式路径的 stdout 已被 take 走,
                     // 转后台后同样收不回输出,agent 只会反复重跑。终止并带回已收集的输出。
-                    child.kill_tree().ok();
+                    crate::utils::lock_or_recover(&crate::utils::BG_JOBS)
+                        .get_mut(&job_id)
+                        .and_then(|j| j.child.kill_tree().ok());
                     let stdout = stdout_drainer
                         .as_ref()
                         .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
@@ -311,7 +353,9 @@ fn wait_child_blocking(
                 thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                child.kill().ok();
+                crate::utils::lock_or_recover(&crate::utils::BG_JOBS)
+                    .get_mut(&job_id)
+                    .and_then(|j| j.child.kill().ok());
                 return Err(format!("命令执行异常: {e}"));
             }
         }
@@ -341,17 +385,29 @@ pub(crate) async fn drain_bg_notifications() -> Result<String, String> {
 mod tests {
     use super::*;
 
+    fn empty_shared() -> crate::utils::BgSharedOutput {
+        use std::sync::{Arc, Mutex};
+        crate::utils::BgSharedOutput {
+            stdout: Arc::new(Mutex::new(Vec::new())),
+            stderr: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// 前台等待辅助：注册进 ledger（与 exec_command 非流式路径一致），完成后移除。
     fn run_wait(cmd: &str, timeout_ms: u64) -> Result<String, String> {
         let mut child = crate::os_sandbox::spawn_shell(cmd, ".").expect("spawn_shell failed");
         let stdout = pipe_drainer(child.take_stdout());
         let stderr = pipe_drainer(child.take_stderr());
-        wait_child_blocking(
-            child,
+        let job_id = crate::utils::register_fg_child(child, cmd, empty_shared());
+        let r = wait_child_blocking(
+            job_id,
             stdout,
             stderr,
             Duration::from_millis(timeout_ms),
             timeout_ms,
-        )
+        );
+        crate::utils::lock_or_recover(&crate::utils::BG_JOBS).remove(&job_id);
+        r
     }
 
     // P1-16 回归：阻塞等待移入 spawn_blocking 后行为不变
@@ -374,5 +430,42 @@ mod tests {
         assert!(out.contains("命令超时"), "unexpected output: {out}");
         // 超时即终止进程树，不得等满 sleep 30
         assert!(start.elapsed() < Duration::from_secs(20), "took {:?}", start.elapsed());
+    }
+
+    // P1-21 回归：前台命令注册进 ledger（kill_all_bg 可遍历终止）；
+    // job 被移除（kill_bg/kill_all_bg）后 wait 立即报告「已被终止」。
+    // 注意：不调真实 kill_all_bg —— 它清空全局 BG_JOBS，会干扰并行测试的其他 job。
+    #[test]
+    fn test_fg_command_killed_by_ledger_removal() {
+        let mut child = crate::os_sandbox::spawn_shell("sleep 30", ".").expect("spawn_shell failed");
+        let stdout = pipe_drainer(child.take_stdout());
+        let stderr = pipe_drainer(child.take_stderr());
+        let job_id = crate::utils::register_fg_child(child, "sleep 30", empty_shared());
+        // 注册生效：ledger 中可见（kill_all_bg 遍历能杀到它）
+        assert!(
+            crate::utils::lock_or_recover(&crate::utils::BG_JOBS).contains_key(&job_id),
+            "前台命令应注册进 ledger"
+        );
+        // 模拟 kill_all_bg / kill_bg 移除 job → wait 立即报「已被终止」
+        crate::utils::lock_or_recover(&crate::utils::BG_JOBS).remove(&job_id);
+        let r = wait_child_blocking(job_id, stdout, stderr, Duration::from_secs(10), 10_000);
+        assert!(r.is_err(), "wait 应因 job 被移除而报错, got {r:?}");
+        assert!(r.unwrap_err().contains("已被终止"), "unexpected err");
+    }
+
+    // P1-21 回归：前台命令正常完成后，ledger 中不再残留该 job
+    #[test]
+    fn test_fg_command_removed_after_completion() {
+        let mut child = crate::os_sandbox::spawn_shell("echo p121-done", ".").expect("spawn_shell failed");
+        let stdout = pipe_drainer(child.take_stdout());
+        let stderr = pipe_drainer(child.take_stderr());
+        let job_id = crate::utils::register_fg_child(child, "echo p121-done", empty_shared());
+        let r = wait_child_blocking(job_id, stdout, stderr, Duration::from_secs(10), 10_000);
+        crate::utils::lock_or_recover(&crate::utils::BG_JOBS).remove(&job_id);
+        assert!(r.as_ref().unwrap().contains("p121-done"), "unexpected output: {r:?}");
+        assert!(
+            crate::utils::lock_or_recover(&crate::utils::BG_JOBS).get(&job_id).is_none(),
+            "job {job_id} 应已从 ledger 移除"
+        );
     }
 }

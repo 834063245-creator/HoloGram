@@ -204,14 +204,14 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
     Ok(id)
 }
 
-/// 将已启动的 SandboxedChild 注册为后台任务，附共享输出缓冲区。
-/// 用于流式 exec_command 超时路径：stdout/stderr 管道已被独立线程
-/// take 走，bg job 从 shared.stdout / shared.stderr Arc 读取输出。
-pub(crate) fn spawn_bg_from_child_shared(
+/// P1-21: 前台 exec_command 子进程注册进 ledger（不 spawn monitor — 前台路径
+/// 自己等待并负责移除）。使 kill_all_bg（工作区切换）/ shutdown 能终止仍在运行
+/// 的前台命令（如占用 target 锁的 cargo），否则它们会成为跨工作区残留进程。
+pub(crate) fn register_fg_child(
     child: os_sandbox::SandboxedChild,
     label: &str,
     shared: BgSharedOutput,
-) -> Result<u32, String> {
+) -> u32 {
     let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let now = std::time::Instant::now();
     let job = BgJob {
@@ -224,8 +224,7 @@ pub(crate) fn spawn_bg_from_child_shared(
         shared,
     };
     crate::utils::lock_or_recover(&BG_JOBS).insert(id, job);
-    spawn_monitor(id, label.to_string());
-    Ok(id)
+    id
 }
 
 pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
