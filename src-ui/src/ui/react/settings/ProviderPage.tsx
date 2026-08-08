@@ -272,27 +272,29 @@ export function ProviderPage({
           isCurrent={selectedProvider.name === settings.activeProvider}
           canDelete={settings.providers.length > 1}
           test={tests.get(selectedProvider.name) ?? { phase: 'idle', msg: '' }}
-          keySaved={!keyDirtyMap.get(selectedProvider.name) && !!selectedProvider.apiKey?.trim()}
-          pendingClear={pendingClears.includes(selectedProvider.name)}
-          keyVisible={!!keyVisibleMap.get(selectedProvider.name)}
-          keyInputRef={keyInputRef}
-          onFieldChange={(field, value) => handleFieldChange(selectedProvider.name, field, value)}
-          onModelChange={(modelId, desc) => handleModelChange(selectedProvider.name, modelId, desc)}
-          onRefreshModels={handleRefreshModels}
-          onTest={handleTest}
-          onSetCurrent={handleSetCurrent}
-          onClearKey={() => setClearTarget(selectedProvider.name)}
-          onResetBaseUrl={() =>
-            onCommitProvider(
-              updateProvider(settings, selectedProvider.name, {
-                baseUrl: defaultBaseUrl(selectedProvider.name, selectedProvider.kind),
-              }),
-            )
-          }
-          onToggleKeyVisible={() =>
-            setKeyVisibleMap((m) => new Map(m).set(selectedProvider.name, !m.get(selectedProvider.name)))
-          }
-          onDelete={() => setDelTarget(selectedProvider.name)}
+          keyState={{
+            saved: !keyDirtyMap.get(selectedProvider.name) && !!selectedProvider.apiKey?.trim(),
+            pendingClear: pendingClears.includes(selectedProvider.name),
+            visible: !!keyVisibleMap.get(selectedProvider.name),
+            inputRef: keyInputRef,
+          }}
+          actions={{
+            onFieldChange: (field, value) => handleFieldChange(selectedProvider.name, field, value),
+            onModelChange: (modelId, desc) => handleModelChange(selectedProvider.name, modelId, desc),
+            onRefreshModels: handleRefreshModels,
+            onTest: handleTest,
+            onSetCurrent: handleSetCurrent,
+            onClearKey: () => setClearTarget(selectedProvider.name),
+            onResetBaseUrl: () =>
+              onCommitProvider(
+                updateProvider(settings, selectedProvider.name, {
+                  baseUrl: defaultBaseUrl(selectedProvider.name, selectedProvider.kind),
+                }),
+              ),
+            onToggleKeyVisible: () =>
+              setKeyVisibleMap((m) => new Map(m).set(selectedProvider.name, !m.get(selectedProvider.name))),
+            onDelete: () => setDelTarget(selectedProvider.name),
+          }}
         />
       </div>
 

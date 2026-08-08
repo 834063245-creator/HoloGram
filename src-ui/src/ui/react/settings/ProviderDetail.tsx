@@ -35,12 +35,25 @@ interface ProviderDetailProps {
   isCurrent: boolean;
   canDelete: boolean;
   test: ProbeUiState;
+  /** Key 栏 UI 状态簇：已保存 / 清除暂存 / 明文可见 / 输入框引用 */
+  keyState: KeyUiState;
+  /** 控制台全部回调簇 */
+  actions: ProviderDetailActions;
+}
+
+/** Key 栏 UI 状态簇（本地暂存，非持久化配置） */
+export interface KeyUiState {
   /** 当前 Key 是否已保存在系统凭据（未在本会话内改动） */
-  keySaved: boolean;
+  saved: boolean;
   /** 该 provider 是否有「清除 Key」暂存（保存时才删凭据） */
   pendingClear: boolean;
-  keyVisible: boolean;
-  keyInputRef: React.RefObject<HTMLInputElement | null>;
+  /** Key 是否明文显示 */
+  visible: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}
+
+/** 控制台回调簇：所有动作统一经此 seam 注入，便于测试与复用 */
+export interface ProviderDetailActions {
   onFieldChange: (field: ProviderField, value: string) => void;
   onModelChange: (modelId: string, desc?: ModelDescriptor) => void;
   onRefreshModels: () => Promise<number>;
@@ -57,20 +70,26 @@ export function ProviderDetail({
   isCurrent,
   canDelete,
   test,
-  keySaved,
-  pendingClear,
-  keyVisible,
-  keyInputRef,
-  onFieldChange,
-  onModelChange,
-  onRefreshModels,
-  onTest,
-  onSetCurrent,
-  onClearKey,
-  onResetBaseUrl,
-  onToggleKeyVisible,
-  onDelete,
+  keyState,
+  actions,
 }: ProviderDetailProps) {
+  const {
+    saved: keySaved,
+    pendingClear,
+    visible: keyVisible,
+    inputRef: keyInputRef,
+  } = keyState;
+  const {
+    onFieldChange,
+    onModelChange,
+    onRefreshModels,
+    onTest,
+    onSetCurrent,
+    onClearKey,
+    onResetBaseUrl,
+    onToggleKeyVisible,
+    onDelete,
+  } = actions;
   const st = providerStatus(provider);
   const statusCls = test.phase === 'testing' ? 'testing' : st;
   const statusLabel = test.phase === 'testing' ? '测试中…' : STATUS_LABEL[st];
