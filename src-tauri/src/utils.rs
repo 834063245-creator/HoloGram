@@ -45,8 +45,12 @@ pub(crate) struct BgJob {
     #[allow(dead_code)] // 存储供未来任务列表功能使用
     label: String,
     last_output_time: std::time::Instant,
-    /// 流式→后台转换：输出管道由独立线程持有，从此 Arc 读取。
-    shared: Option<BgSharedOutput>,
+    /// 共享输出缓冲区（必有）：drain 线程排空管道到此 Arc，
+    /// 读方(wait_bg/read_bg_output/kill_bg)只碰 Arc 内存，永不阻塞读管道。
+    /// P1-17：曾为 Option，None 分支持 BG_JOBS 锁做阻塞管道读——
+    /// 非 Windows 可继承管道下孙进程持写端 → 永久阻塞 → bash_* 全瘫。
+    /// 改为必填字段，从类型上根除该分支。
+    shared: BgSharedOutput,
 }
 
 pub(crate) static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
@@ -135,9 +139,8 @@ pub(crate) fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
 /// 必须 take 管道并用 drain 线程排空到 shared Arc:
 ///  1) std 管道是阻塞模式且缓冲极小(Windows 匿名管道默认 4KB),后台任务
 ///     (cargo build/test 等)输出一多就塞满管道 → bash 写阻塞 → 命令假死;
-///  2) read_bg_output 的 shared 分支只读 Arc 内存,永不阻塞;若 shared=None
-///     会走阻塞读管道分支,任务运行中无输出时永久卡死并占住 BG_JOBS 锁,
-///     连锁导致 bash_output/bash_wait 全部无限等待。
+///  2) 读方(wait_bg/read_bg_output/kill_bg)只读 shared Arc 内存,永不阻塞——
+///     shared 为 BgJob 必填字段,阻塞读管道分支已从类型上移除(P1-17)。
 pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str) -> Result<u32, String> {
     let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let now = std::time::Instant::now();
@@ -194,7 +197,7 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
         start_time: now,
         label: label.to_string(),
         last_output_time: now,
-        shared: Some(BgSharedOutput { stdout: stdout_buf, stderr: stderr_buf }),
+        shared: BgSharedOutput { stdout: stdout_buf, stderr: stderr_buf },
     };
     crate::utils::lock_or_recover(&BG_JOBS).insert(id, job);
     spawn_monitor(id, label.to_string());
@@ -218,7 +221,7 @@ pub(crate) fn spawn_bg_from_child_shared(
         start_time: now,
         label: label.to_string(),
         last_output_time: now,
-        shared: Some(shared),
+        shared,
     };
     crate::utils::lock_or_recover(&BG_JOBS).insert(id, job);
     spawn_monitor(id, label.to_string());
@@ -229,8 +232,9 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
     let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
 
-    // ── 流式→后台路径: 从共享 Arc 读取(管道被独立线程持有) ──
-    let (stdout_str, stderr_str, new_output) = if let Some(ref shared) = job.shared {
+    // ── 只从共享 Arc 读取（drain 线程已排空管道）——不碰 child 管道，永不阻塞 ──
+    let (stdout_str, stderr_str, new_output) = {
+        let shared = &job.shared;
         let so = crate::utils::lock_or_recover(&shared.stdout);
         let se = crate::utils::lock_or_recover(&shared.stderr);
         let has_new = so.len() > job.stdout_buf.len() || se.len() > job.stderr_buf.len();
@@ -239,34 +243,6 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
         job.stdout_buf = so.clone();
         job.stderr_buf = se.clone();
         (s, t, has_new)
-    } else {
-        // ── 常规后台路径: 从 child stdout/stderr 管道读取 ──
-        let mut new_output = false;
-        if let Some(stdout) = job.child.stdout_reader() {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stdout.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => { job.stdout_buf.extend_from_slice(&buf[..n]); new_output = true; }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(_) => break,
-                }
-            }
-        }
-        if let Some(stderr) = job.child.stderr_reader() {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stderr.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => { job.stderr_buf.extend_from_slice(&buf[..n]); new_output = true; }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(_) => break,
-                }
-            }
-        }
-        let s = String::from_utf8_lossy(&job.stdout_buf).to_string();
-        let t = String::from_utf8_lossy(&job.stderr_buf).to_string();
-        (s, t, new_output)
     };
 
     if new_output {
@@ -293,39 +269,13 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
         let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
         match job.child.try_wait() {
             Ok(Some(status)) => {
-                let (stdout_str, stderr_str) = if let Some(ref shared) = job.shared {
-                    // 流式→后台路径: 读取共享 Arc(管道被独立线程持有)
+                // 只从共享 Arc 读取——不碰 child 管道，永不持锁阻塞（P1-17）
+                let (stdout_str, stderr_str) = {
+                    let shared = &job.shared;
                     let so = crate::utils::lock_or_recover(&shared.stdout);
                     let se = crate::utils::lock_or_recover(&shared.stderr);
                     let s = String::from_utf8_lossy(&so).to_string();
                     let t = String::from_utf8_lossy(&se).to_string();
-                    (s, t)
-                } else {
-                    // 常规后台路径: 读取 child 管道剩余输出
-                    if let Some(stdout) = job.child.stdout_reader() {
-                        let mut buf = [0u8; 4096];
-                        loop {
-                            match stdout.read(&mut buf) {
-                                Ok(0) => break,
-                                Ok(n) => { job.stdout_buf.extend_from_slice(&buf[..n]); }
-                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                                Err(_) => break,
-                            }
-                        }
-                    }
-                    if let Some(stderr) = job.child.stderr_reader() {
-                        let mut buf = [0u8; 4096];
-                        loop {
-                            match stderr.read(&mut buf) {
-                                Ok(0) => break,
-                                Ok(n) => { job.stderr_buf.extend_from_slice(&buf[..n]); }
-                                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                                Err(_) => break,
-                            }
-                        }
-                    }
-                    let s = String::from_utf8_lossy(&job.stdout_buf).to_string();
-                    let t = String::from_utf8_lossy(&job.stderr_buf).to_string();
                     (s, t)
                 };
                 let elapsed = job.start_time.elapsed().as_secs();
@@ -355,14 +305,12 @@ pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
     // 必须 kill_tree:kill() 只杀顶层 bash/cmd,残留的 cargo/rustc 孙进程会继续
     // 占用 target/ 文件锁,导致后续所有 cargo 命令无限等待锁 → "cargo test 卡死"。
     job.child.kill_tree().map_err(|e| format!("无法终止任务: {e}"))?;
-    let (stdout, stderr) = if let Some(ref shared) = job.shared {
+    let (stdout, stderr) = {
+        let shared = &job.shared;
         let so = crate::utils::lock_or_recover(&shared.stdout);
         let se = crate::utils::lock_or_recover(&shared.stderr);
         (String::from_utf8_lossy(&so).to_string(),
          String::from_utf8_lossy(&se).to_string())
-    } else {
-        (String::from_utf8_lossy(&job.stdout_buf).to_string(),
-         String::from_utf8_lossy(&job.stderr_buf).to_string())
     };
     jobs.remove(&id);
     Ok(format!("[任务已终止]\n{stdout}{stderr}"))
@@ -1613,5 +1561,31 @@ mod tests {
         .join();
         assert!(m.lock().is_err(), "前提：锁必须已中毒");
         assert_eq!(*lock_or_recover(&m), 43, "中毒后必须恢复数据而非 panic");
+    }
+
+    // ── P1-17：bg 任务读方只碰 shared Arc，永不阻塞读管道 ──
+    #[test]
+    fn bg_job_roundtrip_via_shared_arc() {
+        let id = spawn_bg("echo bg-p117", ".").expect("spawn_bg failed");
+        let out = wait_bg(id, 10_000).expect("wait_bg failed");
+        assert!(out.contains("bg-p117"), "unexpected output: {out}");
+        assert!(out.contains("exit code: 0"), "unexpected output: {out}");
+    }
+
+    /// 无输出的长任务：read_bg_output 必须立即返回快照（修复前 shared=None 分支
+    /// 会持 BG_JOBS 锁阻塞读管道，任务安静时永久卡死）。shared 现为必填字段，
+    /// 该分支已从类型上移除，此测试锁定行为。
+    #[test]
+    fn bg_output_snapshot_quiet_task_returns_fast() {
+        let id = spawn_bg("sleep 5", ".").expect("spawn_bg failed");
+        let start = std::time::Instant::now();
+        let out = read_bg_output(id).expect("read_bg_output failed");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "快照读取耗时 {:?}——疑似退化为阻塞管道读",
+            start.elapsed()
+        );
+        assert!(out.contains("任务运行中"), "unexpected output: {out}");
+        kill_bg(id).expect("kill_bg failed");
     }
 }
