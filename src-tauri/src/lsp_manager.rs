@@ -88,10 +88,15 @@ pub async fn lsp_start(
         .map_err(|e| format!("无法启动 LSP ({cmd}): {e}"))?;
 
     crate::os_sandbox::assign_to_job(&child);
-    let stdout = child.stdout.take()
-        .ok_or("无法获取 LSP stdout")?;
-    let stdin: Box<dyn Write + Send> = Box::new(child.stdin.take()
-        .ok_or("无法获取 LSP stdin")?);
+    // P1-20：spawn 成功后的任何失败路径都必须回收子进程（drop 不杀进程）
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => { reap_failed_child(&mut child); return Err("无法获取 LSP stdout".into()); }
+    };
+    let stdin: Box<dyn Write + Send> = Box::new(match child.stdin.take() {
+        Some(s) => s,
+        None => { reap_failed_child(&mut child); return Err("无法获取 LSP stdin".into()); }
+    });
     let stdin = Arc::new(Mutex::new(stdin));
 
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -187,8 +192,16 @@ pub async fn lsp_start(
     // 等待 initialize 响应（30s 超时，避免坏服务器永久挂起）
     match rx.recv_timeout(Duration::from_secs(30)) {
         Ok(Ok(val)) => { let _ = val; /* initialize 成功 */ }
-        Ok(Err(_)) => { return Err(format!("LSP 初始化失败 ({})", cmd)); }
-        Err(_) => { return Err(format!("LSP 初始化超时 ({})", cmd)); }
+        Ok(Err(_)) => {
+            // P1-20：std Child 的 drop 不杀进程——失败路径必须显式回收，
+            // 否则每次重试泄漏一个语言服务器
+            reap_failed_child(&mut child);
+            return Err(format!("LSP 初始化失败 ({})", cmd));
+        }
+        Err(_) => {
+            reap_failed_child(&mut child);
+            return Err(format!("LSP 初始化超时 ({})", cmd));
+        }
     }
 
     // 发送 initialized 通知
@@ -313,9 +326,15 @@ pub fn stop_all() {
     }
 }
 
+/// P1-20：std::process::Child 的 drop 不杀进程——失败路径必须显式 kill + wait 回收。
+fn reap_failed_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[cfg(test)]
 mod tests {
-    use super::detect_lsp;
+    use super::{detect_lsp, reap_failed_child};
 
     #[test]
     fn test_all_registered_languages_have_lsp() {
@@ -361,5 +380,33 @@ mod tests {
         let (ts_cmd, _) = detect_lsp("typescript").unwrap();
         let (js_cmd, _) = detect_lsp("javascript").unwrap();
         assert_eq!(ts_cmd, js_cmd);
+    }
+
+    // P1-20 回归：reap_failed_child 必须真正终止进程（drop 不杀）
+    #[test]
+    fn test_reap_failed_child_kills_process() {
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "60", "127.0.0.1", ">nul"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        #[cfg(not(windows))]
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        assert!(child.try_wait().unwrap().is_none(), "前提：进程在运行");
+        reap_failed_child(&mut child);
+        assert!(
+            child.try_wait().unwrap().is_some(),
+            "reap 后进程必须已退出（不得残留孤儿语言服务器）"
+        );
     }
 }
