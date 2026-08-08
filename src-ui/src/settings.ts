@@ -42,6 +42,7 @@ export interface ProviderSettings {
 }
 
 export interface AgentSettings {
+  /** 遗留：请求构建器（openai.ts / anthropic.ts）均不读 req.temperature，UI 已移除；保留字段兼容旧存储。 */
   temperature: number;
   contextWindow: number;
   /** DeepSeek: 禁用深度思考 (default false = auto). */

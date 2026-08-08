@@ -352,31 +352,6 @@ const SettingsPanelApp: React.FC<{
             <div className="sp-section">
               <div className="sp-section-title">模型参数</div>
               <div className="sp-field">
-                <label className="sp-label">
-                  输出随机性 <span className="sp-val">{(settings.agent.temperature || 0.7).toFixed(1)}</span>
-                </label>
-                <div className="sp-slider-row">
-                  <span className="sp-slider-end">0</span>
-                  <input
-                    type="range"
-                    className="sp-range"
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    value={settings.agent.temperature || 0.7}
-                    style={{ '--pct': `${Math.round(((settings.agent.temperature || 0.7) / 2) * 100)}%` } as any}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value);
-                      const pct = Math.round((v / 2) * 100);
-                      (e.target as any).style.setProperty('--pct', `${pct}%`);
-                      commit({ ...settings, agent: { ...settings.agent, temperature: v } });
-                    }}
-                  />
-                  <span className="sp-slider-end">2</span>
-                </div>
-                <div className="sp-hint-sub">低 = 稳定可预测，适合代码/事实 · 高 = 有创意，适合写作/头脑风暴</div>
-              </div>
-              <div className="sp-field">
                 <label className="sp-label sp-checkbox-label">
                   <input
                     type="checkbox"
@@ -388,8 +363,8 @@ const SettingsPanelApp: React.FC<{
                   {DEEP_THINK_LABEL}
                 </label>
                 <div className="sp-hint-sub">
-                  关闭 = 强制直出（Anthropic / OpenAI 兼容两种协议都生效）。Anthropic 思考强度在
-                  Provider 页设置；DeepSeek 当前仅支持开关（effort 待 API 支持后开放）。
+                  关闭 = 强制直出（Anthropic / OpenAI 兼容两种协议都生效）。思考强度档位在
+                  Provider 页或聊天面板模型切换器设置（DeepSeek：高/极限；OpenAI 官方：低/中/高）。
                 </div>
               </div>
               <div className="sp-field">
@@ -427,7 +402,7 @@ const SettingsPanelApp: React.FC<{
                 </div>
               </div>
             </div>
-            <div className="sp-hint">输出随机性越低越稳定 · 越高越有创意但可能胡说。小窗口意味着旧消息会被压缩。</div>
+            <div className="sp-hint">小窗口意味着旧消息会被压缩。</div>
           </div>
 
           {/* ═══ 显示标签页 ═══ */}

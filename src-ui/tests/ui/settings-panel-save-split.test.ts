@@ -133,8 +133,8 @@ describe('SettingsPanel — 保存拆域', () => {
     const save = document.querySelector<HTMLButtonElement>('.sp-footer .sp-btn-save')!;
     expect(save.disabled).toBe(true);
 
-    const range = document.querySelector<HTMLInputElement>('.sp-range')!;
-    setInputValue(range, '1.1');
+    const ctxInput = document.querySelector<HTMLInputElement>('.sp-input-num')!;
+    setInputValue(ctxInput, '8000');
     await tick();
     expect(save.disabled).toBe(false);
 
