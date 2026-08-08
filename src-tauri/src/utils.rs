@@ -1311,14 +1311,6 @@ pub(crate) fn read_or_recover<T>(l: &std::sync::RwLock<T>) -> std::sync::RwLockR
     })
 }
 
-/// RwLock 写版本，语义同 lock_or_recover。
-pub(crate) fn write_or_recover<T>(l: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
-    l.write().unwrap_or_else(|e| {
-        eprintln!("[hologram] RwLock 写中毒（持锁线程曾 panic），已恢复继续: {e}");
-        e.into_inner()
-    })
-}
-
 /// 将 `git status --porcelain` 解析为结构化 JSON。
 pub(crate) fn parse_status(raw: &str) -> serde_json::Value {
     let files: Vec<serde_json::Value> = raw
