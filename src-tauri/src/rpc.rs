@@ -437,29 +437,49 @@ pub(crate) async fn rpc(
 
         // ═══════════════════════════════════════════════════════
         // Agent 隔离（7 个命令）
+        // P1-18：worktree 生命周期操作是阻塞进程等待（git worktree add/diff/
+        // merge/prune 的 .output()），全部经 spawn_blocking 移出 async worker。
         // ═══════════════════════════════════════════════════════
         "agent_isolation_create" => {
             let agent_id = req_str(&params, "agent_id", "agent_isolation_create")?;
-            commands::isolation::agent_isolation_create(agent_id, state)
+            let ws = state.inner().clone();
+            tokio::task::spawn_blocking(move || commands::isolation::agent_isolation_create(agent_id, &ws))
+                .await
+                .map_err(|e| format!("agent_isolation_create 任务失败: {e}"))?
         }
         "agent_isolation_diff" => {
             let agent_id = req_str(&params, "agent_id", "agent_isolation_diff")?;
-            commands::isolation::agent_isolation_diff(agent_id, state)
+            let ws = state.inner().clone();
+            tokio::task::spawn_blocking(move || commands::isolation::agent_isolation_diff(agent_id, &ws))
+                .await
+                .map_err(|e| format!("agent_isolation_diff 任务失败: {e}"))?
         }
         "agent_isolation_merge" => {
             let agent_id = req_str(&params, "agent_id", "agent_isolation_merge")?;
-            commands::isolation::agent_isolation_merge(agent_id, state)
+            let ws = state.inner().clone();
+            tokio::task::spawn_blocking(move || commands::isolation::agent_isolation_merge(agent_id, &ws))
+                .await
+                .map_err(|e| format!("agent_isolation_merge 任务失败: {e}"))?
         }
         "agent_isolation_discard" => {
             let agent_id = req_str(&params, "agent_id", "agent_isolation_discard")?;
-            commands::isolation::agent_isolation_discard(agent_id, state)
+            let ws = state.inner().clone();
+            tokio::task::spawn_blocking(move || commands::isolation::agent_isolation_discard(agent_id, &ws))
+                .await
+                .map_err(|e| format!("agent_isolation_discard 任务失败: {e}"))?
         }
         "agent_isolation_status" => {
-            commands::isolation::agent_isolation_status(state)
+            let ws = state.inner().clone();
+            tokio::task::spawn_blocking(move || commands::isolation::agent_isolation_status(&ws))
+                .await
+                .map_err(|e| format!("agent_isolation_status 任务失败: {e}"))?
         }
         "agent_isolation_force_purge" => {
             let agent_id = req_str(&params, "agent_id", "agent_isolation_force_purge")?;
-            commands::isolation::agent_isolation_force_purge(agent_id, state)
+            let ws = state.inner().clone();
+            tokio::task::spawn_blocking(move || commands::isolation::agent_isolation_force_purge(agent_id, &ws))
+                .await
+                .map_err(|e| format!("agent_isolation_force_purge 任务失败: {e}"))?
         }
 
         // ═══════════════════════════════════════════════════════

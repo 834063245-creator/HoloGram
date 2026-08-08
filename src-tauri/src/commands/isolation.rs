@@ -7,7 +7,7 @@ use crate::agent_isolation::{AgentIsolation, IsolationKind};
 #[tauri::command]
 pub(crate) fn agent_isolation_create(
     agent_id: String,
-    state: tauri::State<'_, crate::WorkspaceState>,
+    state: &crate::WorkspaceState,
 ) -> Result<String, String> {
     let project_path = crate::utils::workspace_path(&state)?;
     let main_path = std::path::PathBuf::from(&project_path);
@@ -43,7 +43,7 @@ pub(crate) fn agent_isolation_create(
 #[tauri::command]
 pub(crate) fn agent_isolation_diff(
     agent_id: String,
-    state: tauri::State<'_, crate::WorkspaceState>,
+    state: &crate::WorkspaceState,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
     let isolation = ctx
@@ -77,7 +77,7 @@ pub(crate) fn agent_isolation_diff(
 #[tauri::command]
 pub(crate) fn agent_isolation_merge(
     agent_id: String,
-    state: tauri::State<'_, crate::WorkspaceState>,
+    state: &crate::WorkspaceState,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
     let isolation = ctx
@@ -92,7 +92,7 @@ pub(crate) fn agent_isolation_merge(
 #[tauri::command]
 pub(crate) fn agent_isolation_discard(
     agent_id: String,
-    state: tauri::State<'_, crate::WorkspaceState>,
+    state: &crate::WorkspaceState,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
     let isolation = ctx
@@ -114,7 +114,7 @@ pub(crate) fn agent_isolation_discard(
 
 #[tauri::command]
 pub(crate) fn agent_isolation_status(
-    state: tauri::State<'_, crate::WorkspaceState>,
+    state: &crate::WorkspaceState,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
     let entries = ctx.list_isolations();
@@ -143,7 +143,7 @@ pub(crate) fn agent_isolation_status(
 #[tauri::command]
 pub(crate) fn agent_isolation_force_purge(
     agent_id: String,
-    state: tauri::State<'_, crate::WorkspaceState>,
+    state: &crate::WorkspaceState,
 ) -> Result<String, String> {
     let ctx = crate::utils::get_ctx(&state)?;
     let project_path = crate::utils::workspace_path(&state)?;
@@ -163,4 +163,25 @@ pub(crate) fn agent_isolation_force_purge(
         .output();
 
     Ok(format!("agent {} 的隔离记录已强制清除", agent_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // P1-18 回归：命令函数改为 &WorkspaceState 后可在 spawn_blocking 中调用
+    // （tauri::State 非 'static，无法移入阻塞线程——新签名是编译期护栏）
+    #[test]
+    fn status_without_workspace_errors_not_panics() {
+        let ws: crate::WorkspaceState = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let r = agent_isolation_status(&ws);
+        assert!(r.is_err(), "无工作区必须报错而非 panic");
+    }
+
+    #[test]
+    fn diff_without_workspace_errors_not_panics() {
+        let ws: crate::WorkspaceState = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let r = agent_isolation_diff("agent-x".into(), &ws);
+        assert!(r.is_err());
+    }
 }
