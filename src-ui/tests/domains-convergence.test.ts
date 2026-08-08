@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../src/agent/tool';
+import { selectToolSchemas } from '../src/agent/tool-select';
 import { defineTool } from '../src/agent/tools/define-tool';
 import {
   collectHiddenToolNames,
   convergeRegistry,
+  DOMAIN_SPECS,
   resolveGuardToolName,
 } from '../src/agent/tools/domains';
-import { selectToolSchemas } from '../src/agent/tool-select';
 
 function fakeTool(name: string, description: string, readOnly = false, schema = z.object({})) {
   return defineTool({
@@ -21,9 +22,7 @@ function fakeTool(name: string, description: string, readOnly = false, schema = 
 
 function buildFsRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
-  registry.register(
-    fakeTool('read_file_content', 'Read a file', true, z.object({ filePath: z.string() })),
-  );
+  registry.register(fakeTool('read_file_content', 'Read a file', true, z.object({ filePath: z.string() })));
   registry.register(
     fakeTool('write_file', 'Write a file', false, z.object({ filePath: z.string(), content: z.string() })),
   );
@@ -52,6 +51,60 @@ describe('ToolRegistry.hide', () => {
   });
 });
 
+describe('领域工具参数 schema（DeepSeek 严格校验回归）', () => {
+  it('fs 根节点为 type:object，action 是必选枚举，动作参数合并为可选属性', () => {
+    const registry = buildFsRegistry();
+    convergeRegistry(registry);
+    const fs = registry.get('fs');
+    expect(fs).toBeTruthy();
+    if (!fs) throw new Error('fs domain tool missing');
+    const params = fs.parameters() as {
+      type?: string;
+      oneOf?: unknown;
+      anyOf?: unknown;
+      properties: Record<string, { type?: string; enum?: string[] }>;
+      required?: string[];
+    };
+
+    expect(params.type).toBe('object');
+    expect(params.oneOf).toBeUndefined();
+    expect(params.anyOf).toBeUndefined();
+    expect(params.properties.action).toMatchObject({ type: 'string', enum: ['read', 'write', 'list'] });
+    expect(params.required).toEqual(['action']);
+    for (const key of ['filePath', 'content', 'path']) {
+      expect(params.properties[key]).toBeTruthy();
+    }
+  });
+
+  it('所有领域工具的参数根节点均为 type:object（DeepSeek 不再 400）', () => {
+    const registry = new ToolRegistry();
+    for (const spec of DOMAIN_SPECS) {
+      for (const oldName of Object.values(spec.actions)) {
+        registry.register(fakeTool(oldName, oldName, true, z.object({ p1: z.string() })));
+      }
+    }
+    convergeRegistry(registry);
+
+    for (const spec of DOMAIN_SPECS) {
+      const domainTool = registry.get(spec.name);
+      expect(domainTool, spec.name).toBeTruthy();
+      if (!domainTool) continue;
+      const params = domainTool.parameters() as {
+        type?: string;
+        oneOf?: unknown;
+        anyOf?: unknown;
+        properties: Record<string, { enum?: string[] }>;
+        required?: string[];
+      };
+      expect(params.type, spec.name).toBe('object');
+      expect(params.oneOf, spec.name).toBeUndefined();
+      expect(params.anyOf, spec.name).toBeUndefined();
+      expect(params.properties.action.enum, spec.name).toEqual(Object.keys(spec.actions));
+      expect(params.required, spec.name).toEqual(['action']);
+    }
+  });
+});
+
 describe('领域工具收敛', () => {
   it('fs 领域只包含已注册旧工具的动作，execute 委托给旧工具', async () => {
     const registry = buildFsRegistry();
@@ -63,9 +116,7 @@ describe('领域工具收敛', () => {
     expect(fs!.readOnlyActions?.()).toEqual(['read', 'list']);
     expect(fs!.readOnly()).toBe(false); // 混合读写 → 非整体只读
 
-    expect(await fs!.execute({ action: 'read', filePath: 'D:/a.ts' })).toBe(
-      'read_file_content:{"filePath":"D:/a.ts"}',
-    );
+    expect(await fs!.execute({ action: 'read', filePath: 'D:/a.ts' })).toBe('read_file_content:{"filePath":"D:/a.ts"}');
     expect(await fs!.execute({ action: 'write', filePath: 'D:/a.ts', content: 'x' })).toBe(
       'write_file:{"filePath":"D:/a.ts","content":"x"}',
     );

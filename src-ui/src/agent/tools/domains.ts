@@ -8,9 +8,7 @@
 //   - execute 委托给 registry 中仍保留的旧工具（隐藏但可解析），逻辑零复制。
 //   - 旧工具通过 ToolRegistry.hide() 从 schemas() 消失，但 get() 仍可解析（防御模型幻觉旧名、保持测试兼容）。
 
-import { z } from 'zod';
 import type { Tool, ToolRegistry } from '../tool';
-import { toInputJsonSchema } from './define-tool';
 
 interface JsonProp {
   type?: string;
@@ -25,32 +23,47 @@ interface JsonSchema {
   required?: string[];
 }
 
-/** 把旧工具的 JSON Schema properties 转成 zod object（动作变体用）。
- *  数字字段用 coerce（与旧工具 z.coerce.number() 行为一致），default 由旧工具自己的 parse 兜底。 */
-function zodFromJsonSchema(schema: JsonSchema | undefined): z.ZodObject<Record<string, z.ZodTypeAny>> {
-  const props = schema?.properties ?? {};
-  const required = new Set((schema?.required as string[] | undefined) ?? []);
-  const shape: Record<string, z.ZodTypeAny> = {};
-  for (const [key, rawProp] of Object.entries(props)) {
-    const p = rawProp as JsonProp;
-    let field: z.ZodTypeAny;
-    if (p.enum && p.enum.length > 0) {
-      field = z.enum(p.enum as [string, ...string[]]);
-    } else if (p.type === 'number' || p.type === 'integer') {
-      field = z.coerce.number();
-    } else if (p.type === 'boolean') {
-      field = z.boolean();
-    } else if (p.type === 'array') {
-      const itemType = (p.items as JsonProp | undefined)?.type ?? 'string';
-      field = z.array(itemType === 'number' || itemType === 'integer' ? z.coerce.number() : z.string());
-    } else {
-      field = z.string();
+/**
+ * 领域工具面向模型的 JSON Schema：扁平 object，而不是 discriminated union 的 oneOf。
+ * DeepSeek 等严格校验的 OpenAI 兼容端点要求工具参数根节点为 type: "object"，
+ * oneOf 根节点会直接 400（Invalid schema for function 'fs' ... got 'type: null'）。
+ * action 为必选枚举；各动作私有参数合并为可选属性，跨动作参数在描述中标注所属动作。
+ */
+function domainParametersSchema(entries: Array<[string, string]>, registry: ToolRegistry): Record<string, unknown> {
+  const properties: Record<string, unknown> = {
+    action: {
+      type: 'string',
+      enum: entries.map(([a]) => a),
+      description: 'Which operation to perform.',
+    },
+  };
+  const sources = new Map<string, Array<{ action: string; prop: JsonProp }>>();
+
+  for (const [action, oldName] of entries) {
+    const old = registry.get(oldName);
+    if (!old) continue;
+    const oldSchema = (old.parameters() ?? {}) as JsonSchema;
+    for (const [key, rawProp] of Object.entries(oldSchema.properties ?? {})) {
+      if (key === 'action') continue; // 保留域判别字段，避免旧工具参数覆盖
+      const prop = rawProp as JsonProp;
+      const list = sources.get(key);
+      if (list) list.push({ action, prop });
+      else sources.set(key, [{ action, prop }]);
     }
-    if (p.description) field = field.describe(p.description);
-    if (!required.has(key)) field = field.optional();
-    shape[key] = field;
   }
-  return z.object(shape);
+
+  for (const [key, list] of sources) {
+    const merged: JsonProp = { ...list[0].prop };
+    const described = list.filter((s) => s.prop.description);
+    if (described.length === 1) {
+      merged.description = described[0].prop.description;
+    } else if (described.length > 1) {
+      merged.description = described.map((s) => `${s.prop.description} (action: ${s.action})`).join('; ');
+    }
+    properties[key] = merged;
+  }
+
+  return { type: 'object', properties, required: ['action'] };
 }
 
 export interface DomainSpec {
@@ -180,20 +193,13 @@ function buildDomainTool(registry: ToolRegistry, spec: DomainSpec): Tool | null 
   const entries = Object.entries(spec.actions).filter(([, oldName]) => registry.get(oldName) !== undefined);
   if (entries.length === 0) return null;
 
-  const variants = entries.map(([action, oldName]) => {
-    const old = registry.get(oldName)!;
-    const oldSchema = (old.parameters() ?? {}) as JsonSchema;
-    const shape = zodFromJsonSchema(oldSchema).shape as Record<string, z.ZodTypeAny>;
-    return z.object({ action: z.literal(action), ...shape });
-  });
-
+  const parameters = domainParametersSchema(entries, registry);
   const readOnlyActions = entries.filter(([, oldName]) => registry.get(oldName)!.readOnly()).map(([a]) => a);
-  const schema = z.discriminatedUnion('action', variants as never);
 
   return {
     name: () => spec.name,
     description: () => spec.description,
-    parameters: () => toInputJsonSchema(schema),
+    parameters: () => parameters,
     readOnly: () => readOnlyActions.length === entries.length,
     domain: () => spec.name,
     actions: () => entries.map(([a]) => a),
@@ -261,11 +267,7 @@ export function convergeRegistry(registry: ToolRegistry, opts: { rebuildDomains?
 }
 
 /** 把领域工具调用解析回旧工具名，供 preflight 门禁 / 图增强 hooks / 子 Agent 关联使用。 */
-export function resolveGuardToolName(
-  registry: ToolRegistry,
-  toolName: string,
-  args: Record<string, unknown>,
-): string {
+export function resolveGuardToolName(registry: ToolRegistry, toolName: string, args: Record<string, unknown>): string {
   const t = registry.get(toolName);
   if (!t?.domain) return toolName;
   const action = (args as { action?: unknown })?.action;
