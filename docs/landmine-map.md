@@ -17,9 +17,9 @@
 |---|------|----|------------|------|------|
 | 1 | `src-tauri/src/commands/engine_dispatch.rs:9-46` | `hologram_call` 同步内联调度占 tokio worker | Agent 每次引擎工具调用（大图上秒级）直接占住 async worker；并发调用 + UI 轮询叠加 → 线程池耗尽，**全部 IPC 挂起（含权限弹窗）**。main.rs:198 的测试注释明知的病，此入口漏网 | ✅ 已拆（spawn_blocking + 饥饿回归测试） | S（包 spawn_blocking） |
 | 2 | `commands/graph.rs:16`、`hologram.rs:16`、`filesystem.rs:80`（read_file_base64）、`git_cmds.rs:65/78/265`、`isolation.rs:60` | **大响应无尺寸上限**——与 256MB 事故同一物理通道 | 大仓库图 JSON / 99MiB 文件 base64（~200MB 转义后）/ minified 文件 diff → 复刻 WebView2 击毁。注：git 系列没有 exec_command 那样的 32KB 截断 | ✅ 已拆（truncate_output 提为共享 + git×3/isolation 截断 + base64 8MiB 上限 + 图 128MB 硬护栏；图分页仍是 L 级欠账） | S~M（截断/上限；图分页是 M） |
-| 3 | `src-tauri/src/utils.rs:1361-1392` | `write_atomic` 的 .bak 残留死锁 | Windows rename 不覆盖：上次崩溃残留 .bak → 对该文件的**所有后续写入永久失败**，直到手工删 .bak | 无 | S（rename 前先删旧 .bak） |
-| 4 | `src-tauri/src/utils.rs:845` | `hologram_graph.json` 非原子写入 + `let _ =` 吞错 | 大图落盘（数百 MB 窗口长）中途崩溃 → 截断 JSON 被冷启动原样读回 → 解析失败，且无声 | 无 | S（换用现成 write_atomic） |
-| 5 | `src-tauri/src/permissions/rule.rs:204` | `permissions.json` 非原子读-改-写 | 落盘时崩溃 → 加载端静默返回空规则 → **用户自定义 deny 规则全部丢失，安全 fail-open 无告警** | 无 | S |
+| 3 | `src-tauri/src/utils.rs:1361-1392` | `write_atomic` 的 .bak 残留死锁 | Windows rename 不覆盖：上次崩溃残留 .bak → 对该文件的**所有后续写入永久失败**，直到手工删 .bak | ✅ 已拆（rename 前先删旧 .bak + 回归测试） | S（rename 前先删旧 .bak） |
+| 4 | `src-tauri/src/utils.rs:845` | `hologram_graph.json` 非原子写入 + `let _ =` 吞错 | 大图落盘（数百 MB 窗口长）中途崩溃 → 截断 JSON 被冷启动原样读回 → 解析失败，且无声 | ✅ 已拆（write_atomic + 失败 eprintln 告警） | S（换用现成 write_atomic） |
+| 5 | `src-tauri/src/permissions/rule.rs:204` | `permissions.json` 非原子读-改-写 | 落盘时崩溃 → 加载端静默返回空规则 → **用户自定义 deny 规则全部丢失，安全 fail-open 无告警** | ✅ 已拆（write_atomic + 读/解析失败告警 + 损坏拒绝追加以免清空规则 + 测试×3） | S |
 | 6 | `src-ui/src/agent/message-store.ts:80-83` | **读失败即删数据** | 启动 restore 时 `read_file_content` 因任何瞬时错误失败 → catch 里 delete inbox.json → 跨 Agent 未投递消息静默丢失 | 无 | S（区分「不存在」与「读错误」） |
 | 7 | `src-ui/src/settings.ts:164-168` × `SettingsPanel.tsx:296` | 凭据写失败 UI 报「已保存」 | DPAPI 写失败被两层 catch 吞掉 + 无条件 setSaved(true) → 重启后 key 消失，用户坚信已保存 | 无 | S（失败列表上抛 + UI 据实提示） |
 | 8 | `src-ui/src/ui/react/TimelineHUD.tsx:84-92` | **空时间轴无限 IPC 热循环**（唯一确定性风暴源） | 项目无 timeline 事件 → effect 依赖翻转 → 无退避无上限的 hologram_call 循环，速度=IPC 往返速度，永久轰击引擎 | 仅 8s 超时 | S（尝试计数/退避） |

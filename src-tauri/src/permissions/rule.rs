@@ -138,16 +138,24 @@ pub fn load_system_rules() -> Vec<PermissionRule> {
 }
 
 /// 从 .hologram/permissions.json 加载项目专属规则。
-/// 如果文件不存在或无法解析，返回空 vec。
+/// 文件不存在 = 无规则（正常）；读取/解析失败 = 按无规则运行但必须告警——
+/// 否则用户自定义 deny 规则静默丢失即成安全 fail-open（雷区地图 P0-5）。
 pub fn load_project_rules(project_root: &Path) -> Vec<PermissionRule> {
     let path = project_root.join(".hologram").join("permissions.json");
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
-        Err(_) => return Vec::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            eprintln!("[permissions] permissions.json 读取失败（{e}）——项目规则（含 deny）未生效！");
+            return Vec::new();
+        }
     };
     let json: serde_json::Value = match serde_json::from_str(&content) {
         Ok(v) => v,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            eprintln!("[permissions] permissions.json 解析失败（{e}）——项目规则（含 deny）未生效！");
+            return Vec::new();
+        }
     };
 
     let mut rules = Vec::new();
@@ -182,10 +190,17 @@ pub fn append_project_rule(project_root: &Path, rule_str: &str, behavior: &str) 
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let mut json: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(serde_json::json!({}));
+    // 既有文件损坏时拒绝继续：unwrap_or({}) 会把用户规则整份清空（雷区地图 P0-5）
+    let mut json: serde_json::Value = match std::fs::read_to_string(&path) {
+        Ok(s) if !s.trim().is_empty() => match serde_json::from_str(&s) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[permissions] permissions.json 损坏（{e}）——拒绝追加，以免清空既有规则");
+                return;
+            }
+        },
+        _ => serde_json::json!({}),
+    };
     let section = match behavior {
         "allow" => "allow",
         "deny" => "deny",
@@ -201,7 +216,13 @@ pub fn append_project_rule(project_root: &Path, rule_str: &str, behavior: &str) 
             arr.push(serde_json::json!(rule_str));
         }
     }
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap_or_default());
+    // 原子写：落盘途中崩溃不得留下截断的规则文件（fail-open 是安全事故）
+    if let Err(e) = crate::utils::write_atomic(
+        &path.to_string_lossy(),
+        &serde_json::to_string_pretty(&json).unwrap_or_default(),
+    ) {
+        eprintln!("[permissions] permissions.json 落盘失败: {e}");
+    }
 }
 
 impl PermissionRule {
@@ -449,5 +470,44 @@ mod tests {
         assert!(rule.matches("Bash", Some("npm test --filter=foo")));
         assert!(!rule.matches("Bash", Some("cargo build")));
         assert!(!rule.matches("Read", Some("npm test")));
+    }
+
+    // ── P0-5：permissions.json 落盘与损坏防护 ──
+
+    #[test]
+    fn append_project_rule_creates_file_atomically() {
+        let dir = std::env::temp_dir().join("hologram_test_perm_append");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        append_project_rule(&dir, "Bash(npm test:*)", "allow");
+        let content = std::fs::read_to_string(dir.join(".hologram").join("permissions.json")).unwrap();
+        assert!(content.contains("npm test:*"));
+        // 原子写不得留下 tmp/bak 残渣
+        assert!(!dir.join(".hologram").join("permissions.json.tmp").exists());
+        assert!(!dir.join(".hologram").join("permissions.json.bak").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_project_rule_refuses_to_clobber_corrupt_file() {
+        let dir = std::env::temp_dir().join("hologram_test_perm_corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".hologram")).unwrap();
+        let f = dir.join(".hologram").join("permissions.json");
+        std::fs::write(&f, "not json{{").unwrap();
+        append_project_rule(&dir, "Bash(npm test:*)", "allow");
+        // 损坏文件必须原样保留，等人工处理——而不是被静默清空
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "not json{{");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_project_rules_corrupt_returns_empty_but_does_not_panic() {
+        let dir = std::env::temp_dir().join("hologram_test_perm_load_corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".hologram")).unwrap();
+        std::fs::write(dir.join(".hologram").join("permissions.json"), "{{bad").unwrap();
+        assert!(load_project_rules(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

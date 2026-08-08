@@ -842,7 +842,11 @@ pub(crate) fn direct_analyze(path: &str, force: bool) -> Result<String, String> 
         "nodes": nodes, "edges": edges, "communities": comms,
         "hierarchical_communities": hcomms,
     });
-    let _ = std::fs::write(&graph_path, serde_json::to_string(&wrapped).unwrap_or_default());
+    // 原子写：大图数百 MB 写入窗口长，中途崩溃留下截断 JSON
+    // 会被冷启动原样读回（雷区地图 P0-4）；失败必须可见（宪法·错误不静默）
+    if let Err(e) = write_atomic(&graph_path, &serde_json::to_string(&wrapped).unwrap_or_default()) {
+        eprintln!("[hologram] hologram_graph.json 落盘失败（冷启动缓存缺失）: {e}");
+    }
     // 每次全量分析后都更新基线，使后续检查
     // 与最新快照进行对比 — 防止基线过期导致的误报
     // （例如图结构在两次分析间演化时出现"53 个新循环"）。
@@ -1407,6 +1411,10 @@ pub(crate) fn write_atomic(file_path: &str, content: &str) -> Result<(), String>
     // 在覆盖原文件前创建 .bak 快照（尽力而为）
     let had_original = std::path::Path::new(file_path).exists();
     if had_original {
+        // 上次崩溃可能残留旧 .bak；rename 对既有目标的行为依赖平台/std 语义，
+        // 先删旧 .bak 保证重命名一定可用——否则残留 .bak 会让该文件的
+        // 所有后续写入永久失败（雷区地图 P0-3）
+        let _ = std::fs::remove_file(&bak_path);
         // 将原文件重命名为 .bak；忽略失败（磁盘满、权限等）
         let _ = std::fs::rename(file_path, &bak_path);
     }
@@ -1544,5 +1552,24 @@ mod tests {
         let s = "x".repeat(MAX_IPC_RESPONSE_BYTES + 1);
         let err = guard_ipc_size(s, "Graph JSON").unwrap_err();
         assert!(err.contains("超过 IPC 上限"), "报错必须说明原因：{err}");
+    }
+
+    /// 回归 P0-3：上次崩溃残留的 .bak 不得让后续写入永久失败。
+    #[test]
+    fn write_atomic_clears_stale_bak() {
+        let dir = std::env::temp_dir().join("hologram_test_write_atomic_bak");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("settings.json");
+        let fs = f.to_string_lossy().to_string();
+        std::fs::write(&f, "old").unwrap();
+        std::fs::write(format!("{fs}.bak"), "stale-corpse").unwrap();
+        write_atomic(&fs, "new").expect("残留 .bak 不得导致写失败");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "new");
+        assert!(
+            !std::path::Path::new(&format!("{fs}.bak")).exists(),
+            "成功后 .bak 必须清理"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
