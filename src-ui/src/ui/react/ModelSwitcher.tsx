@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // 聊天面板左下角模型切换器：不弹设置面板，直接在当前信号源内切模型、
-// 切换其他信号源、调整思考强度。任何操作立即保存并触发 Agent 重建。
+// 切换其他信号源、调整思考强度。任何操作立即保存并经 workspace 热切换生效。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getAllModels, getDefaultModel } from '../../provider/catalog';
@@ -16,7 +16,7 @@ import {
   type AppSettings,
   type ProviderId,
 } from '../../settings';
-import { bus } from '../events';
+import { bus, type AgentConfigChangeReason } from '../events';
 import { iconHtml } from '../icons';
 import { protocolLabel } from './settings/protocol';
 
@@ -54,10 +54,11 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
     };
   }, [open]);
 
-  /** 立即落盘 + 发 agent:config-changed 事件（与设置面板保存同一重建入口） */
-  const apply = useCallback((next: AppSettings, keepOpen = false) => {
+  /** 立即落盘 + 发 agent:config-changed 事件（与设置面板保存同一热切换入口）。
+   *  reason 区分变更来源，workspace 统一按需换 provider / 同步行为参数。 */
+  const apply = useCallback((next: AppSettings, reason: AgentConfigChangeReason, keepOpen = false) => {
     saveSettings(next);
-    bus.emit('agent:config-changed', { reason: 'model-switched' });
+    bus.emit('agent:config-changed', { reason });
     if (!keepOpen) setOpen(false);
   }, []);
 
@@ -70,7 +71,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
           next = updateProvider(next, active.name, { baseUrl: desc.baseUrl });
         }
       }
-      apply(next);
+      apply(next, 'model-switched');
     },
     [settings, active.name, apply],
   );
@@ -83,19 +84,20 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
         const def = getDefaultModel(name);
         if (def) next = updateProvider(next, name, { model: def.id, baseUrl: def.baseUrl });
       }
-      apply(next);
+      apply(next, 'model-switched');
     },
     [settings, apply],
   );
 
   const setThinking = useCallback(
-    (v: StoredThinking) => apply(updateProvider(settings, active.name, { thinking: v }), true),
+    (v: StoredThinking) => apply(updateProvider(settings, active.name, { thinking: v }), 'thinking-changed', true),
     [settings, active.name, apply],
   );
 
   const toggleDeepThink = useCallback(() => {
     apply(
       { ...settings, agent: { ...settings.agent, disableThinking: !settings.agent.disableThinking } },
+      'thinking-changed',
       true,
     );
   }, [settings, apply]);

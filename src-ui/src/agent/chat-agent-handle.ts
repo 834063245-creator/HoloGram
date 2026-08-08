@@ -5,7 +5,9 @@
 // chat.ts 只依赖此接口，不直接 import Agent 类。
 // Agent 类已结构性实现此接口，无需额外 adapter。
 
-import type { Message } from '../provider/types';
+import type { Message, Provider } from '../provider/types';
+import type { StoredThinking } from '../provider/thinking';
+import type { Pricing } from './agent-types';
 
 /** 目标运行结果 — runGoal / resumeGoal 的统一返回 */
 export type GoalRunResult = { status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string };
@@ -34,6 +36,15 @@ export interface ChatAgentHandle {
 
   /** 开启全新会话（保留 system prompt） */
   newSession(): void;
+
+  /** 运行时更新思考策略（思考档位/深思考开关切换），不重建 Agent。 */
+  setThinking(cfg: StoredThinking | undefined): void;
+
+  /** 运行时切换 provider（模型/信号源/协议），不重建 Agent。 */
+  setProvider(prov: Provider, pricing?: Pricing): void;
+
+  /** 运行时更新上下文窗口（压缩阈值），不重建 Agent。 */
+  setContextWindow(n: number): void;
 
   /** 预测下一条 insert 的 session 索引 */
   readonly nextInsertIndex: number;

@@ -759,13 +759,13 @@ async function init(): Promise<void> {
   ]);
 
   // Agent 配置变更统一入口：设置面板/模型切换/模式按钮只发事件，
-  // workspace.applyAgentConfig 决定是否重建（重建前先存会话，避免切换丢对话）。
+  // workspace.applyAgentConfig 热切换处理（不重建，会话/上下文全保留）。
   bus.on('agent:config-changed', (e) => {
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
     starGraph?.resize();
     if (workspace) {
       void workspace.applyAgentConfig(chatPanel, e.reason).catch((err) =>
-        console.error('[agent:config-changed] rebuild failed:', err),
+        console.error('[agent:config-changed] hot-switch failed:', err),
       );
     }
   });

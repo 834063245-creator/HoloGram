@@ -14,6 +14,8 @@
 
 import { rpc } from '../../bridge';
 import type { Message, Provider } from '../../provider/types';
+import type { StoredThinking } from '../../provider/thinking';
+import type { Pricing } from '../agent-types';
 import { Agent } from '../agent';
 import type { AgentStore } from '../agent-store';
 import type { AgentEvent, AgentUINotifier, EventSink } from '../agent-types';
@@ -130,6 +132,15 @@ class AgentHandleImpl implements AgentHandle {
   }
   setUiSessionId(sid: number) {
     return this._agent.setUiSessionId(sid);
+  }
+  setThinking(cfg: StoredThinking | undefined) {
+    return this._agent.setThinking(cfg);
+  }
+  setProvider(prov: Provider, pricing?: Pricing) {
+    return this._agent.setProvider(prov, pricing);
+  }
+  setContextWindow(n: number) {
+    return this._agent.setContextWindow(n);
   }
 
   /** 绑定到指定会话的 board — 会话 id 在创建后才分配，由会话层在登记句柄时调用 */

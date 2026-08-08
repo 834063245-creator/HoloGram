@@ -13,6 +13,7 @@
 
 import { Agent } from './agent/agent';
 import { AgentStore } from './agent/agent-store';
+import { agentSessionState } from './agent/agent-session-state';
 import { auraShutdown } from './agent/aura-memory';
 import { SubAgentPool } from './agent/coordinator';
 import { GoalManager } from './agent/goal-manager';
@@ -27,6 +28,7 @@ import type { ChatCore } from './app/chat/chat-core';
 import { listen, rpc } from './bridge';
 import { createProvider } from './provider';
 import { mergeDynamicModels, getModel } from './provider/catalog';
+import { withThinkingDisabled } from './provider/thinking';
 import { defaultPricing, getActiveProvider, loadSettingsWithSecrets, type AppSettings } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
 import { useDockStore } from './ui/dock-store';
@@ -90,6 +92,9 @@ export class Workspace {
   // ── Agent 与记忆 ──
   agent: Agent | null = null;
   prov: Provider | null = null;
+  /** 上次 setupAgent 时的构造级字段摘要 — settings-saved 到达时对比，
+   *  只有构造级字段变化才重建 Agent（运行时级/无关字段走热切换/no-op）。 */
+  private _lastAgentCfgKey: string | null = null;
   registry: ToolRegistry | null = null;
   memoryManager: MemoryManager | null = null;
   taskManager: TaskManager = new TaskManager();
@@ -495,36 +500,67 @@ export class Workspace {
 
   // ── Agent 配置变更统一入口 ──
 
-  /** 需要重建 Agent 的配置变更原因（权限模式等运行时读取项不在此列，发事件也不会触发重建）。 */
-  private static _AGENT_REBUILD_REASONS: ReadonlySet<AgentConfigChangeReason> = new Set([
-    'settings-saved',
-    'model-switched',
-  ]);
+  /** provider 配置摘要键 — 用于判定 provider 是否真的变了。
+   *  provider 变化走 setProvider 热切换；thinking/contextWindow 等行为参数
+   *  总是热同步；无关字段（display/lastTest/temperature 遗留）直接 no-op。 */
+  private static _agentRebuildKey(s: AppSettings): string {
+    const provs = s.providers
+      .map((p) => `${p.name}:${p.kind}:${p.apiKey}:${p.baseUrl}:${p.model}`)
+      .sort()
+      .join('|');
+    return `${s.activeProvider}#${provs}`;
+  }
 
   /**
    * Agent 配置变更统一入口（由 bus 'agent:config-changed' 驱动）。
-   * workspace 自行决定是否重建；重建前先保存当前会话，避免切换模式/模型丢对话。
-   * collaboration-mode 走运行时切换（Agent.setPlanMode），不重建——
-   * 上下文、压缩缓存、hook 全部保留。
+   * 所有变更一律热切换，不重建 Agent：
+   *  - provider（模型/信号源/协议）变了 → 换 provider 引用 + 定价（setProvider）
+   *  - thinking / contextWindow → 热同步（setThinking / setContextWindow）
+   *  - 协作模式 → 运行时切换（setPlanMode）
+   * 上下文、压缩缓存、hook、正在运行的执行、所有会话全部保留。
    * 组件不得绕过此方法直接调 setupAgent。
    */
   async applyAgentConfig(chatPanel: ChatCore, reason: AgentConfigChangeReason): Promise<void> {
-    // 规划模式切换 — 运行时状态切换，不重建 Agent
+    // 规划模式切换 — 运行时状态切换
     if (reason === 'collaboration-mode') {
       const mode = this._modeState().collaborationMode;
       this.agent?.setPlanMode(mode === 'plan');
       return;
     }
-    if (!Workspace._AGENT_REBUILD_REASONS.has(reason)) return;
-    await chatPanel
-      .saveActiveSession(this.path)
-      .catch((e) => console.error('[agent:config-changed] saveActiveSession failed:', e));
-    await this.setupAgent(chatPanel);
-    if (this.agent) {
-      await chatPanel
-        .autoRestoreLastSession(this.path)
-        .catch((e) => console.error('[agent:config-changed] autoRestoreLastSession failed:', e));
+
+    const s = await loadSettingsWithSecrets();
+    const act = getActiveProvider(s);
+
+    // API Key 被清空 → 显式拆除（旧 provider 不得继续服务会话）
+    if (!act.apiKey || act.apiKey.trim() === '') {
+      this.agent = null;
+      this.prov = null;
+      chatPanel.setAgent(null);
+      bus.emit('agent:diag', { text: `❌ API Key 已清空 — provider="${act.name}"。`, ready: false });
+      return;
     }
+
+    // provider 配置变化 → 换引用（热切换），否则跳过
+    const key = Workspace._agentRebuildKey(s);
+    if (this._lastAgentCfgKey === null || key !== this._lastAgentCfgKey) {
+      const prov = this._buildProvider(s);
+      prov.prewarm?.(); // 廉价预热（fire-and-forget）
+      const pricing = defaultPricing(act.kind, act.model);
+      this.prov = prov;
+      this.agent?.setProvider(prov, pricing);
+      agentSessionState.forEachAgent((h) => h.setProvider(prov, pricing));
+      this._lastAgentCfgKey = key;
+    }
+
+    // 行为参数总是热同步（幂等）
+    const thinkingCfg = withThinkingDisabled(act.thinking, s.agent?.disableThinking);
+    const win = this._effectiveContextWindow(s);
+    this.agent?.setThinking(thinkingCfg);
+    this.agent?.setContextWindow(win);
+    agentSessionState.forEachAgent((h) => {
+      h.setThinking(thinkingCfg);
+      h.setContextWindow(win);
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -565,6 +601,13 @@ export class Workspace {
     return createProvider(getActiveProvider(settings), {
       disableThinking: settings.agent?.disableThinking,
     });
+  }
+
+  /** 生效上下文窗口 — 设置值优先，其次活跃模型目录窗口，最后 200K。
+   *  factory 与 settings-saved 热切换共用，保证两处计算不分叉。 */
+  private _effectiveContextWindow(s: AppSettings): number {
+    const act = getActiveProvider(s);
+    return s.agent?.contextWindow || getModel(act.model)?.contextWindow || 200000;
   }
 
   private async _setupAgentInner(chatPanel: ChatCore): Promise<void> {
@@ -743,7 +786,7 @@ export class Workspace {
         // 从模型目录动态解析窗口（deepseek-v4 标 1M），查不到才 fallback 200K。
         // 0b3e5bf 曾加 Math.min(..., 200000) 硬封顶 — 把动态结果压成 200K，
         // 导致压缩在 110K 就触发；压缩已根治为只影响发送载荷，cap 无必要。
-        contextWindow: agentOpts.contextWindow || getModel(act.model)?.contextWindow || 200000,
+        contextWindow: this._effectiveContextWindow(s),
         preRunHook: this.memoryManager
           ? async (input: string) => {
               if (!this.memoryManager!.auraReady) return null;

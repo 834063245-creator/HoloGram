@@ -679,7 +679,7 @@ const SettingsPanelApp: React.FC<{
 
 export function SettingsPanel() {
   const closePanel = useDockStore((s) => s.closePanel);
-  // 保存成功后只发显式事件；重建由 main.ts → Workspace.applyAgentConfig 统一处理。
+  // 保存成功后只发显式事件；热切换由 main.ts → Workspace.applyAgentConfig 统一处理。
   return (
     <SettingsPanelApp
       onClose={() => closePanel('settings')}

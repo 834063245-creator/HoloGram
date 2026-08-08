@@ -101,7 +101,7 @@ function ChatModebar({ panelId }: { panelId: string }) {
       s.agent = { ...s.agent, collaborationMode: mode };
       saveSettings(s);
       // 模式切换只改 panel store + 发显式事件；
-      // 是否重建、重建前先存会话由 Workspace.applyAgentConfig 统一决定。
+      // 由 Workspace.applyAgentConfig 统一热切换处理（不重建）。
       bus.emit('agent:config-changed', { reason: 'collaboration-mode' });
     },
     [panelStore],

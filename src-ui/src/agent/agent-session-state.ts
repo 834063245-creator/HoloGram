@@ -69,9 +69,12 @@ export interface AgentSessionStateApi {
   getTurnPairs(storeId: string): TurnPair[];
   setTurnPairs(storeId: string, pairs: TurnPair[]): void;
 
-  // ── 批量操作 ──
+    // ── 批量操作 ──
   /** 移除并 dispose 面板的所有 agent 句柄，清除 exec 状态。 */
   clearPanelState(storeId: string): void;
+
+  /** 遍历所有活跃会话的 agent 句柄（运行时更新用，如思考策略切换）。 */
+  forEachAgent(fn: (handle: OwnedAgentHandle) => void): void;
 
   // ── 订阅 ──
   /** 订阅状态变更。返回取消订阅函数。 */
@@ -205,6 +208,10 @@ export function createAgentSessionState(): AgentSessionStateApi {
         if (k.startsWith(prefix)) _execBySession.delete(k);
       }
       _bump();
+    },
+
+    forEachAgent(fn): void {
+      for (const h of _agentBySession.values()) fn(h);
     },
 
     // ── 订阅 ──

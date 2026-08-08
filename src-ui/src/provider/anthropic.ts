@@ -35,11 +35,15 @@ interface AnthropicConfig {
 export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
   const name = cfg.name || 'anthropic';
   const baseUrl = (cfg.baseUrl || ANTHROPIC_DEFAULT_BASE_URL).replace(/\/$/, '');
-  const { model, apiKey, thinking } = cfg;
+  const { model, apiKey } = cfg;
+  let thinking: StoredThinking | undefined = cfg.thinking; // setThinking 运行时更新
 
   return {
     name() {
       return name;
+    },
+    setThinking(cfg: StoredThinking | undefined): void {
+      thinking = cfg;
     },
 
     async *stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk> {

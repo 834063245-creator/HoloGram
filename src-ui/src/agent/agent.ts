@@ -30,6 +30,7 @@ import { type ExecStateInstance, createExecState, execState } from './execution-
 import { createProvider } from '../provider';
 import { getAllModels } from '../provider/catalog';
 import { STREAM_IDLE_TIMEOUT_MS, streamWithIdleTimeout } from '../provider/idle-stream';
+import type { StoredThinking } from '../provider/thinking';
 import { loadSettingsWithSecrets } from '../settings';
 import type { GoalManager, GoalRecord } from './goal-manager';
 import { HookRegistry, type PreflightHookRegistry } from './hooks';
@@ -351,6 +352,22 @@ export class Agent {
     }
   }
 
+  /** UI 按钮路径 — 运行时更新思考策略（ModelSwitcher 切档位/深思考开关），
+   *  不重建 Agent。子 Agent 共享 this.prov，自动一并生效。 */
+  setThinking(cfg: StoredThinking | undefined): void {
+    this.prov.setThinking?.(cfg);
+  }
+
+  /** UI 路径 — 运行时切换 provider（模型/信号源/协议），不重建 Agent。
+   *  正在进行的请求已持有旧引用，继续完成后下一轮起用新 provider；
+   *  子 Agent 共享 this.prov，自动一并生效。
+   *  同时更新定价并清空摘要模型缓存，避免压缩摘要仍走旧模型。 */
+  setProvider(prov: Provider, pricing?: Pricing): void {
+    this.prov = prov;
+    if (pricing) this.pricing = pricing;
+    this._summaryProv = null;
+  }
+
   /** 从持久化快照恢复 plan 状态 — 在 agent load 后调用 */
   restorePlanState(snapshot: import('./plan/plan-state').PlanStateSnapshot | null | undefined, projectPath: string): void {
     if (this._planState) {
@@ -415,6 +432,12 @@ export class Agent {
   }
   getContextWindow(): number {
     return this.contextWindow;
+  }
+
+  /** 运行时更新上下文窗口（压缩阈值）。设置面板改 contextWindow 后热切换，
+   *  不重建 Agent — 所有压缩判定都是运行时读此字段，下次判定即生效。 */
+  setContextWindow(n: number): void {
+    this.contextWindow = n > 0 ? n : 1000000; // 与构造兜底同语义
   }
 
   /** 设置自动调优压缩配置的持久化路径。 */

@@ -3,6 +3,8 @@
 
 // Provider 抽象层 — 统一 Message / Chunk / ToolCall，抹平 Anthropic 和 OpenAI 的 API 差异
 
+import type { StoredThinking } from './thinking';
+
 /** 模型 API 的线上方言（CONTEXT.md「Protocol」）。
  *  注意：ProviderSettings/ModelDescriptor 上的持久化字段名仍叫 `kind`（存储遗留名），
  *  领域词与代码类型统一为 Protocol，改存储键名需带迁移。 */
@@ -82,6 +84,9 @@ export interface Provider {
   name(): string;
   /** 启动流式补全，yield chunks。取消 signal 会中止。 */
   stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk>;
+  /** 运行时更新思考策略（ModelSwitcher 切思考档位），不重建 Provider。
+   *  可选 — 旧实现没有此方法时静默跳过。 */
+  setThinking?(cfg: StoredThinking | undefined): void;
   /** 预热 HTTP 连接池。创建后调用一次以在首次真实请求前建立
    *  TCP+TLS 连接。尽力而为 — 失败静默处理。 */
   prewarm?(): void;

@@ -48,12 +48,16 @@ export function guessReasoning(id: string): boolean {
 export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
   const name = cfg.name || 'openai';
   const baseUrl = cfg.baseUrl.replace(/\/$/, ''); // 用户在 baseUrl 中控制 v1 前缀
-  const { model, apiKey, thinking } = cfg;
+  const { model, apiKey } = cfg;
+  let thinking: StoredThinking | undefined = cfg.thinking; // setThinking 运行时更新
   const effortProfile = effortVendor(name, 'openai', baseUrl, model);
 
   return {
     name() {
       return name;
+    },
+    setThinking(cfg: StoredThinking | undefined): void {
+      thinking = cfg;
     },
     async *stream(signal: AbortSignal, req: Request): AsyncGenerator<Chunk> {
       const body = buildChatRequest(
