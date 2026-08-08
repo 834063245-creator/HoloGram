@@ -450,6 +450,15 @@ describe('ChatPanel session persistence', () => {
             savedAt: '2026-06-29T00:00:00Z',
             messages: [{ role: 'system', content: '你是助手' }],
           }),
+        )
+        // P1-14: localStorage 回退需要磁盘文件背书 — 71.json 必须存在且未删除
+        .mockResolvedValueOnce(
+          JSON.stringify({
+            id: 71,
+            label: '有内容的会话',
+            savedAt: '2026-06-29T00:00:00Z',
+            messages: [{ role: 'system', content: 'prompt' }],
+          }),
         );
 
       await panel.autoRestoreLastSession('D:/test');
@@ -794,6 +803,122 @@ describe('ChatPanel session persistence', () => {
       const textParts = assistantMsgs[0].parts.filter((p: any) => p.type === 'text');
       expect(textParts.length).toBeGreaterThan(0);
       expect(textParts[0].text).toBe(REAL_ASSISTANT_MSG);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // P1-14 localStorage 回退复活守卫
+  // 已删会话（磁盘 deleted 标记）不得从 localStorage 残留复活。
+  // 旧代码：删除 = 磁盘写 {deleted:true, savedAt:''} + localStorage removeItem；
+  // 若 removeItem 失败/残留，autoRestore 的 localStorage 扫描与回退会因
+  // !data?.savedAt 采纳残留 → 已删会话「复活」。修复后磁盘是权威。
+  // ═══════════════════════════════════════════════════════════════
+
+  describe('P1-14 localStorage 回退复活守卫', () => {
+    const PROJ = 'D:/p1-14-proj';
+    const hash = hashProjectPath(PROJ).toString(36);
+    const lsKey = `hologram_session_${hash}_7`;
+
+    function setupStubAgent(setSession: (msgs: any[]) => void) {
+      panel = createChatPanel();
+      panel.setProjectPath(PROJ);
+      panel.setAgentFactory(
+        async () =>
+          ({
+            getSession: () => [{ role: 'system', content: 'sys' }],
+            setSession,
+            dispose: vi.fn(),
+          }) as any,
+      );
+    }
+
+    /** tracker 缺失（触发 localStorage 扫描）+ 磁盘 {id}.json 由 impl 决定 */
+    function mockDisk(impl: (filePath: string) => string | null) {
+      mockInvoke.mockReset();
+      mockInvoke.mockImplementation((_cmd: string, payload: any) => {
+        const { method, params } = payload;
+        if (method === 'read_file_content') {
+          const fp = params.file_path as string;
+          if (fp.endsWith('_active.json')) throw new Error('tracker 缺失');
+          const r = impl(fp);
+          if (r === null) throw new Error('文件不存在');
+          return r;
+        }
+        return null;
+      });
+    }
+
+    it('磁盘 deleted 标记 + localStorage 残留 → 不复活，且清理残留', async () => {
+      localStorage.setItem(
+        lsKey,
+        JSON.stringify({
+          id: 7,
+          savedAt: '2026-08-08T10:00:00.000Z',
+          messages: [{ role: 'user', content: '已删会话的消息' }],
+        }),
+      );
+      const restored: any[] = [];
+      setupStubAgent((msgs) => restored.push(...msgs));
+      mockDisk((fp) =>
+        fp.endsWith('/7.json')
+          ? JSON.stringify({ id: 7, deleted: true, label: '', messages: [], savedAt: '' })
+          : null,
+      );
+
+      await panel.autoRestoreLastSession(PROJ);
+
+      // 未恢复 id=7
+      const sessions = Session.getSessions(panel.panelId);
+      expect(sessions.some((s) => s.id === 7)).toBe(false);
+      // localStorage 残留被顺手清理
+      expect(localStorage.getItem(lsKey)).toBeNull();
+    });
+
+    it('磁盘文件不存在 + localStorage 残留 → 不复活，且清理残留', async () => {
+      localStorage.setItem(
+        lsKey,
+        JSON.stringify({
+          id: 7,
+          savedAt: '2026-08-08T10:00:00.000Z',
+          messages: [{ role: 'user', content: '已删会话的消息' }],
+        }),
+      );
+      setupStubAgent(() => {});
+      mockDisk(() => null); // 所有会话文件都不存在
+
+      await panel.autoRestoreLastSession(PROJ);
+
+      const sessions = Session.getSessions(panel.panelId);
+      expect(sessions.some((s) => s.id === 7)).toBe(false);
+      expect(localStorage.getItem(lsKey)).toBeNull();
+    });
+
+    it('磁盘文件有效 + localStorage 更新 → 采纳 localStorage（正常崩溃恢复不受影响）', async () => {
+      localStorage.setItem(
+        lsKey,
+        JSON.stringify({
+          id: 7,
+          savedAt: '2026-08-08T12:00:00.000Z',
+          messages: [{ role: 'user', content: 'localStorage 更新消息' }],
+        }),
+      );
+      const restored: any[] = [];
+      setupStubAgent((msgs) => restored.push(...msgs));
+      mockDisk((fp) =>
+        fp.endsWith('/7.json')
+          ? JSON.stringify({
+              id: 7,
+              label: '旧',
+              savedAt: '2026-08-08T08:00:00.000Z',
+              messages: [{ role: 'user', content: '旧磁盘消息' }],
+            })
+          : null,
+      );
+
+      await panel.autoRestoreLastSession(PROJ);
+
+      // 采纳了 localStorage 的更新消息
+      expect(restored.some((m) => m.content === 'localStorage 更新消息')).toBe(true);
     });
   });
 });

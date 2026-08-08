@@ -34,6 +34,10 @@ const INDEX_FILE = 'index.json';
 
 export class AgentStore {
   private dirReady = false;
+  /** 串行写链 — index.json 的读-改-写按调用序串行化（P1-13）。
+   *  多 Agent 并发 saveState 时，后一个写者在链内读到的永远是前一个写完之后的值，
+   *  避免「读旧快照 → 覆盖新记录」的丢失现场。参照 BoardPersistence._writeChain。 */
+  private _indexChain: Promise<void> = Promise.resolve();
 
   constructor(private projectPath: string) {}
 
@@ -148,38 +152,39 @@ export class AgentStore {
     } catch {
       /* 尽力而为 */
     }
-    // 从索引中移除
-    const all = await this.list();
-    const filtered = all.filter((r) => r.id !== id);
-    if (filtered.length < all.length) {
-      try {
-        await rpc('write_file_content', {
-          filePath: this.indexPath(),
-          content: JSON.stringify(filtered, null, 2),
-        });
-      } catch {
-        /* 索引写入是尽力而为 */
-      }
-    }
+    // 从索引中移除 — 走写链串行化，避免与并发 save 的 _upsertIndex 交错覆盖（P1-13）
+    await this._mutateIndex((all) => all.filter((r) => r.id !== id));
   }
 
   // ── 内部方法 ──
 
+  /** 串行执行 index.json 的读-改-写。fn 在链内执行，读到的永远是最新落盘值。 */
+  private _mutateIndex(fn: (all: AgentRecord[]) => AgentRecord[]): Promise<void> {
+    const run = async (): Promise<void> => {
+      const all = await this.list();
+      const next = fn(all);
+      try {
+        await rpc('write_file_content', {
+          filePath: this.indexPath(),
+          content: JSON.stringify(next, null, 2),
+        });
+      } catch {
+        /* 尽力而为 */
+      }
+    };
+    this._indexChain = this._indexChain.then(run, run);
+    return this._indexChain;
+  }
+
   private async _upsertIndex(record: AgentRecord): Promise<void> {
-    const all = await this.list();
-    const idx = all.findIndex((r) => r.id === record.id);
-    if (idx >= 0) {
-      all[idx] = record;
-    } else {
-      all.push(record);
-    }
-    try {
-      await rpc('write_file_content', {
-        filePath: this.indexPath(),
-        content: JSON.stringify(all, null, 2),
-      });
-    } catch {
-      /* 尽力而为 */
-    }
+    await this._mutateIndex((all) => {
+      const idx = all.findIndex((r) => r.id === record.id);
+      if (idx >= 0) {
+        const next = [...all];
+        next[idx] = record;
+        return next;
+      }
+      return [...all, record];
+    });
   }
 }

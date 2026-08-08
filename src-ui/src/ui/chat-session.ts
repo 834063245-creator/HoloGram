@@ -537,6 +537,28 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
         /* 跳过损坏条目 */
       }
     }
+    if (lastId) {
+      // P1-14: 复活守卫 — localStorage 候选必须对应磁盘上存在的未删除会话。
+      // 已删会话的磁盘文件是 {deleted:true, savedAt:''}，仅剩 localStorage 残留时
+      // 旧代码会选中它 → 已删会话「复活」。磁盘是权威，localStorage 只是加速器。
+      const candidateId = lastId;
+      let diskValid = false;
+      try {
+        const disk = await readSessionJSON(sessionFile(projectPath, candidateId));
+        diskValid = !!disk && !disk.deleted;
+      } catch {
+        /* 磁盘文件不存在 */
+      }
+      if (!diskValid) {
+        lastId = 0;
+        // 顺手清理残留备份，避免下次打开再次选中
+        try {
+          localStorage.removeItem(lsKey(projectPath, candidateId));
+        } catch {
+          /* 忽略 */
+        }
+      }
+    }
     if (lastId) curNextId = lastId + 1;
   }
   if (!lastId) {
@@ -560,8 +582,10 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     if (lsRaw) {
       try {
         const lsData = JSON.parse(lsRaw);
-        // 若文件缺失或 localStorage 数据更新则使用 localStorage
-        if (!data?.savedAt || (lsData.savedAt && lsData.savedAt > data.savedAt)) {
+        // P1-14: 复活守卫 — 仅当磁盘文件有效（存在且未标记删除）时才允许
+        // localStorage 覆盖。已删会话磁盘文件是 {deleted:true, savedAt:''}，
+        // 旧代码因 !data?.savedAt 采纳 localStorage 残留 → 会话复活。
+        if (data && !data.deleted && (!data.savedAt || (lsData.savedAt && lsData.savedAt > data.savedAt))) {
           data = lsData;
         }
       } catch {
@@ -600,14 +624,19 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
         }
       }
       if (bestId > 0 && bestId !== lastId) {
+        // P1-14: 复活守卫 — localStorage 中的会话必须对应磁盘上的未删除文件，
+        // 否则已删会话（仅剩 localStorage 残留）会在此复活。
         try {
-          const lsRaw = localStorage.getItem(lsKey(projectPath, bestId));
-          if (lsRaw) {
-            data = JSON.parse(lsRaw);
-            lastId = bestId;
+          const disk = await readSessionJSON(sessionFile(projectPath, bestId));
+          if (disk && !disk.deleted) {
+            const lsRaw = localStorage.getItem(lsKey(projectPath, bestId));
+            if (lsRaw) {
+              data = JSON.parse(lsRaw);
+              lastId = bestId;
+            }
           }
         } catch {
-          /* 保留原始空数据 */
+          /* 磁盘文件不存在 → 不采纳 */
         }
       }
     }
