@@ -14,6 +14,7 @@ import { type AgentEvent, EventKind } from './agent-types';
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import type { Tool, ToolRegistry } from './tool';
 import { truncateToolOutput } from './truncate';
+import { resolveGuardToolName } from './tools/domains';
 
 export interface ExecutorToolCall {
   call: ToolCall;
@@ -196,11 +197,14 @@ export class StreamingToolExecutor {
       return result;
     }
 
+    // 领域工具（fs/shell/git/...）解析回旧工具名，保证门禁 / hooks / 关联按原语义工作
+    const guardName = resolveGuardToolName(this.tools, call.name, args);
+
     // ── 预检钩子：破坏性写入前警告 ──
     let preflightWarning: string | null = null;
     if (this.preflightHooks) {
       try {
-        preflightWarning = this.preflightHooks.check(call.name, args);
+        preflightWarning = this.preflightHooks.check(guardName, args);
       } catch (_e: any) {
         // 静默降级 — 不阻止执行
       }
@@ -226,7 +230,7 @@ export class StreamingToolExecutor {
     }
 
     // ponytail: 注入 _callId 使子 agent 事件可关联
-    if (call.name === 'agent_spawn') {
+    if (guardName === 'agent_spawn') {
       args._callId = call.id;
     }
 
@@ -255,7 +259,7 @@ export class StreamingToolExecutor {
       // ── 工具后钩子：用图上下文富化结果 ──
       if (this.hooks) {
         try {
-          output = await this.hooks.apply(call.name, args, output);
+          output = await this.hooks.apply(guardName, args, output);
         } catch (_e: any) {
           // 静默降级 — 不破坏结果
         }
@@ -267,7 +271,7 @@ export class StreamingToolExecutor {
       }
 
       // ── 截断输出以限制 token 消耗（50KB / 2000 行）──
-      const trunc = truncateToolOutput(call.name, output);
+      const trunc = truncateToolOutput(guardName, output);
 
       const result: PendingResult = {
         call,

@@ -5,7 +5,7 @@
 
 import { rpc } from '../bridge';
 import { z } from 'zod';
-import type { Message, Provider, ToolCall, Usage } from '../provider/types';
+import type { Message, Provider, ToolCall, ToolSchema, Usage } from '../provider/types';
 import { ChunkType } from '../provider/types';
 import type { AgentRecord, AgentStore } from './agent-store';
 // 共享类型 — 本文件内部也使用
@@ -38,6 +38,7 @@ import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry'
 import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
+import { selectToolSchemas } from './tool-select';
 import { defineTool } from './tools/define-tool';
 
 /** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
@@ -89,6 +90,8 @@ export interface AgentOptions {
   eventSink?: (ev: AgentEvent) => void;
   /** 执行状态实例。未提供则回退到全局 execState。 */
   execState?: ExecStateInstance;
+  /** 每轮发给模型的工具 schema 上限（0 = 全量，默认 14）。 */
+  visibleToolsLimit?: number;
   /** UI 通知端口 — 进度 / 工具完成 / 子 Agent 生命周期。
    *  由 workspace 注入；headless Agent 无。 */
   ui?: AgentUINotifier;
@@ -102,6 +105,7 @@ export interface AgentOptions {
 }
 
 const STORM_BREAK_THRESHOLD = 3;
+const DEFAULT_VISIBLE_TOOLS_LIMIT = 14;
 
 // ---- Agent ----
 
@@ -110,6 +114,7 @@ export class Agent {
   private tools: ToolRegistry;
   private session: Message[];
   private temperature: number;
+  private _visibleToolsLimit: number;
   private pricing: Pricing | undefined;
   private _agentOpts: AgentOptions;
 
@@ -245,6 +250,7 @@ export class Agent {
     this._ui = opts.ui ?? {};
     this._agentOpts = opts;
     this.temperature = opts.temperature ?? 0.7;
+    this._visibleToolsLimit = opts.visibleToolsLimit ?? DEFAULT_VISIBLE_TOOLS_LIMIT;
     this.pricing = opts.pricing;
     this.contextWindow = opts.contextWindow || 1000000; // 1M tokens 默认值; || 捕获零值（设置默认值），使压缩永不被静默禁用
     // ponytail: 0.55 将阈值设在 550K token（1M 窗口）。
@@ -1458,7 +1464,7 @@ ${resumeNote}
     // sanitizeToolPairing 不在此调用 — provider（openai/anthropic）是上线前的最终 gate。
     const stream = streamWithIdleTimeout(this.prov, signal, {
       messages: fullSession,
-      tools: this.tools.schemas(),
+      tools: this.requestToolSchemas(),
       temperature: this.temperature,
       // max_tokens 不开放设置 — 0 = provider 默认 32000，发送前按模型目录上限钳制
       max_tokens: 0,
@@ -1616,12 +1622,22 @@ ${resumeNote}
    *  Anthropic 的 tokenizer 略有差异（< 8% 误差），对压缩安全。
    *  按发送载荷（payloadMessages 折叠视图）计数 — 触发判定必须
    *  与真实 API 压力一致，而非完整历史大小。 */
+  /** 每轮发给模型的工具 schema：目录 > limit 时按上下文打分注入子集（见 tool-select.ts）。 */
+  private requestToolSchemas(): ToolSchema[] {
+    const ctx = this.session
+      .filter((m) => m.role === 'user')
+      .slice(-3)
+      .map((m) => m.content)
+      .join('\n');
+    return selectToolSchemas(this.tools, ctx, this._visibleToolsLimit);
+  }
+
   private tokenCountWithEstimation(): number {
     let total = countMessages(this.payloadMessages());
     // 计算临时提醒 token — 发送给 LLM 但不在会话中
     total += countTexts(this._transientReminders);
     // 计算工具 schema token — 每次请求都发送
-    total += countToolSchemas(this.tools.schemas());
+    total += countToolSchemas(this.requestToolSchemas());
     return total;
   }
 
@@ -1630,7 +1646,7 @@ ${resumeNote}
    *  过滤: jq 'select(.module=="agent" and .message=="token breakdown") | .ctx' */
   private _diagTokenBreakdown(apiUsage: Usage | undefined): void {
     try {
-      const T = this.tools.schemas();
+      const T = this.requestToolSchemas();
       const schemaTokens = countToolSchemas(T);
       // 统计发送载荷（折叠视图）而非完整历史 — 反映真实 API 成本
       const payload = this.payloadMessages();

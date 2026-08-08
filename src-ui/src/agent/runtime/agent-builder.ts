@@ -38,6 +38,7 @@ import { createTaskTools } from '../task';
 import { enqueueShellOp } from './shell-queue';
 import { classifyShellCommand, commandLabel } from './cmd-class';
 import { createWaitTool } from '../tools/wait';
+import { convergeRegistry } from '../tools/domains';
 
 // ── Types ──
 
@@ -173,9 +174,9 @@ export function buildSystemPrompt(
 你只有只读工具 + 写计划文件的权限。不能写其他文件、跑命令、Git 操作。
 
 ### 工作流程
-1. **探索** — 用 read_file / search_content / glob / explore_deps / trace_impact / fragile_modules 充分理解代码
+1. **探索** — 用 fs(read/list/glob) / search(content) / explore_deps / trace_impact / fragile_modules 充分理解代码
 2. **设计** — 确定最佳方案，考虑权衡
-3. **写计划** — 用 write_file 写到计划文件（路径见 enter_plan_mode 返回值）
+3. **写计划** — 用 fs(write) 写到计划文件（路径见 enter_plan_mode 返回值）
 4. **提交** — 调 exit_plan_mode 提交计划给用户审批
 
 ### 计划要求
@@ -207,7 +208,7 @@ export function buildSystemPrompt(
 10. **像资深工程师一样说话**。简洁、直接、不拍马屁、不空洞鼓励。
 11. **用户犯错时指出来**。用户说错了就直接说，不要为了讨好而同意。
 12. **改完后检查**。注释和文档是否过时，一起更新。
-13. **别用 run_shell 搜文件/搜代码/操作 Git**。找文件用 glob，搜文本用 search_content，Git 用专用 git_* 工具。run_shell 只用于构建和测试。
+13. **别用 shell(run) 搜文件/搜代码/操作 Git**。找文件用 fs(glob)，搜文本用 search(content)，Git 用 git(…)。shell(run) 只用于构建和测试。
 ${modeBlock}`;
 
   let suffix = `\n## 模型身份
@@ -219,51 +220,51 @@ ${modeBlock}`;
     suffix += `\n\n## 多 Agent 协作
 
 ### 子 Agent
-- agent_spawn 阻塞到子 Agent 完成，结果就是工具返回值。同一轮发多个可并行。大任务才委派，小任务自己做。
+- agent(spawn) 阻塞到子 Agent 完成，结果就是工具返回值。同一轮发多个可并行。大任务才委派，小任务自己做。
 - **分工**：并行派发多个子 Agent 时，给每个 Agent 明确的、不重叠的文件范围。如果两个子 Agent 可能改同一批文件，改为串行或合并成一个任务。
 - **验证**：子 Agent 不跑构建/测试（避免并行文件锁争抢）。所有子 Agent 返回后，由你统一跑一次编译/测试验证。
 
 ### 异步子 Agent
-- 设 async=true 时 agent_spawn 立即返回 agentId，不阻塞当前轮次。
+- 设 async=true 时 agent(spawn) 立即返回 agentId，不阻塞当前轮次。
 - 适合长时间任务（重构、批量修改、跑测试套件）。你在等待期间可以继续处理其他工作。
-- 异步子 Agent 完成后，结果通过 agent_message（type: 'result'）推送到你的 inbox。
-- 收到 type: 'result' 消息后：用 agent_ack 确认，然后调 agent_merge 合并其工作成果到主仓库。
-- 异步子 Agent 最多 5 个并发。池满时 agent_spawn 返回错误——先 agent_merge 清理已完成的，或等现有任务结束。
+- 异步子 Agent 完成后，结果通过 agent(message)（type: 'result'）推送到你的 inbox。
+- 收到 type: 'result' 消息后：用 agent(ack) 确认，然后调 agent(merge) 合并其工作成果到主仓库。
+- 异步子 Agent 最多 5 个并发。池满时 agent(spawn) 返回错误——先 agent(merge) 清理已完成的，或等现有任务结束。
 
 ### 合并
-- agent_merge 将已完成子 Agent 的 worktree 串行合并回主仓库。
-- 冲突时 diff 保存在 TaskBoard 上，你需要手动用 edit_file 应用。
+- agent(merge) 将已完成子 Agent 的 worktree 串行合并回主仓库。
+- 冲突时 diff 保存在 TaskBoard 上，你需要手动用 fs(edit) 应用。
 - 合并是不可逆操作——确认子 Agent 工作无误后再合并。
 
 ### Agent 间通信
-- agent_message 向指定 Agent 发消息（fire-and-forget，不等回复）。消息存入对方 inbox，30 分钟后自动过期。
-- agent_request 向指定 Agent 发同步请求并阻塞等待回复（有超时，默认 30 秒，最大 120 秒）。当你需要另一个 Agent 的直接回答时使用。
+- agent(message) 向指定 Agent 发消息（fire-and-forget，不等回复）。消息存入对方 inbox，30 分钟后自动过期。
+- agent(request) 向指定 Agent 发同步请求并阻塞等待回复（有超时，默认 30 秒，最大 120 秒）。当你需要另一个 Agent 的直接回答时使用。
 - **消息自动注入**：result/reply 消息会自动注入到你的上下文并从 inbox 移除，无需手动确认。
-- request 消息会注入完整内容但保留在 inbox 中——用 agent_reply 回复后会自动移除。
-- 其他类型的消息显示轻量通知，用 agent_inbox 查看详情。未查看的消息 30 分钟后自动过期。
-- agent_inbox 列出所有未过期消息。
-- agent_ack 确认自由类型消息已读（从 inbox 移除）。强消费类型消息无需手动 ack。
-- agent_reply 回复 inbox 中的消息。
-- agent_list 列出当前拓扑下可通信的 Agent。
+- request 消息会注入完整内容但保留在 inbox 中——用 agent(reply) 回复后会自动移除。
+- 其他类型的消息显示轻量通知，用 agent(inbox) 查看详情。未查看的消息 30 分钟后自动过期。
+- agent(inbox) 列出所有未过期消息。
+- agent(ack) 确认自由类型消息已读（从 inbox 移除）。强消费类型消息无需手动 ack。
+- agent(reply) 回复 inbox 中的消息。
+- agent(list) 列出当前拓扑下可通信的 Agent。
 
 ### 共享发现
-- agent_discover 将你的发现发布到共享发现区（key / value / category）。
+- agent(discover) 将你的发现发布到共享发现区（key / value / category）。
   类别：architecture（架构决策）、bug（缺陷）、pattern（模式/约定）、config（配置）。
-- agent_lookup 查询其他 Agent 发布的发现。
-  在开始探索前用 agent_lookup 检查已有发现，避免重复工作。
+- agent(lookup) 查询其他 Agent 发布的发现。
+  在开始探索前用 agent(lookup) 检查已有发现，避免重复工作。
 - 发现区自动注入：每轮开始时，你会看到其他 Agent 最新的发现（5 分钟内，<system-reminder> 格式）。
 
 ### 决策指南
 - **同步 spawn**：短任务（< 1 分钟）、需要结果才能继续、单文件改动。
 - **异步 spawn**：长任务（> 1 分钟）、互不依赖的并行任务、批量操作。
-- **通信**：只在需要协调时发消息。收到 type: 'result' 后必须 agent_merge。
-- **不要**对正在运行的异步子 Agent 发 agent_message 催促进度——等 result 消息。
+- **通信**：只在需要协调时发消息。收到 type: 'result' 后必须 agent(merge)。
+- **不要**对正在运行的异步子 Agent 发 agent(message) 催促进度——等 result 消息。
 
 ### 拆分与执行（批量并行时的准则）
 - **拆得越细越好，不要省 Agent 数量**：把大任务切成多个互不冲突的子任务并行派发。子 Agent 拥有你的完整能力，任务可以切得很细。只有真正不可分割时才合并任务。
 - **子 Agent 的 prompt 要精简**：只给必要背景 + 该子 Agent 的具体任务，不要塞过多细节（它能力完整，自己能查）。每个子 Agent 拿到的任务范围必须明确、可独立完成。
 - **范围硬约束**：写类任务必须给每个子 Agent 不重叠的文件范围；两个子 Agent 可能改同一文件时，改为串行或合并成一个任务。
-- **读类任务可放宽**：只读/检查/回报类子 Agent 范围可以适度重叠，用 **fresh 模式**（不隔离、低开销、直接改主工作区）；写类任务用 **fork 模式**（worktree 隔离，靠 agent_merge 合并回来）。
+- **读类任务可放宽**：只读/检查/回报类子 Agent 范围可以适度重叠，用 **fresh 模式**（不隔离、低开销、直接改主工作区）；写类任务用 **fork 模式**（worktree 隔离，靠 agent(merge) 合并回来）。
 - **不自己包揽主活**：拆分清楚后，把各子任务交给子 Agent，别在主 Agent 里重复做。`;
   }
 
@@ -481,6 +482,9 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
   // 事件驱动：传 agentId 阻塞到子 Agent 完成；无 pool 时退化为兜底 sleep ──
   registry.register(createWaitTool(subAgentPool));
 
+  // ── 工具层收敛：领域工具 + 隐藏旧名（旧工具保留在 registry 供 executor/测试解析）──
+  convergeRegistry(registry);
+
   return registry;
 }
 
@@ -508,7 +512,18 @@ export function planRegistry(
   planState?: import('../plan/plan-state').PlanStateManager,
 ): ToolRegistry {
   const out = new ToolRegistry();
-  for (const t of base.filterReadOnly()) out.register(t);
+  for (const t of base.all()) {
+    if (base.isHidden(t.name())) continue; // 隐藏的旧工具不再进入 plan 模式可见集
+    if (t.readOnly()) {
+      out.register(t);
+      continue;
+    }
+    // 领域工具：只暴露只读动作，其余动作在 execute 层拦截
+    const ro = t.readOnlyActions?.();
+    if (ro && ro.length > 0) {
+      out.register(guardDomainForPlan(t, ro));
+    }
+  }
 
   // plan 模式下额外允许 write_file / edit_file，但仅限计划文件
   if (planState?.state.active) {
@@ -546,6 +561,26 @@ export function planRegistry(
     }
   }
   return out;
+}
+
+/** plan 模式守卫：领域工具只放行只读动作。 */
+function guardDomainForPlan(t: Tool, readOnlyActions: string[]): Tool {
+  return {
+    name: () => t.name(),
+    description: () => t.description(),
+    parameters: () => t.parameters(),
+    readOnly: () => false,
+    domain: () => t.domain?.() ?? '',
+    actions: () => t.actions?.() ?? [],
+    readOnlyActions: () => readOnlyActions,
+    execute: async (args, onProgress) => {
+      const action = (args as { action?: unknown })?.action;
+      if (typeof action !== 'string' || !readOnlyActions.includes(action)) {
+        return `[已拦截] 规划模式下 ${t.name()} 仅允许只读动作: ${readOnlyActions.join(', ')}`;
+      }
+      return t.execute(args, onProgress);
+    },
+  };
 }
 
 // ── Engine snapshot ──

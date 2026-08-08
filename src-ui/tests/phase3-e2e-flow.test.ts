@@ -220,8 +220,8 @@ describe("端到端：系统提示词验证", () => {
     expect(prompt).toContain("多 Agent 协作")
     expect(prompt).toContain("异步子 Agent")
     expect(prompt).toContain("async=true")
-    expect(prompt).toContain("agent_merge")
-    expect(prompt).toContain("agent_message")
+    expect(prompt).toContain("agent(merge)")
+    expect(prompt).toContain("agent(message)")
     expect(prompt).toContain("决策指南")
   })
 

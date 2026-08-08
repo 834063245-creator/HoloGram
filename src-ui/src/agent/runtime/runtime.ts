@@ -53,6 +53,7 @@ import { createRequestTool } from '../tools/request';
 import { AgentLifecycleManager } from '../lifecycle-manager';
 import { enqueueIsolationOp } from '../isolation-queue';
 import type { SubAgentSpawner } from '../tools/subagent';
+import { convergeRegistry } from '../tools/domains';
 import {
   type BuilderDeps,
   buildGraphContextFromData,
@@ -577,6 +578,10 @@ export class AgentRuntime implements RuntimePort {
 
     // 8. 在 Agent 的有效注册表上注册压缩工具
     registerCompactionTools(newAgent, effR);
+
+    // 8b. 工具层收敛：领域工具 + 隐藏旧名。
+    // plan 模式保留 planRegistry 的只读守卫版领域工具，不重建。
+    convergeRegistry(effR, { rebuildDomains: config.collaborationMode !== 'plan' });
 
     // 9. 接线 hooks（图上下文 + 状态 + board 追踪 + plan）
     const hooks = new HookRegistry();

@@ -18,6 +18,12 @@ export interface Tool {
   parameters(): Record<string, unknown>;
   /** 是否只读（可安全并行） */
   readOnly(): boolean;
+  /** 领域名（收敛后的可见工具，如 "fs" / "shell" / "agent"） */
+  domain?(): string;
+  /** 动作列表（领域工具，如 ["read","write","list"]） */
+  actions?(): string[];
+  /** 只读动作（领域工具在 plan 模式下的白名单） */
+  readOnlyActions?(): string[];
   /** 用原始 JSON 参数执行工具。返回结果字符串。
    *  onProgress 是可选回调，用于在执行期间流式输出部分结果。 */
   execute(args: Record<string, unknown>, onProgress?: (chunk: string) => void): Promise<string>;
@@ -27,6 +33,7 @@ export interface Tool {
 
 export class ToolRegistry {
   private tools = new Map<string, Tool>();
+  private hiddenNames = new Set<string>();
 
   register(t: Tool): void {
     if (this.tools.has(t.name())) {
@@ -38,6 +45,22 @@ export class ToolRegistry {
   /** 按名称移除工具。工具不存在时无操作。 */
   unregister(name: string): void {
     this.tools.delete(name);
+    this.hiddenNames.delete(name);
+  }
+
+  /** 从 schemas()/catalog() 中隐藏工具，但仍保留在 registry 中：
+   *  旧工具名可继续被 executor 解析（防御模型幻觉旧名），测试与内部调用不受影响。 */
+  hide(name: string): void {
+    if (!this.tools.has(name)) return;
+    this.hiddenNames.add(name);
+  }
+
+  unhide(name: string): void {
+    this.hiddenNames.delete(name);
+  }
+
+  isHidden(name: string): boolean {
+    return this.hiddenNames.has(name);
   }
 
   /** 注册别名 — 相同实现，向 LLM 显示不同名称。
@@ -62,11 +85,33 @@ export class ToolRegistry {
     return this.tools.get(name);
   }
 
+  /** 可见工具（未被 hide 的） */
+  visibleTools(): Tool[] {
+    return this.all().filter((t) => !this.hiddenNames.has(t.name()));
+  }
+
   schemas(): ToolSchema[] {
-    return Array.from(this.tools.values()).map((t) => ({
+    return this.visibleTools().map((t) => ({
       name: t.name(),
       description: t.description(),
       parameters: t.parameters(),
+    }));
+  }
+
+  /** 完整目录（供工具检索器使用） */
+  catalog(): Array<{
+    name: string;
+    description: string;
+    domain?: string;
+    actions?: string[];
+    readOnly: boolean;
+  }> {
+    return this.visibleTools().map((t) => ({
+      name: t.name(),
+      description: t.description(),
+      domain: t.domain?.(),
+      actions: t.actions?.(),
+      readOnly: t.readOnly(),
     }));
   }
 

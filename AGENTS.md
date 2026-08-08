@@ -90,6 +90,14 @@ flowchart LR
 - **崩溃接管：** 启动时 `migrateLegacy()`(旧 `agents/main/goal.json` 导入)+ `adoptOrphans()`(遗留 active 记录转 paused)
 - **UI:** 聊天区上方状态条订阅 `goal:state` 事件;测试见 `tests/goal-manager.test.ts` 与 `tests/goal-persistence.test.ts`(含暂停→闲聊→恢复回归)
 
+## 工具层收敛（2026-08-08）
+
+- 模型可见工具收敛为领域工具：`fs` / `shell` / `git` / `search` / `web` / `agent` / `task` / `memory`，加常驻 `ask_user` / `Skill` / `wait` / `enter_plan_mode` / `exit_plan_mode`，再加 engine MCP 工具。
+- 旧工具名（`run_shell`、`write_file`、`agent_spawn`、`git_*` 等）保留在 `ToolRegistry` 中但被 `hide()`：executor 仍可解析（防模型幻觉旧名）、测试兼容，但不再出现在 `schemas()`。
+- 每轮注入：`Agent` 默认只发 ≤14 个 schema（`tool-select.ts` 打分 + 常驻集；`visibleToolsLimit: 0` = 全量）。工具目录见 `ToolRegistry.catalog()`。
+- 领域动作通过 `resolveGuardToolName()` 映射回旧工具名，preflight 架构门禁、图增强 hooks、子 Agent `_callId` 关联均不失效；文件所有权包装的是内层旧工具，天然生效。
+- 新增工具/动作必须同步：`tools/domains.ts` 的 `DOMAIN_SPECS`（动作→旧工具名）+ `collectHiddenToolNames()`（需隐藏的旧名）+ 本文件。
+
 ## 不要做的事
 
 - 不要恢复 Python 引擎路径
