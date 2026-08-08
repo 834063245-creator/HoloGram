@@ -69,7 +69,7 @@ export interface AgentSessionStateApi {
   getTurnPairs(storeId: string): TurnPair[];
   setTurnPairs(storeId: string, pairs: TurnPair[]): void;
 
-    // ── 批量操作 ──
+  // ── 批量操作 ──
   /** 移除并 dispose 面板的所有 agent 句柄，清除 exec 状态。 */
   clearPanelState(storeId: string): void;
 
