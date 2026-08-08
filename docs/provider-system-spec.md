@@ -365,7 +365,8 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
   页内出现「有未保存的信号源更改 + 保存 Provider」保存条；
   Provider tab 下隐藏底部全局保存按钮。
 - 全局保存（Agent / 显示等 tab）与 Provider 保存共用 `runSavePipeline()`
-  （落盘 + 删暂存凭据 + 写新 Key + 重建 Agent），但各自复位各自的 dirty。
+  （落盘 + 删暂存凭据 + 写新 Key + 重建 Agent）。落盘是全量的，
+  因此任一保存成功后两个 dirty 标志一并复位，避免保存条/按钮残留假状态。
 - 关闭确认按 dirty 组合给出不同文案；移除全局保存时空 Key/空模型的
   confirm 拦截（空 Key 是合法状态，如本地端点）。
 

@@ -262,6 +262,9 @@ const SettingsPanelApp: React.FC<{
     const ok = await runSavePipeline();
     if (ok) {
       setDirty(false);
+      // runSavePipeline 是全量落盘：Provider 页的暂存改动也会一并持久化，
+      // 因此两个 dirty 标志必须同时复位，避免保存条/保存按钮残留假状态。
+      setProviderDirty(false);
       setSaveVersion((v) => v + 1);
     }
   }, [runSavePipeline]);
@@ -271,6 +274,7 @@ const SettingsPanelApp: React.FC<{
     const ok = await runSavePipeline();
     if (ok) {
       setProviderDirty(false);
+      setDirty(false); // 同上：全量落盘，其他 tab 的 dirty 一并复位
       setSaveVersion((v) => v + 1);
     }
   }, [runSavePipeline]);
