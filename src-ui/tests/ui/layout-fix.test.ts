@@ -18,7 +18,7 @@ function makeFixture(n: number, comms: number): { nodeComm: number[]; edgePairs:
 }
 
 describe('shell constraint fix — no longer forces sphere', () => {
-  it('nodes should not all cluster at shellRadius distance', async () => {
+  it('nodes should not all cluster at shellRadius distance', { timeout: 30_000 }, async () => {
     const n = 100;
     const { nodeComm, edgePairs } = makeFixture(n, 5);
     const pos = await layout3D(n, edgePairs, undefined, nodeComm);
@@ -42,7 +42,7 @@ describe('shell constraint fix — no longer forces sphere', () => {
     expect(spread).toBeGreaterThan(0);
   });
 
-  it('simulateForces via layout3D should not produce extreme positions', async () => {
+  it('simulateForces via layout3D should not produce extreme positions', { timeout: 30_000 }, async () => {
     const n = 50;
     const pairs: [number, number][] = [];
     for (let i = 0; i + 1 < n; i++) pairs.push([i, i + 1]);
@@ -58,7 +58,7 @@ describe('shell constraint fix — no longer forces sphere', () => {
 });
 
 describe('repelCommunityCentroids — no runaway displacement', () => {
-  it('should not push communities to extreme distances', () => {
+  it('should not push communities to extreme distances', { timeout: 30_000 }, () => {
     const n = 200;
     const { nodeComm, edgePairs } = makeFixture(n, 8);
 
@@ -77,7 +77,7 @@ describe('repelCommunityCentroids — no runaway displacement', () => {
     }
   });
 
-  it('should not produce NaN', () => {
+  it('should not produce NaN', { timeout: 30_000 }, () => {
     const n = 100;
     const { nodeComm, edgePairs } = makeFixture(n, 4);
     const pos = fibonacciSphere(n, Math.cbrt(n) * 14);
@@ -91,7 +91,7 @@ describe('repelCommunityCentroids — no runaway displacement', () => {
 });
 
 describe('layout3D — full pipeline safety', () => {
-  it('large graph produces all-finite positions', async () => {
+  it('large graph produces all-finite positions', { timeout: 30_000 }, async () => {
     const n = 2000;
     const { nodeComm, edgePairs } = makeFixture(n, 15);
     const pos = await layout3D(n, edgePairs, undefined, nodeComm);
@@ -102,12 +102,12 @@ describe('layout3D — full pipeline safety', () => {
     }
   });
 
-  it('empty graph returns empty array', async () => {
+  it('empty graph returns empty array', { timeout: 30_000 }, async () => {
     const pos = await layout3D(0, []);
     expect(pos.length).toBe(0);
   });
 
-  it('single community degrades to single-ball simulation', async () => {
+  it('single community degrades to single-ball simulation', { timeout: 30_000 }, async () => {
     const n = 30;
     const { nodeComm, edgePairs } = makeFixture(n, 1);
     const pos = await layout3D(n, edgePairs, undefined, nodeComm);

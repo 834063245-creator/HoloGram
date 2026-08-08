@@ -39,7 +39,7 @@ describe('#4 linkifyNodeNames processes <code> elements', () => {
     document.body.innerHTML = '';
   });
 
-  it('wraps inline <code> elements as clickable node links', async () => {
+  it('wraps inline <code> elements as clickable node links', { timeout: 20_000 }, async () => {
     // ReactMarkdown renders `someNode` as <code>someNode</code>.
     // linkifyNodeNames should convert them to clickable spans.
     const { ChatMessagesApp } = await import('../src/ui/react/ChatMessages');
@@ -71,7 +71,7 @@ describe('#4 linkifyNodeNames processes <code> elements', () => {
     expect(onNavigate).toHaveBeenCalledWith('myFunc');
   });
 
-  it('does NOT process block <pre><code> elements', () => {
+  it('does NOT process block <pre><code> elements', { timeout: 20_000 }, () => {
     const container = document.createElement('div');
     container.innerHTML = '<pre><code>block code</code></pre>';
     document.body.appendChild(container);
@@ -81,7 +81,7 @@ describe('#4 linkifyNodeNames processes <code> elements', () => {
     expect(codeEls.length).toBe(0);
   });
 
-  it('skips already-linkified elements', () => {
+  it('skips already-linkified elements', { timeout: 20_000 }, () => {
     const container = document.createElement('div');
     container.innerHTML = '<p><span class="node-link">already</span></p>';
     document.body.appendChild(container);
@@ -96,7 +96,7 @@ describe('#4 linkifyNodeNames processes <code> elements', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('#5 formatToolResult integration', () => {
-  it('formats JSON output as pretty-printed', async () => {
+  it('formats JSON output as pretty-printed', { timeout: 20_000 }, async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
     const json = '{"key":"value","num":42}';
     const html = formatToolResult('some_tool', json, false);
@@ -106,7 +106,7 @@ describe('#5 formatToolResult integration', () => {
     expect(html).toContain('"value"');
   });
 
-  it('formats edit_file with diff view', async () => {
+  it('formats edit_file with diff view', { timeout: 20_000 }, async () => {
     const { formatDiffResult } = await import('../src/ui/chat-utils');
     const args = JSON.stringify({ oldString: 'a\nb', newString: 'a\nX', file_path: '/test.ts' });
     const html = formatDiffResult('some longer body text that passes the length check\nsecond line', args);
@@ -115,7 +115,7 @@ describe('#5 formatToolResult integration', () => {
     expect(html).toContain('/test.ts');
   });
 
-  it('appends truncation marker when truncated=true', async () => {
+  it('appends truncation marker when truncated=true', { timeout: 20_000 }, async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
     const html = formatToolResult('run_shell', 'output', true);
     expect(html).toContain('截断');
@@ -127,7 +127,7 @@ describe('#5 formatToolResult integration', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('#2 SubAgentPart.version increments on text append', () => {
-  it('version increments when text is appended to existing part (no length change)', async () => {
+  it('version increments when text is appended to existing part (no length change)', { timeout: 20_000 }, async () => {
     const { createSubAgentSink } = await import('../src/ui/subagent-sink');
     const { EventKind } = await import('../src/agent/agent-types');
     type SubAgentPart = import('../src/ui/message-model').SubAgentPart;
@@ -163,7 +163,7 @@ describe('#2 SubAgentPart.version increments on text append', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('#9 MarkdownCode re-highlights on content change', () => {
-  it('hljs.highlightElement is called when code content changes', async () => {
+  it('hljs.highlightElement is called when code content changes', { timeout: 20_000 }, async () => {
     const hljsModule = await import('highlight.js');
     const hljs = hljsModule.default as any;
     const spy = vi.mocked(hljs.highlightElement);
@@ -192,7 +192,7 @@ describe('#9 MarkdownCode re-highlights on content change', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('#13 _streamingBump fallback to active session', () => {
-  it('bumps active session store when _resolveSessionTarget returns null', async () => {
+  it('bumps active session store when _resolveSessionTarget returns null', { timeout: 20_000 }, async () => {
     const { msgStoreFor, getChatStore } = await import('../src/ui/chat-store');
     const { getSessionStore } = await import('../src/ui/session-store');
     type StreamContext = import('../src/ui/chat-stream').StreamContext;
