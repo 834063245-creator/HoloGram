@@ -5,7 +5,7 @@
 // 或展开自定义表单手动配置。校验在本地完成，父组件只负责落 state。
 
 import { useEffect, useState } from 'react';
-import { getCatalogProviders, getDefaultModel } from '../../../provider/catalog';
+import { getCatalogVendors, getDefaultModel } from '../../../provider/catalog';
 import type { Protocol } from '../../../provider/types';
 import { providerId, type ProviderId } from '../../../settings';
 import { protocolLabel } from './protocol';
@@ -91,7 +91,7 @@ export function AddProviderSheet({ open, existingNames, onClose, onAdd }: AddPro
         </div>
 
         <div className="pp-cat-grid">
-          {getCatalogProviders().map((provName) => {
+          {getCatalogVendors().map((provName) => {
             const defaultModel = getDefaultModel(provName);
             if (!defaultModel) return null;
             const used = existingNames.includes(provName);

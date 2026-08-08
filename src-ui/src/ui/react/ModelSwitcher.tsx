@@ -34,7 +34,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
   const others = settings.providers.filter((p) => p.name !== settings.activeProvider);
 
   const currentModels = useMemo(
-    () => getAllModels().filter((m) => m.provider === active.name).sort((a, b) => a.id.localeCompare(b.id)),
+    () => getAllModels().filter((m) => m.vendor === active.name).sort((a, b) => a.id.localeCompare(b.id)),
     [active.name],
   );
 

@@ -42,8 +42,8 @@ export function ModelSelector({ value, onChange, providerName, kind, onRefreshMo
     return all
       .filter((m) => m.kind === kind)
       .sort((a, b) => {
-        const aMatch = a.provider === providerName ? 0 : 1;
-        const bMatch = b.provider === providerName ? 0 : 1;
+        const aMatch = a.vendor === providerName ? 0 : 1;
+        const bMatch = b.vendor === providerName ? 0 : 1;
         if (aMatch !== bMatch) return aMatch - bMatch;
         return a.id.localeCompare(b.id);
       })

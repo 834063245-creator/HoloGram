@@ -87,8 +87,8 @@ export function getAllModels(): ModelDescriptor[] {
 }
 
 /** 查找属于特定 provider 的模型。 */
-export function findModels(providerName: string): ModelDescriptor[] {
-  return loadCatalog().allModels.filter((m) => m.provider === providerName);
+export function findModels(vendor: string): ModelDescriptor[] {
+  return loadCatalog().allModels.filter((m) => m.vendor === vendor);
 }
 
 /** 根据 id 查找模型。 */
@@ -111,7 +111,7 @@ export function searchModels(query: string): ModelDescriptor[] {
   const q = query.toLowerCase().trim();
   if (!q) return allModels;
   return allModels.filter(
-    (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q) || m.provider.toLowerCase().includes(q),
+    (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q) || m.vendor.toLowerCase().includes(q),
   );
 }
 
@@ -123,7 +123,7 @@ export function getDefaultModel(providerName: string): ModelDescriptor | undefin
   return models[0];
 }
 
-/** 列出目录中有模型的所有 provider 名称。 */
-export function getCatalogProviders(): string[] {
-  return [...new Set(loadCatalog().allModels.map((m) => m.provider))];
+/** 列出目录中有模型的所有 Vendor 名称（CONTEXT.md「Vendor」）。 */
+export function getCatalogVendors(): string[] {
+  return [...new Set(loadCatalog().allModels.map((m) => m.vendor))];
 }

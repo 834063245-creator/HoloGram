@@ -3,7 +3,7 @@
     "id": "kimi-k2-0711-preview",
     "name": "Kimi K2 0711",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": false,
     "input": [
@@ -21,7 +21,7 @@
     "id": "kimi-k2-0905-preview",
     "name": "Kimi K2 0905",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": false,
     "input": [
@@ -39,7 +39,7 @@
     "id": "kimi-k2-thinking",
     "name": "Kimi K2 Thinking",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
@@ -57,7 +57,7 @@
     "id": "kimi-k2-thinking-turbo",
     "name": "Kimi K2 Thinking Turbo",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
@@ -75,7 +75,7 @@
     "id": "kimi-k2-turbo-preview",
     "name": "Kimi K2 Turbo",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": false,
     "input": [
@@ -93,7 +93,7 @@
     "id": "kimi-k2.5",
     "name": "Kimi K2.5",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
@@ -111,7 +111,7 @@
     "id": "kimi-k2.6",
     "name": "Kimi K2.6",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
@@ -129,7 +129,7 @@
     "id": "kimi-k2.7-code",
     "name": "Kimi K2.7 Code",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
@@ -147,7 +147,7 @@
     "id": "kimi-k2.7-code-highspeed",
     "name": "Kimi K2.7 Code HighSpeed",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [
@@ -165,7 +165,7 @@
     "id": "kimi-k3",
     "name": "Kimi K3",
     "kind": "openai",
-    "provider": "moonshotai",
+    "vendor": "moonshotai",
     "baseUrl": "https://api.moonshot.ai/v1",
     "reasoning": true,
     "input": [

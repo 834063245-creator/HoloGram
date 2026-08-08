@@ -4,7 +4,7 @@
 // Settings — API Key 管理、模型选择、provider 配置
 // 存储在 localStorage 中，在可用时由 Tauri store 插件支持
 
-import { getCatalogProviders, getDefaultModel, getModel } from './provider/catalog';
+import { getCatalogVendors, getDefaultModel, getModel } from './provider/catalog';
 import { ANTHROPIC_DEFAULT_BASE_URL } from './provider/anthropic';
 import type { StoredThinking } from './provider/thinking';
 import type { Protocol } from './provider/types';
@@ -85,7 +85,7 @@ export function defaultBaseUrl(name: string, kind: ProviderSettings['kind']): st
  *  设置面板模型切换时的 baseUrl 自动填充判定（用户自定义过就不覆盖）。 */
 export function isFactoryBaseUrl(url: string): boolean {
   const defaults = new Set<string>(Object.values(PROVIDER_PROTOCOL_DEFAULTS));
-  for (const name of getCatalogProviders()) {
+  for (const name of getCatalogVendors()) {
     const u = getDefaultModel(name)?.baseUrl;
     if (u) defaults.add(u);
   }

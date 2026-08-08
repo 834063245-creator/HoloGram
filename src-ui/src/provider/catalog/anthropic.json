@@ -3,7 +3,7 @@
     "id": "claude-fable-5",
     "name": "Claude Fable 5",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -21,7 +21,7 @@
     "id": "claude-haiku-4-5",
     "name": "Claude Haiku 4.5 (latest)",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -39,7 +39,7 @@
     "id": "claude-haiku-4-5-20251001",
     "name": "Claude Haiku 4.5",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -57,7 +57,7 @@
     "id": "claude-opus-4-1",
     "name": "Claude Opus 4.1 (latest)",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -75,7 +75,7 @@
     "id": "claude-opus-4-1-20250805",
     "name": "Claude Opus 4.1",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -93,7 +93,7 @@
     "id": "claude-opus-4-5",
     "name": "Claude Opus 4.5 (latest)",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -111,7 +111,7 @@
     "id": "claude-opus-4-5-20251101",
     "name": "Claude Opus 4.5",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -129,7 +129,7 @@
     "id": "claude-opus-4-6",
     "name": "Claude Opus 4.6",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -147,7 +147,7 @@
     "id": "claude-opus-4-7",
     "name": "Claude Opus 4.7",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -165,7 +165,7 @@
     "id": "claude-opus-4-8",
     "name": "Claude Opus 4.8",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -183,7 +183,7 @@
     "id": "claude-sonnet-4-5",
     "name": "Claude Sonnet 4.5 (latest)",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -201,7 +201,7 @@
     "id": "claude-sonnet-4-5-20250929",
     "name": "Claude Sonnet 4.5",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -219,7 +219,7 @@
     "id": "claude-sonnet-4-6",
     "name": "Claude Sonnet 4.6",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [
@@ -237,7 +237,7 @@
     "id": "claude-sonnet-5",
     "name": "Claude Sonnet 5",
     "kind": "anthropic",
-    "provider": "anthropic",
+    "vendor": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "input": [

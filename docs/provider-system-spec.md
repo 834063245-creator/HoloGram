@@ -460,3 +460,22 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
 - `npx tsc --noEmit` 0 错；档位文案零残留（只在 thinking.ts）
 - provider/settings 相关 48 项测试全绿
 - CDP 真机冒烟 11/11：保存拆域 + 聊天面板切换器 + 思考强度写入，零运行时错误
+
+## P11 — 按词收敛：Vendor（2026-08-08 完成）
+
+> 依据 CONTEXT.md「Vendor」词条：`ModelDescriptor.provider` 实际承载的是厂商
+> （如 deepseek / anthropic），不是 Provider 实例——字段更名 `vendor`，语义钉死。
+
+- `provider/types.ts`：`ModelDescriptor.provider` → `vendor`。
+- 6 个 catalog JSON 的 `"provider"` 键全部改为 `"vendor"`（65 条目录条目；
+  catalog JSON 是仓库数据而非用户存储，零迁移）。
+- `catalog.ts`：`findModels` / `searchModels` 按 `vendor` 匹配；
+  `getCatalogProviders` 更名 `getCatalogVendors`（返回厂商名）。
+- `openai.ts` / `anthropic.ts` 的 `fetchModels` 描述符、`ModelSelector` /
+  `ModelSwitcher` 排序过滤、`agent.ts` 摘要模型选择的 `keyed` 匹配全部改用 `vendor`。
+
+### 验证
+
+- `npx tsc --noEmit` 0 错；`getCatalogProviders` / `m.provider` 零残留
+- provider/settings/摘要模型相关 51 项测试全绿；全量 798 通过
+- CDP 真机冒烟 19/19：目录 chips 一键添加 / ProviderId 交互 / 聊天切换器 / 思考强度，零运行时错误

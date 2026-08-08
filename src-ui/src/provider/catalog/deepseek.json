@@ -3,7 +3,7 @@
     "id": "deepseek-v4-flash",
     "name": "DeepSeek V4 Flash",
     "kind": "openai",
-    "provider": "deepseek",
+    "vendor": "deepseek",
     "baseUrl": "https://api.deepseek.com/v1",
     "reasoning": true,
     "input": [
@@ -21,7 +21,7 @@
     "id": "deepseek-v4-pro",
     "name": "DeepSeek V4 Pro",
     "kind": "openai",
-    "provider": "deepseek",
+    "vendor": "deepseek",
     "baseUrl": "https://api.deepseek.com/v1",
     "reasoning": true,
     "input": [
@@ -39,7 +39,7 @@
     "id": "deepseek-v4-pro-beta",
     "name": "DeepSeek V4 Pro (Beta API)",
     "kind": "anthropic",
-    "provider": "deepseek",
+    "vendor": "deepseek",
     "baseUrl": "https://api.deepseek.com/anthropic",
     "reasoning": true,
     "input": [
@@ -57,7 +57,7 @@
     "id": "deepseek-v4-flash-beta",
     "name": "DeepSeek V4 Flash (Beta API)",
     "kind": "anthropic",
-    "provider": "deepseek",
+    "vendor": "deepseek",
     "baseUrl": "https://api.deepseek.com/anthropic",
     "reasoning": true,
     "input": [

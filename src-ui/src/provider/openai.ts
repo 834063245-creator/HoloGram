@@ -92,7 +92,7 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
           id: m.id,
           name: m.id,
           kind: 'openai' as const,
-          provider: name,
+          vendor: name,
           baseUrl,
           reasoning: guessReasoning(m.id),
           input: ['text'] as ('text' | 'image')[],

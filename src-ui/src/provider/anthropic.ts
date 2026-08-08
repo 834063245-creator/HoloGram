@@ -86,7 +86,7 @@ export function createAnthropicProvider(cfg: AnthropicConfig): Provider {
           id: m.id,
           name: m.display_name || m.id,
           kind: 'anthropic' as const,
-          provider: name,
+          vendor: name,
           baseUrl,
           reasoning: m.id.includes('sonnet') || m.id.includes('opus') || m.id.includes('haiku'),
           // 定稿（P0）：只声明 text——Message 是纯字符串，请求构建器无图像块；

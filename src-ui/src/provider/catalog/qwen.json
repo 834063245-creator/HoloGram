@@ -3,7 +3,7 @@
     "id": "qwen3.6-flash",
     "name": "Qwen3.6 Flash",
     "kind": "openai",
-    "provider": "qwen-token-plan",
+    "vendor": "qwen-token-plan",
     "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
     "reasoning": true,
     "input": [
@@ -21,7 +21,7 @@
     "id": "qwen3.6-plus",
     "name": "Qwen3.6 Plus",
     "kind": "openai",
-    "provider": "qwen-token-plan",
+    "vendor": "qwen-token-plan",
     "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
     "reasoning": true,
     "input": [
@@ -39,7 +39,7 @@
     "id": "qwen3.7-max",
     "name": "Qwen3.7 Max",
     "kind": "openai",
-    "provider": "qwen-token-plan",
+    "vendor": "qwen-token-plan",
     "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
     "reasoning": true,
     "input": [
@@ -57,7 +57,7 @@
     "id": "qwen3.7-plus",
     "name": "Qwen3.7 Plus",
     "kind": "openai",
-    "provider": "qwen-token-plan",
+    "vendor": "qwen-token-plan",
     "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
     "reasoning": true,
     "input": [
@@ -75,7 +75,7 @@
     "id": "qwen3.8-max-preview",
     "name": "Qwen3.8 Max Preview",
     "kind": "openai",
-    "provider": "qwen-token-plan",
+    "vendor": "qwen-token-plan",
     "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
     "reasoning": true,
     "input": [

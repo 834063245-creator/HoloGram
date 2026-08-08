@@ -3,7 +3,7 @@
     "id": "gpt-5",
     "name": "GPT-5",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -21,7 +21,7 @@
     "id": "gpt-5-codex",
     "name": "GPT-5-Codex",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -39,7 +39,7 @@
     "id": "gpt-5-mini",
     "name": "GPT-5 Mini",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -57,7 +57,7 @@
     "id": "gpt-5-nano",
     "name": "GPT-5 Nano",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -75,7 +75,7 @@
     "id": "gpt-5-pro",
     "name": "GPT-5 Pro",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -93,7 +93,7 @@
     "id": "gpt-5.1",
     "name": "GPT-5.1",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -111,7 +111,7 @@
     "id": "gpt-5.1-codex",
     "name": "GPT-5.1 Codex",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -129,7 +129,7 @@
     "id": "gpt-5.1-codex-max",
     "name": "GPT-5.1 Codex Max",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -147,7 +147,7 @@
     "id": "gpt-5.1-codex-mini",
     "name": "GPT-5.1 Codex mini",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -165,7 +165,7 @@
     "id": "gpt-5.2",
     "name": "GPT-5.2",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -183,7 +183,7 @@
     "id": "gpt-5.2-codex",
     "name": "GPT-5.2 Codex",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -201,7 +201,7 @@
     "id": "gpt-5.2-pro",
     "name": "GPT-5.2 Pro",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -219,7 +219,7 @@
     "id": "gpt-5.3-codex",
     "name": "GPT-5.3 Codex",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -237,7 +237,7 @@
     "id": "gpt-5.3-codex-spark",
     "name": "GPT-5.3 Codex Spark",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -255,7 +255,7 @@
     "id": "gpt-5.4",
     "name": "GPT-5.4",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -273,7 +273,7 @@
     "id": "gpt-5.4-mini",
     "name": "GPT-5.4 mini",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -291,7 +291,7 @@
     "id": "gpt-5.4-nano",
     "name": "GPT-5.4 nano",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -309,7 +309,7 @@
     "id": "gpt-5.4-pro",
     "name": "GPT-5.4 Pro",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -327,7 +327,7 @@
     "id": "gpt-5.5",
     "name": "GPT-5.5",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -345,7 +345,7 @@
     "id": "gpt-5.5-pro",
     "name": "GPT-5.5 Pro",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -363,7 +363,7 @@
     "id": "gpt-5.6-luna",
     "name": "GPT-5.6 Luna",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -381,7 +381,7 @@
     "id": "gpt-5.6-sol",
     "name": "GPT-5.6 Sol",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -399,7 +399,7 @@
     "id": "gpt-5.6-terra",
     "name": "GPT-5.6 Terra",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -417,7 +417,7 @@
     "id": "o3",
     "name": "o3",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -435,7 +435,7 @@
     "id": "o3-deep-research",
     "name": "o3-deep-research",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -453,7 +453,7 @@
     "id": "o3-mini",
     "name": "o3-mini",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -471,7 +471,7 @@
     "id": "o3-pro",
     "name": "o3-pro",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -489,7 +489,7 @@
     "id": "o4-mini",
     "name": "o4-mini",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [
@@ -507,7 +507,7 @@
     "id": "o4-mini-deep-research",
     "name": "o4-mini-deep-research",
     "kind": "openai",
-    "provider": "openai",
+    "vendor": "openai",
     "baseUrl": "https://api.openai.com/v1",
     "reasoning": true,
     "input": [

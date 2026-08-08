@@ -105,7 +105,7 @@ export interface ModelDescriptor {
   id: string; // 例如 "deepseek-v4-pro"
   name: string; // 例如 "DeepSeek V4 Pro"
   kind: Protocol; // 使用哪个 provider 实现（领域词：Protocol）
-  provider: string; // provider 名称（例如 "deepseek"、"anthropic"）
+  vendor: string; // Vendor 厂商（例如 "deepseek"、"anthropic"）— CONTEXT.md「Vendor」
   baseUrl: string; // API 端点
   reasoning: boolean; // 是否支持 thinking/reasoning
   input: ('text' | 'image')[];

@@ -6,11 +6,11 @@ import { describe, expect, it } from 'vitest';
 import {
   findModels,
   getAllModels,
-  getCatalogProviders,
   getDefaultModel,
   getModel,
   mergeDynamicModels,
   searchModels,
+  getCatalogVendors,
 } from '../src/provider/catalog';
 import { guessReasoning } from '../src/provider/openai';
 
@@ -21,25 +21,25 @@ describe('catalog', () => {
     expect(all.length).toBeGreaterThanOrEqual(30);
   });
 
-  it('returns all catalog provider names', () => {
-    const providers = getCatalogProviders();
-    expect(providers).toContain('deepseek');
-    expect(providers).toContain('anthropic');
-    expect(providers).toContain('openai');
-    expect(providers).toContain('moonshotai');
-    expect(providers).toContain('minimax');
-    expect(providers).toContain('qwen-token-plan');
+  it('returns all catalog vendor names', () => {
+    const vendors = getCatalogVendors();
+    expect(vendors).toContain('deepseek');
+    expect(vendors).toContain('anthropic');
+    expect(vendors).toContain('openai');
+    expect(vendors).toContain('moonshotai');
+    expect(vendors).toContain('minimax');
+    expect(vendors).toContain('qwen-token-plan');
   });
 
-  it('findModels returns only models for the specified provider', () => {
+  it('findModels returns only models for the specified vendor', () => {
     const deepseekModels = findModels('deepseek');
     expect(deepseekModels.length).toBeGreaterThan(0);
-    expect(deepseekModels.every((m) => m.provider === 'deepseek')).toBe(true);
+    expect(deepseekModels.every((m) => m.vendor === 'deepseek')).toBe(true);
     // Should include deepseek-v4-pro
     expect(deepseekModels.some((m) => m.id === 'deepseek-v4-pro')).toBe(true);
   });
 
-  it('findModels returns empty array for unknown provider', () => {
+  it('findModels returns empty array for unknown vendor', () => {
     expect(findModels('nonexistent')).toEqual([]);
   });
 
@@ -50,7 +50,7 @@ describe('catalog', () => {
     expect(model.id).toBe('deepseek-v4-pro');
     expect(model.name).toBe('DeepSeek V4 Pro');
     expect(model.kind).toBe('openai');
-    expect(model.provider).toBe('deepseek');
+    expect(model.vendor).toBe('deepseek');
     expect(model.reasoning).toBe(true);
     expect(model.contextWindow).toBeGreaterThan(0);
   });
@@ -65,10 +65,10 @@ describe('catalog', () => {
     expect(results.some((m) => m.id.includes('deepseek'))).toBe(true);
   });
 
-  it('searchModels matches by provider name', () => {
+  it('searchModels matches by vendor name', () => {
     const results = searchModels('anthropic');
     expect(results.length).toBeGreaterThan(0);
-    expect(results.every((m) => m.provider === 'anthropic')).toBe(true);
+    expect(results.every((m) => m.vendor === 'anthropic')).toBe(true);
   });
 
   it('searchModels is case-insensitive', () => {
@@ -84,15 +84,15 @@ describe('catalog', () => {
     expect(all.length).toBe(allDirect.length);
   });
 
-  it('getDefaultModel returns a model for each known provider', () => {
+  it('getDefaultModel returns a model for each known vendor', () => {
     for (const providerName of ['deepseek', 'anthropic', 'openai', 'moonshotai', 'minimax', 'qwen-token-plan']) {
       const model = getDefaultModel(providerName);
       expect(model, `default model for ${providerName}`).toBeDefined();
-      if (model) expect(model.provider).toBe(providerName);
+      if (model) expect(model.vendor).toBe(providerName);
     }
   });
 
-  it('getDefaultModel returns undefined for unknown provider', () => {
+  it('getDefaultModel returns undefined for unknown vendor', () => {
     expect(getDefaultModel('nonexistent')).toBeUndefined();
   });
 
@@ -129,7 +129,7 @@ describe('catalog', () => {
         id: 'brand-new-model-x',
         name: 'Brand New',
         kind: 'openai',
-        provider: 'testprov',
+        vendor: 'testprov',
         baseUrl: 'https://api.testprov.com/v1',
         reasoning: true,
         input: ['text'],
@@ -141,7 +141,7 @@ describe('catalog', () => {
         id: 'deepseek-v4-pro', // 静态目录已有 — 应被跳过（静态元数据优先）
         name: 'stale',
         kind: 'openai',
-        provider: 'testprov',
+        vendor: 'testprov',
         baseUrl: 'https://stale.invalid/v1',
         reasoning: false,
         input: ['text'],
@@ -152,7 +152,7 @@ describe('catalog', () => {
     ]);
     const added = getModel('brand-new-model-x');
     expect(added).toBeDefined();
-    expect(added?.provider).toBe('testprov');
+    expect(added?.vendor).toBe('testprov');
     // 静态条目未被覆盖
     const staticOne = getModel('deepseek-v4-pro');
     expect(staticOne?.baseUrl).toBe('https://api.deepseek.com/v1');

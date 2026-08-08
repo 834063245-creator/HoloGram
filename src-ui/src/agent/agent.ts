@@ -2076,14 +2076,14 @@ ${resumeNote}
         .filter(
           (m) =>
             m.id !== active.model &&
-            keyed.has(m.provider) &&
+            keyed.has(m.vendor) &&
             m.contextWindow >= SUMMARY_MIN_WINDOW &&
             (m.cost?.input ?? 0) > 0 &&
             (m.cost?.input ?? Infinity) < mainCost,
         )
         .sort((a, b) => a.cost.input - b.cost.input || b.contextWindow - a.contextWindow)[0];
       if (!winner) return { prov: this.prov, window: mainWindow };
-      const ps = keyed.get(winner.provider)!;
+      const ps = keyed.get(winner.vendor)!;
       const prov = createProvider({ ...ps, model: winner.id, thinking: '' }, { disableThinking: true });
       log.info('agent', 'summary model auto-selected', {
         model: winner.id,
