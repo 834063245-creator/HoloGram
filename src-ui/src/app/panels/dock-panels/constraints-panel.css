@@ -1,0 +1,340 @@
+#constraints-panel {
+  position: fixed;
+  top: var(--obs-bar-h);
+  right: 0;
+  bottom: var(--obs-status-h);
+  width: 340px;
+  max-width: 92vw;
+  z-index: 50;
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border-left: 1px solid var(--obs-line);
+  transform: translateX(100%);
+  transition: transform var(--obs-glide);
+  display: flex;
+  flex-direction: column;
+}
+
+#constraints-panel.cs-open {
+  transform: translateX(0);
+}
+
+#constraints-panel ::-webkit-scrollbar {
+  width: 5px;
+}
+
+#constraints-panel ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#constraints-panel ::-webkit-scrollbar-thumb {
+  background: rgba(48, 60, 80, 0.5);
+  border-radius: 3px;
+}
+
+.cs-section {
+  border: 1px solid rgba(148, 166, 205, 0.09);
+  padding: 10px;
+  border-radius: 4px;
+  background: rgba(6, 14, 26, 0.5);
+  margin-bottom: 10px;
+}
+
+.cs-section-title {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--obs-text-2);
+  margin-bottom: 6px;
+}
+
+.cs-sub-title {
+  font-size: calc(9px * var(--font-scale));
+  color: var(--obs-text-2);
+  margin: 6px 0 3px;
+}
+
+.cs-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.cs-toggle-label {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text);
+}
+
+.cs-toggle input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 30px;
+  height: 16px;
+  background: rgba(15, 22, 38, 0.8);
+  border: 1px solid rgba(148, 166, 205, 0.19);
+  border-radius: 8px;
+  cursor: pointer;
+  position: relative;
+  transition: all var(--obs-snap);
+}
+
+.cs-toggle input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--obs-text-2);
+  transition: all var(--obs-snap);
+}
+
+.cs-toggle input[type="checkbox"]:checked {
+  background: rgba(148, 166, 205, 0.37);
+  border-color: rgba(148, 166, 205, 0.25);
+}
+
+.cs-toggle input[type="checkbox"]:checked::after {
+  left: 16px;
+  background: var(--obs-blue);
+}
+
+.cs-toggle input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cs-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 0;
+}
+
+.cs-field-label {
+  font-size: calc(10px * var(--font-scale));
+  color: var(--obs-text);
+}
+
+.cs-field-input {
+  width: 56px;
+  padding: 3px 6px;
+  font-family: var(--obs-font-mono);
+  font-size: calc(10px * var(--font-scale));
+  text-align: right;
+  background: rgba(8, 16, 30, 0.7);
+  color: var(--obs-text);
+  border: 1px solid rgba(148, 166, 205, 0.16);
+  border-radius: 3px;
+  outline: none;
+  transition: border-color var(--obs-snap);
+}
+
+.cs-field-input:focus {
+  border-color: rgba(148, 166, 205, 0.25);
+}
+
+.cs-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 3px 0;
+}
+
+.cs-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  padding: 2px 6px;
+  background: rgba(15, 25, 42, 0.6);
+  color: var(--obs-blue);
+  border: 1px solid rgba(148, 166, 205, 0.09);
+  border-radius: 3px;
+}
+
+.cs-tag-rm {
+  background: none;
+  border: none;
+  color: var(--obs-text-2);
+  cursor: pointer;
+  font-size: calc(8px * var(--font-scale));
+  padding: 0;
+  line-height: 1;
+  transition: color var(--obs-snap);
+}
+
+.cs-tag-rm:hover {
+  color: var(--obs-fail);
+}
+
+.cs-add-row {
+  display: flex;
+  gap: 3px;
+  margin-top: 3px;
+}
+
+.cs-add-input {
+  flex: 1;
+  padding: 3px 6px;
+  font-family: var(--obs-font-body);
+  font-size: calc(10px * var(--font-scale));
+  background: rgba(8, 16, 30, 0.7);
+  color: var(--obs-text);
+  border: 1px solid rgba(148, 166, 205, 0.12);
+  border-radius: 3px;
+  outline: none;
+  transition: border-color var(--obs-snap);
+}
+
+.cs-add-input:focus {
+  border-color: rgba(148, 166, 205, 0.25);
+}
+
+.cs-add-input::placeholder {
+  color: var(--obs-text-2);
+}
+
+.cs-add-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: calc(14px * var(--font-scale));
+  background: none;
+  color: var(--obs-text-2);
+  border: 1px solid var(--obs-line);
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--obs-snap);
+}
+
+.cs-add-btn:hover {
+  background: rgba(160, 180, 220, 0.08);
+  color: var(--obs-text);
+}
+
+.cs-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid rgba(148, 166, 205, 0.07);
+}
+
+.cs-btn {
+  font-family: var(--obs-font-mono);
+  font-size: calc(8px * var(--font-scale));
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all var(--obs-snap);
+}
+
+.cs-btn-save {
+  background: rgba(25, 45, 80, 0.5);
+  color: var(--obs-blue);
+  border: 1px solid rgba(148, 166, 205, 0.19);
+}
+
+.cs-btn-save:hover {
+  background: rgba(148, 166, 205, 0.37);
+}
+
+.cs-btn-reset {
+  background: rgba(15, 18, 28, 0.5);
+  color: var(--obs-text-2);
+  border: 1px solid rgba(30, 45, 70, 0.3);
+}
+
+.cs-btn-reset:hover {
+  background: rgba(20, 25, 38, 0.6);
+}
+
+#file-viewer,
+.file-viewer {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: var(--obs-glass);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border: 1px solid var(--obs-line);
+  border-radius: 12px;
+  overflow: hidden;
+  min-width: 260px;
+  min-height: 150px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transform: scale(0.95);
+  transition:
+    opacity var(--obs-glide),
+    transform var(--obs-glide);
+  pointer-events: none;
+}
+
+#file-viewer.fv-open {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+#file-viewer ::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+#file-viewer ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#file-viewer ::-webkit-scrollbar-thumb {
+  background: rgba(48, 60, 80, 0.5);
+  border-radius: 3px;
+}
+
+#file-viewer ::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 166, 205, 0.37);
+}
+
+.fv-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  z-index: 2;
+}
+
+.fv-grip::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 7px 7px;
+  border-color: transparent transparent rgba(148, 166, 205, 0.2) transparent;
+}
+
+.hg-icon {
+  display: inline-block;
+  vertical-align: -0.15em;
+  flex-shrink: 0;
+}
+
