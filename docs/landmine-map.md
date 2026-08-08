@@ -30,20 +30,20 @@
 
 ## P1 — 第二批（中等半径或 M 成本）
 
-| # | 位置 | 雷 | 成本 |
-|---|------|----|------|
-| 13 | `agent-store.ts:168-184` | index.json 读-改-写跨异步无锁，多 Agent 并发 saveState 互相覆盖；state/session/index 三文件可留下矛盾现场 | M（写链串行化，参照 BoardPersistence._writeChain） |
-| 14 | `chat-session.ts:519-537` | localStorage 回退使已删会话「复活」——与 null 复活同构（删除只删了一个存储） | M（复活前要求磁盘文件存在） |
-| 15 | `agent.ts:792` + `agent-store.ts:93` | 每轮对话全量重写会话（O(全量) 写放大；聊天侧已有增量 NDJSON，agent 侧没有） | M |
-| 16 | `commands/shell.rs:258-318` | exec_command 非流式路径 `try_wait`+sleep 忙等，最长占 worker 300s | S~M |
-| 17 | `utils.rs:305-325` | bash_wait 非 shared 分支**持 BG_JOBS 锁做阻塞管道读**；非 Windows 可继承管道 → 孙进程持写端 → 永久阻塞 → bash_* 全瘫（Windows 靠不可继承管道幸免） | M |
-| 18 | `commands/isolation.rs:8-164` | worktree 生命周期操作全部是阻塞进程等待内联在 worker 上 | S |
-| 19 | `external.rs:25-43` + `mcp_manager.rs:120` | MCP start 持锁最长 600s；此时 stop_mcp try_lock **静默跳过** → 旧 serve 进程残留 + 新 start 卡死 =「切换项目卡死」 | M |
-| 20 | `lsp_manager.rs:87-92` | LSP 初始化失败/超时返回 Err 前不杀子进程，每次重试泄漏一个语言服务器 | S |
-| 21 | `shell.rs:73` | 前台 exec_command 子进程不进 ledger；非 Windows 无 Job Object → 孤儿进程（平台盲区） | M |
-| 22 | `agent/board-persistence.ts:57-81` | _ensureDir 失败后照样 `_dirReady=true` → board 永不落盘且永不再试，重启全丢，零信号 | S |
-| 23 | `src-tauri/src/audit.rs:34-45` | 审计日志写失败静默 → deny/审批不留痕，安全功能失效无法取证 | S（eprintln + 计数） |
-| 24 | `ui/FileTranslatorPanel.tsx:352` | read_file_content 缓存路径漏 stripLineNumbers → 翻译缓存 100% 不命中（已在坏，无声烧钱） | S |
+| # | 位置 | 雷 | 成本 | 护栏 |
+|---|------|----|------|------|
+| 13 | `agent-store.ts:168-184` | index.json 读-改-写跨异步无锁，多 Agent 并发 saveState 互相覆盖；state/session/index 三文件可留下矛盾现场 | M（写链串行化，参照 BoardPersistence._writeChain） | |
+| 14 | `chat-session.ts:519-537` | localStorage 回退使已删会话「复活」——与 null 复活同构（删除只删了一个存储） | M（复活前要求磁盘文件存在） | |
+| 15 | `agent.ts:792` + `agent-store.ts:93` | 每轮对话全量重写会话（O(全量) 写放大；聊天侧已有增量 NDJSON，agent 侧没有） | M | |
+| 16 | `commands/shell.rs:258-318` | exec_command 非流式路径 `try_wait`+sleep 忙等，最长占 worker 300s | S~M | ✅ 已拆（等待段抽 wait_child_blocking 移入 spawn_blocking；测试×3） |
+| 17 | `utils.rs:305-325` | bash_wait 非 shared 分支**持 BG_JOBS 锁做阻塞管道读**；非 Windows 可继承管道 → 孙进程持写端 → 永久阻塞 → bash_* 全瘫（Windows 靠不可继承管道幸免） | M | ✅ 已拆（BgJob.shared 改必填字段，阻塞读分支从类型上删除；read_bg_output/wait_bg/kill_bg 三处只读 Arc；测试×2） |
+| 18 | `commands/isolation.rs:8-164` | worktree 生命周期操作全部是阻塞进程等待内联在 worker 上 | S | ✅ 已拆（六命令改 &WorkspaceState 签名 + rpc.rs 全部 spawn_blocking；测试×2） |
+| 19 | `external.rs:25-43` + `mcp_manager.rs:120` | MCP start 持锁最长 600s；此时 stop_mcp try_lock **静默跳过** → 旧 serve 进程残留 + 新 start 卡死 =「切换项目卡死」 | M | ✅ 已拆（start 拆 begin/finish 两阶段 + 纪元戳，长等待不持锁不占 worker；stop_mcp 改阻塞取锁；测试×3） |
+| 20 | `lsp_manager.rs:87-92` | LSP 初始化失败/超时返回 Err 前不杀子进程，每次重试泄漏一个语言服务器 | S | ✅ 已拆（reap_failed_child kill+wait，含 stdout/stdin take 失败路径；测试×1） |
+| 21 | `shell.rs:73` | 前台 exec_command 子进程不进 ledger；非 Windows 无 Job Object → 孤儿进程（平台盲区） | M | |
+| 22 | `agent/board-persistence.ts:57-81` | _ensureDir 失败后照样 `_dirReady=true` → board 永不落盘且永不再试，重启全丢，零信号 | S | ✅ 已拆（后端 create_dir_all 幂等故任何抛错都是真实失败：不置位+下次重试+warn 信号；测试×2） |
+| 23 | `src-tauri/src/audit.rs:34-45` | 审计日志写失败静默 → deny/审批不留痕，安全功能失效无法取证 | S（eprintln + 计数） | ✅ 已拆（eprintln 告警含丢失记录摘要 + AtomicU64 计数；测试×2） |
+| 24 | `ui/FileTranslatorPanel.tsx:352` | read_file_content 缓存路径漏 stripLineNumbers → 翻译缓存 100% 不命中（已在坏，无声烧钱） | S | ✅ 已拆（stripLineNumbers + 顺带拆 computeStats 身份导致的 IPC 热循环；测试×1） |
 
 ## P2 — 存疑/低危（记录在案，暂不拆）
 
