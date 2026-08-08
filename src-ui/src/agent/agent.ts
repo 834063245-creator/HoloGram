@@ -105,7 +105,7 @@ export interface AgentOptions {
 }
 
 const STORM_BREAK_THRESHOLD = 3;
-const DEFAULT_VISIBLE_TOOLS_LIMIT = 14;
+const DEFAULT_VISIBLE_TOOLS_LIMIT = 16;
 
 // ---- Agent ----
 
@@ -1625,8 +1625,8 @@ ${resumeNote}
   /** 每轮发给模型的工具 schema：目录 > limit 时按上下文打分注入子集（见 tool-select.ts）。 */
   private requestToolSchemas(): ToolSchema[] {
     const ctx = this.session
-      .filter((m) => m.role === 'user')
-      .slice(-3)
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(-4)
       .map((m) => m.content)
       .join('\n');
     return selectToolSchemas(this.tools, ctx, this._visibleToolsLimit);

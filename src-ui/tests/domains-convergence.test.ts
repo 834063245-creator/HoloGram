@@ -7,6 +7,7 @@ import {
   collectHiddenToolNames,
   convergeRegistry,
   DOMAIN_SPECS,
+  normalizeArgs,
   resolveGuardToolName,
 } from '../src/agent/tools/domains';
 
@@ -165,6 +166,28 @@ describe('领域工具收敛', () => {
   });
 });
 
+describe('normalizeArgs 参数别名归一（领域扁平 schema 摩擦修复）', () => {
+  it('fs(delete, filePath) 补成 delete_file 的 path', async () => {
+    const registry = new ToolRegistry();
+    registry.register(fakeTool('delete_file', 'Delete', false, z.object({ path: z.string() })));
+    convergeRegistry(registry);
+    const out = await registry.get('fs')!.execute({ action: 'delete', filePath: 'D:/x' });
+    expect(out).toContain('"path":"D:/x"');
+  });
+
+  it('fs(read, path) 补成 read_file_content 的 filePath', async () => {
+    const registry = buildFsRegistry();
+    convergeRegistry(registry);
+    const out = await registry.get('fs')!.execute({ action: 'read', path: 'D:/a.ts' });
+    expect(out).toContain('"filePath":"D:/a.ts"');
+  });
+
+  it('直接调用 normalizeArgs', () => {
+    const old = fakeTool('x', 'x', false, z.object({ filePath: z.string() }));
+    expect(normalizeArgs(old, { path: 'p' })).toEqual({ path: 'p', filePath: 'p' });
+  });
+});
+
 describe('selectToolSchemas 每轮注入', () => {
   const registry = new ToolRegistry();
   registry.register(fakeTool('fileops', 'file system ops'));
@@ -190,5 +213,17 @@ describe('selectToolSchemas 每轮注入', () => {
   it('上下文关键词命中工具描述时优先选中', () => {
     const out = selectToolSchemas(registry, '帮我 commit 这些 changes 到 git', 2);
     expect(out.map((t) => t.name)).toContain('beta');
+  });
+
+  it('常驻集包含 search/memory，低 limit 也不丢', () => {
+    const r = new ToolRegistry();
+    r.register(fakeTool('search', 'search source text'));
+    r.register(fakeTool('memory', 'memory ops'));
+    r.register(fakeTool('gamma', 'unrelated tool'));
+    const out = selectToolSchemas(r, '', 2);
+    const names = out.map((t) => t.name);
+    expect(names).toContain('search');
+    expect(names).toContain('memory');
+    expect(names).not.toContain('gamma');
   });
 });

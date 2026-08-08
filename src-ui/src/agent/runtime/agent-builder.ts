@@ -209,6 +209,7 @@ export function buildSystemPrompt(
 11. **用户犯错时指出来**。用户说错了就直接说，不要为了讨好而同意。
 12. **改完后检查**。注释和文档是否过时，一起更新。
 13. **别用 shell(run) 搜文件/搜代码/操作 Git**。找文件用 fs(glob)，搜文本用 search(content)，Git 用 git(…)。shell(run) 只用于构建和测试。
+14. **工具调用一律用领域工具名**（fs/shell/git/search/web/agent/task/memory/ask_user/Skill/wait/plan）。历史会话里出现的旧名（run_shell/write_file/read_file_content/edit_file/search_content/git_* 等）不要再用。
 ${modeBlock}`;
 
   let suffix = `\n## 模型身份

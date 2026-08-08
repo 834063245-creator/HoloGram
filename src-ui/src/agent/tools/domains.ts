@@ -66,6 +66,31 @@ function domainParametersSchema(entries: Array<[string, string]>, registry: Tool
   return { type: 'object', properties, required: ['action'] };
 }
 
+/** 领域扁平 schema 的参数名归一：模型常混用 filePath/path/projectPath 等常见键。
+ *  按旧工具的必填参数补齐（例如 fs(delete, filePath) → delete_file 的 path）。 */
+export function normalizeArgs(old: Tool, rest: Record<string, unknown>): Record<string, unknown> {
+  const schema = (old.parameters() ?? {}) as JsonSchema;
+  const required = (schema.required ?? []) as string[];
+  const out = { ...rest };
+  const aliasMap: Record<string, string[]> = {
+    filePath: ['path', 'file_path'],
+    path: ['filePath'],
+    projectPath: ['path', 'project_path'],
+    newName: ['new_name'],
+    new_name: ['newName'],
+  };
+  for (const req of required) {
+    if (out[req] !== undefined) continue;
+    for (const alias of aliasMap[req] ?? []) {
+      if (out[alias] !== undefined) {
+        out[req] = out[alias];
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 export interface DomainSpec {
   name: string;
   description: string;
@@ -213,7 +238,7 @@ function buildDomainTool(registry: ToolRegistry, spec: DomainSpec): Tool | null 
         return `[${spec.name}] unsupported action "${String(action)}". Available actions: ${available}`;
       }
       const { action: _action, ...rest } = args;
-      return old.execute(rest, onProgress);
+      return old.execute(normalizeArgs(old, rest), onProgress);
     },
   };
 }

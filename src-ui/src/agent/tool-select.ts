@@ -17,8 +17,19 @@ const STOPWORDS = new Set([
   'you', 'your', 'this', 'that', 'it', 'is', 'are', 'be', 'do', 'does', 'not',
 ]);
 
-/** 常驻工具：核心交互 + 计划模式 + 三个高频领域。 */
-const ALWAYS_ON = ['ask_user', 'Skill', 'wait', 'enter_plan_mode', 'exit_plan_mode', 'fs', 'shell', 'git'];
+/** 常驻工具：核心交互 + 计划模式 + 高频领域（编码、搜索、记忆）。 */
+const ALWAYS_ON = [
+  'ask_user',
+  'Skill',
+  'wait',
+  'enter_plan_mode',
+  'exit_plan_mode',
+  'fs',
+  'shell',
+  'git',
+  'search',
+  'memory',
+];
 
 function tokenize(text: string): string[] {
   const lower = text.toLowerCase();
