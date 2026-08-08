@@ -16,13 +16,13 @@ import {
   isFactoryBaseUrl,
   removeProvider,
   type AppSettings,
+  type ConnectionProbe,
   type ProviderSettings,
-  type ProviderTestResult,
   updateProvider,
 } from '../../../settings';
 import { AddProviderSheet, type AddProviderEntry } from './AddProviderSheet';
 import { ConfirmDialog } from './ConfirmDialog';
-import { ProviderDetail, type ProviderField, type TestUiState } from './ProviderDetail';
+import { ProviderDetail, type ProbeUiState, type ProviderField } from './ProviderDetail';
 import { ProviderList } from './ProviderList';
 import { formatLatency } from './status';
 
@@ -60,7 +60,7 @@ export function ProviderPage({
   const [selected, setSelected] = useState(() => getActiveProvider(settings).name);
   const [keyDirtyMap, setKeyDirtyMap] = useState<Record<string, boolean>>({});
   const [keyVisibleMap, setKeyVisibleMap] = useState<Record<string, boolean>>({});
-  const [tests, setTests] = useState<Record<string, TestUiState>>({});
+  const [tests, setTests] = useState<Record<string, ProbeUiState>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [delTarget, setDelTarget] = useState<string | null>(null);
   const [clearTarget, setClearTarget] = useState<string | null>(null);
@@ -163,13 +163,13 @@ export function ProviderPage({
       }
       const latencyMs = Math.round(performance.now() - started);
       const msg = received ? formatLatency(latencyMs) : '连接成功（无文本返回，请检查模型行为）';
-      const result: ProviderTestResult = { status: 'ok', latencyMs, at: Date.now(), message: msg };
+      const result: ConnectionProbe = { status: 'ok', latencyMs, at: Date.now(), message: msg };
       onPersistSettings(updateProvider(settingsRef.current, name, { lastTest: result }));
       setTests((t) => ({ ...t, [name]: { phase: 'ok', msg } }));
     } catch (e: any) {
       const latencyMs = Math.round(performance.now() - started);
       const msg = e?.message || String(e);
-      const result: ProviderTestResult = { status: 'fail', latencyMs, at: Date.now(), message: msg };
+      const result: ConnectionProbe = { status: 'fail', latencyMs, at: Date.now(), message: msg };
       onPersistSettings(updateProvider(settingsRef.current, name, { lastTest: result }));
       setTests((t) => ({ ...t, [name]: { phase: 'fail', msg } }));
     } finally {

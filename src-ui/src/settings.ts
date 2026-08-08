@@ -8,9 +8,11 @@ import { getCatalogProviders, getDefaultModel, getModel } from './provider/catal
 import { ANTHROPIC_DEFAULT_BASE_URL } from './provider/anthropic';
 import type { Protocol } from './provider/types';
 
-/** 最近一次「测试连接」结果 — 非敏感，随 localStorage 持久化（供状态点/历史展示）。 */
-export interface ProviderTestResult {
-  status: 'ok' | 'fail';
+/** 连接探针的结果（CONTEXT.md「ConnectionProbe」）— 非敏感，随 localStorage 持久化。 */
+export type ProbeOutcome = 'ok' | 'fail';
+
+export interface ConnectionProbe {
+  status: ProbeOutcome;
   /** 端到端耗时（毫秒） */
   latencyMs: number;
   /** 测试完成时间（epoch ms） */
@@ -25,7 +27,7 @@ export interface ProviderSettings {
   baseUrl: string;
   model: string;
   thinking?: string; // Anthropic 扩展思考
-  lastTest?: ProviderTestResult;
+  lastTest?: ConnectionProbe; // 存储字段名保持 lastTest（遗留名）；领域词 ConnectionProbe
 }
 
 export interface AgentSettings {

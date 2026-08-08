@@ -5,7 +5,7 @@
 // 状态展示与测试结果均按 provider 独立，切换信号源不会串台。
 
 import type React from 'react';
-import { isFactoryBaseUrl } from '../../../settings';
+import { isFactoryBaseUrl, type ConnectionProbe, type ProbeOutcome } from '../../../settings';
 import type { ModelDescriptor, Protocol } from '../../../provider/types';
 import { ModelSelector } from '../ModelSelector';
 import { formatLatency, formatTestAt, providerStatus, STATUS_LABEL } from './status';
@@ -13,8 +13,11 @@ import { isAnthropic, protocolLabel } from './protocol';
 
 export type ProviderField = 'apiKey' | 'baseUrl' | 'model' | 'thinking';
 
-export interface TestUiState {
-  phase: 'idle' | 'testing' | 'ok' | 'fail';
+/** 连接探针的 UI 阶段（瞬时态，不持久化）；结果本体见 ConnectionProbe。 */
+export type ProbeUiPhase = 'idle' | 'testing' | ProbeOutcome;
+
+export interface ProbeUiState {
+  phase: ProbeUiPhase;
   msg: string;
 }
 
@@ -26,11 +29,11 @@ interface ProviderDetailProps {
     baseUrl: string;
     model: string;
     thinking?: string;
-    lastTest?: { status: 'ok' | 'fail'; latencyMs: number; at: number; message?: string };
+    lastTest?: ConnectionProbe;
   };
   isCurrent: boolean;
   canDelete: boolean;
-  test: TestUiState;
+  test: ProbeUiState;
   /** 当前 Key 是否已保存在系统凭据（未在本会话内改动） */
   keySaved: boolean;
   /** 该 provider 是否有「清除 Key」暂存（保存时才删凭据） */

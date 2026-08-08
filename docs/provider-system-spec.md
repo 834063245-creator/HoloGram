@@ -404,3 +404,19 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
 
 - `npx tsc --noEmit` 0 错
 - provider/settings 相关 48 项测试全绿
+
+## P8 — 按词收敛：ConnectionProbe（2026-08-08 完成）
+
+> 依据 CONTEXT.md「ConnectionProbe」词条：把「测试连接」的三个表示
+> （持久化结果 / UI 瞬时态 / 嵌入 provider 的结构拷贝）收敛为一套类型。
+
+- `settings.ts`：`ProviderTestResult` 更名 `ConnectionProbe`，新增 `ProbeOutcome`；
+  `ProviderSettings.lastTest` 字段名与存储形状不变（遗留名），仅类型统一。
+- `ProviderDetail`：删除内联的 `lastTest` 结构拷贝（改为引用 `ConnectionProbe`）；
+  `TestUiState` 更名 `ProbeUiState`，`phase` 类型基于 `ProbeOutcome`。
+- `ProviderPage`：`tests` Map 与探针结果统一使用 `ProbeUiState` / `ConnectionProbe`。
+
+### 验证
+
+- `npx tsc --noEmit` 0 错，`ProviderTestResult` / `TestUiState` 零残留
+- provider/settings 相关 48 项测试全绿
