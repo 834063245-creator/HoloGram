@@ -5,23 +5,12 @@
 use serde_json;
 use hologram_engine::tools::ToolRegistry;
 
-#[tauri::command]
-pub(crate) fn hologram_call(tool: String, mut args: serde_json::Value, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
-    if tool == "validate_project" {
-        let changed_files: Vec<String> = state.lock().unwrap().as_ref()
-            .and_then(|h| {
-                let mut files = h.changed_files.lock().ok()?;
-                let snapshot = files.clone();
-                files.clear();
-                Some(snapshot)
-            })
-            .unwrap_or_default();
-        if let serde_json::Value::Object(ref mut map) = args {
-            map.insert("changed_files".to_string(), serde_json::json!(changed_files));
-        }
-    }
+/// 引擎调用的同步核心 —— 大图上单次 dispatch 可达秒级，
+/// 必须经 spawn_blocking 调用，绝不能在 async worker 上内联执行
+/// （见 docs/adr/project-constitution.md 异步纪律）。
+fn dispatch_engine(tool: &str, args: &serde_json::Value) -> Result<String, String> {
     let dummy_id = serde_json::json!(null);
-    let result = ToolRegistry::dispatch(&tool, &args, &dummy_id);
+    let result = ToolRegistry::dispatch(tool, args, &dummy_id);
     // 解包 MCP JSON-RPC 信封 → 返回原始工具输出文本。
     // ToolResponse 迁移后，dispatch() 将所有内容包装在
     // {"jsonrpc":"2.0","id":...,"result":{"content":[{"type":"text","text":"..."}]}} 中。
@@ -43,6 +32,26 @@ pub(crate) fn hologram_call(tool: String, mut args: serde_json::Value, state: ta
         return Err("Engine returned empty result".to_string());
     }
     Ok(text.to_string())
+}
+
+#[tauri::command]
+pub(crate) async fn hologram_call(tool: String, mut args: serde_json::Value, state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+    if tool == "validate_project" {
+        let changed_files: Vec<String> = state.lock().unwrap().as_ref()
+            .and_then(|h| {
+                let mut files = h.changed_files.lock().ok()?;
+                let snapshot = files.clone();
+                files.clear();
+                Some(snapshot)
+            })
+            .unwrap_or_default();
+        if let serde_json::Value::Object(ref mut map) = args {
+            map.insert("changed_files".to_string(), serde_json::json!(changed_files));
+        }
+    }
+    tokio::task::spawn_blocking(move || dispatch_engine(&tool, &args))
+        .await
+        .map_err(|e| format!("引擎调用任务失败: {e}"))?
 }
 
 #[tauri::command]
@@ -87,5 +96,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// 回归：引擎 dispatch 必须在 spawn_blocking 中运行（宪法·异步纪律）。
+    /// 大图上单次 dispatch 秒级，内联在 async worker 上会饿死全部并发 IPC
+    /// （含权限弹窗）——2026-08 雷区地图 P0-1。
+    #[test]
+    fn dispatch_engine_in_spawn_blocking_does_not_starve_runtime() {
+        let raw = hologram_tools_list().expect("hologram_tools_list should succeed");
+        let tools: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("should parse");
+        let any_tool = tools[0]["name"].as_str().unwrap().to_string();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let heavy = tokio::task::spawn_blocking(move || {
+                // Ok/Err 都是合法完成（空 args 对多数工具是参数错误）；
+                // JoinError（panic）才是致命。
+                dispatch_engine(&any_tool, &serde_json::json!({}))
+            });
+            let light = tokio::spawn(async { 42 });
+            let (heavy, light) = tokio::join!(heavy, light);
+            assert_eq!(light.unwrap(), 42, "轻量任务必须不被引擎 dispatch 饿死");
+            let _ = heavy.unwrap();
+        });
     }
 }

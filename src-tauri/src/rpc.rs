@@ -75,7 +75,7 @@ pub(crate) async fn rpc(
         "hologram_call" => {
             let tool = req_str(&params, "tool", "hologram_call")?;
             let args = params.get("args").cloned().unwrap_or(Value::Null);
-            commands::engine_dispatch::hologram_call(tool, args, state)
+            commands::engine_dispatch::hologram_call(tool, args, state).await
         }
         "hologram_tools_list" => commands::engine_dispatch::hologram_tools_list(),
 
