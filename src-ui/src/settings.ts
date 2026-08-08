@@ -131,7 +131,13 @@ export function saveSettings(s: AppSettings): void {
       ...s,
       providers: s.providers.map((p) => (p.apiKey ? { ...p, apiKey: '' } : p)),
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+    // P0-9：localStorage 配额与会话备份共享，耗尽时 setItem 同步抛——
+    // 绝不能让异常冲出（曾打断 handleSave，key 因此未落凭据库）
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+    } catch (e) {
+      console.warn('[settings] localStorage 写入失败（配额耗尽？），设置仅本次会话生效:', e);
+    }
   }
   // 通知订阅者（UI 响应式标签 — ChatFooter/ChatBeacon/ChatHint）
   for (const cb of [..._saveListeners]) cb();
@@ -154,23 +160,30 @@ export function onSettingsSaved(cb: () => void): () => void {
  *  暂时不同步（restoreSecrets 未完成时遍历会把未回填的 provider 误删）。
  *  删除凭据只走两个明确场景：removeProvider（removeSecret）与用户主动清空
  *  输入框（手动落盘后保存空 key 不会删凭据——清空需走 removeProvider）。 */
-export async function persistSecrets(s: AppSettings): Promise<void> {
+export async function persistSecrets(s: AppSettings): Promise<string[]> {
+  const failed: string[] = [];
+  const withKey = s.providers.filter((p) => {
+    const k = (p.apiKey || '').trim();
+    return k && k !== 'null';
+  });
   try {
     const { rpc } = await import('./bridge');
-    for (const p of s.providers) {
-      const key = (p.apiKey || '').trim();
+    for (const p of withKey) {
+      const key = p.apiKey!.trim();
       // 「null」字面量护栏：毒化残留的 apiKey:"null" 绝非真 key，绝不写入凭据库
-      if (key && key !== 'null') {
-        try {
-          await rpc('credential_store', { provider: p.name, key });
-        } catch {
-          /* 非关键 — 凭据写入失败不影响本次会话 */
-        }
+      try {
+        await rpc('credential_store', { provider: p.name, key });
+      } catch (e) {
+        // 雷区地图 P0-7：写失败必须上抛给 UI——「失败报已保存」会让用户重启丢 key
+        console.warn(`[settings] credential_store(${p.name}) 失败:`, e);
+        failed.push(p.name);
       }
     }
-  } catch {
-    /* 动态导入失败 — 非关键 */
+  } catch (e) {
+    console.warn('[settings] bridge 不可用，凭据未落盘:', e);
+    failed.push(...withKey.map((p) => p.name));
   }
+  return failed;
 }
 
 /** 删除指定 provider 的 API Key from 系统加密存储（DPAPI）。removeProvider 时调用。 */

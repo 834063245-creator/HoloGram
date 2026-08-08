@@ -64,6 +64,8 @@ export function TimelineHUD() {
   const [loading, setLoading] = useState(false);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const prevPath = useRef(projectPath);
+  // P0-8：空时间轴重试计数——无事件的项目不得无限热循环轰击引擎
+  const emptyRetries = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!projectPath || loading) return;
@@ -84,10 +86,15 @@ export function TimelineHUD() {
   useEffect(() => {
     if (projectPath && projectPath !== prevPath.current) {
       prevPath.current = projectPath;
+      emptyRetries.current = 0;
       setEvents([]);
       refresh();
-    } else if (projectPath && events.length === 0 && !loading) {
-      refresh();
+    } else if (projectPath && events.length === 0 && !loading && emptyRetries.current < 4) {
+      // 空结果退避重试（0s/2s/4s/6s，首次立即），最多 4 次——此前这里是无退避
+      // 无上限的 IPC 热循环，速度=IPC 往返速度，永久轰击引擎（雷区地图 P0-8）
+      const attempt = emptyRetries.current++;
+      const t = setTimeout(refresh, 2000 * attempt);
+      return () => clearTimeout(t);
     }
   }, [projectPath, refresh, loading, events.length]);
 

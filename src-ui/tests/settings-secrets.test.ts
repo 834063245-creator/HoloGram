@@ -112,6 +112,45 @@ describe('persistSecrets', () => {
     await persistSecrets(s);
     expect(bridge.rpc).not.toHaveBeenCalled();
   });
+
+  it('returns failed provider names on credential_store failure (P0-7 失败上抛回归)', async () => {
+    (bridge.rpc as any).mockRejectedValue(new Error('dpapi locked'));
+    const s = {
+      activeProvider: 'deepseek',
+      providers: [
+        { name: 'deepseek', apiKey: 'sk-x' },
+        { name: 'anthropic', apiKey: '' },
+      ],
+    } as any;
+    const failed = await persistSecrets(s);
+    expect(failed).toEqual(['deepseek']);
+  });
+
+  it('returns empty list when all stores succeed', async () => {
+    (bridge.rpc as any).mockResolvedValue('null');
+    const s = { activeProvider: 'deepseek', providers: [{ name: 'deepseek', apiKey: 'sk-x' }] } as any;
+    const failed = await persistSecrets(s);
+    expect(failed).toEqual([]);
+  });
+});
+
+describe('saveSettings 配额护栏（P0-9）', () => {
+  it('localStorage 写爆时不得抛出，订阅者仍收到通知', async () => {
+    const { saveSettings, onSettingsSaved } = await import('../src/settings');
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota exceeded', 'QuotaExceededError');
+    });
+    const listener = vi.fn();
+    const off = onSettingsSaved(listener);
+    try {
+      const s = { activeProvider: 'deepseek', providers: [] } as any;
+      expect(() => saveSettings(s)).not.toThrow();
+      expect(listener).toHaveBeenCalled();
+    } finally {
+      off();
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('loadSettings', () => {

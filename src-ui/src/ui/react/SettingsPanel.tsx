@@ -283,7 +283,7 @@ const SettingsPanelApp: React.FC<{
 
   /** 保存 = 落盘 + 写系统凭据 + 重建 Agent。改动已即时进 state（dirty），
    *  保存后才影响磁盘与运行中 Agent——手动落盘的唯一落盘点。 */
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     const a = settings.providers.find((p) => p.name === settings.activeProvider);
     if (!a) {
       alert(`找不到 Provider "${settings.activeProvider}"`);
@@ -293,7 +293,12 @@ const SettingsPanelApp: React.FC<{
     if (!a.model?.trim() && !confirm(`Provider "${a.name}" 的模型名称为空，仍要保存？`)) return;
 
     saveSettings(settings);
-    persistSecrets(settings).catch(() => {});
+    // P0-7：凭据写失败必须据实提示——否则用户坚信已保存，重启后 key 消失
+    const failed = await persistSecrets(settings);
+    if (failed.length > 0) {
+      alert(`API Key 写入系统凭据失败：${failed.join('、')}。\n设置本身已保存，但重启后这些 Key 会丢失，请重试或检查系统加密服务。`);
+      return;
+    }
     setLang(settings.display.language);
     bus.emit('lang:changed', { lang: settings.display.language });
     setDirty(false);

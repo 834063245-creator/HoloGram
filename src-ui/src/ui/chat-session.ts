@@ -426,7 +426,11 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   const json = JSON.stringify(data);
   try {
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(lsKey(projectPath, sMeta.id), json);
+      // P0-9：配额共 5~10MB 且与设置等键共享——超大会话备份直接跳过，
+      // 磁盘写入（下一步）才是真正的兜底，localStorage 只是加速器
+      if (json.length < 1024 * 1024) {
+        localStorage.setItem(lsKey(projectPath, sMeta.id), json);
+      }
     }
   } catch {
     /* 超出配额 — 磁盘写入作为兜底 */
