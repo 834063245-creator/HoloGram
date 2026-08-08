@@ -1,7 +1,8 @@
 # Agent 项目理解 — HoloGram
 
-> 生成：2026-06-18 · 更新：2026-08-04 · 供 Cursor/Claude 等 Agent 快速上手  
+> 生成：2026-06-18 · 更新：2026-08-08 · 供 Cursor/Claude 等 Agent 快速上手  
 > 架构与现状见 `docs/`（architecture-refactor-spec.md / agents/frontend-refactor-handoff.md）；多 Agent 路线图见 docs/MULTI_AGENT_ROADMAP.md
+> **最高纪律：`docs/adr/project-constitution.md` 四条架构约定（类型边界/单一权威源/异步纪律/错误不静默）——新代码违反即打回；已知违例见 `docs/landmine-map.md`**
 
 ## 一句话
 
