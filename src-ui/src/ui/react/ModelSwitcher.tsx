@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getAllModels, getDefaultModel } from '../../provider/catalog';
 import type { ModelDescriptor } from '../../provider/types';
-import { DEEP_THINK_LABEL, THINKING_MODES, type StoredThinking } from '../../provider/thinking';
+import { DEEP_THINK_LABEL, thinkingModesFor, type StoredThinking } from '../../provider/thinking';
 import {
   getActiveProvider,
   isFactoryBaseUrl,
@@ -18,7 +18,7 @@ import {
 } from '../../settings';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
-import { isAnthropic, protocolLabel } from './settings/protocol';
+import { protocolLabel } from './settings/protocol';
 
 interface ModelSwitcherProps {
   settings: AppSettings;
@@ -30,8 +30,8 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const active = getActiveProvider(settings);
-  const isAnthropicKind = isAnthropic(active.kind);
   const others = settings.providers.filter((p) => p.name !== settings.activeProvider);
+  const thinkingModes = thinkingModesFor(active.kind, active.name, active.baseUrl, active.model);
 
   const currentModels = useMemo(
     () => getAllModels().filter((m) => m.vendor === active.name).sort((a, b) => a.id.localeCompare(b.id)),
@@ -102,7 +102,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
 
   let modelLabel = active?.model || 'unknown';
   if (modelLabel.length > 18) modelLabel = modelLabel.slice(0, 17) + '\u2026';
-  const thinkingLabel = active?.thinking ? ' · 思考' : '';
+  const thinkingLabel = active?.thinking && active.thinking !== 'off' ? ' · 思考' : '';
 
   return (
     <div className="ms-wrap" ref={wrapRef}>
@@ -187,13 +187,17 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
 
           <div className="ms-pop-label">思考强度</div>
           <div className="ms-pop-thinking">
-            {isAnthropicKind ? (
+            {thinkingModes.length > 0 ? (
               <select
                 className="ms-pop-select"
-                value={active.thinking || ''}
+                value={
+                  thinkingModes.some((o) => o.value === (active.thinking || ''))
+                    ? active.thinking || ''
+                    : ''
+                }
                 onChange={(e) => setThinking(e.target.value as StoredThinking)}
               >
-                {THINKING_MODES.map((o) => (
+                {thinkingModes.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>

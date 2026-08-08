@@ -5,6 +5,8 @@
 // 存储字段名保持 `thinking`（遗留名）；领域词 ThinkingPolicy。
 // 数字字符串是历史遗留（Anthropic 支持直接写 token 预算），UI 仅提供命名档位。
 
+import type { Protocol } from './types';
+
 export type ThinkingEffort = 'low' | 'medium' | 'high' | 'max';
 
 export type ThinkingMode = '' | 'off' | ThinkingEffort;
@@ -48,4 +50,72 @@ export function withThinkingDisabled(
   disableThinking: boolean | undefined,
 ): StoredThinking | undefined {
   return disableThinking ? 'off' : thinking || undefined;
+}
+
+/** OpenAI 兼容协议的 reasoning_effort 线上取值（DeepSeek / OpenAI 各自子集）。 */
+export type OpenAIWireEffort = 'low' | 'medium' | 'high' | 'max';
+
+/** ThinkingPolicy 的 wire 适配档案：统一档位 → 各家线上参数由谁翻译。 */
+export type EffortVendor = 'anthropic' | 'deepseek' | 'openai' | 'unknown';
+
+/** 识别一个 Provider 的 effort 档案：Anthropic 走 budget_tokens；
+ *  DeepSeek / OpenAI 官方走 reasoning_effort（取值不同）；其余 OpenAI 兼容
+ *  厂商（MiMo / GLM 等）无 effort 证据 → unknown，不编造参数。 */
+export function effortVendor(
+  name: string,
+  kind: Protocol,
+  baseUrl?: string,
+  model?: string,
+): EffortVendor {
+  if (kind === 'anthropic') return 'anthropic';
+  const id = name.toLowerCase();
+  const url = (baseUrl || '').toLowerCase();
+  const mid = (model || '').toLowerCase();
+  if (id === 'deepseek' || url.includes('deepseek') || mid.includes('deepseek')) return 'deepseek';
+  if (id === 'openai' || url.includes('api.openai.com') || /^(gpt-|o3|o4)/.test(mid)) return 'openai';
+  return 'unknown';
+}
+
+/** 统一档位 → OpenAI 兼容协议 reasoning_effort 的 wire 映射：
+ *  DeepSeek 只认 high/max（low/medium 服务端按 high，本地一并归一）；
+ *  OpenAI 官方只认 low/medium/high（max 降级 high）；unknown 不发送。 */
+export function toOpenAIEffort(
+  vendor: EffortVendor,
+  level: ThinkingMode,
+): OpenAIWireEffort | undefined {
+  if (vendor === 'deepseek') {
+    if (level === 'low' || level === 'medium' || level === 'high') return 'high';
+    if (level === 'max') return 'max';
+    return undefined;
+  }
+  if (vendor === 'openai') {
+    if (level === 'low' || level === 'medium' || level === 'high') return level;
+    if (level === 'max') return 'high';
+    return undefined;
+  }
+  return undefined;
+}
+
+/** 按厂商过滤「思考强度」UI 档位（ProviderDetail / ModelSwitcher 共用）：
+ *  Anthropic 全档；DeepSeek 只给 high/max；OpenAI 全档但 max 标注降级；
+ *  其余厂商无 effort 证据 → 空列表，UI 回退「深度思考」开关。 */
+export function thinkingModesFor(
+  kind: Protocol,
+  name: string,
+  baseUrl?: string,
+  model?: string,
+): readonly { value: ThinkingMode; label: string }[] {
+  const vendor = effortVendor(name, kind, baseUrl, model);
+  if (vendor === 'anthropic') return THINKING_MODES;
+  if (vendor === 'deepseek') {
+    return THINKING_MODES.filter(
+      (o) => o.value === '' || o.value === 'high' || o.value === 'max' || o.value === 'off',
+    );
+  }
+  if (vendor === 'openai') {
+    return THINKING_MODES.map((o) =>
+      o.value === 'max' ? { value: o.value as ThinkingMode, label: '极限 (max → high)' } : o,
+    );
+  }
+  return [];
 }

@@ -6,11 +6,11 @@
 
 import type React from 'react';
 import { isFactoryBaseUrl, type ConnectionProbe, type ProbeOutcome } from '../../../settings';
-import { THINKING_MODES, type StoredThinking } from '../../../provider/thinking';
+import { effortVendor, thinkingModesFor, type StoredThinking } from '../../../provider/thinking';
 import type { ModelDescriptor, Protocol } from '../../../provider/types';
 import { ModelSelector } from '../ModelSelector';
 import { formatLatency, formatTestAt, providerStatus, STATUS_LABEL } from './status';
-import { isAnthropic, protocolLabel } from './protocol';
+import { protocolLabel } from './protocol';
 
 export type ProviderField = 'apiKey' | 'baseUrl' | 'model' | 'thinking';
 
@@ -93,7 +93,14 @@ export function ProviderDetail({
   const st = providerStatus(provider);
   const statusCls = test.phase === 'testing' ? 'testing' : st;
   const statusLabel = test.phase === 'testing' ? '测试中…' : STATUS_LABEL[st];
-  const isAnthropicKind = isAnthropic(provider.kind);
+  const thinkingModes = thinkingModesFor(provider.kind, provider.name, provider.baseUrl, provider.model);
+  const effortProfile = effortVendor(provider.name, provider.kind, provider.baseUrl, provider.model);
+  const thinkingHint =
+    effortProfile === 'deepseek'
+      ? 'DeepSeek V4 支持 高/极限 两档；低/中 服务端会按高处理，故不提供。'
+      : effortProfile === 'openai'
+        ? 'OpenAI 官方支持 低/中/高；「极限」将按 高 发送。'
+        : '等级越高思考越深，也更费 token。与 Agent 页的「深度思考」开关互为补充。';
   const isFactoryUrl = isFactoryBaseUrl(provider.baseUrl);
 
   const keyChip = provider.apiKey?.trim()
@@ -216,23 +223,27 @@ export function ProviderDetail({
           />
         </div>
 
-        {isAnthropicKind && (
+        {thinkingModes.length > 0 && (
           <div className="pp-field">
             <div className="pp-f-label-row">
               <label className="pp-f-label">思考努力等级</label>
             </div>
             <select
               className="sp-select"
-              value={provider.thinking || ''}
+              value={
+                thinkingModes.some((o) => o.value === (provider.thinking || ''))
+                  ? provider.thinking || ''
+                  : ''
+              }
               onChange={(e) => onFieldChange('thinking', e.target.value)}
             >
-              {THINKING_MODES.map((o) => (
+              {thinkingModes.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
               ))}
             </select>
-            <div className="pp-f-hint">等级越高思考越深，也更费 token。与 Agent 页的「深度思考」开关互为补充。</div>
+            <div className="pp-f-hint">{thinkingHint}</div>
           </div>
         )}
       </div>

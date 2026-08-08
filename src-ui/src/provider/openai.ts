@@ -8,6 +8,15 @@ import { clampMaxTokens } from './catalog';
 import { sendWithRetry } from './retry';
 import { extractWritePreview, fetchJsonWithTimeout, prewarmEndpoint, sseEvents } from './shared';
 import {
+  effortVendor,
+  isThinkingMode,
+  toOpenAIEffort,
+  type EffortVendor,
+  type OpenAIWireEffort,
+  type StoredThinking,
+  type ThinkingMode,
+} from './thinking';
+import {
   type Chunk,
   ChunkType,
   type Message,
@@ -25,8 +34,8 @@ interface OpenAIConfig {
   apiKey: string;
   baseUrl: string; // 例如 "https://api.deepseek.com/v1" 或 "https://api.openai.com/v1"
   model: string;
-  /** 禁用 reasoning/thinking 模式（DeepSeek v4-pro）。默认：false（自动）。 */
-  disableThinking?: boolean;
+  /** 思考档位（ThinkingPolicy）。'off' = 关闭；命名档位按 EffortVendor 映射。 */
+  thinking?: StoredThinking;
 }
 
 /** 动态模型 reasoning 启发式（P0 定稿）：
@@ -39,7 +48,8 @@ export function guessReasoning(id: string): boolean {
 export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
   const name = cfg.name || 'openai';
   const baseUrl = cfg.baseUrl.replace(/\/$/, ''); // 用户在 baseUrl 中控制 v1 前缀
-  const { model, apiKey, disableThinking } = cfg;
+  const { model, apiKey, thinking } = cfg;
+  const effortProfile = effortVendor(name, 'openai', baseUrl, model);
 
   return {
     name() {
@@ -51,7 +61,8 @@ export function createOpenAIProvider(cfg: OpenAIConfig): Provider {
         req.tools,
         model,
         req.max_tokens,
-        disableThinking,
+        thinking,
+        effortProfile,
       );
       const response = await sendWithRetry({
         url: `${baseUrl}/chat/completions`,
@@ -140,16 +151,23 @@ interface ChatRequest {
   stream: true;
   stream_options?: { include_usage: true };
   thinking?: { type: 'enabled' | 'disabled' };
+  reasoning_effort?: OpenAIWireEffort;
 }
 
-function buildChatRequest(
+export function buildChatRequest(
   msgs: Message[],
   tools: Request['tools'],
   model: string,
   maxTok: number,
-  disableThinking?: boolean,
+  thinking: StoredThinking | undefined,
+  effortProfile: EffortVendor,
 ): ChatRequest {
-  const thinking = disableThinking ? { type: 'disabled' as const } : undefined;
+  // 数字预算串是 Anthropic 遗留存储形态，对 OpenAI 兼容协议无 effort 语义 → 按自动处理。
+  const stored = thinking || '';
+  const level: ThinkingMode = isThinkingMode(stored) ? stored : '';
+  const effort = toOpenAIEffort(effortProfile, level);
+  const thinkingBlock =
+    thinking === 'off' ? { type: 'disabled' as const } : effort ? { type: 'enabled' as const } : undefined;
   const chatMsgs: ChatMessage[] = [];
 
   for (const m of msgs) {
@@ -209,7 +227,8 @@ function buildChatRequest(
     max_tokens: clampMaxTokens(model, maxTok > 0 ? maxTok : DEFAULT_MAX_TOKENS),
     stream: true,
     stream_options: { include_usage: true },
-    thinking,
+    thinking: thinkingBlock,
+    reasoning_effort: effort,
   };
 
   return r;

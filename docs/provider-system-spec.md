@@ -217,7 +217,7 @@ interface Provider {
 
 - [x] anthropic 「自动」模式补 `budget_tokens`（anthropic.ts L295，缺字段部分 API 版本 400）
 - [x] `disableThinking` 语义统一到 anthropic：createProvider 时 `disableThinking → thinking='off'`（index.ts），翻译器/摘要路径自动受益
-- [x] openai 协议思考强度 UI：仅落「深度思考」开关 + 说明文案（不编造 effort 参数——仓库无 DeepSeek effort 证据，API 支持后再加）
+- [x] ~~openai 协议思考强度 UI：仅落「深度思考」开关 + 说明文案（不编造 effort 参数——仓库无 DeepSeek effort 证据，API 支持后再加）~~ → **已过时（2026-08-09）**：DeepSeek V4 官方文档已支持 `reasoning_effort`，见 P12
 - **验收**：anthropic 翻译轮 thinking 关闭；「自动」模式真机不再 400；Agent 页开关真机生效
 
 ### P1-C — 其余协议硬化
@@ -479,3 +479,46 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
 - `npx tsc --noEmit` 0 错；`getCatalogProviders` / `m.provider` 零残留
 - provider/settings/摘要模型相关 51 项测试全绿；全量 798 通过
 - CDP 真机冒烟 19/19：目录 chips 一键添加 / ProviderId 交互 / 聊天切换器 / 思考强度，零运行时错误
+
+## P12 — OpenAI 兼容 effort 落地：DeepSeek reasoning_effort（2026-08-09）
+
+> 动因：P1-B 裁决「不编造 effort 参数」基于当时仓库无 DeepSeek effort 证据；
+> 2026-08-09 复查官方文档，DeepSeek V4（deepseek-v4-pro / deepseek-v4-flash，
+> 2026-04-24 发布）已支持 OpenAI 格式 `thinking` + `reasoning_effort`。
+> LiteLLM / Cherry Studio / vLLM 均已修复 pass-through，领域已确认。
+
+### 事实（官方文档）
+
+- DeepSeek V4：`thinking: {type: enabled|disabled}` + `reasoning_effort`
+  有效值 `high`（默认）/ `max`；`low`/`medium` 服务端静默按 `high`，`xhigh` 按 `max`。
+- OpenAI 官方：`reasoning_effort: low|medium|high`（无 max）。
+- Anthropic：无 `reasoning_effort`，思考强度 = `thinking.budget_tokens`（已实现）。
+
+### 方案：统一档位 → 每家 wire 参数（fan-out，不做「服务端自动转换」）
+
+| 档位 | DeepSeek V4 | OpenAI 官方 | Anthropic |
+|---|---|---|---|
+| 自动（''） | 不传（默认 high） | 不传 | auto budget 16000 |
+| 低 low | UI 不提供（wire 按 high） | `low` | 4000 |
+| 中 medium | UI 不提供（wire 按 high） | `medium` | 8000 |
+| 高 high | `high` | `high` | 16000 |
+| 极限 max | `max` | 降级 `high`（UI 标注） | 32000 |
+| 关闭 off | `thinking:{type:'disabled'}` | 同左 | 不发送 thinking 块 |
+
+### 落地
+
+- `provider/thinking.ts`：`EffortVendor` / `effortVendor()`（name / baseUrl / model
+  识别）+ `toOpenAIEffort()`（wire 映射）+ `thinkingModesFor()`（UI 档位可见性）
+  作为唯一事实源。
+- `provider/openai.ts`：`OpenAIConfig.thinking` 接管 per-provider 档位，请求体
+  发送 `thinking` + `reasoning_effort`；不再只依赖全局 `disableThinking`。
+- `provider/index.ts`：openai 分支与 anthropic 一致，`disableThinking → thinking='off'`。
+- UI：ProviderDetail / ModelSwitcher 按厂商显示档位：
+  DeepSeek = 自动/高/极限/关闭；OpenAI = 自动/低/中/高/极限（按高发送）/关闭；
+  Anthropic 维持六档；其余 OpenAI 兼容厂商（MiMo/GLM 等）无 effort 证据，
+  维持「深度思考」开关、不编造参数。
+
+### 验证
+
+- `npx tsc --noEmit` 0 错；新增 thinking 映射 + openai 请求体测试全绿
+- 真机回归（并入 P3 挂起项）：DeepSeek 高/极限/关闭 各一轮对话

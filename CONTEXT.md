@@ -31,7 +31,10 @@ _Avoid_: 模型名、model id、LLM
 _Avoid_: model、模型名
 
 **ThinkingPolicy**:
-用户对「模型作答前推理多少」的配置。按 Protocol 分为 Anthropic 的 effort 等级与 OpenAI 兼容的深度思考开关；区别于模型能力（是否支持推理）与响应中的思维链内容。
+用户对「模型作答前推理多少」的配置。统一档位（自动/低/中/高/极限/关闭）是 UI 与存储形态；
+wire 参数按 EffortVendor 适配（Anthropic budget_tokens、DeepSeek reasoning_effort high/max、
+OpenAI 官方 low/medium/high、其余厂商不发送），映射唯一事实源在 provider/thinking.ts。
+区别于模型能力（是否支持推理）与响应中的思维链内容。
 _Avoid_: thinking、深度思考、reasoning（作设置名）
 
 **ConnectionProbe**:

@@ -32,6 +32,6 @@ export function createProvider(settings: ProviderSettings, options?: CreateProvi
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
     model: settings.model,
-    disableThinking: options?.disableThinking,
+    thinking: withThinkingDisabled(settings.thinking, options?.disableThinking),
   });
 }

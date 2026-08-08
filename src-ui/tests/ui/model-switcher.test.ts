@@ -138,12 +138,14 @@ describe('ModelSwitcher', () => {
     root?.unmount();
   });
 
-  it('opens popover: current-vendor models + deep-think switch for openai', async () => {
+  it('opens popover: current-vendor models + deepseek effort select', async () => {
     await render(makeSettings());
     await click(document.querySelector('.chat-model-clickable'));
 
     expect(document.querySelector('.ms-pop')).not.toBeNull();
-    expect(document.querySelector('.ms-pop-check')).not.toBeNull(); // deepseek = openai → 深度思考开关
+    const sel = document.querySelector<HTMLSelectElement>('.ms-pop-select');
+    expect(sel).not.toBeNull(); // deepseek = OpenAI 兼容 → effort 下拉
+    expect([...sel!.options].map((o) => o.value)).toEqual(['', 'high', 'max', 'off']);
     const trigger = document.querySelector<HTMLButtonElement>('.chat-model-clickable')!;
     expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
@@ -204,11 +206,65 @@ describe('ModelSwitcher', () => {
     expect(document.querySelector('.ms-pop')).not.toBeNull(); // 思考设置不关闭弹层
   });
 
-  it('deep-think toggle flips global disableThinking and keeps popover open', async () => {
+  it('deepseek thinking effort writes provider thinking and keeps popover open', async () => {
     await render(makeSettings());
     await click(document.querySelector('.chat-model-clickable'));
 
+    const sel = document.querySelector<HTMLSelectElement>('.ms-pop-select')!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!;
+      setter.call(sel, 'max');
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(mockSave).toHaveBeenCalledTimes(1);
+    const next = mockSave.mock.calls[0][0] as AppSettings;
+    expect(next.providers[0].thinking).toBe('max');
+    expect(mockConfigChanged).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.ms-pop')).not.toBeNull();
+  });
+
+  it('openai provider shows full effort tiers with max degradation note', async () => {
+    await render(
+      makeSettings({
+        activeProvider: 'openai',
+        providers: [
+          {
+            kind: 'openai',
+            name: 'openai',
+            apiKey: 'sk-oai',
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'gpt-5.4',
+          },
+        ],
+      }),
+    );
+    await click(document.querySelector('.chat-model-clickable'));
+
+    const sel = document.querySelector<HTMLSelectElement>('.ms-pop-select')!;
+    expect([...sel.options].map((o) => o.value)).toEqual(['', 'low', 'medium', 'high', 'max', 'off']);
+    expect([...sel.options].find((o) => o.value === 'max')?.textContent).toContain('high');
+  });
+
+  it('deep-think toggle flips global disableThinking for vendors without effort evidence', async () => {
+    await render(
+      makeSettings({
+        activeProvider: 'glm',
+        providers: [
+          {
+            kind: 'openai',
+            name: 'glm',
+            apiKey: '',
+            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+            model: 'glm-5',
+          },
+        ],
+      }),
+    );
+    await click(document.querySelector('.chat-model-clickable'));
+
     const box = document.querySelector<HTMLInputElement>('.ms-pop-check input');
+    expect(box).not.toBeNull();
     await click(box);
 
     expect(mockSave).toHaveBeenCalledTimes(1);
