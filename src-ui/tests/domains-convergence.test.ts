@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from '../src/agent/tool';
 import { selectToolSchemas } from '../src/agent/tool-select';
+import { StreamingToolExecutor } from '../src/agent/streaming-executor';
 import { defineTool } from '../src/agent/tools/define-tool';
 import {
   collectHiddenToolNames,
   convergeRegistry,
   DOMAIN_SPECS,
   normalizeArgs,
+  retireRedirect,
   resolveGuardToolName,
 } from '../src/agent/tools/domains';
 
@@ -185,6 +187,48 @@ describe('normalizeArgs 参数别名归一（领域扁平 schema 摩擦修复）
   it('直接调用 normalizeArgs', () => {
     const old = fakeTool('x', 'x', false, z.object({ filePath: z.string() }));
     expect(normalizeArgs(old, { path: 'p' })).toEqual({ path: 'p', filePath: 'p' });
+  });
+});
+
+describe('retireRedirect 旧名淘汰重定向', () => {
+  it('常见旧名映射到领域动作', () => {
+    expect(retireRedirect('read_file_content')).toBe('fs(read)');
+    expect(retireRedirect('write_file')).toBe('fs(write)');
+    expect(retireRedirect('edit_file')).toBe('fs(edit)');
+    expect(retireRedirect('run_shell')).toBe('shell(run)');
+    expect(retireRedirect('search_content')).toBe('search(content)');
+    expect(retireRedirect('git_status')).toBe('git(status)');
+    expect(retireRedirect('agent_spawn')).toBe('agent(spawn)');
+    expect(retireRedirect('agent_message')).toBe('agent(message)');
+    expect(retireRedirect('task_create')).toBe('task(create)');
+    expect(retireRedirect('hologram_memory_save')).toBe('memory(save)');
+  });
+
+  it('read_file 别名经链解析到 fs(read)', () => {
+    expect(retireRedirect('read_file')).toBe('fs(read)');
+  });
+
+  it('未知/领域名返回 null（不误伤）', () => {
+    expect(retireRedirect('fs')).toBeNull();
+    expect(retireRedirect('whatever')).toBeNull();
+  });
+});
+
+describe('executor 拦截隐藏旧名（负反馈 seam）', () => {
+  it('模型调用 read_file_content 返回 [已淘汰] 重定向而非执行', async () => {
+    const registry = buildFsRegistry();
+    convergeRegistry(registry);
+    const events: unknown[] = [];
+    const ex = new StreamingToolExecutor(registry, (e) => events.push(e));
+    ex.addTool({ id: 'c1', name: 'read_file_content', arguments: '{"filePath":"D:/a"}' });
+    const results = await ex.awaitRemaining();
+    expect(results).toHaveLength(1);
+    expect(results[0].output).toContain('[已淘汰]');
+    expect(results[0].output).toContain('fs(read)');
+    // 领域工具不受影响，仍正常执行
+    ex.addTool({ id: 'c2', name: 'fs', arguments: '{"action":"read","filePath":"D:/a"}' });
+    const results2 = await ex.awaitRemaining();
+    expect(results2[0].output).toContain('read_file_content:');
   });
 });
 

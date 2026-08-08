@@ -14,7 +14,7 @@ import { type AgentEvent, EventKind } from './agent-types';
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import type { Tool, ToolRegistry } from './tool';
 import { truncateToolOutput } from './truncate';
-import { resolveGuardToolName } from './tools/domains';
+import { resolveGuardToolName, retireRedirect } from './tools/domains';
 
 export interface ExecutorToolCall {
   call: ToolCall;
@@ -108,6 +108,23 @@ export class StreamingToolExecutor {
       // 否则子 agent 活动跟踪器会永远将该幻觉调用保持为
       // currentTool（120s 后误报 ⚠️ 疑似卡死），UI 工具
       // 部分无限旋转。
+      this.emitResult(call, null, result);
+      return;
+    }
+
+    // 旧工具名已收敛：不执行，返回重定向（负反馈驱动模型迁移到领域工具）。
+    // 仅拦截模型调用路径；内部委托 / plan 写入直接调旧工具，不走 executor，不受影响。
+    if (this.tools.isHidden(call.name)) {
+      const redirect = retireRedirect(call.name);
+      const hint = redirect
+        ? `已并入 ${redirect}，请直接调用 ${redirect}`
+        : '已淘汰，请查看当前可用工具列表';
+      const result: PendingResult = {
+        call,
+        output: `[已淘汰] ${call.name} ${hint}。不要再使用旧工具名。`,
+        truncated: false,
+      };
+      this.completed.push(result);
       this.emitResult(call, null, result);
       return;
     }

@@ -300,3 +300,25 @@ export function resolveGuardToolName(registry: ToolRegistry, toolName: string, a
   const spec = DOMAIN_SPECS.find((s) => s.name === toolName);
   return spec?.actions[action] ?? toolName;
 }
+
+/** 旧名重定向表：隐藏的旧工具被模型调用时，executor 返回"已淘汰 → 领域动作"而非执行。
+ *  仅作用于模型调用路径（streaming-executor）；内部委托 / plan 写入 / 测试直接调旧工具不受影响。 */
+const ALIAS_REDIRECTS: Record<string, string> = {
+  read_file: 'read_file_content',
+  symbol_history: 'inspect_symbol',
+};
+
+export function retireRedirect(toolName: string): string | null {
+  let name = toolName;
+  const visited = new Set<string>();
+  while (ALIAS_REDIRECTS[name] && !visited.has(name)) {
+    visited.add(name);
+    name = ALIAS_REDIRECTS[name];
+  }
+  for (const spec of DOMAIN_SPECS) {
+    for (const [action, oldName] of Object.entries(spec.actions)) {
+      if (oldName === name) return `${spec.name}(${action})`;
+    }
+  }
+  return null;
+}

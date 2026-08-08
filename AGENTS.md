@@ -93,7 +93,7 @@ flowchart LR
 ## 工具层收敛（2026-08-08）
 
 - 模型可见工具收敛为领域工具：`fs` / `shell` / `git` / `search` / `web` / `agent` / `task` / `memory`，加常驻 `ask_user` / `Skill` / `wait` / `enter_plan_mode` / `exit_plan_mode`，再加 engine MCP 工具。
-- 旧工具名（`run_shell`、`write_file`、`agent_spawn`、`git_*` 等）保留在 `ToolRegistry` 中但被 `hide()`：executor 仍可解析（防模型幻觉旧名）、测试兼容，但不再出现在 `schemas()`。
+- 旧工具名（`run_shell`、`write_file`、`agent_spawn`、`git_*` 等）保留在 `ToolRegistry` 中但被 `hide()`：内部代码与测试仍可直接调用，但不再出现在 `schemas()`；**模型调用隐藏旧名会被 executor 拦截并返回 `[已淘汰]` 重定向**（见 `tools/domains.ts` 的 `retireRedirect`），不再静默执行。
 - 每轮注入：`Agent` 默认只发 ≤14 个 schema（`tool-select.ts` 打分 + 常驻集；`visibleToolsLimit: 0` = 全量）。工具目录见 `ToolRegistry.catalog()`。
 - 领域动作通过 `resolveGuardToolName()` 映射回旧工具名，preflight 架构门禁、图增强 hooks、子 Agent `_callId` 关联均不失效；文件所有权包装的是内层旧工具，天然生效。
 - 新增工具/动作必须同步：`tools/domains.ts` 的 `DOMAIN_SPECS`（动作→旧工具名）+ `collectHiddenToolNames()`（需隐藏的旧名）+ 本文件。

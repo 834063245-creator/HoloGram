@@ -49,7 +49,8 @@ export class ToolRegistry {
   }
 
   /** 从 schemas()/catalog() 中隐藏工具，但仍保留在 registry 中：
-   *  旧工具名可继续被 executor 解析（防御模型幻觉旧名），测试与内部调用不受影响。 */
+   *  内部代码与测试可直接调用；模型调用隐藏旧名会被 streaming-executor
+   *  拦截并返回 [已淘汰] 重定向（retireRedirect），不再静默执行。 */
   hide(name: string): void {
     if (!this.tools.has(name)) return;
     this.hiddenNames.add(name);
