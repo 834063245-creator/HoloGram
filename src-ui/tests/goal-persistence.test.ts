@@ -98,6 +98,14 @@ function mockLiveFs(initial: Record<string, string> = {}): Map<string, string> {
       return null;
     }
     if (method === 'list_directory') return '[]';
+    if (method === 'agent_session_append') {
+      // P1-15: 模拟后端 — rewrite → truncate 重建；否则 append-only
+      const p = params as any;
+      const nds = `${p.projectPath}/.hologram/agents/${p.agentId}/session.ndjson`;
+      const block = (p.messages as any[]).map((m) => JSON.stringify(m)).join('\n') + '\n';
+      files.set(nds, p.rewrite ? block : (files.get(nds) ?? '') + block);
+      return null;
+    }
     throw new Error(`unexpected rpc: ${method}`);
   });
   return files;
