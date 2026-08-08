@@ -93,10 +93,10 @@ export interface AgentOptions {
   execState?: ExecStateInstance;
   /** 每轮发给模型的工具 schema 上限（0 = 全量，默认 14）。 */
   visibleToolsLimit?: number;
-  /** 工具结果批量折叠大小（默认 40，<=0 = 禁用）。tool 消息总数每超过
-   *  折叠边界 + batch 时，把最早一批（batch 条）折叠为占位符。
-   *  折叠边界批量前移而非逐轮滚动——保证相邻轮次发送载荷前缀稳定，
-   *  不击穿 DeepSeek 前缀缓存。session/UI/存档不受影响。 */
+  /** 工具结果批量折叠大小（默认 0 = 禁用）。tool 消息总数每超过
+   *  折叠边界 + 2×batch 时，把最早一批（batch 条）折叠为占位符。
+   *  默认禁用：在 DeepSeek 前缀缓存计价下，折叠省的（hit 1/50 价）与
+   *  断的（边界后全价 miss）大致相抵甚至亏本；需要时再开启。 */
   toolResultWindow?: number;
   /** UI 通知端口 — 进度 / 工具完成 / 子 Agent 生命周期。
    *  由 workspace 注入；headless Agent 无。 */
@@ -260,7 +260,8 @@ export class Agent {
     this._agentOpts = opts;
     this.temperature = opts.temperature ?? 0.7;
     this._visibleToolsLimit = opts.visibleToolsLimit ?? DEFAULT_VISIBLE_TOOLS_LIMIT;
-    this._toolResultWindow = opts.toolResultWindow ?? DEFAULT_TOOL_FOLD_BATCH;
+    // 默认禁用折叠 — 见 toolResultWindow 注释（DeepSeek 缓存计价下不划算）
+    this._toolResultWindow = opts.toolResultWindow ?? 0;
     this.pricing = opts.pricing;
     this.contextWindow = opts.contextWindow || 1000000; // 1M tokens 默认值; || 捕获零值（设置默认值），使压缩永不被静默禁用
     // ponytail: 0.55 将阈值设在 550K token（1M 窗口）。

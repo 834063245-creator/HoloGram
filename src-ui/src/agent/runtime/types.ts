@@ -114,7 +114,7 @@ export interface AgentConfig {
   temperature?: number;
   contextWindow?: number;
   pricing?: Pricing;
-  /** 发送载荷中完整保留的最近工具结果条数（-1 = 禁用折叠，默认 40） */
+  /** 工具结果批量折叠大小（默认 0 = 禁用；开启需 >0） */
   toolResultWindow?: number;
   /** 协作模式 */
   collaborationMode?: 'normal' | 'plan';

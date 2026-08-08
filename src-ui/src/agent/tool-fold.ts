@@ -3,15 +3,17 @@
 
 // 工具结果批量折叠 — 发送载荷层的轻量压缩（不碰 session/UI/存档）。
 //
-// 依据：Anthropic 官方 context engineering 文章将 tool result clearing 列为
-// "the safest lightest touch form of compaction"——深历史中的工具输出对模型
-// 几乎没有再利用价值（需要细节时模型会重新调用工具），却是 token 成本与
-// context rot 的主要来源（本仓库实测长会话 tool_results 占载荷 50%+）。
+// ⚠️ 默认禁用（Agent.toolResultWindow 默认 0）：
+// 在 DeepSeek 前缀缓存计价下（hit $0.0028/M vs miss $0.14/M，50 倍价差），
+// 折叠省的是最便宜的 hit 段（1/50 价），而每次折叠事件会让折叠边界之后
+// 的全部历史从 hit 变 miss 重算一次。实测盈亏大致相抵甚至略亏（见
+// 2026-08-09 会话分析），且引入 context rot 与重复调用工具的风险。
+// 保留实现与开关：若未来接入无前缀缓存的 provider，或证明折叠净收益为正，再启用。
 //
-// 缓存纪律：折叠边界（foldBoundary）由调用方稳定维护，只在跨过整批阈值时
-// 批量前移。绝不能做成"每轮推进的滚动窗口"——被折叠消息的内容从完整变为
-// 占位会让前缀在折叠边界处断裂，其后全部内容每轮重新计费（实测 miss/turn
-// 从 659 恶化到 62K）。
+// 依据：Anthropic 官方 context engineering 文章将 tool result clearing 列为
+// "the safest lightest touch form of compaction"——但该建议预设了
+// "上下文接近窗口上限"的场景；在缓存命中的长会话里，历史段几乎免费，
+// 该结论不直接适用。
 
 import type { Message } from '../provider/types';
 
