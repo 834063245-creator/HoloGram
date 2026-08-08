@@ -10,20 +10,19 @@ import type { ModelDescriptor } from '../../provider/types';
 import { getActiveProvider, isFactoryBaseUrl, saveSettings, updateProvider, type AppSettings } from '../../settings';
 import { getOnSettingsSave } from '../dock-config';
 import { iconHtml } from '../icons';
+import { isAnthropic, protocolLabel } from './settings/protocol';
 
 interface ModelSwitcherProps {
   settings: AppSettings;
   onOpenSettings: (() => void) | null;
 }
 
-const kindLabel = (k: 'anthropic' | 'openai') => (k === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容');
-
 export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const active = getActiveProvider(settings);
-  const isAnthropic = active?.kind === 'anthropic';
+  const isAnthropicKind = isAnthropic(active.kind);
   const others = settings.providers.filter((p) => p.name !== settings.activeProvider);
 
   const currentModels = useMemo(
@@ -112,7 +111,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
         <div className="ms-pop" role="menu">
           <div className="ms-pop-hd">
             <span className="ms-pop-src">{active.name}</span>
-            <span className={`ms-pop-kind ms-pop-kind-${active.kind}`}>{kindLabel(active.kind)}</span>
+            <span className={`ms-pop-kind ms-pop-kind-${active.kind}`}>{protocolLabel(active.kind)}</span>
           </div>
 
           <div className="ms-pop-label">模型</div>
@@ -154,7 +153,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
                     <span className="ms-pop-item-main">
                       <span className="ms-pop-item-id">{p.name}</span>
                       <span className="ms-pop-item-name">
-                        {kindLabel(p.kind)}
+                        {protocolLabel(p.kind)}
                         {p.model ? ` · ${p.model}` : ''}
                       </span>
                     </span>
@@ -169,7 +168,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
 
           <div className="ms-pop-label">思考强度</div>
           <div className="ms-pop-thinking">
-            {isAnthropic ? (
+            {isAnthropicKind ? (
               <select
                 className="ms-pop-select"
                 value={active.thinking || ''}

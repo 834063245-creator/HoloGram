@@ -385,3 +385,22 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
 - `npx tsc --noEmit` 0 错
 - `npx vitest run` 全绿
 - CDP 真机冒烟：Provider 页保存条出现/独立保存、聊天面板弹层展开/切模型/切信号源/思考强度
+
+## P7 — 按词收敛：Protocol（2026-08-08 完成）
+
+> 依据 CONTEXT.md「模型接入」词表的第一刀：把「协议」从字符串字面量与三份 `kindLabel`
+> 拷贝中收敛出来。
+
+- `provider/types.ts` 新增 `Protocol = 'anthropic' | 'openai'` 领域类型；
+  `ProviderSettings.kind` / `ModelDescriptor.kind` 统一引用它。
+- **存储键名 `kind` 保持不变**（localStorage 遗留名），只收类型与展示层；
+  改存储键名需带迁移，见类型注释。
+- `ui/react/settings/protocol.ts` 是协议标签唯一事实源（`PROTOCOL_LABELS` /
+  `protocolLabel` / `isAnthropic`）；删除 ProviderList / ProviderDetail / ModelSwitcher
+  三份 `kindLabel` 与 AddProviderSheet 内联三元。
+- ModelSelector / ProviderDetail / AddProviderSheet 的 props 与 entry 类型统一为 `Protocol`。
+
+### 验证
+
+- `npx tsc --noEmit` 0 错
+- provider/settings 相关 48 项测试全绿

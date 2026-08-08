@@ -6,9 +6,10 @@
 
 import type React from 'react';
 import { isFactoryBaseUrl } from '../../../settings';
-import type { ModelDescriptor } from '../../../provider/types';
+import type { ModelDescriptor, Protocol } from '../../../provider/types';
 import { ModelSelector } from '../ModelSelector';
 import { formatLatency, formatTestAt, providerStatus, STATUS_LABEL } from './status';
+import { isAnthropic, protocolLabel } from './protocol';
 
 export type ProviderField = 'apiKey' | 'baseUrl' | 'model' | 'thinking';
 
@@ -20,7 +21,7 @@ export interface TestUiState {
 interface ProviderDetailProps {
   provider: {
     name: string;
-    kind: 'anthropic' | 'openai';
+    kind: Protocol;
     apiKey: string;
     baseUrl: string;
     model: string;
@@ -47,8 +48,6 @@ interface ProviderDetailProps {
   onDelete: () => void;
 }
 
-const kindLabel = (k: 'anthropic' | 'openai') => (k === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容');
-
 export function ProviderDetail({
   provider,
   isCurrent,
@@ -71,7 +70,7 @@ export function ProviderDetail({
   const st = providerStatus(provider);
   const statusCls = test.phase === 'testing' ? 'testing' : st;
   const statusLabel = test.phase === 'testing' ? '测试中…' : STATUS_LABEL[st];
-  const isAnthropic = provider.kind === 'anthropic';
+  const isAnthropicKind = isAnthropic(provider.kind);
   const isFactoryUrl = isFactoryBaseUrl(provider.baseUrl);
 
   const keyChip = provider.apiKey?.trim()
@@ -102,7 +101,7 @@ export function ProviderDetail({
     <section className="pp-console">
       <div className="pp-console-head">
         <span className="pp-name">{provider.name}</span>
-        <span className={`pp-badge pp-badge-${provider.kind}`}>{kindLabel(provider.kind)}</span>
+        <span className={`pp-badge pp-badge-${provider.kind}`}>{protocolLabel(provider.kind)}</span>
         <span className={`pp-status-pill pp-pill-${statusCls}`}>
           <i className="pp-pdot" />
           {statusLabel}
@@ -194,7 +193,7 @@ export function ProviderDetail({
           />
         </div>
 
-        {isAnthropic && (
+        {isAnthropicKind && (
           <div className="pp-field">
             <div className="pp-f-label-row">
               <label className="pp-f-label">思考努力等级</label>

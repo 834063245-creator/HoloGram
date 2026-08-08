@@ -6,6 +6,7 @@
 
 import { getCatalogProviders, getDefaultModel, getModel } from './provider/catalog';
 import { ANTHROPIC_DEFAULT_BASE_URL } from './provider/anthropic';
+import type { Protocol } from './provider/types';
 
 /** 最近一次「测试连接」结果 — 非敏感，随 localStorage 持久化（供状态点/历史展示）。 */
 export interface ProviderTestResult {
@@ -18,7 +19,7 @@ export interface ProviderTestResult {
 }
 
 export interface ProviderSettings {
-  kind: 'anthropic' | 'openai';
+  kind: Protocol; // 持久化字段名保持 kind（存储遗留名）；领域词见 CONTEXT.md「Protocol」
   name: string;
   apiKey: string;
   baseUrl: string;
@@ -56,7 +57,7 @@ const STORAGE_KEY = 'hologram_settings';
 /** 协议（kind）→ 默认 Base URL。字面量的唯一事实源——
  *  新增 provider 无目录条目时的兜底；已知厂商优先用
  *  defaultBaseUrl()（目录 getDefaultModel(name).baseUrl 优先）。 */
-export const PROVIDER_PROTOCOL_DEFAULTS: Record<ProviderSettings['kind'], string> = {
+export const PROVIDER_PROTOCOL_DEFAULTS: Record<Protocol, string> = {
   anthropic: ANTHROPIC_DEFAULT_BASE_URL,
   openai: 'https://api.openai.com/v1',
 };
@@ -277,7 +278,7 @@ export function updateProvider(s: AppSettings, name: string, patch: Partial<Prov
   };
 }
 
-export function addProvider(s: AppSettings, name: string, kind: 'anthropic' | 'openai'): AppSettings {
+export function addProvider(s: AppSettings, name: string, kind: Protocol): AppSettings {
   if (s.providers.find((p) => p.name === name)) {
     throw new Error(`Provider "${name}" 已存在`);
   }
@@ -310,7 +311,7 @@ export function removeProvider(s: AppSettings, name: string): AppSettings {
 // ---- 定价（每百万 token）----
 
 /** 解析显示定价：优先模型目录（权威 USD 数据），读不到才回退硬编码。 */
-export function defaultPricing(kind: string, model: string) {
+export function defaultPricing(kind: Protocol, model: string) {
   const m = getModel(model);
   if (m && m.cost && m.cost.input > 0) {
     return { cache_hit: m.cost.cacheRead, input: m.cost.input, output: m.cost.output, currency: '$' };

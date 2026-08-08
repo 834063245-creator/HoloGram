@@ -3,6 +3,11 @@
 
 // Provider 抽象层 — 统一 Message / Chunk / ToolCall，抹平 Anthropic 和 OpenAI 的 API 差异
 
+/** 模型 API 的线上方言（CONTEXT.md「Protocol」）。
+ *  注意：ProviderSettings/ModelDescriptor 上的持久化字段名仍叫 `kind`（存储遗留名），
+ *  领域词与代码类型统一为 Protocol，改存储键名需带迁移。 */
+export type Protocol = 'anthropic' | 'openai';
+
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface Message {
@@ -99,7 +104,7 @@ export interface ModelCost {
 export interface ModelDescriptor {
   id: string; // 例如 "deepseek-v4-pro"
   name: string; // 例如 "DeepSeek V4 Pro"
-  kind: 'anthropic' | 'openai'; // 使用哪个 provider 实现
+  kind: Protocol; // 使用哪个 provider 实现（领域词：Protocol）
   provider: string; // provider 名称（例如 "deepseek"、"anthropic"）
   baseUrl: string; // API 端点
   reasoning: boolean; // 是否支持 thinking/reasoning

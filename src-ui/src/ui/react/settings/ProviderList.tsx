@@ -6,6 +6,7 @@
 
 import type { ProviderSettings } from '../../../settings';
 import { providerStatus, STATUS_LABEL } from './status';
+import { protocolLabel } from './protocol';
 
 interface ProviderListProps {
   providers: ProviderSettings[];
@@ -14,8 +15,6 @@ interface ProviderListProps {
   onSelect: (name: string) => void;
   onAdd: () => void;
 }
-
-const kindLabel = (k: ProviderSettings['kind']) => (k === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容');
 
 export function ProviderList({ providers, selected, current, onSelect, onAdd }: ProviderListProps) {
   return (
@@ -42,7 +41,7 @@ export function ProviderList({ providers, selected, current, onSelect, onAdd }: 
                   {p.name === current && <span className="pp-now-badge">当前</span>}
                 </span>
                 <span className="pp-src-sub">
-                  {kindLabel(p.kind)}
+                  {protocolLabel(p.kind)}
                   {p.model ? ` · ${p.model}` : ''}
                 </span>
               </span>

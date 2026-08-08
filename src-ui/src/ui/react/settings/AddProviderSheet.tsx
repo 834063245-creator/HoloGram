@@ -6,10 +6,12 @@
 
 import { useEffect, useState } from 'react';
 import { getCatalogProviders, getDefaultModel } from '../../../provider/catalog';
+import type { Protocol } from '../../../provider/types';
+import { protocolLabel } from './protocol';
 
 export interface AddProviderEntry {
   name: string;
-  kind: 'anthropic' | 'openai';
+  kind: Protocol;
   apiKey?: string;
   baseUrl?: string;
   model?: string;
@@ -26,7 +28,7 @@ const NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
 export function AddProviderSheet({ open, existingNames, onClose, onAdd }: AddProviderSheetProps) {
   const [name, setName] = useState('');
-  const [kind, setKind] = useState<'anthropic' | 'openai'>('openai');
+  const [kind, setKind] = useState<Protocol>('openai');
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [key, setKey] = useState('');
@@ -114,7 +116,7 @@ export function AddProviderSheet({ open, existingNames, onClose, onAdd }: AddPro
               >
                 <div className="pp-cat-name">{provName}</div>
                 <div className="pp-cat-model">{defaultModel.id}</div>
-                <div className="pp-cat-kind">{defaultModel.kind === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容'}</div>
+                <div className="pp-cat-kind">{protocolLabel(defaultModel.kind)}</div>
               </button>
             );
           })}

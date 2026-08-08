@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getDynamicModelCount, getModel, searchModels } from '../../provider/catalog';
-import type { ModelDescriptor } from '../../provider/types';
+import type { ModelDescriptor, Protocol } from '../../provider/types';
 import { iconHtml } from '../icons';
 
 interface ModelSelectorProps {
@@ -16,7 +16,7 @@ interface ModelSelectorProps {
   /** 当前 provider 名称 — 来自该 provider 的模型优先排序。 */
   providerName: string;
   /** Provider 类型 — 按匹配的 API 协议过滤目录。 */
-  kind: 'anthropic' | 'openai';
+  kind: Protocol;
   /** 可选：从 provider 的 API 获取模型并合并到目录中。 */
   onRefreshModels?: () => Promise<number>;
 }
