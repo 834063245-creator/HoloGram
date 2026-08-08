@@ -10,12 +10,24 @@
 
 ## API 级预检（脚本）
 
+方式 A：凭据直读（推荐，Key 不落盘、不打印）
+
+```powershell
+# 脚本从 %LOCALAPPDATA%\com.hologram.app\credentials.enc（DPAPI）解密后经 stdin 传入
+node scripts/p3-regression/check-providers.mjs --from-stdin
+```
+
+方式 B：环境变量
+
 ```powershell
 cd scripts/p3-regression
 $env:DEEPSEEK_KEY='sk-...'
 $env:ANTHROPIC_KEY='sk-ant-...'
 node check-providers.mjs
 ```
+
+> 不要把 Key 粘贴进聊天/文档；`--from-stdin` 模式由本机 DPAPI 解密后管道直传，全程不落盘。
+> Anthropic 需要 App 内已配置 Key（credentials.enc 中有 anthropic 条目），否则脚本会 SKIP。
 
 脚本逐项检查：
 
@@ -26,6 +38,9 @@ node check-providers.mjs
 5. OpenAI 兼容 `/models` 枚举（DeepSeek/GLM/Ollama 可用时）
 
 任一项失败 → 先看错误分类（`[密钥错误]` / `[网络问题]` / `[地址错误]` / `[模型不存在]`），再进 App 复现。
+
+> 2026-08-08 实跑记录：DeepSeek（deepseek-v4-flash）与 GLM（glm-4.5）各 3 项（/models 发现、带工具一轮、翻译器）全过；
+> 翻译器预算须 ≥1024 token（推理模型会先消耗思考链）；Anthropic 因 App 无凭据 SKIP，Ollama 因本地未启动 SKIP。
 
 ## UI 级检查清单（App 内）
 
