@@ -176,7 +176,7 @@ export function buildSystemPrompt(
 ### 工作流程
 1. **探索** — 用 fs(read/list/glob) / search(content) / explore_deps / trace_impact / fragile_modules 充分理解代码
 2. **设计** — 确定最佳方案，考虑权衡
-3. **写计划** — 用 fs(write) 写到计划文件（路径见 enter_plan_mode 返回值）
+3. **写计划** — 用 write_file 写到计划文件（路径见 enter_plan_mode 返回值）
 4. **提交** — 调 exit_plan_mode 提交计划给用户审批
 
 ### 计划要求
@@ -526,40 +526,41 @@ export function planRegistry(
     }
   }
 
-  // plan 模式下额外允许 write_file / edit_file，但仅限计划文件
-  if (planState?.state.active) {
-    const writeFile = base.get('write_file');
-    const editFile = base.get('edit_file');
-    if (writeFile) {
-      out.register({
-        name: () => writeFile.name(),
-        description: () => writeFile.description(),
-        parameters: () => writeFile.parameters(),
-        readOnly: () => false,
-        execute: async (args, onProgress) => {
-          const fp = String(args.filePath || '');
-          if (planState.isPlanFile(fp)) {
-            return writeFile.execute(args, onProgress);
-          }
-          return `[已拦截] 规划模式下只能写计划文件 (${planState.state.planFilePath})。`;
-        },
-      });
-    }
-    if (editFile) {
-      out.register({
-        name: () => editFile.name(),
-        description: () => editFile.description(),
-        parameters: () => editFile.parameters(),
-        readOnly: () => false,
-        execute: async (args, onProgress) => {
-          const fp = String(args.filePath || '');
-          if (planState.isPlanFile(fp)) {
-            return editFile.execute(args, onProgress);
-          }
-          return `[已拦截] 规划模式下只能编辑计划文件 (${planState.state.planFilePath})。`;
-        },
-      });
-    }
+  // plan 模式下额外允许 write_file / edit_file，但仅限计划文件。
+  // 无条件注册（不依赖构建时 active 状态）——运行时由 planState.isPlanFile 判定：
+  // 未激活时 planFilePath 为 null → isPlanFile 恒 false → 拦截所有写（安全兜底）；
+  // 激活后只放行计划文件。这样 plan 工具集可随时构建、随时切换。
+  const writeFile = base.get('write_file');
+  const editFile = base.get('edit_file');
+  if (writeFile) {
+    out.register({
+      name: () => writeFile.name(),
+      description: () => writeFile.description(),
+      parameters: () => writeFile.parameters(),
+      readOnly: () => false,
+      execute: async (args, onProgress) => {
+        const fp = String(args.filePath || '');
+        if (planState && planState.isPlanFile(fp)) {
+          return writeFile.execute(args, onProgress);
+        }
+        return `[已拦截] 规划模式下只能写计划文件 (${planState?.state.planFilePath ?? '未知'})。`;
+      },
+    });
+  }
+  if (editFile) {
+    out.register({
+      name: () => editFile.name(),
+      description: () => editFile.description(),
+      parameters: () => editFile.parameters(),
+      readOnly: () => false,
+      execute: async (args, onProgress) => {
+        const fp = String(args.filePath || '');
+        if (planState && planState.isPlanFile(fp)) {
+          return editFile.execute(args, onProgress);
+        }
+        return `[已拦截] 规划模式下只能编辑计划文件 (${planState?.state.planFilePath ?? '未知'})。`;
+      },
+    });
   }
   return out;
 }

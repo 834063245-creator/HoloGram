@@ -292,13 +292,52 @@ export class Agent {
   /** Plan 模式状态 + 注入器 — 由 Runtime 在 createAgent 时设置 */
   private _planState: import('./plan/plan-state').PlanStateManager | null = null;
   private _planInjector: import('./plan/plan-injection').PlanModeInjector | null = null;
+  /** 完整工具集（normal 模式）— plan 激活时切到 _planTools，退出时切回 */
+  private _fullTools: ToolRegistry | null = null;
+  /** plan 过滤工具集（只读 + 计划文件写入） */
+  private _planTools: ToolRegistry | null = null;
+  /** 项目路径 — plan 模式 enter 需要（UI 按钮切换路径） */
+  private _projectPath = '';
 
   setPlanState(
     state: import('./plan/plan-state').PlanStateManager,
     injector: import('./plan/plan-injection').PlanModeInjector,
+    projectPath = '',
   ): void {
     this._planState = state;
     this._planInjector = injector;
+    this._projectPath = projectPath;
+    // 运行时工具集切换 — enter/exit/restore 都会触发 onChange，
+    // 这样 enter_plan_mode / exit_plan_mode / UI 按钮 / 会话恢复
+    // 全部走同一条路径，无需重建 Agent。
+    state.onChange((s) => {
+      this.tools = s.active ? (this._planTools ?? this._fullTools ?? this.tools) : (this._fullTools ?? this.tools);
+    });
+    // 初始校正：createAgent 时 collaborationMode === 'plan' 会先 enter
+    //（onChange 注册晚于 enter），这里补一次同步。
+    if (state.state.active && this._planTools) {
+      this.tools = this._planTools;
+    }
+  }
+
+  /** 注入两套工具集（完整 + plan 过滤）。plan 状态变化时在两者间切换。 */
+  setToolSets(full: ToolRegistry, plan: ToolRegistry): void {
+    this._fullTools = full;
+    this._planTools = plan;
+    if (this._planState?.state.active) {
+      this.tools = plan;
+    }
+  }
+
+  /** UI 按钮路径 — 运行时切换 plan 模式，不重建 Agent。 */
+  setPlanMode(active: boolean): void {
+    if (!this._planState) return;
+    if (active && !this._planState.state.active) {
+      if (!this._projectPath) return;
+      this._planState.enter(this._projectPath);
+    } else if (!active && this._planState.state.active) {
+      this._planState.exit();
+    }
   }
 
   /** 从持久化快照恢复 plan 状态 — 在 agent load 后调用 */

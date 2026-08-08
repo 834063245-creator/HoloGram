@@ -498,16 +498,23 @@ export class Workspace {
   /** 需要重建 Agent 的配置变更原因（权限模式等运行时读取项不在此列，发事件也不会触发重建）。 */
   private static _AGENT_REBUILD_REASONS: ReadonlySet<AgentConfigChangeReason> = new Set([
     'settings-saved',
-    'collaboration-mode',
     'model-switched',
   ]);
 
   /**
    * Agent 配置变更统一入口（由 bus 'agent:config-changed' 驱动）。
    * workspace 自行决定是否重建；重建前先保存当前会话，避免切换模式/模型丢对话。
+   * collaboration-mode 走运行时切换（Agent.setPlanMode），不重建——
+   * 上下文、压缩缓存、hook 全部保留。
    * 组件不得绕过此方法直接调 setupAgent。
    */
   async applyAgentConfig(chatPanel: ChatCore, reason: AgentConfigChangeReason): Promise<void> {
+    // 规划模式切换 — 运行时状态切换，不重建 Agent
+    if (reason === 'collaboration-mode') {
+      const mode = this._modeState().collaborationMode;
+      this.agent?.setPlanMode(mode === 'plan');
+      return;
+    }
     if (!Workspace._AGENT_REBUILD_REASONS.has(reason)) return;
     await chatPanel
       .saveActiveSession(this.path)
@@ -539,13 +546,6 @@ export class Workspace {
         await this.setupAgent(chatPanel);
       }
     }
-  }
-
-  /** Plan 模式工具注册表：从给定注册表浅拷贝只读工具。 */
-  private _planRegistry(base: ToolRegistry): ToolRegistry {
-    const out = new ToolRegistry();
-    for (const t of base.filterReadOnly()) out.register(t);
-    return out;
   }
 
   /** 从 panel store 读取模式状态。回退到 normal/ask。 */

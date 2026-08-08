@@ -448,20 +448,22 @@ export class AgentRuntime implements RuntimePort {
     const r = new ToolRegistry();
     for (const t of config.tools.all()) r.register(t);
 
-    // 2b. Plan 模式状态 — 在 planRegistry 之前创建，使工具能引用它
+    // 2b. Plan 模式状态 — 运行时状态机，enter/exit 动态切换工具集
     const planState = new PlanStateManager();
     if (config.collaborationMode === 'plan') {
       planState.enter(config.projectPath);
     }
 
-    // 2c. 注册 plan 工具（readOnly: true → 通过 planRegistry 过滤）
+    // 2c. 注册 plan 工具（readOnly: true → 两种模式都存活）
     r.register(createEnterPlanModeTool(planState, config.projectPath));
     // exit_plan_mode 使用 eventSink 将 PlanReview 事件推入聊天流
     r.register(createExitPlanModeTool(planState, config.eventSink));
 
-    // 3. Plan 模式：过滤为只读，但允许 plan 文件写入
-    const effR =
-      config.collaborationMode === 'plan' ? planRegistry(r, planState) : r;
+    // 3. 始终构建完整工具集（不再静态过滤）— plan 过滤版在下方
+    //    planR = planRegistry(effR) 构建，由 Agent.setPlanState 的
+    //    onChange 监听在运行时切换。审批通过 / UI 切换 / 会话恢复
+    //    都走同一条路径，无需重建 Agent。
+    const effR = r;
 
     // 4. 创建 Agent 实例
     const execState = config.execState ?? createExecState();
@@ -497,15 +499,14 @@ export class AgentRuntime implements RuntimePort {
     newAgent.setBus(this._bus);
     // 接线 discovery board 用于 Agent 间知识共享（通过 proxy 实现会话隔离）
     newAgent.setDiscoveryBoard(discoveryProxy as any);
-    // 注册通信工具 — plan 模式仅获得只读工具（agent_inbox / agent_list）
+    // 注册通信工具 — 完整集注册全部；plan 过滤版由 planRegistry 派生时
+    // 自动丢弃非只读工具（agent_message 等），只保留 inbox/list 只读。
     for (const tool of createCommunicationTools(this._bus, () => newAgent.id)) {
-      if (config.collaborationMode === 'plan' && !tool.readOnly()) continue;
       effR.register(tool);
     }
 
-    // 注册 discovery 工具 — plan 模式：仅只读 agent_lookup
+    // 注册 discovery 工具 — 同上，plan 过滤版只保留只读 agent_lookup
     for (const tool of createDiscoveryTools(discoveryProxy as any, () => newAgent.id)) {
-      if (config.collaborationMode === 'plan' && !tool.readOnly()) continue;
       effR.register(tool);
     }
 
@@ -517,16 +518,15 @@ export class AgentRuntime implements RuntimePort {
     };
 
     // 注册 agent_merge 工具 — 允许父 Agent 合并已完成的异步子 Agent worktree
-    if (config.collaborationMode !== 'plan' && config.subAgentPool) {
+    // （完整集注册；plan 过滤版会自动丢弃这些非只读工具）
+    if (config.subAgentPool) {
       effR.register(createMergeTool(taskProxy as any, () => newAgent.id, isolationExec, { projectPath: config.projectPath }));
       effR.register(createBoardStatusTool(taskProxy as any, () => newAgent.id));
       effR.register(createAgentKillTool(config.subAgentPool, isolationExec));
     }
 
     // 注册 agent_request 工具 — 带超时的同步请求
-    if (config.collaborationMode !== 'plan') {
-      effR.register(createRequestTool(this._bus, () => newAgent.id));
-    }
+    effR.register(createRequestTool(this._bus, () => newAgent.id));
 
     // ── 替换 agent_spawn 为绑定本 Agent 的版本 ──
     // 背景：agent_spawn 在 buildToolRegistry 用 workspace 传入的 subAgentSpawner
@@ -580,8 +580,18 @@ export class AgentRuntime implements RuntimePort {
     registerCompactionTools(newAgent, effR);
 
     // 8b. 工具层收敛：领域工具 + 隐藏旧名。
-    // plan 模式保留 planRegistry 的只读守卫版领域工具，不重建。
-    convergeRegistry(effR, { rebuildDomains: config.collaborationMode !== 'plan' });
+    // 始终收敛完整工具集（effR = r）；plan 过滤版由下方 planRegistry 独立派生。
+    convergeRegistry(effR);
+
+    // 8c. 构建 plan 过滤工具集 — 只读 + 领域只读动作 + 计划文件写入。
+    // 通过 Agent.setToolSets 注入，由 planState.onChange 在运行时切换。
+    const planR = planRegistry(effR, planState);
+    // plan 模式保留 agent_spawn（与原静态实现一致）— 子 Agent 从
+    // this.tools 克隆工具集（planR），因此 spawn 出的子 Agent 也是
+    // 只读的，可做并行只读探索；spawn 自身不受影响。
+    const spawnT = effR.get('agent_spawn');
+    if (spawnT) planR.register(spawnT);
+    newAgent.setToolSets(effR, planR);
 
     // 9. 接线 hooks（图上下文 + 状态 + board 追踪 + plan）
     const hooks = new HookRegistry();
@@ -607,9 +617,10 @@ export class AgentRuntime implements RuntimePort {
     newAgent.setHooks(hooks);
     newAgent.setPreflightHooks(preflightHooks);
 
-    // 9b. 接线 plan 模式 — runLoop 提醒注入器 + 状态通知
+    // 9b. 接线 plan 模式 — runLoop 提醒注入器 + 状态通知。
+    // 传入 projectPath：UI 按钮切换（setPlanMode）需要它来 enter。
     const planInjector = new PlanModeInjector();
-    newAgent.setPlanState(planState, planInjector);
+    newAgent.setPlanState(planState, planInjector, config.projectPath);
     planState.onChange((s) => {
       this.notifier?.onPlanModeChange?.(agentId, s.active, s.planFilePath);
     });
