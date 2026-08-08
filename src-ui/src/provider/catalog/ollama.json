@@ -1,0 +1,56 @@
+{
+  "qwen2.5-coder:7b": {
+    "id": "qwen2.5-coder:7b",
+    "name": "Qwen2.5 Coder 7B (本地)",
+    "kind": "openai",
+    "vendor": "ollama",
+    "baseUrl": "http://localhost:11434/v1",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0
+    },
+    "contextWindow": 0,
+    "maxTokens": 0
+  },
+  "llama3.1:8b": {
+    "id": "llama3.1:8b",
+    "name": "Llama 3.1 8B (本地)",
+    "kind": "openai",
+    "vendor": "ollama",
+    "baseUrl": "http://localhost:11434/v1",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0
+    },
+    "contextWindow": 0,
+    "maxTokens": 0
+  },
+  "deepseek-r1:8b": {
+    "id": "deepseek-r1:8b",
+    "name": "DeepSeek R1 8B (本地)",
+    "kind": "openai",
+    "vendor": "ollama",
+    "baseUrl": "http://localhost:11434/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0
+    },
+    "contextWindow": 0,
+    "maxTokens": 0
+  }
+}

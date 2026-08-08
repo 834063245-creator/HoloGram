@@ -12,8 +12,10 @@
 
 import anthropicJson from './catalog/anthropic.json';
 import deepseekJson from './catalog/deepseek.json';
+import glmJson from './catalog/glm.json';
 import minimaxJson from './catalog/minimax.json';
 import moonshotaiJson from './catalog/moonshotai.json';
+import ollamaJson from './catalog/ollama.json';
 import openaiJson from './catalog/openai.json';
 import qwenJson from './catalog/qwen.json';
 import type { ModelDescriptor } from './types';
@@ -24,8 +26,10 @@ type CatalogFile = Record<string, ModelDescriptor>;
 const CATALOG_FILES: Record<string, CatalogFile> = {
   anthropic: anthropicJson as CatalogFile,
   deepseek: deepseekJson as CatalogFile,
+  glm: glmJson as CatalogFile,
   minimax: minimaxJson as CatalogFile,
   moonshotai: moonshotaiJson as CatalogFile,
+  ollama: ollamaJson as CatalogFile,
   openai: openaiJson as CatalogFile,
   qwen: qwenJson as CatalogFile,
 };

@@ -1,0 +1,56 @@
+{
+  "glm-4.5": {
+    "id": "glm-4.5",
+    "name": "GLM-4.5",
+    "kind": "openai",
+    "vendor": "glm",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.8,
+      "output": 2.4,
+      "cacheRead": 0.08
+    },
+    "contextWindow": 128000,
+    "maxTokens": 8192
+  },
+  "glm-4.5-air": {
+    "id": "glm-4.5-air",
+    "name": "GLM-4.5 Air",
+    "kind": "openai",
+    "vendor": "glm",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 0.9,
+      "cacheRead": 0.03
+    },
+    "contextWindow": 128000,
+    "maxTokens": 8192
+  },
+  "glm-4-flash": {
+    "id": "glm-4-flash",
+    "name": "GLM-4 Flash",
+    "kind": "openai",
+    "vendor": "glm",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0
+    },
+    "contextWindow": 128000,
+    "maxTokens": 4096
+  }
+}

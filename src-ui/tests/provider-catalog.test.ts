@@ -15,9 +15,9 @@ import {
 import { guessReasoning } from '../src/provider/openai';
 
 describe('catalog', () => {
-  it('loads models from all 6 providers', () => {
+  it('loads models from all catalog providers', () => {
     const all = getAllModels();
-    // deepseek(2) + anthropic(14) + openai(29) + moonshotai(10) + minimax(3) + qwen(5) = 63
+    // deepseek(2) + anthropic(14) + openai(29) + moonshotai(10) + minimax(3) + qwen(5) + glm(3) + ollama(3)
     expect(all.length).toBeGreaterThanOrEqual(30);
   });
 
@@ -29,6 +29,8 @@ describe('catalog', () => {
     expect(vendors).toContain('moonshotai');
     expect(vendors).toContain('minimax');
     expect(vendors).toContain('qwen-token-plan');
+    expect(vendors).toContain('glm');
+    expect(vendors).toContain('ollama');
   });
 
   it('findModels returns only models for the specified vendor', () => {
@@ -85,7 +87,16 @@ describe('catalog', () => {
   });
 
   it('getDefaultModel returns a model for each known vendor', () => {
-    for (const providerName of ['deepseek', 'anthropic', 'openai', 'moonshotai', 'minimax', 'qwen-token-plan']) {
+    for (const providerName of [
+      'deepseek',
+      'anthropic',
+      'openai',
+      'moonshotai',
+      'minimax',
+      'qwen-token-plan',
+      'glm',
+      'ollama',
+    ]) {
       const model = getDefaultModel(providerName);
       expect(model, `default model for ${providerName}`).toBeDefined();
       if (model) expect(model.vendor).toBe(providerName);
