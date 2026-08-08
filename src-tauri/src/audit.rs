@@ -60,6 +60,7 @@ impl AuditLogger {
     }
 
     /// 累计写失败次数（测试与可观测用）。
+    #[allow(dead_code)] // 当前仅测试消费；保留为可观测接口
     pub fn write_failure_count(&self) -> u64 {
         self.write_failures.load(Ordering::Relaxed)
     }
