@@ -136,6 +136,16 @@ describe('ModelSwitcher', () => {
 
     expect(document.querySelector('.ms-pop')).not.toBeNull();
     expect(document.querySelector('.ms-pop-check')).not.toBeNull(); // deepseek = openai → 深度思考开关
+    const trigger = document.querySelector<HTMLButtonElement>('.chat-model-clickable')!;
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(document.querySelector('.ms-pop')?.getAttribute('role')).toBe('menu');
+    const modelItems = [
+      ...document.querySelector<HTMLDivElement>('.ms-pop-list')!.querySelectorAll<HTMLButtonElement>('.ms-pop-item'),
+    ];
+    expect(modelItems.every((b) => b.getAttribute('role') === 'menuitemradio')).toBe(true);
+    const selected = modelItems.find((b) => b.classList.contains('selected'));
+    expect(selected?.getAttribute('aria-checked')).toBe('true');
     const ids = [...document.querySelectorAll('.ms-pop-item-id')].map((n) => n.textContent);
     expect(ids).toContain('deepseek-v4');
     expect(ids).not.toContain('claude-sonnet-4-6'); // 当前信号源只列自己的模型

@@ -109,6 +109,9 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
       <button
         className="chat-model-badge chat-model-clickable"
         title={`切换模型 · ${active?.name} / ${active?.model}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls="ms-pop"
         onClick={() => setOpen((o) => !o)}
       >
         <span dangerouslySetInnerHTML={{ __html: iconHtml('agent', 10) }} /> {modelLabel}
@@ -116,7 +119,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
       </button>
 
       {open && (
-        <div className="ms-pop" role="menu">
+        <div id="ms-pop" className="ms-pop" role="menu" aria-label="模型切换">
           <div className="ms-pop-hd">
             <span className="ms-pop-src">{active.name}</span>
             <span className={`ms-pop-kind ms-pop-kind-${active.kind}`}>{protocolLabel(active.kind)}</span>
@@ -130,6 +133,8 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
                   type="button"
                   key={m.id}
                   className={`ms-pop-item${m.id === active.model ? ' selected' : ''}`}
+                  role="menuitemradio"
+                  aria-checked={m.id === active.model}
                   onClick={() => selectModel(m.id, m)}
                 >
                   <span className="ms-pop-item-main">
@@ -157,7 +162,13 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
               <div className="ms-pop-label">其他信号源</div>
               <div className="ms-pop-list">
                 {others.map((p) => (
-                  <button type="button" key={p.name} className="ms-pop-item" onClick={() => switchProvider(p.name)}>
+                  <button
+                    type="button"
+                    key={p.name}
+                    className="ms-pop-item"
+                    role="menuitem"
+                    onClick={() => switchProvider(p.name)}
+                  >
                     <span className="ms-pop-item-main">
                       <span className="ms-pop-item-id">{p.name}</span>
                       <span className="ms-pop-item-name">
@@ -200,6 +211,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
             <button
               type="button"
               className="ms-pop-manage"
+              role="menuitem"
               onClick={() => {
                 setOpen(false);
                 onOpenSettings?.();
