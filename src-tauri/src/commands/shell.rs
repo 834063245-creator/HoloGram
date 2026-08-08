@@ -218,25 +218,43 @@ pub(crate) async fn exec_command(
     }
 
     // ── 非流式路径（原始阻塞行为） ──
-    let stdout_drainer = child.take_stdout().map(|mut reader| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut v = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut reader, &mut v);
-            let _ = tx.send(v);
-        });
-        rx
-    });
-    let stderr_drainer = child.take_stderr().map(|mut reader| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut v = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut reader, &mut v);
-            let _ = tx.send(v);
-        });
-        rx
-    });
+    let stdout_drainer = pipe_drainer(child.take_stdout());
+    let stderr_drainer = pipe_drainer(child.take_stderr());
 
+    // P1-16：try_wait+sleep 忙等是阻塞循环，移入 spawn_blocking——
+    // 否则一条长命令（默认上限 300s）占住一个 tokio worker，并发命令叠加可耗尽线程池。
+    let timeout_ms_val = timeout_ms.unwrap_or(300_000);
+    tokio::task::spawn_blocking(move || {
+        wait_child_blocking(child, stdout_drainer, stderr_drainer, timeout, timeout_ms_val)
+    })
+    .await
+    .map_err(|e| format!("命令等待任务异常: {e}"))?
+}
+
+/// 为子进程管道起 drainer 线程：read_to_end 后经 channel 送回，避免管道写满阻塞子进程。
+fn pipe_drainer(
+    reader: Option<Box<dyn std::io::Read + Send + Unpin>>,
+) -> Option<std::sync::mpsc::Receiver<Vec<u8>>> {
+    reader.map(|mut r| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut r, &mut v);
+            let _ = tx.send(v);
+        });
+        rx
+    })
+}
+
+/// 非流式路径的阻塞等待：轮询子进程退出，收集 drainer 输出，超时杀进程树。
+/// 必须运行在阻塞线程上（spawn_blocking），不得内联在 async worker。
+fn wait_child_blocking(
+    mut child: crate::os_sandbox::SandboxedChild,
+    stdout_drainer: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
+    stderr_drainer: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
+    timeout: Duration,
+    timeout_ms_val: u64,
+) -> Result<String, String> {
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
@@ -285,7 +303,7 @@ pub(crate) async fn exec_command(
                         .unwrap_or_default();
                     return Ok(truncate_output(&format!(
                         "[exit code: -1] 命令超时 ({}ms)，已终止。可拆小命令或增大 timeoutMs 后重试。\n{}{}",
-                        timeout_ms.unwrap_or(300_000),
+                        timeout_ms_val,
                         stdout,
                         stderr
                     )));
@@ -318,4 +336,43 @@ pub(crate) async fn bash_wait(job_id: u32, timeout_ms: Option<u64>) -> Result<St
 #[tauri::command]
 pub(crate) async fn drain_bg_notifications() -> Result<String, String> {
     Ok(crate::utils::drain_bg_notifications())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_wait(cmd: &str, timeout_ms: u64) -> Result<String, String> {
+        let mut child = crate::os_sandbox::spawn_shell(cmd, ".").expect("spawn_shell failed");
+        let stdout = pipe_drainer(child.take_stdout());
+        let stderr = pipe_drainer(child.take_stderr());
+        wait_child_blocking(
+            child,
+            stdout,
+            stderr,
+            Duration::from_millis(timeout_ms),
+            timeout_ms,
+        )
+    }
+
+    // P1-16 回归：阻塞等待移入 spawn_blocking 后行为不变
+    #[test]
+    fn test_wait_child_blocking_success_output() {
+        let out = run_wait("echo hello-p116", 30_000).unwrap();
+        assert!(out.contains("hello-p116"), "unexpected output: {out}");
+    }
+
+    #[test]
+    fn test_wait_child_blocking_exit_code() {
+        let out = run_wait("exit 3", 30_000).unwrap();
+        assert!(out.contains("[exit code: 3]"), "unexpected output: {out}");
+    }
+
+    #[test]
+    fn test_wait_child_blocking_timeout_kills() {
+        let start = std::time::Instant::now();
+        let out = run_wait("sleep 30", 500).unwrap();
+        assert!(out.contains("命令超时"), "unexpected output: {out}");
+        // 超时即终止进程树，不得等满 sleep 30
+        assert!(start.elapsed() < Duration::from_secs(20), "took {:?}", start.elapsed());
+    }
 }
