@@ -3,92 +3,33 @@
 </p>
 
 <p align="center">
-  <strong>© 2026 Wenbing Jing. Licensed under MIT.</strong><br/>
-  <em>This software is free for any use. Attribution required.</em>
+  <strong>HoloGram</strong> — 代码库依赖图引擎，为 AI Agent 提供确定性的静态分析
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange&style=for-the-badge" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-1400%2B%20total-brightgreen?style=for-the-badge" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20Linux-blue?style=for-the-badge" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange&style=flat-square" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-1600%2B-brightgreen?style=flat-square" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20Linux-blue?style=flat-square" /></a>
 </p>
 
-<br/>
-
-> 🧠 **给你的 AI 编程助手装一双"眼睛"。**
->
-> HoloGram 把你的代码库变成一张依赖拓扑图——Agent 不用逐层翻源文件，一次工具调用就知道「改这里会不会炸」、「哪些地方会被波及」。
->
-> **26 门语言 · 零配置 · 省 ~70% token。**
-
 ---
 
-## 📖 目录
+## 定位
 
-- [🎯 什么人需要这个](#-什么人需要这个)
-- [⚡ 5 分钟上手](#-5-分钟上手)
-- [✨ 它能做什么](#-它能做什么)
-- [📊 真实案例：FirstBeat Ultimate 项目体检](#-真实案例firstbeat-ultimate-项目体检)
-- [🖥️ 桌面应用（可选）](#️-桌面应用可选)
-- [🌐 支持的语言](#-支持的语言)
-- [🗺️ 工具地图](#️-工具地图)
-- [🏗️ 架构总览](#️-架构总览)
-- [🔨 从源码构建](#-从源码构建)
-- [⚠️ 已知局限](#️-已知局限)
-- [❓ 常见问题 (FAQ)](#-常见问题-faq)
-- [🔧 故障排查](#-故障排查)
-- [👩‍💻 开发](#-开发)
-- [📄 许可证](#-许可证)
+HoloGram 把代码库编译成一张统一 IR 依赖图（节点=符号/函数/类/模块，边=调用/继承/读写/时序），并通过 MCP 协议向 AI Agent 暴露 33 个图查询工具。
 
----
+**核心主张：依赖推理应当是确定性的，而不是猜的。**
 
-## 🎯 什么人需要这个
+LLM 分析"改 A 会炸什么"时，靠逐文件读源码推测依赖——弱模型会漏，大项目会翻不动。HoloGram 用 tree-sitter 静态分析预先算好整张依赖图：Agent 一次工具调用拿到结构化事实（影响面、循环、脆弱模块、数据流路径），而不是源文件文本。单点查询省 ~70% token，全局分析省 90%+；省 token 是次要的，**可靠性**是主要的。
 
-<p align="center">
-  <table>
-    <tr>
-      <td align="center" width="33%"><h3>🤖<br/>AI 编码工具用户</h3></td>
-      <td align="center" width="33%"><h3>🔍<br/>接手老项目的开发者</h3></td>
-      <td align="center" width="33%"><h3>🏛️<br/>技术负责人 / 架构师</h3></td>
-    </tr>
-    <tr>
-      <td>Agent 读源文件猜依赖，一层层翻代码，又慢又容易漏。弱模型还经常翻漏——漏一个，后面改了就炸。</td>
-      <td>代码库没文档、不知道模块之间的真实关系、不敢随便改——牵一发动全身。</td>
-      <td>需要盯模块边界、防止循环依赖、管控架构腐化——人工 Code Review 盯不过来。</td>
-    </tr>
-    <tr>
-      <td>✅ 全库依赖提前算好<br/>✅ 一次调用代替逐层翻文件<br/>✅ 改前自动告诉波及范围</td>
-      <td>✅ 打开项目 → 3D 星图<br/>✅ 谁调了谁一目了然<br/>✅ 改了谁会炸，点一下就知道</td>
-      <td>✅ 自定义约束规则<br/>✅ 越界自动标红<br/>✅ 循环依赖 / 脆弱模块 / 盲区扫描</td>
-    </tr>
-  </table>
-</p>
+引擎是单文件二进制，本地运行、零配置、代码不出机器。
 
-> 💡 **简单说：如果你在用 AI 写代码，HoloGram 让 AI 更聪明。如果你是人在维护代码，HoloGram 让你更快看懂。**
+## 快速开始
 
----
+### MCP 模式（推荐，1 分钟）
 
-## ⚡ 5 分钟上手
-
-### 🤙 方式一：MCP 模式（推荐 · 1 分钟 · 零界面）
-
-**不需要桌面应用。** 引擎是单文件二进制，26 种语法静态链接，零依赖。支持 Windows 和 Linux。
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                                                         │
-│   1.  复制下面那段话                                     │
-│   2.  粘贴到 Claude Code / Cursor                        │
-│   3.  回车                                               │
-│                                                         │
-│   🎉 搞定。Agent 自己下载、配置、验证。                    │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-```
-
-> 复制这段话发给你的 AI 编程工具：
+引擎随 [Releases](https://github.com/834063245-creator/HoloGram/releases) 发布（Windows / Linux），安装脚本一键完成。也可以把下面这段话直接发给你的 AI 编程工具，让它自己装：
 
 ```
 请帮我安装 HoloGram MCP 服务。步骤：
@@ -105,11 +46,8 @@
 4. 重启 AI 编程工具，调 engine_status 验证
 ```
 
-安装成功后，直接问：「分析这个项目」「改 auth.py 会炸吗」「有没有循环依赖」——Agent 自动调 HoloGram。
-
 <details>
-<summary>📝 手动配置（习惯自己来？）</summary>
-<br/>
+<summary>手动配置</summary>
 
 **Claude Code** — `~/.claude/mcp.json`：
 ```json
@@ -123,385 +61,121 @@
 }
 ```
 
-**Cursor** — Settings → MCP → Add new MCP server，command: `hologram-engine`，args: `serve`。
+**Cursor** — Settings → MCP → Add new MCP server：command `hologram-engine`，args `serve`。
 </details>
 
-### 💻 方式二：CLI 命令行工具
-
-安装后还可以直接在终端使用，适合脚本化场景：
+### CLI
 
 ```bash
-hologram run --list                           # 查看所有工具
-hologram run graph_summary .                   # 项目概览
-hologram run trace_impact . --node_id src/main.rs:main  # 查影响面
-hologram run preflight_check . --files a.rs,b.rs        # 改前检查（exit code 表达 pass/fail）
-hologram run detect_cycles .                    # 检测循环依赖
-hologram run list_flows .                       # 列出执行流（按安全敏感度排序）
+hologram run --list                        # 所有工具
+hologram run graph_summary .               # 项目概览
+hologram run trace_impact . --node_id src/main.rs:main   # 影响面
+hologram run preflight_check . --files a.rs,b.rs         # 改前检查（exit code 表达结果）
+hologram run detect_cycles .               # 循环依赖
+hologram run list_flows .                  # 执行流（按安全敏感度排序）
 ```
 
-> 💡 `preflight_check` 的 exit code：0=低风险，1=高风险（critical/high），适合 CI/CD 和 git hooks。
+### 桌面应用
 
-### 🖥️ 方式三：桌面应用
+[Releases](https://github.com/834063245-creator/HoloGram/releases) → 下载 `.msi`（Windows）→ 选项目 → 自动出图。桌面端与 MCP 模式共用同一个引擎。
 
-[Releases](https://github.com/834063245-creator/HoloGram/releases) → 下载 `.msi` → 双击 → 选项目 → 自动出图。
+## 能力
 
-> ⚠️ 桌面应用目前仅 Windows。macOS / Linux 请用 MCP 模式。
+### 图查询（33 个 MCP 工具）
 
----
+| 域 | 工具 |
+|:--|:--|
+| 依赖查询 | `explore_deps` `search_symbols` `get_neighbors` `inspect_symbol` `find_dep_path` |
+| 风险分析 | `trace_impact` `preflight_check` `fragile_modules` `detect_cycles` `thread_conflicts` |
+| 架构诊断 | `coupling_report` `arch_blindspots` `check_boundaries` `find_unused` |
+| 执行流 | `list_flows` `get_flow` `get_affected_flows` |
+| 数据流 | `trace_dataflow` `async_edges` |
+| 框架路由 | 24 种框架 URL → handler 映射（Express / Django / Rails / Spring …），动态 import / 反射 / DI 合成边 |
+| LSP 精确 | `resolve_call` `infer_type` `find_implementations` `find_references`（按需启动） |
+| 工程 | `analyze_project` `validate_project` `graph_diff` `rename_symbol` `project_health` `graph_summary` `cluster_report` `project_timeline` `get_community` |
+| 系统 | `engine_status` |
 
-## ✨ 它能做什么
+每个工具返回结构化 JSON（不是源文件），并附带推荐的下一步工具。
 
-| 能力 | 一句话 |
-|:-----|:-------|
-| 🎯 **改前查影响** | 改一个文件 → 立刻看到波及范围。Agent 在 `edit_file` / `write_file` 执行前**自动注入 ⚠️ 影响分析** |
-| 📋 **计划模式** | 探索 → 写计划 → 审批 → 执行。图引擎自动注入影响面，Agent 先想清楚再动手 |
-| 🚨 **自动抓越界** | 模块之间乱 import？自动标红。你定规则（glob/regex），它替你盯着 |
-| 💸 **给 Agent 省 token** | 一次调用拿结构化依赖数据，典型场景省 ~70% token |
-| 🌌 **3D 代码地图** | 代码库变星图，谁依赖谁一眼看穿。5000 文件不卡，GPU 加速布局 |
-| 🔄 **保存即刷新** | 代码保存 → 图自动更新。缓存过期检测，源文件更新时自动重分析 |
-| 🌊 **执行流分析** | 自动发现入口点（框架路由 / main / CLI），追踪完整调用链，按安全敏感度排序 |
-| 💡 **下一步建议** | 每个工具返回结果时自动附带推荐的后续工具——Agent 不用猜下一步查什么 |
-| 💬 **多 Agent 通信** | Agent 之间发消息、广播、查询、发现。拓扑无关、格式无关，有界 inbox 防背压 |
-| 🚀 **虚拟聊天渲染** | 虚拟列表 + 高度预测替代 DOM reflow，万条消息流畅滚动 |
-| 🌍 **26 门语言，零配置** | 打开项目直接出图。不需要配置文件、不需要标注 |
+### Agent 运行时（桌面应用内置）
 
----
+- **领域工具收敛**：`fs` `shell` `git` `search` `web` `agent` `task` `memory` 八个领域动作，旧工具名在模型调用路径直接淘汰
+- **每轮 schema 注入 ≤14**：按当前任务打分选择工具集，控制上下文与缓存成本
+- **计划模式**：探索 → 计划 → 审批 → 执行，图引擎自动注入影响面
+- **Goal 模式**：持久化目标状态，跨会话恢复，普通对话与目标现场完全隔离
+- **多 Agent**：spawn / kill / status / merge，git worktree 隔离，TaskBoard / DiscoveryBoard 共享状态，有界 inbox 防背压
+- **token 治理**：工具结果滚动折叠、auto-compact、缓存计价下的折叠开关
 
-## 📊 真实案例：FirstBeat Ultimate 项目体检
-
-> 2026-06-21 · 218 符号 · 322 边 · ~4,400 行 Python · 21 个源文件
-
-| 你想知道 | HoloGram | 手工做法 | 省多少 |
-|:--|:--|:--|:--|
-| 🔍 有循环依赖吗？ | `detect_cycles` → 200 tok | 读完 4400 行 + 画拓扑图找环 | **~500x** |
-| 📊 哪些模块最脆弱？ | `fragile_modules` → 300 tok | 218 个符号逐个 grep fan-in | **~150x** |
-| 🗂️ 整体结构？ | `cluster_report` → 2,500 tok | 人工分 32 个社区——根本做不准 | **~40x** |
-| 💣 改 engine.close 会炸多少？ | `trace_impact` → 800 tok | 手动追踪 3 层调用链 / 8-10 文件 | **~37x** |
-
-> **单点查询省 70%，全局分析省 95%（20 倍+）。项目越大，差距越悬殊。**
-> 💡 **省 token 是小头。大头是：弱模型推依赖容易漏，HoloGram 给的图是确定性静态分析——比靠读源文件猜依赖可靠得多。**
-
----
-
-## 🖥️ 桌面应用（可选）
+### 桌面端
 
 <p align="center">
   <img src="assets/screenshots/01.png" width="32%" />&nbsp;
   <img src="assets/screenshots/02.png" width="32%" />&nbsp;
   <img src="assets/screenshots/03.png" width="32%" />
 </p>
-<p align="center">
-  <img src="assets/screenshots/04.png" width="32%" />&nbsp;
-  <img src="assets/screenshots/05.png" width="32%" />&nbsp;
-  <img src="assets/screenshots/06.png" width="32%" />
-</p>
-<p align="center">
-  <img src="assets/screenshots/07.png" width="32%" />&nbsp;
-  <img src="assets/screenshots/08.png" width="32%" />&nbsp;
-  <img src="assets/screenshots/09.png" width="32%" />
-</p>
 
-| 特性 | 说明 |
-|:--|:--|
-| 🌌 **3D 代码星图** | Three.js + WebGPU，颜色按社区聚类，缩放旋转拖拽随心 |
-| 💬 **内置 Agent 面板** | 对话、文件操作、Git、Shell、Web 搜索，全在应用内 |
-| 📋 **计划模式** | 探索 → 写计划 → 审批卡片 → 执行，图引擎自动注入影响面 |
-| 📝 **Monaco 编辑器** | 点击节点 → 右侧直接打开源码 |
-| 🔗 **数据流面板** | 追踪变量读写路径，可视化数据流向 |
-| 🕐 **时间轴面板** | 变更历史 + 分析记录一览 |
-| 🍴 **子 Agent 并行** | git worktree 隔离，多 Agent 同时工作互不干扰 |
-| 💬 **多 Agent 通信** | Agent 间消息/广播/发现/合并，拓扑无关的通信层 |
-| 🚀 **虚拟聊天渲染** | 虚拟列表 + 高度预测，万条消息流畅滚动 |
-| 🧠 **记忆系统** | Markdown + AuraSDK 语义召回，跨会话记住上下文 |
+3D 星图（Three.js + WebGPU）· Monaco 编辑器（点节点即开源码）· 数据流面板 · 时间轴面板 · 虚拟列表聊天（万条消息流畅）· 多厂商 LLM（Anthropic / OpenAI 兼容 / DeepSeek / GLM，含 reasoning_effort 适配）
 
-> 💡 桌面应用和 MCP 模式用的是**同一个引擎**——所有图分析能力完全一致。
-
----
-
-## 🌐 支持的语言
+## 架构
 
 ```
-  Python  ·  TypeScript / JavaScript  ·  Go  ·  Rust  ·  Java  ·  C / C++
-  Ruby  ·  Lua  ·  C#  ·  Swift  ·  Dart  ·  Scala  ·  Haskell  ·  HTML
-  CSS  ·  PHP  ·  OCaml  ·  R  ·  Nix  ·  Bash  ·  YAML  ·  Zig  ·  Elixir
-  Erlang  ·  Kotlin  ·  TOML  ·  Markdown
+┌─────────────── src-ui (TypeScript) ───────────────┐
+│  Three.js 星图 · React · Monaco · Agent 运行时    │
+└───────────────────────┬───────────────────────────┘
+                        │ Tauri IPC
+┌─────────────── src-tauri (Rust) ─────────────────┐
+│  权限裁决 · OS 沙箱 · 文件所有权 · 审计日志       │
+└───────────────────────┬───────────────────────────┘
+                        │ TCP :9777
+┌───────────────────────▼───────────────────────────┐
+│  engine (Rust，单二进制)                          │
+│  tree-sitter AST → 并行合并管线 → GraphStore      │
+│  MemoryIndex (CSR) + SQLite + FTS5 + 语义向量     │
+│  33 MCP 工具 · stdio / CLI 双入口                  │
+└───────────────────────────────────────────────────┘
 ```
 
-> 🌍 26 门静态链接 + 3 门动态加载。零配置——打开目录，自动识别。
-
----
-
-## 🗺️ 工具地图
-
-> 33 个图查询工具 + 47 个 Agent 编码/通信工具，覆盖「查依赖 → 改代码 → 多 Agent 协作」完整链路。
-
-| 类别 | 工具 | 你问 → 它答 |
+| 层 | 目录 | 职责 |
 |:--|:--|:--|
-| 🔍 **日常查询** | `explore_deps` `search_symbols` `get_neighbors` `inspect_symbol` | "这个函数连了啥？" "谁在调它？" |
-| 💣 **风险评估** | `trace_impact` `preflight_check` `fragile_modules` `detect_cycles` | "改这里会炸吗？" "有没有循环依赖？" |
-| 🩺 **架构诊断** | `arch_blindspots` `thread_conflicts` `coupling_report` `check_boundaries` | "隐藏的架构问题？" "边界被偷越了吗？" |
-| 🌊 **执行流** | `list_flows` `get_flow` `get_affected_flows` | "项目核心流程是什么？" "改这个函数会影响哪些业务流程？" |
-| 🔗 **数据流** | `trace_dataflow` `async_edges` `find_dep_path` | "变量在哪被改了？" "A 怎么依赖到 B 的？" |
-| 🌍 **全局视野** | `graph_summary` `cluster_report` `project_health` `project_timeline` | "项目整体怎么样？" "有哪些子系统？" |
-| 🎯 **LSP 精确** | `resolve_call` `infer_type` `find_implementations` `find_references` | "这个调用到底调了哪个实现？" |
-| 🛠️ **工程** | `analyze_project` `validate_project` `graph_diff` `find_unused` `rename_symbol` | 全量分析、约束校验、找死代码、安全重命名 |
-| 💬 **多 Agent 通信** | `agent_message` `agent_reply` `agent_inbox` `agent_list` `agent_discover` `agent_lookup` `agent_merge` | "发给另一个 Agent" "谁能帮我？" "Agent 列表" |
-| 🍴 **子 Agent 编排** | `agent_spawn` `agent_kill` `agent_status` | 派发并行子 Agent、查看状态、终止 |
+| 引擎 | `engine/` | 解析 · 图构建 · 耦合/数据流/脆弱性分析 · 存储 · MCP/CLI |
+| 壳 | `src-tauri/` | Tauri 2 · 权限 · 沙箱 · 隔离 · 凭据加密 |
+| 前端 | `src-ui/` | 星图渲染 · Agent 运行时 · 多 Agent 编排 |
 
-**Agent 内置编码工具：** 文件读写 · 目录操作 · Git 全套 · Shell (含 `bash_wait`) · 搜索 · Web · 记忆 · 任务 · 子 Agent 分叉 · 隔离合并
+引擎自举验证：HoloGram 用自己的引擎分析自己的代码库（3965 节点 / 5328 边）。
 
-> 💡 所有工具对 Agent 透明——统一调用。返回结构化 JSON，不是源文件——**省 token**。每个响应自动附带下一步工具建议。
+## 语言支持
 
----
+18 种语言经手工调校的查询式结构抽取（深度建模）：Python · TypeScript/JavaScript · Rust · Go · Java · C/C++ · C# · Ruby · PHP · Swift · Dart · Scala · Zig · Elixir · Lua · Bash · R
 
-## 🏗️ 架构总览
+其余语言（OCaml · Haskell · Nix · JSON · HTML · CSS · YAML · Erlang 等）经 tree-sitter grammar 兜底；Kotlin · Markdown · TOML 动态加载。跨语言调用（子进程 / HTTP / FFI）以合成边标记为运行时桥接点。
 
-```
- ┌────────────────────── 桌面壳 (Tauri 2) ──────────────────────────┐
- │                                                                    │
- │  ┌── 前端 (TypeScript) ──────────────┐  IPC  ┌── Rust 后端 ────┐ │
- │  │  🌌 3D 星图  ·  💬 Agent 面板     │◄────►│  🛡️ 权限裁决     │ │
- │  │  📝 Monaco    ·  🔗 数据流面板    │      │  🏖️ OS 沙箱      │ │
- │  │  🕐 时间轴    ·  ⚛️ React UI      │      │  🍴 Agent 隔离   │ │
- │  │  📋 计划卡片  ·  💬 多Agent通信   │      │  📋 审计日志     │ │
- │  │  ⚡ WebGPU    ·  🎯 LSP 客户端    │      │  🔐 文件所有权   │ │
- │  └───────────────────────────────────┘      └──────┬───────────┘ │
- └────────────────────────────────────────────────────┼─────────────┘
-                                                      │ MCP stdio
-       ┌──────────────────────────────────────────────▼──────────────┐
-       │             🧠 Rust 引擎 (engine/)                          │
-       │                                                              │
-       │   合并管线 · 边去重 625× · 33 图工具 · 四级过滤              │
-       │   MemoryIndex + SQLite FTS5 · 增量更新 · Leiden 社区发现     │
-       │   数据流引擎 (17 语言) · 24 框架路由 · LSP 按需 · 语义记忆   │
-       │   执行流检测 · 两阶段重命名 · 下一步建议 · 计划模式 Hook    │
-       └──────────────────────────────────────────────────────────────┘
-```
+## 工程事实
 
-| 层 | 目录 | 技术栈 |
-|:--|:--|:--|
-| 🧠 引擎 | `engine/` | Rust — 解析 · 图构建 · 分析 · 存储 · MCP · 执行流 |
-| 🐚 壳 | `src-tauri/` | Rust / Tauri 2 — 权限 · 沙箱 · 隔离 · 加密 · 文件所有权 |
-| 🎨 前端 | `src-ui/` | TypeScript — Three.js · React · Monaco · WebGPU · Agent 通信 |
+- 测试：1640+（engine 643 · 壳 240 · 前端 757），三端独立验证
+- 实测（Linux kernel，R10 后）：全量分析 1,770s 全程跑完，RSS 646MB；快照写入 2.44GB / 56.3s
+- 并行解析 200 文件/批，边去重 625×，增量更新由 watcher 驱动（保存即刷新）
+- 已知盲区以"诚实标记"处理：eval / 动态代码标记为不可达，动态 import 标记动态站点，不假装知道运行时才知道的事
 
-> 🔬 **自举验证：HoloGram 用自己的引擎分析自己的代码库。**
-
----
-
-## 🔨 从源码构建
-
-**系统要求：** Rust 1.80+ · Node.js 20+（桌面应用额外需要 Windows 10+）
+## 从源码构建
 
 ```bash
-git clone https://github.com/834063245-creator/HoloGram.git
-cd HoloGram
+# 引擎（MCP / CLI 只需要这个；Linux / Windows 均可）
+cd engine && cargo build --release
 
-# 仅引擎 — MCP 模式只需要这个（Linux / Windows 均可）
-cd engine && cargo build --release    # → engine/target/release/hologram-engine
-
-# 桌面应用（仅 Windows）
-cd src-tauri && cargo tauri build     # → src-tauri/target/release/bundle/
+# 桌面应用（Windows）
+cd src-tauri && cargo tauri build
 ```
 
----
-
-## ⚠️ 已知局限
-
-> 静态分析有天花板。这五项不是 bug，是物理上限。我们选择诚实面对——全部通过合成边和标记节点给出了诚实的答案。
-
-| 盲区 | 说明 | 状态 |
-|:--|:--|:--|
-| 字符串路由 | Express / Django 等路由字符串 → handler 映射 | ✅ 24 种框架已覆盖 |
-| 动态 import | `import(variable)` / `require(expr)` | ✅ 动态导入站点已标记 |
-| 反射 / DI | getattr / @Autowired / @Injectable 等 | ✅ 10 语言已处理 |
-| 跨语言调用 | 子进程 / FFI / HTTP client → 运行时桥接点 | ✅ 8 语言已覆盖 |
-| eval / 动态代码 | eval / exec / new Function | ✅ 已诚实标记为不可达 |
-
----
-
-## ❓ 常见问题 (FAQ)
-
-<details>
-<summary><strong>🔀 MCP 模式和桌面应用有什么区别？</strong></summary>
-<br/>
-引擎完全一样——同一套图分析能力。MCP 模式无界面，通过 AI 工具的 MCP 协议调用。桌面应用多了 3D 可视化、编辑器、聊天面板等 UI。
-
-→ 只要 Agent 增强 → MCP 模式 · 想可视化浏览 → 桌面应用
-</details>
-
-<details>
-<summary><strong>🍎 支持 macOS / Linux 吗？</strong></summary>
-<br/>
-
-**引擎 + CLI：** ✅ Windows 和 Linux 均有 CI 测试和预编译二进制发布。从 [Releases](https://github.com/834063245-creator/HoloGram/releases) 下载对应平台包，运行安装脚本即可。macOS 可从源码编译（`cargo build --release`）。
-
-**桌面应用：** ⚠️ 目前仅 Windows。沙箱（JobObject / bubblewrap / sandbox-exec）、权限层、凭据层（DPAPI / Keychain / Secret Service）均已三平台实现，但尚未在 CI 中构建 Linux/macOS 桌面端。
-</details>
-
-<details>
-<summary><strong>🔒 需要联网吗？代码会传到外部吗？</strong></summary>
-<br/>
-
-**不会。** 引擎全部本地运行，代码不离开你的机器。仅两个例外：1) 桌面应用内的 Agent 调用你配置的 LLM API；2) 你手动触发 Web 搜索时。
-</details>
-
-<details>
-<summary><strong>🐘 大项目会卡吗？</strong></summary>
-<br/>
-不会。rayon 并行解析（200 文件/批），边去重 625× 削减。Django 3031 文件 ~4.1 秒全量分析。3D 星图 GPU 加速，5000 节点流畅。增量模式下保存秒级更新。
-</details>
-
-<details>
-<summary><strong>📏 能分析多大项目？</strong></summary>
-<br/>
-实测无上限。四级过滤自动排除 node_modules / vendor / target。> 1 MB 文件自动跳过。引擎自身体检：3965 节点 / 5328 边，毫秒级查询。
-</details>
-
-<details>
-<summary><strong>🌍 能跨语言追踪吗？</strong></summary>
-<br/>
-能。多语言项目（Python + TypeScript 等）统一建模进一张图。跨语言调用（子进程、HTTP、FFI）通过合成边标记为运行时桥接点。
-</details>
-
-<details>
-<summary><strong>🪞 反射和动态调用能检测吗？</strong></summary>
-<br/>
-部分能。反射 / DI（getattr、@Autowired）通过类型级解析补充。纯字符串反射标记为动态站点。诚实标记——不假装知道运行时才知道的事。
-</details>
-
-<details>
-<summary><strong>⚖️ 和 SonarQube / CodeClimate 有什么区别？</strong></summary>
-<br/>
-互补，不替代。SonarQube 做代码质量（bug、漏洞、坏味道），HoloGram 做依赖拓扑和 Agent 增强。用 SonarQube 发现问题，用 HoloGram 让 AI 更聪明地改。
-</details>
-
-<details>
-<summary><strong>💰 收费吗？</strong></summary>
-<br/>
-**完全免费。MIT 开源。** 引擎、桌面应用、MCP 全部免费。商用、修改、再发布——只需保留版权声明。
-</details>
-
-<details>
-<summary><strong>🔑 LLM API 费用呢？</strong></summary>
-<br/>
-Agent 功能需要你自己配置 LLM API key（支持 Anthropic / OpenAI 兼容接口）。HoloGram 不提供 API key，不收费。API 费用由 LLM 提供商收取。
-</details>
-
----
-
-## 🔧 故障排查
-
-### MCP 模式
-
-| 症状 | 原因 | 解药 |
-|:--|:--|:--|
-| `engine_status` 无响应 | MCP 服务未注册 | 检查 MCP 配置文件路径和 command |
-| 工具返回空结果 | 引擎还没分析项目 | 先调 `analyze_project` 做全量分析 |
-| "engine not found" | 引擎不在 PATH 上 | 重新运行 install.sh / install.cmd |
-| 引擎启动失败 (Windows) | 缺少 VC++ Redistributable | [下载安装](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
-| 引擎启动失败 (Linux) | 缺少 C++ 运行时 | `sudo apt install libstdc++6` |
-
-### 桌面应用
-
-| 症状 | 原因 | 解药 |
-|:--|:--|:--|
-| 白屏 / 加载失败 | WebView2 未安装 | [下载 WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) |
-| 分析一直转圈 | 首次分析大项目需时 | 耐心等，或查看 `.hologram/logs/engine.log` |
-| 3D 图卡顿 | GPU 驱动旧 | 更新显卡驱动（WebGPU 需要较新驱动） |
-| Agent 无响应 | API key 未配置 | 检查设置面板 → API 配置 |
-
-### 通用
-
-| 症状 | 解药 |
-|:--|:--|
-| 分析结果对不上 | 看 `.hologram/logs/engine.log` 过滤日志 |
-| 增量更新不生效 | 手动触发全量：`analyze_project` 或重启应用 |
-| 想报 bug？ | [GitHub Issues](https://github.com/834063245-creator/HoloGram/issues) — 带上 `.hologram/logs/` 日志 |
-
----
-
-## 👩‍💻 开发
+## 开发
 
 ```bash
-cd engine && cargo test              # 562+ Rust 引擎测试
-cd src-tauri && cargo test           # 197+ Tauri 壳测试
-cd src-ui && npx vitest run          # 675+ 前端测试
-cd engine && cargo build --release   # 编译引擎
-cargo tauri build                    # 打包桌面应用
-cd src-ui && npm run build           # 类型检查 + 打包前端
+cd engine && cargo test        # 643 引擎测试
+cd src-tauri && cargo test     # 240 壳测试
+cd src-ui && npx vitest run    # 757 前端测试
 ```
 
-```
-  engine/         🧠 Rust 引擎 — 管线 · 过滤 · 数据流 · 路由 · LSP · 33 工具
-  src-tauri/      🐚 Tauri 壳 — 权限 · 沙箱 · 隔离 · PTY · 凭证 · 审计
-  src-ui/         🎨 前端 — Three.js · React · Monaco · Agent · WebGPU
-  assets/         🖼️ 图标 · 截图
-  grammars/       📦 动态语法 DLL (Kotlin / TOML / Markdown)
-  build/          🔧 构建脚本
-```
+项目理解与工作纪律见 [`AGENTS.md`](AGENTS.md)；架构与交接文档见 [`docs/`](docs/)（`docs/archive/` 为已竣工施工稿，勿作现状依据）。
 
-<details>
-<summary>📐 分析管道 (10 阶段)</summary>
-<br/>
+## 许可
 
-| # | 阶段 | 说明 |
-|:--|:--|:--|
-| 1 | 文件发现 | 四级过滤 — 黑名单 + .gitignore + 扩展名 + 1 MB 上限 |
-| 2 | 并行解析 + 合并 | 200 文件/批，rayon 并行，全局去重 (625× 削减) |
-| 3 | 类型感知调用解析 | 8 语言 tree-sitter 类型级解析，30s 熔断 |
-| 4 | 框架路由 | 24 种框架 URL→handler 映射 |
-| 5 | 跨文件解析 | import → 调用链连接 |
-| 5.1-5.8 | 动态调度合成 | React/Vue 组件边 · DI/反射 · 动态 import · eval · 跨语言调用 |
-| 6 | 耦合分析 | L1-L4 耦合深度赋值 |
-| 7 | 执行流检测 | 入口点发现 → BFS 前向追踪 → 安全敏感度评分 |
-| 8 | 社区发现 | Leiden（扁平）+ Louvain（层级）聚类 |
-| 9 | 语义向量索引 | usearch ANN 索引构建（后台线程） |
-| 10 | 持久化 | MemoryIndex + SQLite + FTS5 全文搜索 |
-
-</details>
-
-<details>
-<summary>💾 存储引擎</summary>
-<br/>
-
-| 组件 | 特点 |
-|:--|:--|
-| MemoryIndex | CSR 格式邻接表 + 倒排索引，O(degree) 查询 |
-| SqliteDb | hologram.db + FTS5 全文搜索 |
-| GraphStore | MemoryIndex + SqliteDb，`parking_lot::RwLock` N 路并发读 |
-| 执行流索引 | 入口点 BFS 前向追踪，安全敏感度评分持久化为节点属性 |
-| 增量更新 | watcher → 防抖 → 重解析 → diff → 边修复 → 原子 swap |
-
-</details>
-
-<details>
-<summary>🧩 图数据模型</summary>
-<br/>
-
-**9 种节点：** Symbol · Function · Class · Module · File · Interface · Variable · Medium（存储/IO）· Temporal（异步任务）
-——每个节点携带 location、degree、community_id、3D 坐标。
-
-**12 种边：**
-- 结构边：`imports` `calls` `inherits` `defines` — 管道预计算
-- 数据边：`reads` `writes` `shares` — 数据流引擎按需查询
-- 时序边：`triggers` `awaits` `sequences` — 含 `temporal_delay_sec`
-- 图边：`usage` `throws` — 引用关系与异常抛出
-
-每条边附加 coupling_depth (L1-L4)、cross_file、direction、lsp_resolved、is_synthesized。
-
-</details>
-
----
-
-## 📄 许可证
-
-HoloGram © 2026 Wenbing Jing — [MIT](LICENSE)
-
-本项目使用了多个第三方开源组件（AuraSDK、tree-sitter 语法库、SQLite、mimalloc、USearch 等）。完整版权声明见 **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**。
-
----
-
-<p align="center">
-  <br/>
-  <em>Built with ❤️ and Rust. One person, ~104,000 lines of code, 350 source files, 26 languages, 1400+ tests.</em>
-</p>
+HoloGram © 2026 Wenbing Jing — [MIT](LICENSE)。第三方组件（tree-sitter 语法库、SQLite、USearch、mimalloc 等）版权声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

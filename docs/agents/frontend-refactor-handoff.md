@@ -2,7 +2,7 @@
 
 > 交接时间：2026-07-19 · 上一棒：P0 → P6 已完成并全部入库
 > **接手方式**：新窗口先读本文件 + `src-ui/src/app/README.md`。
-> **下一棒**：视觉深化 P7 系列 —— P7g/P7a 已入 main；下一棒 P7b 六面板内部。按 `docs/agents/visual-deepening-plan.md` 施工（唯一事实来源）。
+> **下一棒**：视觉深化 P7 系列 —— P7g/P7a 已入 main；下一棒 P7b 六面板内部。按 `docs/archive/visual-deepening-plan.md` 施工（唯一事实来源）。
 > 本文件取代会话内的计划文件，是重构的唯一事实来源。设计原型：`prototype/observatory-concept.html`（gitignored，本地参考）。
 
 ## 一、已完成（9 个 commit，全部在 main）

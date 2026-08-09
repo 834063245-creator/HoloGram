@@ -2,7 +2,7 @@
 
 > 最后更新：2026-08-04
 > 用途：多 Agent 协调机制的持续推进工作台——目标、已落地、待推进、红线。
-> 配套文档：`docs/MULTI_AGENT_STATUS.md`（多 Agent 系统实现状态，Phase 1-4 通信/持久化/UI）
+> 配套文档：`docs/archive/MULTI_AGENT_STATUS.md`（多 Agent 系统实现状态，Phase 1-4 通信/持久化/UI）
 
 ## 1. 目标
 

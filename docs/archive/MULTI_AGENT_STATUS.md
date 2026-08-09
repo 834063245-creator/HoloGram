@@ -199,8 +199,8 @@ cfac45a feat(agent): add multi-agent communication layer (Phase 1)
 
 ## 设计文档位置
 
-- `docs/plans/async-spawn-taskboard-merge-bus-wakeup.md` — 异步编排设计方案
-- `docs/plans/async-spawn-self-review.md` — 初版自查报告（已被后续审计取代）
+- `async-spawn-taskboard-merge-bus-wakeup.md` — 异步编排设计方案
+- `async-spawn-self-review.md` — 初版自查报告（已被后续审计取代）
 - `COMMUNICATION_LAYER_DESIGN.md` — 通信层完整设计（含 Phase 路线图）
 
 ## 下一步

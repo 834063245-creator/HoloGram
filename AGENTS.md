@@ -1,7 +1,7 @@
 # Agent 项目理解 — HoloGram
 
-> 生成：2026-06-18 · 更新：2026-08-08 · 供 Cursor/Claude 等 Agent 快速上手  
-> 架构与现状见 `docs/`（architecture-refactor-spec.md / agents/frontend-refactor-handoff.md）；多 Agent 路线图见 docs/MULTI_AGENT_ROADMAP.md
+> 生成：2026-06-18 · 更新：2026-08-09 · 供 Cursor/Claude 等 Agent 快速上手  
+> 架构与现状见 `docs/`（agents/frontend-refactor-handoff.md = 前端重构唯一事实来源；architecture-refactor-spec.md 为历史 spec，已被前者接管）；多 Agent 路线图见 docs/MULTI_AGENT_ROADMAP.md
 > **最高纪律：`docs/adr/project-constitution.md` 四条架构约定（类型边界/单一权威源/异步纪律/错误不静默）——新代码违反即打回；已知违例见 `docs/landmine-map.md`**
 
 ## 一句话
@@ -17,12 +17,11 @@ HoloGramHG/
 ├── src-ui/          TypeScript 前端（Three.js + Agent + Monaco；观测台重构 P0–P6 + 视觉深化 P7 全系列已竣工）
 ├── tests/           遗留 Python 测试（引擎已 Rust 化，部分仍可用）
 ├── assets/          图标、UI 原型
-├── docs/            架构与交接文档（agents/frontend-refactor-handoff.md = 前端重构事实来源）
+├── docs/            架构与交接文档（agents/frontend-refactor-handoff.md = 前端重构事实来源；archive/ = 已竣工施工稿与历史设计，勿作现状依据）
 ├── CLAUDE.md        Agent 工作指令
-└── V4_CONSTRUCTION_PLAN.md  v4 施工方案（已竣工）
 ```
 
-> 注：PROJECT.md / BUGS.md 已移除（2026-07 归档删除），现状以 docs/ 与 docs/MULTI_AGENT_ROADMAP.md 为准。
+> 注：PROJECT.md / BUGS.md 已移除（2026-07 归档删除），现状以 docs/ 与 docs/MULTI_AGENT_ROADMAP.md 为准；已竣工的执行方案、窗口交接稿、历史设计统一归档在 `docs/archive/`（2026-08-09 整理）。
 
 ### `.hologram/` 运行时目录结构
 

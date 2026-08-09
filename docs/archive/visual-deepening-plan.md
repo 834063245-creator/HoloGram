@@ -174,7 +174,7 @@ P0–P6 已在 main 完成：单 React 壳 + 无头聊天核心 + 六面板收�
 **开工提示词（用户可直接粘贴给新窗口，把 `P7x` 换成当期）**：
 
 ```
-按 docs/agents/visual-deepening-plan.md 施工 P7x，分支 feature/observatory-visual。
+按 docs/archive/visual-deepening-plan.md 施工 P7x，分支 feature/observatory-visual。
 约束：
 1. 只读 plan 的 P7x 一节 + 设计规范 + 契约与坑；handoff 只需读「铁律」。
 2. 只改动 P7x 一节列出的文件；git diff --stat 里出现范围外文件 = 返工。

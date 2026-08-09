@@ -386,7 +386,7 @@ private _injectDiscoveries(): void {
 | `src-ui/src/ui/agent-panel-store.ts` | 加 discoveries 数据源 |
 | `src-ui/src/ui/react/AgentsPanel.tsx` | 加发现区 section |
 | `src-ui/src/workspace.ts` | 初始化 DiscoveryBoard + deactivate 清理 |
-| `docs/MULTI_AGENT_STATUS.md` | 更新 Phase 4 状态 |
+| `MULTI_AGENT_STATUS.md` | 更新 Phase 4 状态 |
 
 ---
 

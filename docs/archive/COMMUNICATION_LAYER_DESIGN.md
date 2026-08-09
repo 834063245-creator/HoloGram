@@ -472,7 +472,7 @@ createAgent(config) {
 
 ### 异步编排层（Phase 1.5 — 已落地）
 
-在 Phase 1 和 Phase 2 之间，落地了异步编排层（详见 `docs/plans/async-spawn-taskboard-merge-bus-wakeup.md`）：
+在 Phase 1 和 Phase 2 之间，落地了异步编排层（详见 `async-spawn-taskboard-merge-bus-wakeup.md`）：
 
 - 非阻塞 spawn（`async: true` 参数）
 - TaskBoard 共享状态区（文件追踪、diff 保全）
@@ -713,7 +713,7 @@ try {
 
 ## 9. 开放问题
 
-1. **子 agent 运行期间的通信**：✅ 已解决（异步编排层）。`agent_spawn` 支持 `async: true`，父 agent spawn 后立即继续，子 agent 完成后通过 bus 发 `type: 'result'` 消息通知父 agent。详见 `docs/plans/async-spawn-taskboard-merge-bus-wakeup.md`。
+1. **子 agent 运行期间的通信**：✅ 已解决（异步编排层）。`agent_spawn` 支持 `async: true`，父 agent spawn 后立即继续，子 agent 完成后通过 bus 发 `type: 'result'` 消息通知父 agent。详见 `async-spawn-taskboard-merge-bus-wakeup.md`。
 
 2. **消息与 agent_spawn 的关系**：`agent_message` 工具与 `agent_spawn` 工具的差异——spawn 创建一个新 agent 并给它任务，message 给已存在的 agent 发消息。两者互补，不替代。
 

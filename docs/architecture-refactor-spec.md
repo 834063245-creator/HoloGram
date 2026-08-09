@@ -1,5 +1,8 @@
 # HoloGram 前端架构重构 Spec
 
+> **状态：历史 Spec（2026-07 制定）· 已被 `docs/agents/frontend-refactor-handoff.md` 接管为唯一事实来源**
+> 本文档保留作设计演进参考；施工/现状判断一律以 handoff 为准。归档稿见 `docs/archive/`。
+
 ## 目标
 
 消除 Agent 引擎和聊天 UI 之间不必要的耦合，建立清晰的数据流边界。修复 reactive compaction 后 UI/Agent 数据不同步的实际 bug。
