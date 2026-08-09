@@ -478,10 +478,11 @@ export function planRegistry(
       out.register(t);
       continue;
     }
-    // 领域工具：只暴露只读动作，其余动作在 execute 层拦截
+    // 领域工具：只暴露只读动作，其余动作在 execute 层拦截。
+    // fs 的 write/edit 与 write_file/edit_file 同等待遇：命中计划文件时放行。
     const ro = t.readOnlyActions?.();
     if (ro && ro.length > 0) {
-      out.register(guardDomainForPlan(t, ro));
+      out.register(guardDomainForPlan(t, ro, planState));
     }
   }
 
@@ -524,8 +525,14 @@ export function planRegistry(
   return out;
 }
 
-/** plan 模式守卫：领域工具只放行只读动作。 */
-function guardDomainForPlan(t: Tool, readOnlyActions: string[]): Tool {
+/** plan 模式守卫：领域工具只放行只读动作；fs 的 write/edit 在命中计划文件时豁免
+ *  （与 write_file/edit_file 的计划文件特判一致，见上方 492-523 行）。
+ *  未激活规划模式时 planFilePath 为 null → isPlanFile 恒 false → 写操作仍全拦（安全兜底）。 */
+function guardDomainForPlan(
+  t: Tool,
+  readOnlyActions: string[],
+  planState?: import('../plan/plan-state').PlanStateManager,
+): Tool {
   return {
     name: () => t.name(),
     description: () => t.description(),
@@ -534,12 +541,26 @@ function guardDomainForPlan(t: Tool, readOnlyActions: string[]): Tool {
     domain: () => t.domain?.() ?? '',
     actions: () => t.actions?.() ?? [],
     readOnlyActions: () => readOnlyActions,
-    execute: async (args, onProgress) => {
+    execute: async (args, onProgress, signal) => {
       const action = (args as { action?: unknown })?.action;
-      if (typeof action !== 'string' || !readOnlyActions.includes(action)) {
-        return `[已拦截] 规划模式下 ${t.name()} 仅允许只读动作: ${readOnlyActions.join(', ')}`;
+      if (typeof action === 'string') {
+        if (readOnlyActions.includes(action)) {
+          return t.execute(args, onProgress, signal);
+        }
+        // fs(write)/fs(edit) 计划文件豁免 — 兼容 filePath/path/file_path 别名
+        // （与 domains.ts normalizeArgs 的别名表一致）。
+        if (
+          t.domain?.() === 'fs' &&
+          (action === 'write' || action === 'edit') &&
+          planState
+        ) {
+          const fp = String(args.filePath ?? args.path ?? args.file_path ?? '');
+          if (planState.isPlanFile(fp)) {
+            return t.execute(args, onProgress, signal);
+          }
+        }
       }
-      return t.execute(args, onProgress);
+      return `[已拦截] 规划模式下 ${t.name()} 仅允许只读动作: ${readOnlyActions.join(', ')}`;
     },
   };
 }
