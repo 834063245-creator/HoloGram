@@ -19,6 +19,10 @@ export interface AskPrompt {
   header: string;
   options: { label: string; description: string }[];
   multiSelect: boolean;
+  /** 批量多问（questions 数组）时当前问题序号，1-based；单问时缺省 */
+  batchIndex?: number;
+  /** 批量多问总题数；单问时缺省 */
+  batchTotal?: number;
 }
 
 export interface PermissionPrompt {
@@ -47,7 +51,11 @@ const AskCard: React.FC<{
 }> = ({ prompt, onResolve }) => {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const advanceTimer = useRef<number | null>(null);
+
+  /** 无 options = 开放式问题（用户输入自由文本回答）。 */
+  const hasOptions = prompt.options.length > 0;
 
   const toggle = useCallback(
     (idx: number) => {
@@ -78,6 +86,11 @@ const AskCard: React.FC<{
     const labels = prompt.options.filter((_, i) => selected.has(i)).map((o) => o.label);
     onResolve(labels);
   }, [prompt.options, selected, onResolve]);
+
+  const submitCustom = useCallback(() => {
+    const v = inputRef.current?.value.trim();
+    if (v) onResolve([v]);
+  }, [onResolve]);
 
   const cancel = useCallback(() => {
     // 清掉待触发的自动确认，防取消后定时器泄漏到下一张卡
@@ -116,68 +129,78 @@ const AskCard: React.FC<{
   }, [prompt.options.length, toggle, cancel]);
 
   const hoveredOption = hoverIdx !== null ? prompt.options[hoverIdx] : null;
+  const batchTag =
+    prompt.batchTotal && prompt.batchTotal > 1
+      ? `问题 ${prompt.batchIndex ?? 1}/${prompt.batchTotal} · `
+      : '';
 
   return (
     <div className="prompt-shelf__card" role="dialog" aria-modal="false">
       {/* 头部 */}
       <div className="prompt-shelf__head">
-        <span className="prompt-shelf__tag">{prompt.header.slice(0, 12)}</span>
+        <span className="prompt-shelf__tag">{batchTag}{prompt.header.slice(0, 12)}</span>
         <span className="prompt-shelf__question">{prompt.question}</span>
         <button className="prompt-shelf__dismiss" onClick={cancel} title="取消 (Esc)" type="button">
           <span dangerouslySetInnerHTML={{ __html: svgIcon('close', 14) }} />
         </button>
       </div>
 
-      {/* 选项 */}
-      <div className="prompt-shelf__options">
-        {prompt.options.map((opt, i) => {
-          const on = selected.has(i);
-          const num = i + 1;
-          return (
-            <button
-              key={i}
-              className={`prompt-shelf__option${on ? ' prompt-shelf__option--on' : ''}`}
-              onClick={() => toggle(i)}
-              onMouseEnter={() => setHoverIdx(i)}
-              onMouseLeave={() => setHoverIdx((h) => (h === i ? null : h))}
-              type="button"
-            >
-              <span className="prompt-shelf__num">{num <= 9 ? num : ''}</span>
-              <div className="prompt-shelf__opt-body">
-                <span className="prompt-shelf__opt-label">{opt.label}</span>
-                {opt.description && <span className="prompt-shelf__opt-desc">{opt.description}</span>}
-              </div>
-              {on && (
-                <span
-                  className="prompt-shelf__check"
-                  dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 14) }}
-                />
-              )}
-            </button>
-          );
-        })}
-      </div>
+      {/* 选项（开放式问题无 options 时隐藏） */}
+      {hasOptions && (
+        <div className="prompt-shelf__options">
+          {prompt.options.map((opt, i) => {
+            const on = selected.has(i);
+            const num = i + 1;
+            return (
+              <button
+                key={i}
+                className={`prompt-shelf__option${on ? ' prompt-shelf__option--on' : ''}`}
+                onClick={() => toggle(i)}
+                onMouseEnter={() => setHoverIdx(i)}
+                onMouseLeave={() => setHoverIdx((h) => (h === i ? null : h))}
+                type="button"
+              >
+                <span className="prompt-shelf__num">{num <= 9 ? num : ''}</span>
+                <div className="prompt-shelf__opt-body">
+                  <span className="prompt-shelf__opt-label">{opt.label}</span>
+                  {opt.description && <span className="prompt-shelf__opt-desc">{opt.description}</span>}
+                </div>
+                {on && (
+                  <span
+                    className="prompt-shelf__check"
+                    dangerouslySetInnerHTML={{ __html: svgIcon('check-circle', 14) }}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* 详情预览 — 始终以固定高度渲染以防抖动 */}
-      <div className="prompt-shelf__detail">
-        {hoveredOption?.description ? (
-          <>
-            <span className="prompt-shelf__detail-label">{hoveredOption.label}</span>
-            <span className="prompt-shelf__detail-text">{hoveredOption.description}</span>
-          </>
-        ) : (
-          <span className="prompt-shelf__detail-text" style={{ opacity: 0 }}>
-            &nbsp;
-          </span>
-        )}
-      </div>
+      {hasOptions && (
+        <div className="prompt-shelf__detail">
+          {hoveredOption?.description ? (
+            <>
+              <span className="prompt-shelf__detail-label">{hoveredOption.label}</span>
+              <span className="prompt-shelf__detail-text">{hoveredOption.description}</span>
+            </>
+          ) : (
+            <span className="prompt-shelf__detail-text" style={{ opacity: 0 }}>
+              &nbsp;
+            </span>
+          )}
+        </div>
+      )}
 
-      {/* 用于输入预定义选项之外的自定义回答 */}
+      {/* 用于输入预定义选项之外的自定义回答；开放式问题为主输入 */}
       <div className="prompt-shelf__custom">
         <input
+          ref={inputRef}
           className="prompt-shelf__custom-input"
           type="text"
-          placeholder="或者直接输入自定义回答…"
+          autoFocus={!hasOptions}
+          placeholder={hasOptions ? '或者直接输入自定义回答…' : '输入回答后回车提交…'}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
               e.preventDefault();
@@ -185,10 +208,15 @@ const AskCard: React.FC<{
             }
           }}
         />
+        {!hasOptions && (
+          <button className="prompt-shelf__submit" onClick={submitCustom} type="button">
+            提交回答
+          </button>
+        )}
       </div>
 
       {/* 多选确认 */}
-      {prompt.multiSelect && selected.size > 0 && (
+      {prompt.multiSelect && hasOptions && selected.size > 0 && (
         <div className="prompt-shelf__actions">
           <button className="prompt-shelf__confirm" onClick={confirm} type="button">
             确认选择 ({selected.size})

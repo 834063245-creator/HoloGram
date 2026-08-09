@@ -50,6 +50,8 @@ export interface BuilderDeps {
     header: string;
     options: { label: string; description: string }[];
     multiSelect: boolean;
+    batchIndex?: number;
+    batchTotal?: number;
     callback: (answer: string[] | null) => void;
   }) => void;
   /** exit_plan_mode 工具的计划审批回调（UI 展示计划审批 banner） */

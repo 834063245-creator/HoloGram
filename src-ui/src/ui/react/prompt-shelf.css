@@ -234,6 +234,24 @@
 .prompt-shelf__custom-input::placeholder {
   color: var(--obs-text-3);
 }
+/* 开放式问题的提交按钮 */
+.prompt-shelf__submit {
+  margin-top: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 600;
+  font-family: var(--obs-font-body);
+  background: rgba(148, 166, 205, 0.07);
+  border: 1px solid rgba(125, 179, 232, 0.3);
+  color: var(--obs-blue);
+  cursor: pointer;
+  transition: all var(--obs-snap);
+}
+.prompt-shelf__submit:hover {
+  background: rgba(148, 166, 205, 0.14);
+  border-color: var(--obs-blue);
+}
 
 /* ═══════════════════════════════════════════════════════════════
    P7a · 权限卡（原型 .perm-card 配方：warn 色调卡片 + mini-btn 组）

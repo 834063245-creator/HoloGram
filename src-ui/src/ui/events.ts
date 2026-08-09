@@ -31,6 +31,8 @@ export interface BusEvents {
       header: string;
       options: { label: string; description: string }[];
       multiSelect: boolean;
+      batchIndex?: number;
+      batchTotal?: number;
       callback: (answer: string[] | null) => void;
     },
   ];

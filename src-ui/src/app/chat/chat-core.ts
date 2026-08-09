@@ -119,6 +119,8 @@ export class ChatCore {
         header: string;
         options: { label: string; description: string }[];
         multiSelect: boolean;
+        batchIndex?: number;
+        batchTotal?: number;
         callback: (answer: string[] | null) => void;
       }) => {
         if (!this._promptShelf) {
@@ -133,6 +135,8 @@ export class ChatCore {
             header: data.header,
             options: data.options,
             multiSelect: data.multiSelect,
+            batchIndex: data.batchIndex,
+            batchTotal: data.batchTotal,
           })
           .then(data.callback);
       },

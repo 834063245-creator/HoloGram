@@ -19,7 +19,19 @@ export interface AskUserRequest {
   header: string;
   options: { label: string; description: string }[];
   multiSelect: boolean;
+  /** 批量多问（questions 数组）时当前问题序号，1-based；单问时缺省 */
+  batchIndex?: number;
+  /** 批量多问总题数；单问时缺省 */
+  batchTotal?: number;
   callback: (answer: string[] | null) => void;
+}
+
+/** ask_user 单条问题（单问表单或批量 questions 数组元素）。 */
+interface AskItem {
+  question: string;
+  header?: string;
+  options?: { label: string; description: string }[];
+  multiSelect?: boolean;
 }
 
 export interface CodingToolsUI {
@@ -32,11 +44,15 @@ export function createCodingTools(exec: ToolExecutor, ui?: CodingToolsUI): Tool[
     defineTool({
       name: 'ask_user',
       description:
-        "Ask the user a question when you need clarification or confirmation before proceeding. Use when the request is ambiguous, you need to choose between approaches, or you need approval for a destructive action. Returns the user's answer.",
+        "Ask the user one or more questions when you need clarification or confirmation before proceeding. Use when the request is ambiguous, you need to choose between approaches, or you need approval for a destructive action. Supports: single question (question/header/options/multiSelect), multiple questions in one call (questions array — recommended for 2+, asked one at a time), and open-ended questions (omit options — the user types a free-text answer). Returns the user's answer(s).",
       schema: z.object({
-        question: z.string().describe('The question to ask the user. Be specific about what you need to know.'),
+        question: z
+          .string()
+          .optional()
+          .describe('The question to ask the user (single-question form). For 2+ questions use the questions array instead.'),
         header: z
           .string()
+          .optional()
           .describe('Short label (max 12 chars) shown as a tag, e.g. "Confirm", "Approach", "File"'),
         options: z
           .array(
@@ -45,38 +61,101 @@ export function createCodingTools(exec: ToolExecutor, ui?: CodingToolsUI): Tool[
               description: z.string().describe('Explanation of what this option means'),
             }),
           )
+          .optional()
           .describe(
-            '2-4 predefined choices the user can pick from. Each option has a label and optional description.',
+            '2-4 predefined choices the user can pick from. Omit for an open-ended question — the user types a free-text answer.',
           ),
         multiSelect: z
           .boolean()
           .optional()
           .default(false)
           .describe('Set to true to allow selecting multiple options (default: false)'),
+        questions: z
+          .array(
+            z.object({
+              question: z.string().describe('The question to ask the user. Be specific about what you need to know.'),
+              header: z
+                .string()
+                .optional()
+                .describe('Short label (max 12 chars) shown as a tag, e.g. "Confirm", "Approach", "File"'),
+              options: z
+                .array(
+                  z.object({
+                    label: z.string().describe('Display text (1-5 words)'),
+                    description: z.string().describe('Explanation of what this option means'),
+                  }),
+                )
+                .optional()
+                .describe(
+                  '2-4 predefined choices the user can pick from. Omit for an open-ended question — the user types a free-text answer.',
+                ),
+              multiSelect: z
+                .boolean()
+                .optional()
+                .default(false)
+                .describe('Set to true to allow selecting multiple options (default: false)'),
+            }),
+          )
+          .optional()
+          .describe(
+            'Multiple questions in one call (recommended for 2+). Asked one at a time in order; the returned answers array aligns with this array. Each answer is a string (single choice / free text) or an array of strings (multi-select), or null if the user cancelled.',
+          ),
       }),
       readOnly: true,
       execute: async (args) => {
-        const id = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         if (!ui?.askUser) {
           return JSON.stringify({ answer: null, error: 'ask_user 不可用：UI 未接线' });
         }
-        return new Promise((resolve) => {
-          ui.askUser?.({
-            id,
-            question: args.question,
-            header: args.header,
-            options: args.options,
-            multiSelect: args.multiSelect,
-            callback: (answer: string[] | null) => {
-              if (answer === null) {
-                resolve(JSON.stringify({ answer: null }));
-              } else if (args.multiSelect) {
-                resolve(JSON.stringify({ answers: answer }));
-              } else {
-                resolve(JSON.stringify({ answer: answer[0] || null }));
-              }
-            },
+        const batch: AskItem[] | null =
+          Array.isArray(args.questions) && args.questions.length > 0 ? args.questions : null;
+        const items: AskItem[] =
+          batch ??
+          (args.question
+            ? [
+                {
+                  question: args.question,
+                  header: args.header,
+                  options: args.options,
+                  multiSelect: args.multiSelect,
+                },
+              ]
+            : []);
+        if (items.length === 0) {
+          return JSON.stringify({ error: 'ask_user: 需要提供 question（单问）或 questions（多问）' });
+        }
+        // 逐个提问 — PromptShelf 内部 FIFO 排队，前一个答完才出现下一个；
+        // 未提供 options 的问题降级为开放式（用户输入自由文本）。
+        const answers: (string[] | null)[] = [];
+        for (let i = 0; i < items.length; i++) {
+          const q = items[i];
+          const multi = (q.options?.length ?? 0) > 0 && !!q.multiSelect;
+          const ans = await new Promise<string[] | null>((resolve) => {
+            ui.askUser?.({
+              id: `ask-${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${i}`,
+              question: q.question,
+              header: q.header || '提问',
+              options: q.options ?? [],
+              multiSelect: multi,
+              batchIndex: batch ? i + 1 : undefined,
+              batchTotal: batch ? items.length : undefined,
+              callback: resolve,
+            });
           });
+          answers.push(ans);
+        }
+        if (!batch) {
+          const a = answers[0];
+          if (a === null) return JSON.stringify({ answer: null });
+          const multi = (items[0].options?.length ?? 0) > 0 && !!items[0].multiSelect;
+          return JSON.stringify(multi ? { answers: a } : { answer: a[0] ?? null });
+        }
+        // 批量返回与 questions 对齐：多选 → label 数组；单选/开放式 → 字符串；取消 → null
+        return JSON.stringify({
+          answers: answers.map((a, i) => {
+            if (a === null) return null;
+            const multi = (items[i].options?.length ?? 0) > 0 && !!items[i].multiSelect;
+            return multi ? a : (a[0] ?? null);
+          }),
         });
       },
     }),
