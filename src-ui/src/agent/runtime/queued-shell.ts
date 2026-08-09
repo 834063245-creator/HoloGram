@@ -47,9 +47,12 @@ export async function execQueuedShell(
   let jobId: number | null = null;
   /** fn 已开始执行 — 队列反馈定时器据此停报（执行期流式输出接管） */
   let startedFlag = false;
+  /** 车道真正放行（开始执行）的时刻 — 排队时长 = startedAt - queuedAt，不含执行时间 */
+  let startedAtMs: number | null = null;
 
   const { promise: shellPromise, status } = enqueueShellOp(
     () => {
+      startedAtMs = Date.now();
       startedFlag = true;
       const streamId = `shell-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       return new Promise<string>((resolve) => {
@@ -143,7 +146,7 @@ export async function execQueuedShell(
     clearInterval(queueTimer);
     queueTimer = null;
   }
-  const waitMs = Date.now() - queuedAt;
+  const waitMs = startedAtMs != null ? startedAtMs - queuedAt : 0;
   // 模型可见反馈：等待 >500ms 时加前缀（不污染快速命令的输出；取消文案不加）
   if (waitMs > 500 && out !== SHELL_CANCELLED_MESSAGE) {
     return `[shell 队列] ⏱ ${laneName}车道排队 ${(waitMs / 1000).toFixed(1)}s 后执行。\n${out}`;
