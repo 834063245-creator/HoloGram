@@ -63,7 +63,6 @@ import {
   buildToolRegistry,
   extractGraphNodeNames,
   loadEngineSnapshot,
-  planRegistry,
   registerCompactionTools,
 } from './agent-builder';
 import { PlanModeInjector } from '../plan/plan-injection';
@@ -470,10 +469,9 @@ export class AgentRuntime implements RuntimePort {
     // exit_plan_mode 使用 eventSink 将 PlanReview 事件推入聊天流
     r.register(createExitPlanModeTool(planState, config.eventSink));
 
-    // 3. 始终构建完整工具集（不再静态过滤）— plan 过滤版在下方
-    //    planR = planRegistry(effR) 构建，由 Agent.setPlanState 的
-    //    onChange 监听在运行时切换。审批通过 / UI 切换 / 会话恢复
-    //    都走同一条路径，无需重建 Agent。
+    // 3. 始终构建完整工具集（不再静态过滤，也不再派生 plan 过滤版）—
+    //    plan 只读约束在 streaming-executor 的 planGate 按 planState
+    //    运行时拦截，schema 跨模式恒定（前缀缓存不被 plan 切换击穿）。
     const effR = r;
 
     // 4. 创建 Agent 实例
@@ -511,8 +509,8 @@ export class AgentRuntime implements RuntimePort {
     newAgent.setBus(this._bus);
     // 接线 discovery board 用于 Agent 间知识共享（通过 proxy 实现会话隔离）
     newAgent.setDiscoveryBoard(discoveryProxy as any);
-    // 注册通信工具 — 完整集注册全部；plan 过滤版由 planRegistry 派生时
-    // 自动丢弃非只读工具（agent_message 等），只保留 inbox/list 只读。
+    // 注册通信工具 — 完整集注册全部；plan 模式下非只读动作（agent_message 等）
+    // 由执行层 planGate 拦截，只保留 inbox/list 等只读动作可用。
     for (const tool of createCommunicationTools(this._bus, () => newAgent.id)) {
       effR.register(tool);
     }
@@ -530,7 +528,7 @@ export class AgentRuntime implements RuntimePort {
     };
 
     // 注册 agent_merge 工具 — 允许父 Agent 合并已完成的异步子 Agent worktree
-    // （完整集注册；plan 过滤版会自动丢弃这些非只读工具）
+    // （完整集注册；plan 模式下这些非只读工具由执行层 planGate 拦截）
     if (config.subAgentPool) {
       effR.register(createMergeTool(taskProxy as any, () => newAgent.id, isolationExec, { projectPath: config.projectPath }));
       effR.register(createBoardStatusTool(taskProxy as any, () => newAgent.id));
@@ -591,19 +589,14 @@ export class AgentRuntime implements RuntimePort {
     // 8. 在 Agent 的有效注册表上注册压缩工具
     registerCompactionTools(newAgent, effR);
 
-    // 8b. 工具层收敛：领域工具 + 隐藏旧名。
-    // 始终收敛完整工具集（effR = r）；plan 过滤版由下方 planRegistry 独立派生。
+    // 8b. 工具层收敛：领域工具 + 隐藏旧名。始终收敛完整工具集（effR = r）；
+    // plan 模式的写约束由执行层 planGate 处理（见下方 8c 注释）。
     convergeRegistry(effR);
 
-    // 8c. 构建 plan 过滤工具集 — 只读 + 领域只读动作 + 计划文件写入。
-    // 通过 Agent.setToolSets 注入，由 planState.onChange 在运行时切换。
-    const planR = planRegistry(effR, planState);
-    // plan 模式保留 agent_spawn（与原静态实现一致）— 子 Agent 从
-    // this.tools 克隆工具集（planR），因此 spawn 出的子 Agent 也是
-    // 只读的，可做并行只读探索；spawn 自身不受影响。
-    const spawnT = effR.get('agent_spawn');
-    if (spawnT) planR.register(spawnT);
-    newAgent.setToolSets(effR, planR);
+    // 8c. （已移除 plan 过滤工具集：单一注册表 + 执行层 plan 门禁——
+    //     schema 跨模式恒定，DeepSeek 前缀缓存不被 plan 切换击穿。
+    //     门禁规则见 plan/plan-registry.ts 的 planGateCheck；
+    //     plan 中 spawn 的只读子 Agent 克隆在 Agent.spawnSubAgent 内按需派生。）
 
     // 9. 接线 hooks（图上下文 + 状态 + board 追踪 + plan）
     const hooks = new HookRegistry();

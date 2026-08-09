@@ -38,7 +38,7 @@ export function createEnterPlanModeTool(
   return defineTool({
     name: 'enter_plan_mode',
     description:
-      '进入规划模式。切换后你只有只读工具（加上写计划文件的权限）。' +
+      '进入规划模式。切换后写操作会在执行层被拦截（写计划文件除外），你只保有只读能力。' +
       '适合：新功能实现、多文件改动、架构决策、需求不明确的任务。' +
       '不适合：单行修复、明确的指令、纯探索任务。' +
       '进入后按流程操作：探索 → 设计 → 写计划文件 → exit_plan_mode 提交审批。',
@@ -51,7 +51,7 @@ export function createEnterPlanModeTool(
       const path = planState.enter(projectPath);
       return (
         `已进入规划模式。计划文件路径：${path}\n` +
-        '用 write_file 把计划写到这个文件（计划文件写入不受只读限制）。\n' +
+        '用 fs 的 write 动作把计划写到这个文件（计划文件写入不受只读限制）。\n' +
         '然后调 exit_plan_mode 提交计划给用户审批。'
       );
     },

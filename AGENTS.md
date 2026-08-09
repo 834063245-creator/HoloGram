@@ -1,6 +1,6 @@
 # Agent 项目理解 — HoloGram
 
-> 生成：2026-06-18 · 更新：2026-08-09 · 供 Cursor/Claude 等 Agent 快速上手  
+> 生成：2026-06-18 · 更新：2026-08-10 · 供 Cursor/Claude 等 Agent 快速上手  
 > 架构与现状见 `docs/`（agents/frontend-refactor-handoff.md = 前端重构唯一事实来源；architecture-refactor-spec.md 为历史 spec，已被前者接管）；多 Agent 路线图见 docs/MULTI_AGENT_ROADMAP.md
 > **最高纪律：`docs/adr/project-constitution.md` 四条架构约定（类型边界/单一权威源/异步纪律/错误不静默）——新代码违反即打回；已知违例见 `docs/landmine-map.md`**
 
@@ -93,7 +93,8 @@ flowchart LR
 
 - 模型可见工具收敛为领域工具：`fs` / `shell` / `git` / `search` / `web` / `agent` / `task` / `memory`，加常驻 `ask_user` / `Skill` / `wait` / `enter_plan_mode` / `exit_plan_mode`，再加 engine MCP 工具。
 - 旧工具名（`run_shell`、`write_file`、`agent_spawn`、`git_*` 等）保留在 `ToolRegistry` 中但被 `hide()`：内部代码与测试仍可直接调用，但不再出现在 `schemas()`；**模型调用隐藏旧名会被 executor 拦截并返回 `[已淘汰]` 重定向**（见 `tools/domains.ts` 的 `retireRedirect`），不再静默执行。
-- 每轮注入：`Agent` 默认只发 ≤14 个 schema（`tool-select.ts` 打分 + 常驻集；`visibleToolsLimit: 0` = 全量）。工具目录见 `ToolRegistry.catalog()`。
+- 每轮注入：默认发**全量**可见工具 schema（`visibleToolsLimit` 默认 0，2026-08-10 起）——DeepSeek 前缀缓存对 tools 段敏感，按用户消息重打分选子集会导致 tools 段漂移、整段历史缓存 miss 按全价计费（实测单次 ~10 万 tokens）；全量 ~46 工具 ≈ 10k tokens，稳定后常驻缓存按命中价计费。设 `visibleToolsLimit > 0` 回退 `tool-select.ts` 打分 + 常驻集子集模式。工具目录见 `ToolRegistry.catalog()`。
+- Plan 模式不再切换工具注册表（2026-08-10 起）：schema 跨模式恒定，enter/exit 不击穿前缀缓存；写约束在执行层按 `planState` 运行时拦截（`streaming-executor` 的 `planGate`，规则见 `plan/plan-registry.ts` 的 `planGateCheck`：只读动作放行、fs write/edit 计划文件豁免、agent spawn 豁免）。plan 中 spawn 的子 Agent 仍静态降级为只读克隆（`planRegistry()`），不依赖父 Agent 运行时状态。
 - 领域动作通过 `resolveGuardToolName()` 映射回旧工具名，preflight 架构门禁、图增强 hooks、子 Agent `_callId` 关联均不失效；文件所有权包装的是内层旧工具，天然生效。
 - 新增工具/动作必须同步：`tools/domains.ts` 的 `DOMAIN_SPECS`（动作→旧工具名）+ `collectHiddenToolNames()`（需隐藏的旧名）+ 本文件。
 

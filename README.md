@@ -100,7 +100,7 @@ hologram run list_flows .                  # 执行流（按安全敏感度排�
 ### Agent 运行时（桌面应用内置）
 
 - **领域工具收敛**：`fs` `shell` `git` `search` `web` `agent` `task` `memory` 八个领域动作，旧工具名在模型调用路径直接淘汰
-- **每轮 schema 注入 ≤14**：按当前任务打分选择工具集，控制上下文与缓存成本
+- **每轮 schema 注入全量**：tools 段逐字节稳定，DeepSeek 前缀缓存跨消息命中（可选 `visibleToolsLimit > 0` 回退打分子集）
 - **计划模式**：探索 → 计划 → 审批 → 执行，图引擎自动注入影响面
 - **Goal 模式**：持久化目标状态，跨会话恢复，普通对话与目标现场完全隔离
 - **多 Agent**：spawn / kill / status / merge，git worktree 隔离，TaskBoard / DiscoveryBoard 共享状态，有界 inbox 防背压

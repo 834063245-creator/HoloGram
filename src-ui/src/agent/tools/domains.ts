@@ -282,7 +282,7 @@ export function collectHiddenToolNames(): string[] {
 
 /** 收敛入口：注册领域工具 + 隐藏旧工具名。
  *  rebuildDomains=true 时先注销已有领域工具再重建（正常模式：补齐运行时后注册的动作）；
- *  rebuildDomains=false 用于 plan 模式（planRegistry 已注册只读守卫版领域工具，不能覆盖）。 */
+ *  rebuildDomains=false 时保留现有领域工具不重建，仅追加隐藏旧名。 */
 export function convergeRegistry(registry: ToolRegistry, opts: { rebuildDomains?: boolean } = {}): void {
   const { rebuildDomains = true } = opts;
   if (rebuildDomains) {

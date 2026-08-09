@@ -40,6 +40,7 @@ import { StreamingToolExecutor } from './streaming-executor';
 import type { Tool } from './tool';
 import { ToolRegistry } from './tool';
 import { userContext, createStableSchemaSelector, type StableSchemaSelector } from './tool-select';
+import { planGateCheck, planRegistry, type PlanGate } from './plan/plan-registry';
 import { foldToolResults, nextFoldBoundary, DEFAULT_TOOL_FOLD_BATCH } from './tool-fold';
 import { defineTool } from './tools/define-tool';
 
@@ -112,7 +113,11 @@ export interface AgentOptions {
 }
 
 const STORM_BREAK_THRESHOLD = 3;
-const DEFAULT_VISIBLE_TOOLS_LIMIT = 16;
+// 默认发全量可见工具 schema（0 = 全量）。DeepSeek 前缀缓存对 tools 段敏感：
+// 按用户消息重打分选子集会让 tools 段漂移，整段历史缓存失效按全价计费
+// （实测单次 ~10 万 tokens）。全量目录 ~46 工具 ≈ 10k tokens，逐字节稳定后
+// 常驻缓存按 1/14 命中价计费，远低于一次全量 miss。设 >0 回退打分子集模式。
+const DEFAULT_VISIBLE_TOOLS_LIMIT = 0;
 
 // ---- Agent ----
 
@@ -301,15 +306,17 @@ export class Agent {
     this.preflightHooks = hooks;
   }
 
-  /** Plan 模式状态 + 注入器 — 由 Runtime 在 createAgent 时设置 */
+  /** Plan 模式状态 + 注入器 — 由 Runtime 在 createAgent 时设置。
+   *  2026-08-10 起不再按 plan 状态切换工具注册表（schema 跨模式恒定，
+   *  DeepSeek 前缀缓存不被 enter/exit 击穿）；写约束在执行层按
+   *  planState 运行时拦截（planGateCheck → StreamingToolExecutor）。 */
   private _planState: import('./plan/plan-state').PlanStateManager | null = null;
   private _planInjector: import('./plan/plan-injection').PlanModeInjector | null = null;
-  /** 完整工具集（normal 模式）— plan 激活时切到 _planTools，退出时切回 */
-  private _fullTools: ToolRegistry | null = null;
-  /** plan 过滤工具集（只读 + 计划文件写入） */
-  private _planTools: ToolRegistry | null = null;
   /** 项目路径 — plan 模式 enter 需要（UI 按钮切换路径） */
   private _projectPath = '';
+
+  /** Plan 门禁委托 — 稳定引用供 executor 构造时注入；运行时读取最新 _planState。 */
+  private _planGate: PlanGate = (name, args, tool) => planGateCheck(this._planState, name, args, tool);
 
   setPlanState(
     state: import('./plan/plan-state').PlanStateManager,
@@ -319,26 +326,6 @@ export class Agent {
     this._planState = state;
     this._planInjector = injector;
     this._projectPath = projectPath;
-    // 运行时工具集切换 — enter/exit/restore 都会触发 onChange，
-    // 这样 enter_plan_mode / exit_plan_mode / UI 按钮 / 会话恢复
-    // 全部走同一条路径，无需重建 Agent。
-    state.onChange((s) => {
-      this.tools = s.active ? (this._planTools ?? this._fullTools ?? this.tools) : (this._fullTools ?? this.tools);
-    });
-    // 初始校正：createAgent 时 collaborationMode === 'plan' 会先 enter
-    //（onChange 注册晚于 enter），这里补一次同步。
-    if (state.state.active && this._planTools) {
-      this.tools = this._planTools;
-    }
-  }
-
-  /** 注入两套工具集（完整 + plan 过滤）。plan 状态变化时在两者间切换。 */
-  setToolSets(full: ToolRegistry, plan: ToolRegistry): void {
-    this._fullTools = full;
-    this._planTools = plan;
-    if (this._planState?.state.active) {
-      this.tools = plan;
-    }
   }
 
   /** UI 按钮路径 — 运行时切换 plan 模式，不重建 Agent。 */
@@ -1282,6 +1269,7 @@ ${resumeNote}
         this.preflightHooks,
         this._isolationId ?? null,
         signal,
+        this._planGate,
       );
       let { text, reasoning, signature, calls, usage, err } = await this.stream(signal, step + 1, executor);
       if (err) {
@@ -1695,10 +1683,10 @@ ${resumeNote}
    *  Anthropic 的 tokenizer 略有差异（< 8% 误差），对压缩安全。
    *  按发送载荷（payloadMessages 折叠视图）计数 — 触发判定必须
    *  与真实 API 压力一致，而非完整历史大小。 */
-  /** 每轮发给模型的工具 schema：目录 > limit 时按上下文打分注入子集（见 tool-select.ts）。
-   *  稳定性契约：子集只由 user 消息驱动（assistant/tool 轮次不参与打分），且带锁存——
-   *  同一用户请求的整个工具循环内 schema 保持逐字节一致。DeepSeek 前缀缓存对
-   *  tools 段敏感，schema 漂移会导致整段历史 miss 按全价计费。 */
+  /** 每轮发给模型的工具 schema：默认全量（limit=0），保持 tools 段逐字节稳定，
+   *  DeepSeek 前缀缓存才能跨用户消息命中；limit>0 时按上下文打分注入子集
+   *  （见 tool-select.ts）。打分子集的稳定性契约：只由 user 消息驱动、带锁存——
+   *  同一用户请求的整个工具循环内逐字节一致，但跨请求仍会漂移击穿缓存。 */
   private _schemaSelector: StableSchemaSelector = createStableSchemaSelector();
 
   private requestToolSchemas(): ToolSchema[] {
@@ -2320,10 +2308,14 @@ ${resumeNote}
       }
     }
 
-    // 从父 Agent 克隆工具 — 如指定则应用允许列表过滤
+    // 从父 Agent 克隆工具 — 如指定则应用允许列表过滤。
+    // plan 模式：主 Agent 是单一注册表 + 执行层门禁（schema 恒定保缓存），
+    // 但子 Agent 生命周期可能跨越 plan 退出，故静态降级为只读克隆，
+    // 保持"plan 中 spawn = 并行只读探索"语义（与原 planR 克隆一致）。
+    const cloneSource = this._planState?.state.active ? planRegistry(this.tools, this._planState) : this.tools;
     const subTools = new ToolRegistry();
     const allowed = toolAllowlist && toolAllowlist.length > 0 ? new Set(toolAllowlist) : null;
-    for (const t of this.tools.all()) {
+    for (const t of cloneSource.all()) {
       if (!allowed || allowed.has(t.name())) {
         subTools.register(t);
       }

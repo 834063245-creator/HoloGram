@@ -12,12 +12,12 @@ function withPlanFileFooter(body: string, planFilePath: string | null): string {
 export function PLAN_FULL_REMINDER(planFilePath: string | null): string {
   return withPlanFileFooter(`## 规划模式已激活
 
-你只有只读工具 + 写计划文件的权限。不能写其他文件、跑命令、Git 操作。
+你只有只读权限 + 写计划文件的权限。写文件、跑命令、Git 操作会在执行层被拦截（[已拦截]），不要尝试。
 
 ### 工作流程
 1. **探索** — 用 fs(read/list/glob) / search(content) / explore_deps / trace_impact / fragile_modules 充分理解代码
 2. **设计** — 确定最佳方案，考虑权衡
-3. **写计划** — 用 write_file 写到计划文件
+3. **写计划** — 用 fs 的 write 动作写到计划文件
 4. **提交** — 调 exit_plan_mode 提交计划给用户审批
 
 ### 计划要求

@@ -15,6 +15,7 @@ import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import type { Tool, ToolRegistry } from './tool';
 import { truncateToolOutput } from './truncate';
 import { resolveGuardToolName, retireRedirect } from './tools/domains';
+import { type PlanGate } from './plan/plan-registry';
 
 export interface ExecutorToolCall {
   call: ToolCall;
@@ -59,6 +60,8 @@ export class StreamingToolExecutor {
   private agentId: string | null;
   /** AbortSignal — 设置后，awaitRemaining 将每个 pending promise 与其竞速。 */
   private signal: AbortSignal | null;
+  /** Plan 门禁 — plan 激活时在执行层拦截写操作；schema 跨模式恒定（缓存友好）。 */
+  private planGate: PlanGate | null;
 
   constructor(
     tools: ToolRegistry,
@@ -67,6 +70,7 @@ export class StreamingToolExecutor {
     preflightHooks?: PreflightHookRegistry | null,
     agentId?: string | null,
     signal?: AbortSignal | null,
+    planGate?: PlanGate | null,
   ) {
     this.tools = tools;
     this.emit = emitEvent;
@@ -74,6 +78,7 @@ export class StreamingToolExecutor {
     this.preflightHooks = preflightHooks ?? null;
     this.agentId = agentId ?? null;
     this.signal = signal ?? null;
+    this.planGate = planGate ?? null;
   }
 
   /** 从流中添加工具调用。立即开始执行。
@@ -127,6 +132,31 @@ export class StreamingToolExecutor {
       this.completed.push(result);
       this.emitResult(call, null, result);
       return;
+    }
+
+    // Plan 门禁：plan 激活时在执行层拦截写操作（schema 不切换注册表，
+    // DeepSeek 前缀缓存不被 plan 切换击穿；规则见 plan/plan-registry.ts）。
+    // 内部 plan 文件写入不走 executor，不受影响。
+    if (this.planGate) {
+      // 门禁需要解析后的 args（action/filePath）；非法 JSON 放行至
+      // executeTool 的 "invalid JSON arguments" 错误路径，保持报错语义。
+      let gateArgs: Record<string, unknown> | null = null;
+      try {
+        gateArgs = JSON.parse(call.arguments || '{}');
+      } catch {
+        gateArgs = null;
+      }
+      const blocked = gateArgs ? this.planGate(call.name, gateArgs, tool) : null;
+      if (blocked) {
+        const result: PendingResult = {
+          call,
+          output: blocked,
+          truncated: false,
+        };
+        this.completed.push(result);
+        this.emitResult(call, null, result);
+        return;
+      }
     }
 
     // 立即开始执行 — 不等待流结束
