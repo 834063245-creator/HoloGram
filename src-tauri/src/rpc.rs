@@ -337,9 +337,9 @@ pub(crate) async fn rpc(
             let timeout_ms = opt_u64(&params, "timeout_ms");
             let run_in_background = opt_bool(&params, "run_in_background");
             let is_agent = opt_bool(&params, "is_agent");
-            let _agent_id = opt_str(&params, "_agent_id");
+            let agent_id = opt_str(&params, "_agent_id").or_else(|| opt_str(&params, "agent_id"));
             let stream_tool_id = opt_str(&params, "stream_tool_id");
-            commands::shell::exec_command(command, cwd, timeout_ms, run_in_background, is_agent, stream_tool_id, _agent_id, state, app).await
+            commands::shell::exec_command(command, cwd, timeout_ms, run_in_background, is_agent, stream_tool_id, agent_id, state, app).await
         }
         "bash_output" => {
             let job_id = params.get("job_id").and_then(|v| v.as_u64()).map(|n| n as u32)
@@ -349,7 +349,8 @@ pub(crate) async fn rpc(
                 "bash_kill" => {
             let job_id = params.get("job_id").and_then(|v| v.as_u64()).map(|n| n as u32)
                 .ok_or_else(|| "bash_kill: missing 'job_id'".to_string())?;
-            commands::shell::bash_kill(job_id).await
+            let agent_id = opt_str(&params, "agent_id");
+            commands::shell::bash_kill(job_id, agent_id).await
         }
         "bash_wait" => {
             let job_id = params.get("job_id").and_then(|v| v.as_u64()).map(|n| n as u32)

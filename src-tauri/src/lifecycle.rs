@@ -118,6 +118,7 @@ impl LifecycleService for BgJobsService {
             }
         }
         jobs.clear();
+        crate::utils::lock_or_recover(&crate::utils::BUILD_LOCKS).clear();
         ShutdownStatus::Clean
     }
 }

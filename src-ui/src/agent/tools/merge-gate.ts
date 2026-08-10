@@ -17,7 +17,7 @@
 
 import type { BoardEntry } from '../task-board';
 import type { ToolExecutor } from '../tool';
-import { execQueuedShell } from '../runtime/queued-shell';
+import { execStreamedShell } from '../runtime/queued-shell';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -111,10 +111,8 @@ export async function runCompileTest(entry: BoardEntry, opts: MergeGateOptions):
   // Rust 侧 slug 也不重复拼接 — cwd 直接用 isolationId。
   const cwd = `${opts.projectPath}/.hologram/worktrees/${entry.isolationId}`;
   try {
-    // 经 shell 队列执行（heavy → 互斥车道）— 与前台命令正确互斥，
-    // 不再绕过队列裸调 exec_command 与排队中的 cargo 并发抢锁。
-    const out = await execQueuedShell({ command, cwd, timeoutMs: opts.compileTimeoutMs ?? 600_000 });
-    // 输出可能带 [shell 队列] 排队前缀行 — [exit 标记用多行匹配（fail-closed 语义不变）
+    // 直连流式执行（队列已退役，2026-08-10）— 构建锁冲突由 Rust BuildLock 打回。
+    const out = await execStreamedShell({ command, cwd, timeoutMs: opts.compileTimeoutMs ?? 600_000 });
     const passed = !/^\[exit [^0]\]/m.test(out.trimStart());
     return { passed, quiet: false, report: passed ? '✅ 编译测试通过' : `⚠️ 编译测试失败:\n${out.slice(0, 2000)}` };
   } catch (e: any) {

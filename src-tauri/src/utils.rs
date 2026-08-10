@@ -51,10 +51,119 @@ pub(crate) struct BgJob {
     /// 非 Windows 可继承管道下孙进程持写端 → 永久阻塞 → bash_* 全瘫。
     /// 改为必填字段，从类型上根除该分支。
     shared: BgSharedOutput,
+    /// 任务发起者：Some(agent_id)=Agent 发起；None=用户/UI 直接发起。
+    /// bash_kill 权限边界：Agent 只能 kill 自己发起的 job。
+    pub(crate) owner: Option<String>,
+    /// 本 job 持有的构建锁（若有）— 随 job 移除时自动释放。
+    pub(crate) lock_key: Option<LockKey>,
 }
 
 pub(crate) static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
     std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+// ══════════════════════════════════════════════════════════════════════
+// BuildLock — 多 Agent 构建锁互斥（替代前端 shell 队列的互斥职责）。
+//
+// 设计（2026-08-10，退役前端全局串行队列的替代方案）：
+//   - 互斥粒度是"锁资源"不是"命令"：同一 (cwd, lock_name) 上同时只能
+//     有一个 job，不同资源互不阻塞——冲突面从时间线收窄到资源交集。
+//   - 原子检查+注册：Tauri 单进程 + Mutex 临界区，无 TOCTOU 窗口。
+//   - 锁生命周期 = job 生命周期：锁随 BG_JOBS 移除自动释放（remove_job）。
+//   - 打回而非排队：冲突时返回带路径的错误（重试 / bash_wait），
+//     由 LLM 决策；OS 文件锁（cargo/npm/git 自带）兜底竞态外冲突。
+//   - 局限性（接受）：用户手动命令不注册 ledger → 锁表不可见 →
+//     冲突由 OS 锁兜底；cargo workspace root 场景锁键按 cwd 判定可能漏判。
+pub(crate) type LockKey = (String, String); // (cwd, lock_name)
+
+pub(crate) struct LockHolder {
+    pub(crate) job_id: u32,
+    pub(crate) cmd: String,
+    pub(crate) owner: Option<String>,
+    pub(crate) started_at: std::time::Instant,
+}
+
+pub(crate) static BUILD_LOCKS: std::sync::LazyLock<Arc<Mutex<HashMap<LockKey, LockHolder>>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// 命令 → 锁名映射（种子抄前端 cmd-class.ts 的 HEAVY_SUB / GIT_WRITE_SUB）。
+/// 只覆盖会抢构建锁的命令：cargo→target/，npm/pnpm/yarn→node_modules/，git 写→index。
+/// 其余命令无锁，不检查不注册（互斥交给 OS/工具自带锁）。
+pub(crate) fn lock_name_for_command(cmd: &str) -> Option<&'static str> {
+    let mut it = cmd.split_whitespace();
+    let tool = it.next()?;
+    let sub = it.next().unwrap_or("");
+    let heavy = |set: &[&str]| set.contains(&sub);
+    match tool {
+        "cargo" => heavy(&["build", "test", "check", "clippy", "run", "install", "bench", "audit"]).then_some("target"),
+        "npm" | "pnpm" | "yarn" => heavy(&["install", "ci", "build", "test", "run", "exec", "audit", "start"]).then_some("node_modules"),
+        "git" => {
+            let write = [
+                "add", "commit", "push", "pull", "fetch", "checkout", "switch", "create-branch",
+                "init", "reset", "merge", "rebase", "cherry-pick", "revert", "clean",
+                "restore", "rm", "mv", "stage", "unstage", "stash", "tag", "apply", "am",
+            ];
+            write.contains(&sub).then_some("git_index")
+        }
+        _ => None,
+    }
+}
+
+fn lock_label(lock_name: &str) -> &str {
+    match lock_name {
+        "target" => "target/ 构建目录",
+        "node_modules" => "node_modules/ 目录",
+        "git_index" => ".git/index 索引",
+        _ => lock_name,
+    }
+}
+
+/// 原子检查+注册构建锁（同一 Mutex 临界区，无 TOCTOU）。
+/// 冲突 → Err(带路径的打回信息)；成功 → Ok(锁键，None=无锁命令)。
+/// job_id 须由调用方先用 next_job_id() 预留（与后续 spawn 使用同一 id）。
+pub(crate) fn acquire_build_lock(
+    cmd: &str,
+    cwd: &str,
+    job_id: u32,
+    owner: Option<String>,
+) -> Result<Option<LockKey>, String> {
+    let Some(lock_name) = lock_name_for_command(cmd) else {
+        return Ok(None);
+    };
+    let key = (cwd.to_string(), lock_name.to_string());
+    let mut locks = lock_or_recover(&BUILD_LOCKS);
+    if let Some(h) = locks.get(&key) {
+        let secs = h.started_at.elapsed().as_secs();
+        let holder = h.owner.as_deref().unwrap_or("用户手动命令");
+        return Err(format!(
+            "⚠️ 构建锁冲突：{label} 被 job #{id} 持有（{cmd}，已运行 {secs}s，持有者：{holder}）。\
+             本命令未执行。可稍后重试，或 bash_wait({id}) 等它完成。",
+            label = lock_label(lock_name),
+            id = h.job_id,
+            cmd = h.cmd,
+        ));
+    }
+    locks.insert(
+        key.clone(),
+        LockHolder { job_id, cmd: cmd.to_string(), owner, started_at: std::time::Instant::now() },
+    );
+    Ok(Some(key))
+}
+
+/// 从 ledger 移除 job 并释放其构建锁（所有 job 移除路径的统一出口）。
+pub(crate) fn remove_job(id: u32) -> Option<BgJob> {
+    let removed = lock_or_recover(&BG_JOBS).remove(&id);
+    if let Some(job) = &removed {
+        if let Some(k) = &job.lock_key {
+            lock_or_recover(&BUILD_LOCKS).remove(k);
+        }
+    }
+    removed
+}
+
+/// 预留下一个 job id（acquire_build_lock 与 spawn 共用同一 id，保证锁原子注册）。
+pub(crate) fn next_job_id() -> u32 {
+    NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
 
 /// 通知队列 — 由 agent 在每次 stream() 调用前清空。
 pub(crate) static COMPLETED_NOTES: std::sync::LazyLock<Mutex<Vec<String>>> =
@@ -121,11 +230,11 @@ fn spawn_monitor(id: u32, label: String) {
 /// 日志守护 — 在首次打开项目时初始化一次，在整个进程生命周期内持有。
 pub(crate) static LOG_GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
 
-pub(crate) fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
+pub(crate) fn spawn_bg(cmd: &str, cwd: &str, owner: Option<String>, lock_key: Option<LockKey>) -> Result<u32, String> {
     let child = os_sandbox::spawn_shell(cmd, cwd)
         .map_err(|e| format!("无法启动后台命令: {e}"))?;
     let label: String = cmd.chars().take(80).collect();
-    spawn_bg_from_child(child, &label)
+    spawn_bg_from_child(child, &label, owner, lock_key)
 }
 
 /// 将已启动的 SandboxedChild 注册为后台任务。
@@ -136,8 +245,13 @@ pub(crate) fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
 ///     (cargo build/test 等)输出一多就塞满管道 → bash 写阻塞 → 命令假死;
 ///  2) 读方(wait_bg/read_bg_output/kill_bg)只读 shared Arc 内存,永不阻塞——
 ///     shared 为 BgJob 必填字段,阻塞读管道分支已从类型上移除(P1-17)。
-pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str) -> Result<u32, String> {
-    let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+pub(crate) fn spawn_bg_from_child(
+    child: os_sandbox::SandboxedChild,
+    label: &str,
+    owner: Option<String>,
+    lock_key: Option<LockKey>,
+) -> Result<u32, String> {
+    let id = next_job_id();
     let now = std::time::Instant::now();
     let mut child = child;
 
@@ -193,6 +307,8 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
         label: label.to_string(),
         last_output_time: now,
         shared: BgSharedOutput { stdout: stdout_buf, stderr: stderr_buf },
+        owner,
+        lock_key,
     };
     crate::utils::lock_or_recover(&BG_JOBS).insert(id, job);
     spawn_monitor(id, label.to_string());
@@ -202,12 +318,15 @@ pub(crate) fn spawn_bg_from_child(child: os_sandbox::SandboxedChild, label: &str
 /// P1-21: 前台 exec_command 子进程注册进 ledger（不 spawn monitor — 前台路径
 /// 自己等待并负责移除）。使 kill_all_bg（工作区切换）/ shutdown 能终止仍在运行
 /// 的前台命令（如占用 target 锁的 cargo），否则它们会成为跨工作区残留进程。
+/// id 须由调用方用 next_job_id() 预留（与 acquire_build_lock 共用同一 id）。
 pub(crate) fn register_fg_child(
+    id: u32,
     child: os_sandbox::SandboxedChild,
     label: &str,
     shared: BgSharedOutput,
-) -> u32 {
-    let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    owner: Option<String>,
+    lock_key: Option<LockKey>,
+) {
     let now = std::time::Instant::now();
     let job = BgJob {
         child,
@@ -217,9 +336,10 @@ pub(crate) fn register_fg_child(
         label: label.to_string(),
         last_output_time: now,
         shared,
+        owner,
+        lock_key,
     };
     crate::utils::lock_or_recover(&BG_JOBS).insert(id, job);
-    id
 }
 
 pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
@@ -246,7 +366,12 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
     let status = job.child.try_wait().map_err(|e| format!("检查进程状态失败: {e}"))?;
     let info = if let Some(ec) = status {
         let msg = format!("[任务已完成, exit code: {}, 耗时: {}s]\n", ec, elapsed);
+        let lock_key = job.lock_key.clone();
         jobs.remove(&id);
+        drop(jobs);
+        if let Some(k) = lock_key {
+            crate::utils::lock_or_recover(&BUILD_LOCKS).remove(&k);
+        }
         msg
     } else {
         format!("[任务运行中, 已运行: {}s]\n", elapsed)
@@ -274,7 +399,12 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
                 };
                 let elapsed = job.start_time.elapsed().as_secs();
                 let ec = status.code().unwrap_or(-1);
+                let lock_key = job.lock_key.clone();
                 jobs.remove(&id);
+                drop(jobs);
+                if let Some(k) = lock_key {
+                    crate::utils::lock_or_recover(&BUILD_LOCKS).remove(&k);
+                }
                 let header = format!("[任务已完成, exit code: {}, 耗时: {}s]\n", ec, elapsed);
                 return Ok(format!("{header}{stdout_str}{stderr_str}"));
             }
@@ -286,28 +416,53 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
             Err(e) => {
+                let lock_key = jobs.get(&id).and_then(|j| j.lock_key.clone());
                 jobs.remove(&id);
+                drop(jobs);
+                if let Some(k) = lock_key {
+                    crate::utils::lock_or_recover(&BUILD_LOCKS).remove(&k);
+                }
                 return Err(format!("检查进程状态失败: {e}"));
             }
         }
     }
 }
 
-pub(crate) fn kill_bg(id: u32) -> Result<String, String> {
-    let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
-    let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
-    // 必须 kill_tree:kill() 只杀顶层 bash/cmd,残留的 cargo/rustc 孙进程会继续
-    // 占用 target/ 文件锁,导致后续所有 cargo 命令无限等待锁 → "cargo test 卡死"。
-    job.child.kill_tree().map_err(|e| format!("无法终止任务: {e}"))?;
-    let (stdout, stderr) = {
-        let shared = &job.shared;
-        let so = crate::utils::lock_or_recover(&shared.stdout);
-        let se = crate::utils::lock_or_recover(&shared.stderr);
-        (String::from_utf8_lossy(&so).to_string(),
-         String::from_utf8_lossy(&se).to_string())
+/// 终止后台任务。caller=Some(agent_id) 时校验所有权：
+/// Agent 只能 kill 自己发起的 job（用户/其他 Agent 的任务无权终止）。
+pub(crate) fn kill_bg(id: u32, caller: Option<&str>) -> Result<String, String> {
+    let (lock_key, output) = {
+        let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
+        let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
+        if let Some(caller) = caller {
+            match job.owner.as_deref() {
+                None => {
+                    return Err("该任务由用户发起，Agent 无权终止。请等待其完成或由用户手动清理。".into())
+                }
+                Some(owner) if owner != caller => {
+                    return Err(format!("该任务由 {owner} 持有，当前 Agent 无权终止"))
+                }
+                _ => {}
+            }
+        }
+        // 必须 kill_tree:kill() 只杀顶层 bash/cmd,残留的 cargo/rustc 孙进程会继续
+        // 占用 target/ 文件锁,导致后续所有 cargo 命令无限等待锁 → "cargo test 卡死"。
+        job.child.kill_tree().map_err(|e| format!("无法终止任务: {e}"))?;
+        let (stdout, stderr) = {
+            let shared = &job.shared;
+            let so = crate::utils::lock_or_recover(&shared.stdout);
+            let se = crate::utils::lock_or_recover(&shared.stderr);
+            (String::from_utf8_lossy(&so).to_string(),
+             String::from_utf8_lossy(&se).to_string())
+        };
+        let lk = job.lock_key.clone();
+        jobs.remove(&id);
+        (lk, format!("[任务已终止]\n{stdout}{stderr}"))
     };
-    jobs.remove(&id);
-    Ok(format!("[任务已终止]\n{stdout}{stderr}"))
+    if let Some(k) = lock_key {
+        crate::utils::lock_or_recover(&BUILD_LOCKS).remove(&k);
+    }
+    Ok(output)
 }
 
 /// 终止全部后台任务（workspace 切换时调用）。
@@ -318,6 +473,7 @@ pub(crate) fn kill_all_bg() {
         let _ = job.child.kill_tree();
     }
     jobs.clear();
+    crate::utils::lock_or_recover(&BUILD_LOCKS).clear();
 }
 
 /// 查找 Rust 引擎可执行文件。
@@ -1554,10 +1710,110 @@ mod tests {
         assert_eq!(*lock_or_recover(&m), 43, "中毒后必须恢复数据而非 panic");
     }
 
+    // ── BuildLock：多 Agent 构建锁互斥 ──
+    // 测试共享全局 BUILD_LOCKS 且并行执行——各测试末尾的 clear() 会互踩，
+    // 用共享 Mutex 串行化（Rust 测试默认并行线程）。
+    static BUILD_LOCK_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 锁键按 (cwd, lock_name) 判定：同目录两个 cargo build 冲突。
+    #[test]
+    fn build_lock_conflict_same_resource() {
+        let _g = BUILD_LOCK_TESTS.lock().expect("test lock");
+        let k1 = acquire_build_lock("cargo build", "C:/ws-t1", 1, Some("agent-a".into())).unwrap();
+        assert!(k1.is_some(), "cargo build 应注册 target 锁");
+        let err = acquire_build_lock("cargo test", "C:/ws-t1", 2, Some("agent-b".into())).unwrap_err();
+        assert!(err.contains("构建锁冲突"), "冲突应打回: {err}");
+        assert!(err.contains("job #1"), "打回应指明持有者 job: {err}");
+        assert!(err.contains("agent-a"), "打回应指明持有者: {err}");
+        assert!(err.contains("bash_wait(1)"), "打回应带等待路径: {err}");
+        crate::utils::lock_or_recover(&BUILD_LOCKS).clear();
+    }
+
+    /// 不同锁资源 / 不同 cwd 互不冲突（worktree 隔离白赚）。
+    #[test]
+    fn build_lock_no_conflict_different_resource() {
+        let _g = BUILD_LOCK_TESTS.lock().expect("test lock");
+        let k1 = acquire_build_lock("cargo build", "C:/ws-t2", 1, None).unwrap();
+        let k2 = acquire_build_lock("npm install", "C:/ws-t2", 2, None).unwrap();
+        let k3 = acquire_build_lock("cargo build", "C:/ws-t2/worktree2", 3, None).unwrap();
+        assert!(k1.is_some() && k2.is_some() && k3.is_some(), "异资源/异目录不应冲突");
+        assert_ne!(k1, k2);
+        assert_ne!(k1, k3);
+        crate::utils::lock_or_recover(&BUILD_LOCKS).clear();
+    }
+
+    /// 无锁命令不注册；git 只读子命令不锁。
+    #[test]
+    fn build_lock_ignores_nonlocking_commands() {
+        let _g = BUILD_LOCK_TESTS.lock().expect("test lock");
+        assert!(acquire_build_lock("echo hi", "C:/ws-t3", 1, None).unwrap().is_none());
+        assert!(acquire_build_lock("git status", "C:/ws-t3", 2, None).unwrap().is_none());
+        assert!(acquire_build_lock("git commit -m x", "C:/ws-t3", 3, None).unwrap().is_some());
+        crate::utils::lock_or_recover(&BUILD_LOCKS).clear();
+    }
+
+    /// remove_job 释放锁：job 完成后同资源命令恢复可执行。
+    #[test]
+    fn build_lock_released_on_remove_job() {
+        let _g = BUILD_LOCK_TESTS.lock().expect("test lock");
+        let id = next_job_id();
+        let k = acquire_build_lock("cargo build", "C:/ws-t4", id, None).unwrap().unwrap();
+        // 模拟 job 完成 → remove_job 释放锁
+        crate::utils::lock_or_recover(&BG_JOBS).insert(
+            id,
+            BgJob {
+                child: {
+                    // 占位 child — 测试只关心锁释放，不启动进程
+                    // （用 spawn 一个立即退出的命令得到 SandboxedChild）
+                    let c = crate::os_sandbox::spawn_shell("echo x", ".").expect("spawn_shell failed");
+                    c
+                },
+                stdout_buf: Vec::new(),
+                stderr_buf: Vec::new(),
+                start_time: std::time::Instant::now(),
+                label: "test".into(),
+                last_output_time: std::time::Instant::now(),
+                shared: BgSharedOutput {
+                    stdout: Default::default(),
+                    stderr: Default::default(),
+                },
+                owner: None,
+                lock_key: Some(k.clone()),
+            },
+        );
+        remove_job(id);
+        assert!(
+            !crate::utils::lock_or_recover(&BUILD_LOCKS).contains_key(&k),
+            "remove_job 应释放构建锁"
+        );
+    }
+
+    /// bash_kill 所有权边界：Agent 不能 kill 用户任务 / 其他 Agent 任务。
+    #[test]
+    fn kill_bg_ownership_boundary() {
+        let _g = BUILD_LOCK_TESTS.lock().expect("test lock");
+        let id = next_job_id();
+        let child = crate::os_sandbox::spawn_shell("sleep 30", ".").expect("spawn_shell failed");
+        register_fg_child(id, child, "sleep 30", BgSharedOutput { stdout: Default::default(), stderr: Default::default() }, Some("agent-a".into()), None);
+        // 其他 Agent 无权 kill
+        let err = kill_bg(id, Some("agent-b")).unwrap_err();
+        assert!(err.contains("无权终止"), "跨 Agent kill 应拒绝: {err}");
+        // 本人可 kill
+        assert!(kill_bg(id, Some("agent-a")).is_ok(), "本人 kill 应放行");
+        // 用户任务（owner=None）：Agent 无权 kill
+        let id2 = next_job_id();
+        let child2 = crate::os_sandbox::spawn_shell("sleep 30", ".").expect("spawn_shell failed");
+        register_fg_child(id2, child2, "sleep 30", BgSharedOutput { stdout: Default::default(), stderr: Default::default() }, None, None);
+        let err2 = kill_bg(id2, Some("agent-a")).unwrap_err();
+        assert!(err2.contains("无权终止"), "用户任务 Agent 不可 kill: {err2}");
+        // 用户（无 agent_id）可 kill 任何任务
+        assert!(kill_bg(id2, None).is_ok(), "用户 kill 应放行");
+    }
+
     // ── P1-17：bg 任务读方只碰 shared Arc，永不阻塞读管道 ──
     #[test]
     fn bg_job_roundtrip_via_shared_arc() {
-        let id = spawn_bg("echo bg-p117", ".").expect("spawn_bg failed");
+        let id = spawn_bg("echo bg-p117", ".", None, None).expect("spawn_bg failed");
         let out = wait_bg(id, 10_000).expect("wait_bg failed");
         assert!(out.contains("bg-p117"), "unexpected output: {out}");
         assert!(out.contains("exit code: 0"), "unexpected output: {out}");
@@ -1568,7 +1824,7 @@ mod tests {
     /// 该分支已从类型上移除，此测试锁定行为。
     #[test]
     fn bg_output_snapshot_quiet_task_returns_fast() {
-        let id = spawn_bg("sleep 5", ".").expect("spawn_bg failed");
+        let id = spawn_bg("sleep 5", ".", None, None).expect("spawn_bg failed");
         let start = std::time::Instant::now();
         let out = read_bg_output(id).expect("read_bg_output failed");
         assert!(
@@ -1577,6 +1833,6 @@ mod tests {
             start.elapsed()
         );
         assert!(out.contains("任务运行中"), "unexpected output: {out}");
-        kill_bg(id).expect("kill_bg failed");
+        kill_bg(id, None).expect("kill_bg failed");
     }
 }

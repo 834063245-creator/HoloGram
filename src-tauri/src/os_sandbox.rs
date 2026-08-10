@@ -819,7 +819,7 @@ pub mod imp {
             use std::time::{Duration, Instant};
 
             // spawn_bg 需要 os_sandbox::init() 的 Job Object? 不需要 — spawn_bg 内部调 spawn_shell
-            let id = match crate::utils::spawn_bg("seq 1 5000", ".") {
+            let id = match crate::utils::spawn_bg("seq 1 5000", ".", None, None) {
                 Ok(id) => id,
                 Err(e) => {
                     eprintln!("[bg-repro] spawn_bg failed: {e}");

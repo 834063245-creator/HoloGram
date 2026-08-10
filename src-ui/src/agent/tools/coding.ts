@@ -381,7 +381,8 @@ export function createCodingTools(exec: ToolExecutor, ui?: CodingToolsUI): Tool[
           .int()
           .describe('The job ID returned by run_shell with runInBackground: true'),
       }),
-      execute: (args, onProgress) => exec('bash_kill', { jobId: args.jobId }, onProgress),
+      execute: (args, onProgress) =>
+        exec('bash_kill', { jobId: args.jobId, agentId: (args as { _agent_id?: string })._agent_id }, onProgress),
     }),
     defineTool({
       name: 'bash_wait',

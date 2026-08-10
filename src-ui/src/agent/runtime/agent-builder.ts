@@ -35,7 +35,7 @@ import { createCodingTools } from '../tools/coding';
 import { createSubAgentTool, createAgentKillTool, createAgentStatusTool } from '../tools/subagent';
 import { createSkillTool } from '../skills';
 import { createTaskTools } from '../task';
-import { execQueuedShell, heavyBackgroundConflictWarning } from './queued-shell';
+import { execStreamedShell } from './queued-shell';
 import { createWaitTool } from '../tools/wait';
 import { convergeRegistry } from '../tools/domains';
 
@@ -351,12 +351,10 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
     );
   }
 
-  // ── Shell 队列（分车道） ──
-// 流式 exec_command 经 shell-queue 调度（v2，见 queued-shell.ts / shell-queue.ts）：
-//  1) read 类走只读车道（并发 3）——ls/grep/cat 不再被 cargo build 堵满全程；
-//  2) write/heavy/unknown 走互斥车道（全串行）——避免并发 cargo 互杀 listener / 抢 target 锁;
-//  3) abort 可取消：排队中出队、运行中 bash_kill（修"幽灵命令占排头"）。
-// 后台任务（runInBackground）不入队 —— 与互斥车道 heavy 冲突时给警告（不能持租约）。
+  // ── Shell 执行（2026-08-10：队列退役，直连流式） ──
+  // 多 Agent 构建锁互斥由 Rust 侧 BuildLock 承担（资源级原子检查 + 带路径打回，
+  // 见 src-tauri/src/utils.rs）：冲突时 exec_command 返回错误，不排队不串行化。
+  // abort 取消保留：bash_kill 携带 agent_id 身份，只能 kill 自己发起的 job。
 
   // ── Coding tools ──
   // 后台任务等待总上限:后台 job 若卡死(如 cargo 等待 target 文件锁)可能无限期运行,
@@ -367,9 +365,7 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
       // 命令名必须是 exec_command(run_shell 不是 Tauri 命令),args 已含 runInBackground: true
       const raw = await agentInvoke<string>('exec_command', args);
       const m = /ID:\s*(\d+)/.exec(raw);
-      if (!m) return raw; // 启动失败 — 把 Rust 返回的消息直接给 agent
-      // heavy 后台任务与互斥车道的 heavy 前台命令会抢构建锁 — 信息提示（不阻塞）
-      const bgWarn = heavyBackgroundConflictWarning(String(args.command || ''));
+      if (!m) return raw; // 启动失败 — 把 Rust 返回的消息直接给 agent（含构建锁打回）
       const jobId = m[1];
       let last = '';
       const bgDeadline = Date.now() + BG_WAIT_TIMEOUT;
@@ -381,22 +377,22 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
           if (msg.includes('等待超时')) {
             // 任务仍在跑 — 检查总超时,超时则放弃等待并把控制权交还 Agent
             if (Date.now() >= bgDeadline) {
-              return `[exit -1] 后台任务已等待 ${BG_WAIT_TIMEOUT / 1000}s 仍未完成,已放弃等待(可能卡在文件锁或等待输入)。当前输出:\n${last}\n可用 bash_output(${jobId}) 查看进度, bash_kill(${jobId}) 终止任务。${bgWarn}`;
+              return `[exit -1] 后台任务已等待 ${BG_WAIT_TIMEOUT / 1000}s 仍未完成,已放弃等待(可能卡在文件锁或等待输入)。当前输出:\n${last}\n可用 bash_output(${jobId}) 查看进度, bash_kill(${jobId}) 终止任务。`;
             }
             if (onProgress) onProgress(`[后台任务运行中, job_id: ${jobId}]`);
             continue;
           }
           // 任务已被清理(完成或 kill)— 带最后已知输出返回
-          return last ? `[后台任务结束]\n${last}${bgWarn}` : `后台任务查询失败: ${msg}`;
+          return last ? `[后台任务结束]\n${last}` : `后台任务查询失败: ${msg}`;
         }
-        if (last.includes('[任务已完成')) return last + bgWarn;
+        if (last.includes('[任务已完成')) return last;
         if (onProgress) onProgress(last); // 每 60s 报一次进度
       }
     }
     if (name === 'exec_command' && !args.runInBackground) {
-      // 经队列执行（分车道 + 取消语义）— 实现见 queued-shell.ts。
-      // 无 onProgress 时静默入队（merge-gate 路径经 execQueuedShell 直调，不走这里）。
-      return execQueuedShell(args, onProgress, signal);
+      // 直连流式执行（取消语义 + 600s 兜底）— 实现见 queued-shell.ts。
+      // 构建锁冲突由 Rust 打回（错误信息直接返回，模型据此重试/等待）。
+      return execStreamedShell(args, onProgress, signal);
     }
     // ── Timeout wrapper for search/list tools — prevent stuck Tauri invokes ──
     const TOOL_TIMEOUT = 120_000;
