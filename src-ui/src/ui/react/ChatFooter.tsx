@@ -9,6 +9,7 @@ import type React from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
 import { useStore } from 'zustand';
 import { useShellStore } from '../../app/shell-store';
+import { rpc } from '../../bridge';
 import { type AppSettings, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
 import { getChatStore } from '../chat-store';
 import { bus } from '../events';
@@ -112,6 +113,8 @@ function ChatModebar({ panelId }: { panelId: string }) {
       const s = loadSettings();
       s.agent = { ...s.agent, permissionMode: mode };
       saveSettings(s);
+      // 模式镜像到后端 — 后台任务（同步权限路径）靠它决定是否旁路 Ask
+      rpc('set_permission_mode', { mode }).catch(() => {});
     },
     [panelStore],
   );

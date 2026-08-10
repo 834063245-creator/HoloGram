@@ -427,7 +427,10 @@ async function init(): Promise<void> {
     });
 
         // ── 后端权限请求 → 前端内联聊天卡片桥接 ──
-    const AUTO_WHITELIST = new Set(['edit_file', 'write_file', 'git_stage', 'delete_file', 'move_file', 'create_directory']);
+    // 白名单按后端 Tool.name() 匹配（payload.tool）：
+    // "Edit" = edit_file/write_file/delete_file/move_file/create_directory/log_append。
+    // 注意与 src-tauri permissions::auto_mode_allows 保持同一份名单（两端镜像）。
+    const AUTO_WHITELIST = new Set(['Edit']);
     const timedOutRequests = new Set<string>();
     await listen('permission-ask', (event: any) => {
       const p = event.payload as {

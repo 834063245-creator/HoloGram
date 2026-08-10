@@ -13,6 +13,7 @@ pub mod web;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{LazyLock, RwLock};
 
 use tokio::sync::oneshot;
@@ -20,6 +21,52 @@ use tokio::sync::oneshot;
 use crate::agent_isolation::AgentIsolation;
 use crate::audit::AuditLogger;
 use crate::sandbox::{Sandbox, SandboxResult};
+
+// ═══════════════════════════════════════════════════════════════
+// 权限模式 — 前端 UI 模式镜像（ask/auto/yolo）
+// 仅前端拥有权威状态；后端保存镜像供同步路径（后台任务）使用，
+// 因为同步路径无法等待前端弹窗回复（见 check_permission_sync）。
+// ═══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionMode {
+    /// 每个 Ask 都弹窗（默认）
+    Ask,
+    /// 白名单常规编辑自动批准，其余 Ask 弹窗
+    Auto,
+    /// 全部 Ask 自动批准（危险！）
+    Yolo,
+}
+
+/// 0=Ask 1=Auto 2=Yolo — 原子，无锁读（同步路径高频调用）。
+static PERMISSION_MODE: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_permission_mode(mode: &str) -> bool {
+    let v = match mode {
+        "ask" => 0,
+        "auto" => 1,
+        "yolo" => 2,
+        _ => return false,
+    };
+    PERMISSION_MODE.store(v, Ordering::Relaxed);
+    true
+}
+
+pub fn current_permission_mode() -> PermissionMode {
+    match PERMISSION_MODE.load(Ordering::Relaxed) {
+        1 => PermissionMode::Auto,
+        2 => PermissionMode::Yolo,
+        _ => PermissionMode::Ask,
+    }
+}
+
+/// auto 模式白名单 — 常规编辑自动批准（与前端 AUTO_WHITELIST 语义一致；
+/// 前端按后端 Tool.name() 匹配，本函数保持同一份名单）。
+/// EditTool 覆盖 edit_file/write_file/delete_file/move_file/create_directory/log_append。
+/// 注意：Bash/Read/Git/WebFetch 不在名单内 — auto 模式下仍弹窗（危险命令仍询问）。
+pub fn auto_mode_allows(tool_name: &str) -> bool {
+    matches!(tool_name, "Edit")
+}
 
 // ═══════════════════════════════════════════════════════════════
 // Tool trait — 每个 Tauri command 对应一个 Tool 实现 (spec §4.2)
@@ -800,5 +847,71 @@ mod regression {
                 other
             ),
         }
+    }
+
+    /// 回归 — 同步路径（后台任务）不感知权限模式
+    /// 修前: yolo 旁路只存在于前端 permission-ask 事件监听，后台任务走
+    ///       check_permission_sync 同步路径，从不发事件也不读模式 → 一律拒绝。
+    /// 修后: yolo → Ask 自动放行；auto → 白名单工具（Edit）放行；
+    ///       Bash 在 auto 下仍拒绝（危险命令仍询问）。
+    #[test]
+    fn r11_sync_path_respects_permission_mode() {
+        let root = tmp_project();
+        let ctx = PermissionContext::new(&root);
+        let bash = crate::tools::BashTool {
+            command: "sudo make install".into(),
+        };
+        let edit = crate::tools::EditTool {
+            path: root.join("..").join("outside.txt").to_string_lossy().to_string(),
+            agent_id: None,
+        };
+        // 前置：两个工具在 ask 模式下都应触发 Ask（否则测试无意义）
+        assert!(matches!(
+            has_permission_to_use_tool(&bash, &ctx),
+            PermissionDecision::Ask { .. }
+        ));
+        assert!(matches!(
+            has_permission_to_use_tool(&edit, &ctx),
+            PermissionDecision::Ask { .. }
+        ));
+
+        // yolo → 全部放行
+        set_permission_mode("yolo");
+        crate::utils::check_permission_sync(&bash, &ctx).expect("yolo must allow bg bash");
+        crate::utils::check_permission_sync(&edit, &ctx).expect("yolo must allow bg edit");
+
+        // auto → 白名单（Edit）放行，Bash 仍拒绝
+        set_permission_mode("auto");
+        crate::utils::check_permission_sync(&edit, &ctx).expect("auto must allow bg edit");
+        let err = crate::utils::check_permission_sync(&bash, &ctx).unwrap_err();
+        assert!(
+            err.contains("无法交互"),
+            "auto must still deny bg bash, got: {}",
+            err
+        );
+
+        // ask（默认）→ 全部拒绝
+        set_permission_mode("ask");
+        crate::utils::check_permission_sync(&edit, &ctx).unwrap_err();
+        crate::utils::check_permission_sync(&bash, &ctx).unwrap_err();
+    }
+
+    /// 回归 — yolo 不旁路 Deny（系统 Deny 规则始终拒绝）
+    #[test]
+    fn r12_yolo_does_not_bypass_deny() {
+        let root = tmp_project();
+        let ctx = PermissionContext::new(&root);
+        // .hologram/settings.json 有系统 Deny 规则（与 r1 同源）
+        let tool = crate::tools::EditTool {
+            path: root.join(".hologram/settings.json").to_string_lossy().to_string(),
+            agent_id: None,
+        };
+        // Deny 无论模式
+        set_permission_mode("yolo");
+        assert!(matches!(
+            has_permission_to_use_tool(&tool, &ctx),
+            PermissionDecision::Deny { .. }
+        ));
+        crate::utils::check_permission_sync(&tool, &ctx).unwrap_err();
     }
 }

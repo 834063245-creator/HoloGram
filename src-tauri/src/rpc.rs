@@ -412,6 +412,10 @@ pub(crate) async fn rpc(
             };
             ok_unit(commands::identity::permission_ask_response(request_id, allow, remember, rule_to_add, rule_behavior, state).await)
         }
+        "set_permission_mode" => {
+            let mode = req_str(&params, "mode", "set_permission_mode")?;
+            ok_unit(commands::identity::set_permission_mode(mode))
+        }
         "credential_store" => {
             let provider = req_str(&params, "provider", "credential_store")?;
             let key = req_str(&params, "key", "credential_store")?;

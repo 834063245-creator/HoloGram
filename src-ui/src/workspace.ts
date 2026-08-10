@@ -624,6 +624,8 @@ export class Workspace {
     if (sAgent.permissionMode && ps.permissionMode === 'ask') {
       ps.setPermissionMode(sAgent.permissionMode);
     }
+    // 模式镜像到后端 — 后台任务（同步权限路径）靠它决定是否旁路 Ask
+    rpc('set_permission_mode', { mode: ps.permissionMode }).catch(() => {});
 
     const active = getActiveProvider(settings);
 

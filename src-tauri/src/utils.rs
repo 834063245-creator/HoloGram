@@ -598,6 +598,10 @@ pub(crate) fn check_mcp_permission(
 
     // ② 工具级 Ask — 强制弹窗确认（此前对 MCP 工具忽略此项）
     if let Some(rule) = rules.find_ask(tool_name, None) {
+        // yolo 模式：Ask 一律自动放行（同步路径无前端弹窗可等）
+        if permissions::current_permission_mode() == permissions::PermissionMode::Yolo {
+            return Ok(());
+        }
         let reason = rule.explain();
         drop(rules);
         return Err(format!("{} 工具需要用户确认: {}", tool_name, reason));
@@ -650,6 +654,8 @@ pub(crate) async fn check_permission(
 }
 
 /// 同步检查权限（无 Await — 用于后台任务：Ask → 记录日志 + 拒绝并给出明确原因）。
+/// 权限模式旁路（与前端 permission-ask 旁路对齐）：yolo → 全部 Ask 自动放行；
+/// auto → 白名单工具放行。仅旁路 Ask — Deny（Critical 危险）始终拒绝。
 pub(crate) fn check_permission_sync(
     tool: &dyn permissions::Tool,
     ctx: &PermissionContext,
@@ -662,6 +668,14 @@ pub(crate) fn check_permission_sync(
                 .get_path()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
+            let mode = permissions::current_permission_mode();
+            if mode == permissions::PermissionMode::Yolo
+                || (mode == permissions::PermissionMode::Auto
+                    && permissions::auto_mode_allows(tool.name()))
+            {
+                ctx.audit_allow(tool.name(), &target);
+                return Ok(());
+            }
             ctx.audit_deny(tool.name(), &target, &format!("后台任务无法交互，自动拒绝: {}", reason));
             let hint = match suggestions.first() {
                 Some(s) => format!("\n建议在 .hologram/permissions.json 添加: \"allow\": [\"{}\"]", s.rule),

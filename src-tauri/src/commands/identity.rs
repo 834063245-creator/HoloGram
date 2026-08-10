@@ -40,6 +40,22 @@ pub(crate) fn credential_store(provider: String, key: String) -> Result<(), Stri
     crate::credential::store_api_key(&provider, &key)
 }
 
+/// 权限模式同步 — 前端 UI 模式镜像到后端，供同步路径（后台任务）旁路使用。
+/// 仅前端是权威源；本函数只更新镜像，不持久化。
+pub(crate) fn set_permission_mode(mode: String) -> Result<(), String> {
+    match mode.as_str() {
+        "ask" | "auto" | "yolo" => {
+            crate::permissions::set_permission_mode(mode.as_str());
+            tracing::info!("[perm] permission mode -> {}", mode);
+            Ok(())
+        }
+        other => Err(format!(
+            "无效的权限模式: '{}' (允许: ask/auto/yolo)",
+            other
+        )),
+    }
+}
+
 pub(crate) fn credential_get(provider: String) -> Result<Option<String>, String> {
     crate::credential::get_api_key(&provider)
 }
