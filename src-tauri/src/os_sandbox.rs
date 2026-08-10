@@ -195,17 +195,20 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
         //   （静默回退会让 Agent 猜不到命令跑在哪个解释器上，语法必踩坑）
         // - 探测结果就是 Cmd（本机无 Git Bash）→ 用 cmd，但 shell_env() 会
         //   显式上报，前端注入 Agent system prompt 声明 shell=cmd
+        //
+        // 命令传递策略（2026-08：修复"转译问题/斜杠问题"）：
+        // - Bash：命令串原样经 Command::arg 传给 bash -c（不经 split_cmdline 分词，
+        //   也不做任何包裹）— 模型写的 $VAR / $(...) / 引号嵌套由 bash 正常解析。
+        //   此前整体单引号包裹把 $、$()、` 全部变成字面量，模型写什么都"不生效"。
+        // - Cmd：命令写入临时 .cmd 文件再执行 — cmd /s /c 的引号剥离规则对内嵌
+        //   双引号必错乱，批处理文件免疫一切 cmd 引号/展开问题。
         match imp::detect_shell() {
-            imp::Shell::Bash(ref bash_path) => {
-                let cmdline = format!("\"{}\" -c {}", bash_path, quote_cmd(command));
-                imp::spawn(&cmdline, cwd)
-            }
+            imp::Shell::Bash(ref bash_path) => imp::spawn_bash(bash_path, command, cwd),
             imp::Shell::Cmd => {
                 eprintln!(
                     "[hologram] no Git Bash detected — shell=cmd (Agent environment block will declare this)"
                 );
-                let cmdline = format!("cmd /s /c \"{}\"", command);
-                imp::spawn(&cmdline, cwd)
+                imp::spawn_cmd_script(command, cwd)
             }
         }
     }
@@ -245,7 +248,7 @@ pub fn shell_env() -> serde_json::Value {
                 "os": "windows",
                 "shell": "bash",
                 "shell_path": path,
-                "notes": "命令跑在 Git Bash (bash) 上，用 Unix 语法：/dev/null 不是 NUL、路径用正斜杠、用 ls 而不是 dir"
+                "notes": "命令跑在 Git Bash (bash) 上，用 Unix 语法：$VAR / $(...) / 引号嵌套正常解析；路径用正斜杠（/c/Users/... 或相对路径），D:\\foo 这种反斜杠路径在 bash 内建命令里不可靠；MSYS 路径自动转换已关闭，/ 开头的参数按字面传给程序"
             }),
             imp::Shell::Cmd => serde_json::json!({
                 "os": "windows",
@@ -315,14 +318,6 @@ pub fn assign_to_job(child: &std::process::Child) -> bool {
 // ═══════════════════════════════════════════════════════════════
 // 辅助函数
 // ═══════════════════════════════════════════════════════════════
-
-/// 为 bash -c 单引号包裹命令。单引号转义所有内容
-/// （包括 $、&、!、`、\），只有 ' 本身需要特殊处理。
-#[cfg(windows)]
-fn quote_cmd(cmd: &str) -> String {
-    let escaped = cmd.replace('\'', "'\\''");
-    format!("'{}'", escaped)
-}
 
 // ═══════════════════════════════════════════════════════════════
 // Windows 实现 — 仅 Job Object
@@ -456,8 +451,7 @@ pub mod imp {
     /// OnceLock::get_or_init,冒烟测试卡住 = 整个 shell 子系统全局锁死,
     /// 之后所有 shell 命令(前台/后台)全部无限等待。
     fn smoke_test_bash(bash_path: &str) -> bool {
-        let cmdline = format!("\"{}\" -c {}", bash_path, super::quote_cmd("exit 0"));
-        match spawn(&cmdline, ".") {
+        match spawn_bash(bash_path, "exit 0", ".") {
             Ok(mut child) => {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 loop {
@@ -570,25 +564,36 @@ pub mod imp {
     /// （如 bash 启动的 cargo test 二进制）不能在直接子进程
     /// 退出后保持管道打开。
     pub fn spawn(cmdline: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
-        use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
-
         let (program, args) = split_cmdline(cmdline);
+        spawn_argv(&program, &args, cwd, &[])
+    }
 
+    /// 以 argv 数组形式启动（不经 split_cmdline 分词/去引号）。
+    /// 命令字符串作为单个参数传给解释器 — 内部 $、$(...)、引号由
+    /// 解释器自行解析，此处不做任何改写（2026-08 修转义问题）。
+    pub fn spawn_argv(
+        program: &str,
+        args: &[String],
+        cwd: &str,
+        envs: &[(&str, &str)],
+    ) -> io::Result<super::SandboxedChild> {
+        use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
         // 创建 stdout/stderr 管道，子端标记为不可继承。
         // 这防止子进程（cargo → test 二进制）持有
         // 管道句柄打开，导致 read_to_end 永久阻塞。
         let (stdout_read, stdout_write) = create_non_inheritable_pipe()?;
         let (stderr_read, stderr_write) = create_non_inheritable_pipe()?;
 
-        let mut c = std::process::Command::new(&program);
-        for a in &args {
-            c.arg(a);
-        }
-        c.current_dir(cwd)
+        let mut c = std::process::Command::new(program);
+        c.args(args)
+            .current_dir(cwd)
             .stdin(std::process::Stdio::null())
             .stdout(stdout_write)
             .stderr(stderr_write)
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+        for (k, v) in envs {
+            c.env(k, v);
+        }
         let mut child = c.spawn()?;
 
         // 用我们的读取句柄替换子进程的 stdout/stderr。
@@ -606,6 +611,42 @@ pub mod imp {
 
         job::assign(&child);
         Ok(super::SandboxedChild { inner: child })
+    }
+
+    /// Git Bash：`bash -c <command>` — 命令串原样传参，bash 自行解析
+    /// $VAR / $(...) / 引号嵌套。设 MSYS2_ARG_CONV_EXCL='*' 关闭 MSYS
+    /// 参数路径自动转换（否则 /src/main.ts 会被改写成
+    /// C:\Program Files\Git\src\main.ts，正斜杠参数必错）。
+    pub fn spawn_bash(bash_path: &str, command: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
+        let arg = command.to_string();
+        spawn_argv(bash_path, &[String::from("-c"), arg], cwd, &[("MSYS2_ARG_CONV_EXCL", "*")])
+    }
+
+    /// cmd.exe：命令写入临时 .cmd 批处理文件再执行 —
+    /// cmd /s /c 对内嵌双引号的剥离规则必错乱（如
+    /// git commit -m "msg"），批处理文件免疫全部 cmd 引号/展开问题。
+    /// spawn 返回时 cmd 可能仍持有句柄，3 秒后尽力删除（失败无害，留在 temp）。
+    pub fn spawn_cmd_script(command: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SCRIPT_SEQ: AtomicU32 = AtomicU32::new(0);
+        let script_name = format!(
+            "hologram_cmd_{}_{}.cmd",
+            std::process::id(),
+            SCRIPT_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let script_path = std::env::temp_dir().join(script_name);
+        // CRLF 必需 — cmd 对纯 LF 批处理文件的部分语法解析异常。
+        let script = format!("@echo off\r\n{}\r\nexit /b %errorlevel%\r\n", command);
+        std::fs::write(&script_path, script)?;
+        let path_arg = script_path.to_string_lossy().to_string();
+        // /c 后跟批处理路径；cmd 用 /d 跳过 AutoRun 注册表项，行为更可预期。
+        let child = spawn_argv("cmd.exe", &[String::from("/d"), String::from("/c"), path_arg], cwd, &[])?;
+        // 延迟清理：cmd /c 秒级执行完即释放句柄，3 秒后删除足够安全。
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let _ = std::fs::remove_file(&script_path);
+        });
+        Ok(child)
     }
 
     /// 创建一个管道，子端（写入端）标记为不可继承。
@@ -692,7 +733,7 @@ pub mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::{detect_shell, windows_to_posix_path, Shell};
+        use super::{detect_shell, spawn_bash, spawn_cmd_script, windows_to_posix_path, Shell};
 
         #[test]
         fn test_windows_to_posix_drive_letter() {
@@ -954,6 +995,74 @@ pub mod imp {
                     child.kill_tree().ok();
                 }
             }
+        }
+
+        fn run_and_capture(child: &mut super::super::SandboxedChild) -> String {
+            use std::io::Read;
+            let mut out = String::new();
+            if let Some(mut r) = child.take_stdout() {
+                let _ = r.read_to_string(&mut out);
+            }
+            let _ = child.wait();
+            out
+        }
+
+        /// 回归 2026-08：整体单引号包裹曾使 $() / $VAR / 引号嵌套全部失效。
+        /// 修复后命令原样传给 bash -c，bash 语义完整保留。
+        #[test]
+        #[cfg(windows)]
+        fn test_bash_expansion_semantics() {
+            match detect_shell() {
+                Shell::Bash(path) => {
+                    let mut child = spawn_bash(&path, "echo \"x=$(echo hi) y=$((2+3))\"", ".")
+                        .expect("spawn_bash");
+                    let out = run_and_capture(&mut child);
+                    assert!(
+                        out.contains("x=hi y=5"),
+                        "子 shell/算术展开失效（转译问题回归）: {out:?}"
+                    );
+
+                    let mut child2 = spawn_bash(&path, "printf '%s\\n' \"a b\"", ".")
+                        .expect("spawn_bash");
+                    let out2 = run_and_capture(&mut child2);
+                    assert_eq!(out2.trim(), "a b", "引号嵌套失效: {out2:?}");
+                }
+                Shell::Cmd => eprintln!("[bash-semantics] no Git Bash, skip"),
+            }
+        }
+
+        /// 回归 2026-08：cmd /s /c 对内嵌双引号的剥离规则必错乱 —
+        /// 改为临时 .cmd 文件执行后，引号与 & 分隔命令都按 cmd 语义正常。
+        #[test]
+        #[cfg(windows)]
+        fn test_cmd_script_quoting() {
+            use std::sync::mpsc;
+            use std::time::{Duration, Instant};
+            let mut child = spawn_cmd_script("echo \"a b\"&echo two", ".").expect("spawn_cmd_script");
+            let mut reader = child.take_stdout().expect("take_stdout failed");
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut v = Vec::new();
+                use std::io::Read;
+                let _ = reader.read_to_end(&mut v);
+                let _ = tx.send(v);
+            });
+            let t0 = Instant::now();
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(v) => {
+                    let out = String::from_utf8_lossy(&v);
+                    eprintln!("[cmd-script] output: {out:?} in {:?}", t0.elapsed());
+                    assert!(out.contains("a b"), "cmd 脚本引号失效: {out:?}");
+                    assert!(out.contains("two"), "cmd 脚本 & 分隔失效: {out:?}");
+                }
+                Err(_) => {
+                    eprintln!("[cmd-script] TIMEOUT 5s — cmd 未退出或未输出! kill_tree");
+                    child.kill_tree().ok();
+                    let _ = child.wait();
+                    panic!("cmd 脚本执行卡住");
+                }
+            }
+            let _ = child.wait();
         }
     }
 }
