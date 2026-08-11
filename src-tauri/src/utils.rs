@@ -832,7 +832,12 @@ fn cache_is_stale(root: &std::path::Path) -> bool {
         .filter_entry(|e| {
             if e.file_type().is_dir() {
                 let name = e.file_name().to_string_lossy();
-                !SKIP.iter().any(|d| name.as_ref() == *d)
+                // 前缀规则与引擎 discovery.rs 保持一致：`.venv-lme` 等
+                // 带后缀虚拟环境同样排除，避免其 mtime 频繁变化误判缓存过期。
+                !(SKIP.iter().any(|d| name.as_ref() == *d)
+                    || name.starts_with(".venv")
+                    || name.starts_with("venv-")
+                    || name.starts_with("venv_"))
             } else {
                 true
             }

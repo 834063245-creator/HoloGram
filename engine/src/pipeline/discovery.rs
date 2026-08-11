@@ -212,6 +212,19 @@ pub const IGNORED_DIRS: &[&str] = &[
     "Pods", ".gradle",  // CocoaPods 依赖 / Gradle 缓存 — 语义铁定的依赖目录
 ];
 
+/// 目录名是否应被排除（精确名单 + 虚拟环境前缀规则）。
+/// `.venv*` / `venv-` / `venv_` 前缀覆盖带后缀命名的 Python 虚拟环境
+/// （`.venv-lme`、`.venv2`、`venv-lme`…）——精确名单匹配不上时，整棵
+/// site-packages 依赖树会漏进图（d:\newexperience 实证：1,891 个第三方
+/// py → 9 万节点 / 280MB graph JSON / 447MB sqlite）。虚拟环境目录
+/// 无源码语义，前缀匹配不会误伤真实源码（区别于 vendor/bin 的教训）。
+pub fn is_ignored_dir_name(name: &str) -> bool {
+    if IGNORED_DIRS.contains(&name) {
+        return true;
+    }
+    name.starts_with(".venv") || name.starts_with("venv-") || name.starts_with("venv_")
+}
+
 /// 检查目录条目是否应从遍历中排除。
 /// global_names 按 basename 匹配（兼容旧行为），anchored 按相对 root 路径匹配。
 fn is_excluded(entry: &walkdir::DirEntry, rules: &GitignoreRules, root: &Path) -> bool {
@@ -219,7 +232,7 @@ fn is_excluded(entry: &walkdir::DirEntry, rules: &GitignoreRules, root: &Path) -
     if !entry.file_type().is_dir() {
         return false;
     }
-    if IGNORED_DIRS.contains(&name) {
+    if is_ignored_dir_name(name) {
         return true;
     }
     let rel = rel_path_str(entry.path(), root).unwrap_or_default();
@@ -234,8 +247,16 @@ fn is_excluded(entry: &walkdir::DirEntry, rules: &GitignoreRules, root: &Path) -
 /// 同时处理 `/` 和 `\` 路径分隔符，以实现跨平台兼容。
 pub fn is_ignored_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
-    for component in normalized.split('/') {
-        if IGNORED_DIRS.contains(&component) {
+    let mut components = normalized.split('/').peekable();
+    while let Some(component) = components.next() {
+        if components.peek().is_some() {
+            // 目录分量：精确名单 + 虚拟环境前缀规则（`.venv-lme` 等）
+            if is_ignored_dir_name(component) {
+                return true;
+            }
+        } else if IGNORED_DIRS.contains(&component) {
+            // 末位分量（文件名）：仅精确名单——前缀规则是目录语义，
+            // 套到文件名会误伤 `venv_helper.py` 这类真实文件。
             return true;
         }
     }
@@ -510,6 +531,50 @@ mod tests {
         assert!(!is_ignored_path("D:/projects/myapp/src/main.rs"));
         assert!(!is_ignored_path("src/handler.py"));
         assert!(!is_ignored_path("app/config/settings.yaml"));
+    }
+
+    #[test]
+    fn test_venv_suffix_variants_excluded() {
+        // d:\newexperience 回归点：嵌套 venv 带后缀命名（.venv-lme）漏过
+        // 精确名单（.venv/venv），整棵 site-packages 依赖树进图 → 9 万节点。
+        for name in [".venv-lme", ".venv2", ".venv_backup", "venv-lme", "venv_foo"] {
+            assert!(is_ignored_dir_name(name), "{name} should be ignored");
+            assert!(
+                is_ignored_path(&format!("D:/proj/{name}/Lib/site-packages/pip/_internal/x.py")),
+                "{name} path should be ignored"
+            );
+        }
+        // 精确名单语义保持（旧行为回归）
+        assert!(is_ignored_dir_name(".venv"));
+        assert!(is_ignored_dir_name("venv"));
+        // 前缀规则不误伤真实源码目录
+        assert!(!is_ignored_dir_name("src"));
+        assert!(!is_ignored_dir_name("vendor"));
+        assert!(!is_ignored_path("D:/proj/src/venv_helper.py"));
+    }
+
+    #[test]
+    fn test_discover_skips_suffixed_venv() {
+        // 端到端：.venv-lme 下的 py 不应被 discover_files 收集
+        let tmp = std::env::temp_dir().join("hologram_test_suffixed_venv");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join(".venv-lme").join("Lib").join("site-packages")).unwrap();
+        fs::create_dir_all(tmp.join("src")).unwrap();
+
+        fs::write(
+            tmp.join(".venv-lme").join("Lib").join("site-packages").join("pip.py"),
+            "import os\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("src").join("main.py"), "x=1\n").unwrap();
+
+        let files = discover_files(&tmp, &["py"]);
+        let names: Vec<String> = files.iter().map(|p| p.to_string_lossy().replace('\\', "/")).collect();
+
+        assert!(names.iter().any(|p| p.ends_with("src/main.py")), "src/main.py should be found");
+        assert!(names.iter().all(|p| !p.contains(".venv-lme")), ".venv-lme must be excluded");
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -272,7 +272,12 @@ fn collect_file_mtimes(root: &str) -> std::collections::HashMap<String, u64> {
         .filter_entry(|e| {
             if e.file_type().is_dir() {
                 let name = e.file_name().to_string_lossy();
-                !IGNORE_DIRS.iter().any(|d| name.as_ref() == *d)
+                // 前缀规则与引擎 discovery.rs 保持一致：`.venv-lme` 等
+                // 带后缀虚拟环境同样排除，避免增量重解析扫进第三方依赖树。
+                !(IGNORE_DIRS.iter().any(|d| name.as_ref() == *d)
+                    || name.starts_with(".venv")
+                    || name.starts_with("venv-")
+                    || name.starts_with("venv_"))
             } else {
                 true
             }
