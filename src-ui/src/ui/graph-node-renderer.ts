@@ -432,8 +432,10 @@ export class GraphNodeRenderer {
   /** 向现有缓冲追加新节点（容量必须充足）。 */
   _appendNodes(nodes: GraphNode[], fullGraph: GraphJSON, nodeIdxMap: Map<string, number>): void {
     // ponytail: 只取 level0 社区 — 与 _renderImpl 的 nodeCommMap 层级一致
-    const allComms = ((fullGraph as any).hierarchical_communities ||
-      (fullGraph as any).communities ||
+    // P0-2 修复：空数组是真值 — 分页中间页的 hierarchical_communities:[]
+    // 不能阻断回退到 communities（否则新节点失去社区质心锚定）。
+    const hc = (fullGraph as any).hierarchical_communities;
+    const allComms = ((Array.isArray(hc) && hc.length > 0 ? hc : (fullGraph as any).communities) ||
       []) as CommunityData[];
     const comms = allComms.filter((c) => !c.level || c.level === 0);
     const nodeComm = new Map<string, string>();

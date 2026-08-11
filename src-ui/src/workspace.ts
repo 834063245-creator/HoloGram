@@ -1059,13 +1059,15 @@ export async function loadGraphPages(
     const root = p.meta?.source_root || '';
     if (root && !isSamePath(root, ws.path)) continue; // 引擎已被切走，丢弃错页
     const diff = mergePageIntoGraph(ws.graphData, p);
+    // 权威社区（最后一页携带）必须先挂到 graphData 再交给渲染器 —
+    // render/applyGraphDiff 在调用时读取 communities 构建布局与质心锚定。
+    if (p.communities) ws.graphData.communities = p.communities;
+    if (p.hierarchical_communities) ws.graphData.hierarchical_communities = p.hierarchical_communities;
     if (page === 0) {
       await starGraph.render(ws.graphData);
     } else if (diff.added_nodes.length > 0 || diff.added_edges.length > 0) {
       await starGraph.applyGraphDiff(diff, ws.graphData);
     }
-    if (p.communities) ws.graphData.communities = p.communities;
-    if (p.hierarchical_communities) ws.graphData.hierarchical_communities = p.hierarchical_communities;
     if (totalPages > 1) ws.onStatusChange?.(`已加载图谱 ${page + 1}/${totalPages} 页`);
   }
   return true;

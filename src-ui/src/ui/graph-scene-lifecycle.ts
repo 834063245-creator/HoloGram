@@ -230,8 +230,10 @@ export class GraphSceneLifecycle {
 
     // ── 解析社区 & 构建 node→community 索引 ──────
     // 优先使用层级（多级）而非扁平社区
-    this.host.communities = ((graph as any).hierarchical_communities ||
-      (graph as any).communities ||
+    // P0-2 修复：空数组在 JS 里是真值 — 分页空壳的 hierarchical_communities:[]
+    // 会阻断回退到 communities，布局丢失社区分组（目录分组兜底 → 一锅粥）。
+    const hc = (graph as any).hierarchical_communities;
+    this.host.communities = ((Array.isArray(hc) && hc.length > 0 ? hc : (graph as any).communities) ||
       []) as CommunityData[];
     this.host.nodeCommMap.clear();
     // 调试：记录社区数据
@@ -861,9 +863,9 @@ export class GraphSceneLifecycle {
     // 7. 同步所有修改节点的 GPU 核心位置
     this.host._nodes._syncNodeCoreMatrices();
 
-    // 8. 从完整图更新社区
-    this.host.communities = ((fullGraph as any).hierarchical_communities ||
-      (fullGraph as any).communities ||
+    // 8. 从完整图更新社区（空数组是真值 — 分页中间页必须回退到 communities）
+    const hcDiff = (fullGraph as any).hierarchical_communities;
+    this.host.communities = ((Array.isArray(hcDiff) && hcDiff.length > 0 ? hcDiff : (fullGraph as any).communities) ||
       []) as CommunityData[];
 
     // 9. 清除指向死亡节点的过期交互状态
