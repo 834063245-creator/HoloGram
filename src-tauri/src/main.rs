@@ -202,6 +202,7 @@ mod tests {
     /// 并发的轻量任务仍能继续执行。
     #[test]
     fn serialize_cached_graph_in_spawn_blocking_does_not_starve_runtime() {
+        let _guard = ENGINE_TEST_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join("hologram_test_serialize_async");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("src")).unwrap();
@@ -429,5 +430,132 @@ mod tests {
         // edges 在命令 payload 中是计数（showDiff 仅着色节点）
         assert_eq!(v["added_edges"].as_u64(), Some(1));
         assert_eq!(v["removed_edges"].as_u64(), Some(0));
+    }
+
+    // ── 图分页测试（P0-2 分页化）─────────────────────────────
+    // 逐页拉取必须与全量序列化等价：节点集合一致、边集合收敛到全图。
+    // ⚠️ direct_analyze 操作进程级全局引擎，多个此类测试并行会互相
+    //    取消分析（"分析已被新的重分析请求取消"）→ 用全局锁串行化。
+
+    static ENGINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn make_pageable_repo(tmp: &std::path::Path) {
+        std::fs::create_dir_all(tmp.join("src").join("mod_a")).unwrap();
+        std::fs::create_dir_all(tmp.join("src").join("mod_b")).unwrap();
+        for i in 0..6 {
+            std::fs::write(
+                tmp.join("src").join("mod_a").join(format!("a{i}.py")),
+                format!("def fa{i}():\n    pass\nclass CA{i}:\n    def m(self): pass\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                tmp.join("src").join("mod_b").join(format!("b{i}.py")),
+                format!("def fb{i}():\n    pass\n"),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn graph_pages_reassemble_to_full_graph() {
+        let _guard = ENGINE_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("hologram_test_paging");
+        let _ = std::fs::remove_dir_all(&tmp);
+        make_pageable_repo(&tmp);
+        let tmp_s = tmp.to_string_lossy().to_string();
+        utils::direct_analyze(&tmp_s, true).unwrap();
+
+        let page_size = 3usize;
+        // meta：分页信息正确
+        let meta: serde_json::Value = serde_json::from_str(
+            &utils::graph_meta_json(&tmp_s, page_size).unwrap(),
+        ).unwrap();
+        assert_eq!(meta["paged"].as_bool(), Some(true));
+        let total_pages = meta["total_pages"].as_u64().expect("total_pages") as usize;
+        let node_count = meta["meta"]["node_count"].as_u64().unwrap() as usize;
+        assert!(total_pages >= 2, "小仓库 + 小页宽必须切出多页");
+        assert_eq!(meta["page_size"].as_u64().unwrap(), page_size as u64);
+
+        // 逐页合并
+        let full: serde_json::Value =
+            serde_json::from_str(&utils::serialize_cached_graph(&tmp_s).unwrap()).unwrap();
+        let full_nodes: std::collections::BTreeSet<String> = full["nodes"]
+            .as_array().unwrap().iter()
+            .map(|n| n["id"].as_str().unwrap().to_string())
+            .collect();
+        let full_edges: std::collections::BTreeSet<String> = full["edges"]
+            .as_array().unwrap().iter()
+            .map(|e| e["id"].as_str().unwrap().to_string())
+            .collect();
+
+        let mut merged_nodes: std::collections::BTreeSet<String> = Default::default();
+        let mut merged_edges: std::collections::BTreeSet<String> = Default::default();
+        let mut saw_hierarchical = false;
+        for page in 0..total_pages {
+            let p: serde_json::Value = serde_json::from_str(
+                &utils::serialize_graph_page(&tmp_s, page, page_size).unwrap(),
+            ).unwrap();
+            assert_eq!(p["page"].as_u64().unwrap(), page as u64);
+            assert_eq!(p["total_pages"].as_u64().unwrap(), total_pages as u64);
+            assert_eq!(p["meta"]["node_count"].as_u64().unwrap() as usize, node_count);
+            for n in p["nodes"].as_array().unwrap() {
+                merged_nodes.insert(n["id"].as_str().unwrap().to_string());
+            }
+            for e in p["edges"].as_array().unwrap() {
+                merged_edges.insert(e["id"].as_str().unwrap().to_string());
+            }
+            if page + 1 == total_pages {
+                // 最后一页附带权威社区数据
+                assert!(p["communities"].is_array());
+                assert!(p["hierarchical_communities"].is_array());
+                saw_hierarchical = true;
+            }
+        }
+        assert!(saw_hierarchical, "最后一页必须携带 hierarchical_communities");
+        assert_eq!(merged_nodes, full_nodes, "逐页节点集合必须与全量一致");
+        assert_eq!(merged_edges, full_edges, "逐页边集合必须收敛到全量");
+
+        // 边累计规则：第 k 页只含两端点均 ≤k 页覆盖的边 → 逐页计数非降
+        let mut prev_edge_count = 0usize;
+        for page in 0..total_pages {
+            let p: serde_json::Value = serde_json::from_str(
+                &utils::serialize_graph_page(&tmp_s, page, page_size).unwrap(),
+            ).unwrap();
+            let c = p["edges"].as_array().unwrap().len();
+            assert!(c >= prev_edge_count, "边集必须单调收敛（累积规则）");
+            prev_edge_count = c;
+        }
+
+        // 越界页报错
+        let err = utils::serialize_graph_page(&tmp_s, total_pages, page_size).unwrap_err();
+        assert!(err.contains("分页越界"), "越界页必须明确报错: {err}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn graph_page_index_cache_invalidates_on_graph_change() {
+        let _guard = ENGINE_TEST_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("hologram_test_paging_cache");
+        let _ = std::fs::remove_dir_all(&tmp);
+        make_pageable_repo(&tmp);
+        let tmp_s = tmp.to_string_lossy().to_string();
+        utils::direct_analyze(&tmp_s, true).unwrap();
+
+        let page_size = 3usize;
+        let before: serde_json::Value = serde_json::from_str(
+            &utils::graph_meta_json(&tmp_s, page_size).unwrap(),
+        ).unwrap();
+        let before_pages = before["total_pages"].as_u64().unwrap();
+
+        // 加一个文件 → 节点数变化 → 缓存键失效 → 页数变化
+        std::fs::write(tmp.join("src").join("mod_b").join("b99.py"), "def fb99():\n    pass\n").unwrap();
+        utils::direct_analyze(&tmp_s, true).unwrap();
+        let after: serde_json::Value = serde_json::from_str(
+            &utils::graph_meta_json(&tmp_s, page_size).unwrap(),
+        ).unwrap();
+        assert_ne!(after["total_pages"].as_u64().unwrap(), before_pages, "图变更后页数必须重算");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

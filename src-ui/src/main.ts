@@ -41,7 +41,7 @@ import { GraphInteraction } from './ui/graph-interaction';
 import { getPanelStore } from './ui/panel-store';
 import { installResizeZones } from './ui/resize-zones';
 import type { CheckResult } from './ui/react/CheckPanel';
-import { isSamePath, Workspace } from './workspace';
+import { isSamePath, loadGraphPages, Workspace } from './workspace';
 import { WorkspaceStateMachine } from './lifecycle/state-machine';
 import { withTimeout } from './lifecycle/timeout';
 
@@ -337,22 +337,29 @@ async function reanalyze(): Promise<void> {
   try {
     console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
     const raw = await rpc<string>('analyze_and_load', { path: ws.path, force: true });
-    console.log('[reanalyze] step 2: analyze_and_load returned, length:', raw?.length);
+    console.log('[reanalyze] step 2: analyze_and_load returned meta, length:', raw?.length);
     // 在漫长的 await 期间防止工作区切换。
     if (workspace !== ws) {
       console.log('[reanalyze] workspace switched during analysis — discarding result');
       pushStatus('工作区已切换，重分析已取消');
       return;
     }
-    ws.graphData = JSON.parse(raw);
-    console.log('[reanalyze] step 3: JSON parsed, nodes:', Object.keys(ws.graphData.nodes || {}).length);
-    starGraph.render(ws.graphData);
-    console.log('[reanalyze] step 4: render done');
+    // P0-2 分页化：analyze_and_load 只回 meta，图数据逐页拉取重建。
+    const meta = JSON.parse(raw);
+    ws.graphData = {
+      meta: meta.meta || {},
+      nodes: [],
+      edges: [],
+      communities: [],
+      hierarchical_communities: [],
+    };
+    await loadGraphPages(ws, starGraph, meta);
+    console.log('[reanalyze] step 3: pages loaded, nodes:', ws.graphData.nodes.length);
     const nc = Array.isArray(ws.graphData.nodes)
       ? ws.graphData.nodes.length
       : Object.keys(ws.graphData.nodes || {}).length;
     pushStatus(`✨ ${nc} 节点已就绪`);
-    console.log('[reanalyze] step 5: done');
+    console.log('[reanalyze] step 4: done');
   } catch (e: any) {
     console.error('[reanalyze] FAILED:', e);
     pushStatus(`重分析失败: ${e}`);
@@ -830,7 +837,12 @@ async function init(): Promise<void> {
       return;
     }
 
-    const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
+    // P0-2 分页化：load_graph_json 返回 meta-only（paged）或旧格式全量图（兼容）。
+    const nodeCount = graph.paged
+      ? graph.meta?.node_count || 0
+      : Array.isArray(graph.nodes)
+        ? graph.nodes.length
+        : Object.keys(graph.nodes || {}).length;
     if (nodeCount > 0) {
       const root: string = graph.meta?.source_root || '';
       if (!root) {

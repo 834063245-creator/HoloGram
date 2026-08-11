@@ -1012,52 +1012,196 @@ pub(crate) fn serialize_cached_graph(source_root: &str) -> Result<String, String
             "cross_file": e.cross_file,
             "temporal_delay_sec": e.temporal_delay_sec,
         })).collect();
-        // 从每个节点上预计算的 community_id 重建社区
-        // （避免重新运行 Louvain，其复杂度为 O(V·avg_degree·iterations)）
-        // community_id 是 Option<usize> → JSON 数字，而非字符串
-        let mut comm_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-        for n in &nodes {
-            if let Some(cid) = n.get("community_id").and_then(|v| v.as_u64()) {
-                if let Some(node_id) = n.get("id").and_then(|v| v.as_str()) {
-                    comm_map.entry(cid.to_string()).or_default().push(node_id.to_string());
-                }
-            }
-        }
-        let communities_json: Vec<serde_json::Value> = comm_map.iter()
-            .map(|(cid, node_ids)| {
-                // 从最常见的文件前缀推导可读标签
-                let label = derive_community_label(node_ids);
-                serde_json::json!({"id": cid, "size": node_ids.len(), "node_ids": node_ids, "label": label})
-            })
-            .collect();
-        // 层次社区 — 从 node.community_id 重建基础社区
-        // （在分析阶段已设置），然后仅运行 Phase 2 凝聚。
-        // 避免每次序列化时重新运行 Phase 1 detect_communities。
-        let mut base_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
-        for n in g.nodes_map().values() {
-            if let Some(cid) = n.community_id {
-                base_map.entry(cid).or_default().push(n.id.as_str().to_owned());
-            }
-        }
-        let base: Vec<Vec<String>> = base_map.values().cloned().collect();
-        let hcommunities = detect_hierarchical_communities_with_base(g, base, 42);
-        let hcommunities_json: Vec<serde_json::Value> = hcommunities.iter()
-            .map(|hc| serde_json::json!({
-                "id": hc.id,
-                "label": hc.label,
-                "node_ids": hc.node_ids,
-                "level": hc.level,
-                "parent_id": hc.parent_id,
-            }))
-            .collect();
         let meta = serde_json::json!({
             "source_root": source_root,
             "node_count": g.node_count(),
             "edge_count": g.edge_count(),
         });
-        serde_json::to_string(&serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": communities_json, "hierarchical_communities": hcommunities_json})).unwrap_or_default()
+        serde_json::to_string(&serde_json::json!({"meta": meta, "nodes": nodes, "edges": edges, "communities": build_level0_communities_json(g), "hierarchical_communities": build_hierarchical_communities_json(g)})).unwrap_or_default()
     })
     .map_err(|e| format!("Engine error: {}", e))
+}
+
+/// 从每个节点上预计算的 community_id 重建 level-0 社区
+/// （避免重新运行 Louvain，其复杂度为 O(V·avg_degree·iterations)）
+/// community_id 是 Option<usize> → JSON 数字，而非字符串。
+fn build_level0_communities_json(g: &Graph) -> serde_json::Value {
+    let mut comm_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for n in g.nodes_map().values() {
+        if let Some(cid) = n.community_id {
+            comm_map.entry(cid.to_string()).or_default().push(n.id.to_string());
+        }
+    }
+    serde_json::to_value(
+        comm_map.iter().map(|(cid, node_ids)| {
+            // 从最常见的文件前缀推导可读标签
+            let label = derive_community_label(node_ids);
+            serde_json::json!({"id": cid, "size": node_ids.len(), "node_ids": node_ids, "label": label})
+        }).collect::<Vec<_>>(),
+    ).unwrap_or(serde_json::json!([]))
+}
+
+/// 层次社区 — 从 node.community_id 重建基础社区
+/// （在分析阶段已设置），然后仅运行 Phase 2 凝聚。
+/// 避免每次序列化时重新运行 Phase 1 detect_communities。
+fn build_hierarchical_communities_json(g: &Graph) -> serde_json::Value {
+    let mut base_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    for n in g.nodes_map().values() {
+        if let Some(cid) = n.community_id {
+            base_map.entry(cid).or_default().push(n.id.as_str().to_owned());
+        }
+    }
+    let base: Vec<Vec<String>> = base_map.values().cloned().collect();
+    let hcommunities = detect_hierarchical_communities_with_base(g, base, 42);
+    serde_json::to_value(
+        hcommunities.iter().map(|hc| serde_json::json!({
+            "id": hc.id,
+            "label": hc.label,
+            "node_ids": hc.node_ids,
+            "level": hc.level,
+            "parent_id": hc.parent_id,
+        })).collect::<Vec<_>>(),
+    ).unwrap_or(serde_json::json!([]))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 图分页 — landmine-map.md P0-2 欠账清账（雷 2：大响应无尺寸上限）
+// ═══════════════════════════════════════════════════════════════
+// 大仓库（kernel 级）全量图 JSON 可达数百 MB，超过 IPC 硬上限
+// （guard_ipc_size 128MB）会直接报错导致工作区无法打开。分页方案：
+// 1. 节点按 id 字典序排序后切成等宽页（页数 = ceil(V / page_size)），
+//    页边界缓存只存每页首个 id（内存可忽略），缓存键含
+//    (source_root, node_count, edge_count, page_size) — 图变更自动失效。
+//    每页响应远小于护栏；重复拉页不会跨页漏节点（边界重建时节点
+//    只会移位到相邻页，前端按 id 去重吸收）。
+// 2. 第 k 页只回「两端点均位于 0..=k 页」的边 — 前端逐页合并后
+//    边集单调收敛到全图。
+// 3. 社区数据不随页下发（节点自带 community_id，前端渐进重建 level-0）；
+//    hierarchical_communities 仅最后一页携带（O(社区) 凝聚只做一次）。
+pub(crate) const GRAPH_PAGE_DEFAULT_NODES: usize = 12_000;
+
+struct PageIndexCache {
+    key: (String, usize, usize, usize),
+    boundaries: Vec<String>,
+}
+
+static PAGE_INDEX_CACHE: std::sync::LazyLock<std::sync::Mutex<Option<PageIndexCache>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// 构建/复用分页索引，返回 (页边界 id 列表, 节点总数)。
+/// 边界 = 每页第一个 id（字典序）；page_of(id) = 二分定位。
+fn graph_page_index(source_root: &str, page_size: usize) -> Result<(Vec<String>, usize), String> {
+    let (node_count, edge_count) = engine_api::engine_read_graph(|g| (g.node_count(), g.edge_count()))
+        .map_err(|e| format!("Engine error: {e}"))?;
+    let key = (source_root.to_owned(), node_count, edge_count, page_size);
+    {
+        let cache = lock_or_recover(&PAGE_INDEX_CACHE);
+        if let Some(c) = cache.as_ref() {
+            if c.key == key {
+                return Ok((c.boundaries.clone(), node_count));
+            }
+        }
+    }
+    let boundaries: Vec<String> = engine_api::engine_read_graph(|g| {
+        let mut ids: Vec<String> = g.nodes_map().values().map(|n| n.id.to_string()).collect();
+        ids.sort_unstable();
+        let total_pages = if ids.is_empty() { 0 } else { (ids.len() + page_size - 1) / page_size };
+        (0..total_pages).map(|p| ids[p * page_size].clone()).collect()
+    })
+    .map_err(|e| format!("Engine error: {e}"))?;
+    *lock_or_recover(&PAGE_INDEX_CACHE) = Some(PageIndexCache { key, boundaries: boundaries.clone() });
+    Ok((boundaries, node_count))
+}
+
+/// 图谱 meta + 分页信息 — 工作区切换/冷启动的轻量响应（替代全量图 JSON）。
+pub(crate) fn graph_meta_json(source_root: &str, page_size: usize) -> Result<String, String> {
+    let (boundaries, node_count) = graph_page_index(source_root, page_size)?;
+    let total_pages = boundaries.len();
+    let edge_count = engine_api::engine_read_graph(|g| g.edge_count())
+        .map_err(|e| format!("Engine error: {e}"))?;
+    Ok(serde_json::json!({
+        "meta": {"source_root": source_root, "node_count": node_count, "edge_count": edge_count},
+        "paged": true,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_more": total_pages > 0,
+    }).to_string())
+}
+
+/// 序列化第 page 页（0 基）。边只含两端点均已被 ≤page 页覆盖的边。
+/// 最后一页附带完整 communities + hierarchical_communities。
+pub(crate) fn serialize_graph_page(source_root: &str, page: usize, page_size: usize) -> Result<String, String> {
+    let (boundaries, node_count) = graph_page_index(source_root, page_size)?;
+    let total_pages = boundaries.len();
+    if total_pages == 0 {
+        return Err(format!("图谱为空，无法分页: {source_root}"));
+    }
+    if page >= total_pages {
+        return Err(format!("图谱分页越界: page={page}, total_pages={total_pages}"));
+    }
+    let page_of = |id: &str| -> usize {
+        boundaries.partition_point(|b| b.as_str() <= id).saturating_sub(1)
+    };
+    let last_page = page + 1 == total_pages;
+    let (nodes, edges, edge_count, communities, hcommunities) = engine_api::engine_read_graph(|g| {
+        let nodes: Vec<serde_json::Value> = g.nodes_map().values()
+            .filter(|n| page_of(&n.id) == page)
+            .map(|n| serde_json::json!({
+                "id": n.id, "name": n.name, "type": n.kind.as_str(),
+                "location": n.location, "in_degree": n.in_degree,
+                "out_degree": n.out_degree,
+                "properties": n.properties, "position": n.position,
+                "community_id": n.community_id,
+            }))
+            .collect();
+        let edges: Vec<serde_json::Value> = g.edges_map().values()
+            .filter(|e| page_of(&e.source) <= page && page_of(&e.target) <= page)
+            .map(|e| serde_json::json!({
+                "id": e.id, "source": e.source, "target": e.target,
+                "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
+                "cross_file": e.cross_file,
+                "temporal_delay_sec": e.temporal_delay_sec,
+            }))
+            .collect();
+        let communities = if last_page { Some(build_level0_communities_json(g)) } else { None };
+        let hcommunities = if last_page { Some(build_hierarchical_communities_json(g)) } else { None };
+        (nodes, edges, g.edge_count(), communities, hcommunities)
+    })
+    .map_err(|e| format!("Engine error: {e}"))?;
+    let mut payload = serde_json::json!({
+        "meta": {"source_root": source_root, "node_count": node_count, "edge_count": edge_count},
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_more": !last_page,
+        "nodes": nodes,
+        "edges": edges,
+    });
+    if let Some(c) = communities {
+        payload["communities"] = c;
+    }
+    if let Some(h) = hcommunities {
+        payload["hierarchical_communities"] = h;
+    }
+    Ok(payload.to_string())
+}
+
+/// 确保引擎内存图属于 source_root 且非空（仅加载 SQLite 缓存，不触发分析）。
+/// 工作区切换后引擎图可能是上一个仓库的 — 必须切回来，否则分页会错乱。
+pub(crate) fn ensure_engine_graph(source_root: &str) -> Result<(), String> {
+    let same_root = engine_api::with_engine(|e| {
+        e.project_root() == std::path::Path::new(source_root) && e.is_ready()
+    })
+    .unwrap_or(false);
+    if !same_root {
+        engine_api::engine_init(std::path::Path::new(source_root))
+            .map_err(|e| format!("Engine init failed: {e}"))?;
+    }
+    let node_count = engine_api::engine_read(|idx| idx.node_count()).unwrap_or(0);
+    if node_count == 0 {
+        return Err(format!("引擎中无图谱数据: {source_root}（请先执行分析）"));
+    }
+    Ok(())
 }
 
 /// 从社区的成员节点 ID 推导可读标签。

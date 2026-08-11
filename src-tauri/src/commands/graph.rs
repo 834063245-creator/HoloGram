@@ -9,35 +9,43 @@ pub(crate) async fn load_graph_json(
     path: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
 ) -> Result<String, String> {
+    // P0-2 分页化（landmine-map.md 雷 2）：冷启动优先返回引擎图 meta + 分页信息，
+    // 不再一次性回传全量 JSON（大仓库 267MB 级会击穿 128MB IPC 护栏）。
+    // 磁盘 hologram_graph.json 仅作无引擎缓存时的兜底（小图兼容旧路径）。
+    let mut candidate: Option<String> = None;
     if let Some(ref p) = path {
-        if p.contains("..") || p.contains('\0') {
+        candidate = Some(p.clone());
+    } else if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
+        candidate = Some(handle.path.clone());
+    }
+    let root: Option<String> = match candidate {
+        Some(r) => Some(r),
+        None => {
+            let last_path_file = crate::utils::project_root().join(".last_project");
+            std::fs::read_to_string(&last_path_file)
+                .ok()
+                .map(|s| s.trim().to_string())
+        }
+    };
+    if let Some(root) = root {
+        if root.contains("..") || root.contains('\0') {
             return Err("路径包含非法字符".into());
         }
-        let content = std::fs::read_to_string(p)
-            .map_err(|e| format!("Graph JSON not found at {}: {}", p, e))?;
-        if content.trim().is_empty() {
-            return Err(format!("Graph JSON file is empty: {}", p));
+        // 引擎图（内存/SQLite 缓存）优先 — ensure_engine_graph 只加载缓存不分析。
+        if let Ok(()) = crate::utils::ensure_engine_graph(&root) {
+            return crate::utils::graph_meta_json(
+                &root,
+                crate::utils::GRAPH_PAGE_DEFAULT_NODES,
+            );
         }
-        return crate::utils::guard_ipc_size(content, "Graph JSON");
-    }
-
-    if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
-        let p = std::path::PathBuf::from(&handle.path).join("hologram_graph.json");
-        if let Ok(content) = std::fs::read_to_string(&p) {
-            if !content.trim().is_empty() {
-                return crate::utils::guard_ipc_size(content, "Graph JSON");
-            }
-        }
-    }
-
-    let last_path_file = crate::utils::project_root().join(".last_project");
-    if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
-        let trim = last_path.trim();
-        if !trim.is_empty() {
-            let p = std::path::PathBuf::from(trim).join("hologram_graph.json");
-            if let Ok(content) = std::fs::read_to_string(&p) {
-                if !content.trim().is_empty() {
-                    return crate::utils::guard_ipc_size(content, "Graph JSON");
+        // 磁盘兜底：小图走旧路径全量返回；大文件（>64MB）不白读，直接放弃。
+        let p = std::path::PathBuf::from(&root).join("hologram_graph.json");
+        if let Ok(meta) = std::fs::metadata(&p) {
+            if meta.len() <= 64 * 1024 * 1024 {
+                if let Ok(content) = std::fs::read_to_string(&p) {
+                    if !content.trim().is_empty() {
+                        return crate::utils::guard_ipc_size(content, "Graph JSON");
+                    }
                 }
             }
         }
@@ -67,11 +75,45 @@ pub(crate) async fn analyze_and_load(path: String, force: Option<bool>, app: tau
         let _ = crate::utils::regenerate_file_graph(&path);
     }
 
+    // P0-2 分页化：只回 meta + 分页信息，全量图由 get_graph_page 逐页拉取。
     let path_clone = path.clone();
-    let serialized = tokio::task::spawn_blocking(move || crate::utils::serialize_cached_graph(&path_clone))
+    let meta = tokio::task::spawn_blocking(move || crate::utils::graph_meta_json(&path_clone, crate::utils::GRAPH_PAGE_DEFAULT_NODES))
         .await
         .map_err(|e| format!("序列化任务失败: {e}"))??;
-    crate::utils::guard_ipc_size(serialized, "序列化图")
+    Ok(meta)
+}
+
+/// 当前工作区图的 meta + 分页信息（重新分析/事件兜底时获取新图分页信息）。
+#[tauri::command]
+pub(crate) async fn get_graph_meta(state: tauri::State<'_, crate::WorkspaceState>) -> Result<String, String> {
+    let root = crate::utils::workspace_path(&state)?;
+    let root_c = root.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::utils::ensure_engine_graph(&root_c)?;
+        crate::utils::graph_meta_json(&root_c, crate::utils::GRAPH_PAGE_DEFAULT_NODES)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 分页拉取当前工作区图的第 page 页（0 基）。
+/// 边只含两端点均已被 ≤page 页覆盖的边；最后一页附带社区数据。
+#[tauri::command]
+pub(crate) async fn get_graph_page(
+    page: usize,
+    page_size: Option<usize>,
+    state: tauri::State<'_, crate::WorkspaceState>,
+) -> Result<String, String> {
+    let root = crate::utils::workspace_path(&state)?;
+    let size = page_size.unwrap_or(crate::utils::GRAPH_PAGE_DEFAULT_NODES).clamp(500, 60_000);
+    let root_c = root.clone();
+    let serialized = tokio::task::spawn_blocking(move || {
+        crate::utils::ensure_engine_graph(&root_c)?;
+        crate::utils::serialize_graph_page(&root_c, page, size)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))??;
+    crate::utils::guard_ipc_size(serialized, "图谱分页")
 }
 
 // ═══════════════════════════════════════════════════════

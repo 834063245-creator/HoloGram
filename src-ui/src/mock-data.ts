@@ -776,9 +776,27 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     return mockInvoke(method, params);
   }
 
-  // 返回完整图谱的命令
-  if (cmd === 'analyze_and_load' || cmd === 'load_graph_json') {
-    return JSON.stringify(buildMockGraph());
+  // 图谱命令（P0-2 分页化）：analyze_and_load / load_graph_json / get_graph_meta 回 meta-only，
+  // get_graph_page 回整图（mock 图小，单页即全量）。
+  if (cmd === 'analyze_and_load' || cmd === 'load_graph_json' || cmd === 'get_graph_meta') {
+    const g = buildMockGraph();
+    return JSON.stringify({
+      meta: {
+        source_root: g.meta?.source_root || '/mock/nebula-project',
+        node_count: Array.isArray(g.nodes) ? g.nodes.length : 0,
+        edge_count: Array.isArray(g.edges) ? g.edges.length : 0,
+      },
+      paged: true,
+      page_size: 1,
+      total_pages: 1,
+      has_more: false,
+    });
+  }
+  if (cmd === 'get_graph_page') {
+    const g = buildMockGraph();
+    // source_root 置空：mock 工作区路径可被用户任意输入，跳过前端的错页校验
+    g.meta = { ...g.meta, source_root: '' };
+    return JSON.stringify(g);
   }
 
   // 简报

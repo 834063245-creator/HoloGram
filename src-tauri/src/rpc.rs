@@ -91,6 +91,12 @@ pub(crate) async fn rpc(
             let force = opt_bool(&params, "force");
             commands::graph::analyze_and_load(path, force, app).await
         }
+        "get_graph_meta" => commands::graph::get_graph_meta(state).await,
+        "get_graph_page" => {
+            let page = opt_usize(&params, "page").unwrap_or(0);
+            let page_size = opt_usize(&params, "page_size");
+            commands::graph::get_graph_page(page, page_size, state).await
+        }
         "engine_impact" => {
             let node_id = req_str(&params, "node_id", "engine_impact")?;
             let max_depth = opt_usize(&params, "max_depth").unwrap_or(3);

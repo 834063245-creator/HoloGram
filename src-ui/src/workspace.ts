@@ -206,27 +206,61 @@ export class Workspace {
 
     try {
       if (opts?.skipAnalysis && opts.cachedGraph) {
-        // 冷启动：使用缓存的图谱进行即时渲染。
-        // 仍触发 analyze_and_load（force=false），使 engine_init 将后端引擎切换到
-        // 当前项目。否则所有 hologram_* 工具调用会命中上一个会话的图谱数据。
-        // fire-and-track：用户立即看到图谱，引擎初始化在后台完成。
-        // 若分析失败，工作区进入降级模式 — 可见但不阻塞。
-        ws.graphData = opts.cachedGraph;
-        rpc('analyze_and_load', { path, force: false })
-          .then(() => {
-            if (!ws._active) return;
-            ws._health = 'ready';
-          })
-          .catch((err) => {
-            if (!ws._active) return;
-            ws._health = 'degraded';
-            ws.onAnalysisFailed?.(err);
-          });
+        if (opts.cachedGraph.paged) {
+          // 冷启动（分页 meta）：先放空壳，立即后台逐页拉取渲染 —
+          // ensure_engine_graph 顺带完成引擎预热（等价旧 fire-and-track
+          // analyze_and_load 的引擎初始化部分）。若拉页失败，工作区进入
+          // 降级模式 — 可见但不阻塞。
+          ws.graphData = {
+            meta: opts.cachedGraph.meta || {},
+            nodes: [],
+            edges: [],
+            communities: [],
+            hierarchical_communities: [],
+          };
+          loadGraphPages(ws, starGraph, opts.cachedGraph)
+            .then((ok) => {
+              if (!ws._active || !ok) return;
+              ws._health = 'ready';
+            })
+            .catch((err) => {
+              if (!ws._active) return;
+              ws._health = 'degraded';
+              ws.onAnalysisFailed?.(err);
+            });
+        } else {
+          // 旧格式全量缓存图兼容（load_graph_json 遗留磁盘文件小图路径）
+          ws.graphData = opts.cachedGraph;
+          rpc('analyze_and_load', { path, force: false })
+            .then(() => {
+              if (!ws._active) return;
+              ws._health = 'ready';
+            })
+            .catch((err) => {
+              if (!ws._active) return;
+              ws._health = 'degraded';
+              ws.onAnalysisFailed?.(err);
+            });
+        }
+        // 仍触发 analyze_and_load（force=false），保留缓存过期→重分析能力：
+        // direct_analyze 内部校验 SQLite 缓存新鲜度，过期则重建并触发
+        // analysis-complete 事件（其处理器 reloadGraphPaged 拉取新图）。
+        rpc('analyze_and_load', { path, force: false }).catch(() => {
+          /* 拉页路径已降级处理，此处静默 */
+        });
       } else {
-        // 完整分析
+        // 完整分析：analyze_and_load 只回 meta + 分页信息，图数据逐页拉取。
         ws.onLoadingChange?.(true);
         const raw = await rpc<string>('analyze_and_load', { path, force: false });
-        ws.graphData = JSON.parse(raw);
+        const meta = JSON.parse(raw);
+        ws.graphData = {
+          meta: meta.meta || {},
+          nodes: [],
+          edges: [],
+          communities: [],
+          hierarchical_communities: [],
+        };
+        await loadGraphPages(ws, starGraph, meta);
       }
 
       // 3. 加载文件级图谱 — 5 秒超时，不阻塞工作区打开。
@@ -261,7 +295,12 @@ export class Workspace {
       setTimeout(async () => {
         console.log('[Workspace.open] render starting');
         try {
-          await starGraph.render(ws.graphData);
+          // P0-2 分页化：完整分析路径已在 loadGraphPages 中渲染（含首页全量
+          // 布局）。此处仅在「有图但尚未渲染」（旧 cachedGraph 兼容 / 竞态）时补渲染。
+          const nc = Array.isArray(ws.graphData?.nodes) ? ws.graphData.nodes.length : 0;
+          if (nc > 0 && !starGraph.hasGraph) {
+            await starGraph.render(ws.graphData);
+          }
         } catch {
           /* 渲染器自行处理错误 */
         }
@@ -302,9 +341,11 @@ export class Workspace {
                 if (nc !== (summary.total_nodes ?? summary.node_count ?? nc)) {
                   throw new Error(`nodeCount mismatch: local ${nc} vs engine ${summary.total_nodes}`);
                 }
+                ws.doGraphUpdate(starGraph, summary.diff);
               } else {
-                const raw = await rpc<string>('get_full_graph');
-                ws.graphData = JSON.parse(raw);
+                // 无 diff 可用 → 分页全量重载（P0-2：不再 get_full_graph 全量拉图）
+                await reloadGraphPaged(ws, starGraph);
+                ws.runCheck();
               }
               try {
                 const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
@@ -314,17 +355,14 @@ export class Workspace {
               } catch {
                 /* 文件图谱可能尚不存在 */
               }
-              ws.doGraphUpdate(starGraph, summary.diff);
               bus.emit('timeline:refresh');
             } catch {
-              // 合并失败 / nodeCount 漂移 → 全量兜底
+              // 合并失败 / nodeCount 漂移 → 分页全量兜底
               try {
-                const raw = await rpc<string>('get_full_graph');
-                ws.graphData = JSON.parse(raw);
-                ws.doGraphUpdate(starGraph);
+                await reloadGraphPaged(ws, starGraph);
                 bus.emit('timeline:refresh');
               } catch {
-                /* get_full_graph 也失败 — 保持现状 */
+                /* reloadGraphPaged 也失败 — 保持现状 */
               }
             }
           }
@@ -364,8 +402,8 @@ export class Workspace {
         try {
           const summary = JSON.parse(event.payload);
           if (!isSamePath(ws.path, summary.path)) return;
-          const raw = await rpc<string>('get_full_graph');
-          ws.graphData = JSON.parse(raw);
+          // P0-2 分页化：分页全量重载新图（原 get_full_graph 大仓库会超 IPC 护栏）
+          await reloadGraphPaged(ws, starGraph);
           try {
             const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
             ws.fileGraphData = JSON.parse(
@@ -374,8 +412,7 @@ export class Workspace {
           } catch {
             /* 将由 watcher 重新生成 */
           }
-          // 若 diff 可用则增量更新，否则全量渲染
-          ws.doGraphUpdate(starGraph, summary.diff);
+          ws.runCheck();
           bus.emit('timeline:refresh');
         } catch (e) {
           console.error('[analysis-complete] failed to reload graph:', e);
@@ -995,6 +1032,126 @@ function mergeGraphDiff(graphData: { nodes?: any; edges?: any }, diff: GraphDiff
     for (const e of diff.added_edges) graphData.edges[e.id] = e;
     for (const id of removedEdgeIds) delete graphData.edges[id];
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 图分页加载（P0-2 分页化 — landmine-map.md 雷 2 清账）
+// ═══════════════════════════════════════════════════════════════
+// 大仓库全量图 JSON 超 IPC 128MB 护栏，analyze_and_load 只回 meta + 分页信息，
+// 图数据经 get_graph_page 逐页拉取：首页全量渲染（布局），后续页走
+// applyGraphDiff 增量合入同一张星图（新节点落在社区质心附近 + 局部松弛）。
+// 单次 IPC 响应远小于护栏；页与页之间节点按 id 去重，图变更导致的分页
+// 漂移被自然吸收（与 graph-updated 的 mergeGraphDiff 同一策略）。
+
+/** 从第 page 页拉取并合并进 ws.graphData；返回是否完整加载（false = 工作区已切走）。 */
+export async function loadGraphPages(
+  ws: Workspace,
+  starGraph: StarGraph,
+  paged: { meta?: any; page_size?: number; total_pages?: number },
+): Promise<boolean> {
+  const pageSize = paged.page_size || 12000;
+  const totalPages = paged.total_pages ?? 1;
+  for (let page = 0; page < totalPages; page++) {
+    if (!ws.active) return false;
+    const raw = await rpc<string>('get_graph_page', { page, page_size: pageSize });
+    if (!ws.active) return false;
+    const p = JSON.parse(raw);
+    const root = p.meta?.source_root || '';
+    if (root && !isSamePath(root, ws.path)) continue; // 引擎已被切走，丢弃错页
+    const diff = mergePageIntoGraph(ws.graphData, p);
+    if (page === 0) {
+      await starGraph.render(ws.graphData);
+    } else if (diff.added_nodes.length > 0 || diff.added_edges.length > 0) {
+      await starGraph.applyGraphDiff(diff, ws.graphData);
+    }
+    if (p.communities) ws.graphData.communities = p.communities;
+    if (p.hierarchical_communities) ws.graphData.hierarchical_communities = p.hierarchical_communities;
+    if (totalPages > 1) ws.onStatusChange?.(`已加载图谱 ${page + 1}/${totalPages} 页`);
+  }
+  return true;
+}
+
+/** 分页全量重载：get_graph_meta → 重置 graphData → 逐页重建（事件兜底/重分析用）。 */
+async function reloadGraphPaged(ws: Workspace, starGraph: StarGraph): Promise<void> {
+  const raw = await rpc<string>('get_graph_meta');
+  const meta = JSON.parse(raw);
+  if (!meta.paged) throw new Error('引擎未返回分页信息');
+  ws.graphData = {
+    meta: meta.meta || {},
+    nodes: [],
+    edges: [],
+    communities: [],
+    hierarchical_communities: [],
+  };
+  await loadGraphPages(ws, starGraph, meta);
+}
+
+/** 把一页数据并入 graphData（节点/边按 id 去重）；返回渲染层 diff（仅新增项）。 */
+function mergePageIntoGraph(graphData: { nodes?: any; edges?: any; communities?: any }, page: any): GraphDiffJson {
+  if (!Array.isArray(graphData.nodes)) graphData.nodes = [];
+  if (!Array.isArray(graphData.edges)) graphData.edges = [];
+  const nodes = graphData.nodes as any[];
+  const edges = graphData.edges as any[];
+  const existingNodeIds = new Set<string>();
+  for (const n of nodes) existingNodeIds.add(n.id);
+  const existingEdgeIds = new Set<string>();
+  for (const e of edges) existingEdgeIds.add(e.id);
+  const added_nodes: any[] = [];
+  const added_edges: any[] = [];
+  for (const n of page.nodes || []) {
+    if (!existingNodeIds.has(n.id)) {
+      existingNodeIds.add(n.id);
+      nodes.push(n);
+      added_nodes.push(n);
+    }
+  }
+  for (const e of page.edges || []) {
+    if (!existingEdgeIds.has(e.id)) {
+      existingEdgeIds.add(e.id);
+      edges.push(e);
+      added_edges.push(e);
+    }
+  }
+  // 渐进重建 level-0 社区（节点自带 community_id；最后一页服务器会下发权威社区覆盖）
+  graphData.communities = rebuildLevel0Communities(nodes);
+  return { added_nodes, added_edges, removed_nodes: [], removed_edges: [], modified_nodes: [] };
+}
+
+/** 从节点的 community_id 重建 level-0 社区（端口自引擎 derive_community_label）。 */
+function rebuildLevel0Communities(nodes: any[]): any[] {
+  const map = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (n.community_id == null) continue;
+    const cid = String(n.community_id);
+    if (!map.has(cid)) map.set(cid, []);
+    map.get(cid)!.push(n.id);
+  }
+  return [...map.entries()].map(([cid, nodeIds]) => ({
+    id: cid,
+    size: nodeIds.length,
+    node_ids: nodeIds,
+    label: deriveCommunityLabel(nodeIds),
+  }));
+}
+
+/** 社区标签：取成员 id 中最常见的文件路径尾段（与引擎 derive_community_label 同启发式）。 */
+function deriveCommunityLabel(nodeIds: string[]): string {
+  const prefixCounts = new Map<string, number>();
+  for (const nid of nodeIds) {
+    const file = nid.split(':')[0] || nid;
+    const parts = file.split(/[/\\]/);
+    const prefix = parts.length >= 2 ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}` : file;
+    prefixCounts.set(prefix, (prefixCounts.get(prefix) || 0) + 1);
+  }
+  let best = '社区';
+  let bestCount = 0;
+  for (const [p, c] of prefixCounts) {
+    if (c > bestCount) {
+      best = p;
+      bestCount = c;
+    }
+  }
+  return best;
 }
 
 // ═══════════════════════════════════════════════════════════════

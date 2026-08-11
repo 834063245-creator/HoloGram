@@ -635,6 +635,10 @@ mod regression {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+    /// 全局权限模式（PERMISSION_MODE）是进程级单例。r9/r11/r12 并行
+    /// 写/读它：r11/r12 设 yolo/auto 的窗口内，check_permission_sync
+    /// 放行 Ask 返回 Ok，r9 的 unwrap_err() 会 panic。串行化消除竞争。
+    static PERMISSION_MODE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn tmp_project() -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -797,6 +801,8 @@ mod regression {
     /// 必须明确告诉用户应在 permissions.json 中添加什么规则。
     #[test]
     fn r9_sync_deny_error_includes_suggestion() {
+        let _mode_guard = PERMISSION_MODE_LOCK.lock().unwrap();
+        set_permission_mode("ask"); // 前置条件：其他测试不得残留 yolo/auto
         let root = tmp_project();
         let ctx = PermissionContext::new(&root);
         // BashTool 使用危险（但非 Critical）命令触发 Ask
@@ -856,6 +862,7 @@ mod regression {
     ///       Bash 在 auto 下仍拒绝（危险命令仍询问）。
     #[test]
     fn r11_sync_path_respects_permission_mode() {
+        let _mode_guard = PERMISSION_MODE_LOCK.lock().unwrap();
         let root = tmp_project();
         let ctx = PermissionContext::new(&root);
         let bash = crate::tools::BashTool {
@@ -895,10 +902,10 @@ mod regression {
         crate::utils::check_permission_sync(&edit, &ctx).unwrap_err();
         crate::utils::check_permission_sync(&bash, &ctx).unwrap_err();
     }
-
     /// 回归 — yolo 不旁路 Deny（系统 Deny 规则始终拒绝）
     #[test]
     fn r12_yolo_does_not_bypass_deny() {
+        let _mode_guard = PERMISSION_MODE_LOCK.lock().unwrap();
         let root = tmp_project();
         let ctx = PermissionContext::new(&root);
         // .hologram/settings.json 有系统 Deny 规则（与 r1 同源）
@@ -913,5 +920,7 @@ mod regression {
             PermissionDecision::Deny { .. }
         ));
         crate::utils::check_permission_sync(&tool, &ctx).unwrap_err();
+        // 恢复默认 ask — 否则并行测试 r9 会读到残留的 yolo 而失败
+        set_permission_mode("ask");
     }
 }
