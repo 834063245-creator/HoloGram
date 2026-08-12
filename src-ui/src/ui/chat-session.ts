@@ -21,6 +21,7 @@ import {
   nextMsgId,
   resetMsgIdCounter,
 } from './message-model';
+import { isSubagentSpawnTool } from './tool-semantics';
 
 // ── 模块级会话状态 ──
 //
@@ -953,6 +954,10 @@ export function rebuildMessagesFromMessages(
 
       if (m.tool_calls) {
         for (const tc of m.tool_calls) {
+          // 子 Agent spawn 调用由 SubAgentBlock 呈现（实时会话的 SubAgentPart 在上方
+          // preservedSubAgents 中保留并重新挂载）— 不重建 ToolCard，
+          // 否则恢复/撤回重建后同一 spawn 会同时出现两种卡片。
+          if (isSubagentSpawnTool(tc.name, tc.arguments || undefined)) continue;
           am.parts.push({
             type: 'tool',
             toolId: tc.id,

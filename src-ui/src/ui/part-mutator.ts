@@ -114,6 +114,23 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
           tr.truncated = ev.tool.truncated;
           return true;
         }
+        // 错误不静默：dispatch 卡片被跳过的调用（子 Agent spawn 由
+        // SubAgentBlock 接管）若执行失败，补建错误卡片留痕 — 否则
+        // spawn 失败在聊天流中完全不可见，无从 debug。
+        // 成功结果不补卡（spawn 成功已有 SubAgentBlock）。
+        if (ev.tool.err) {
+          parts.push({
+            type: 'tool',
+            toolId: ev.tool.id,
+            name: ev.tool.name,
+            args: ev.tool.args || '',
+            label: ev.tool.name,
+            readOnly: ev.tool.read_only ?? false,
+            status: 'error',
+            err: ev.tool.err,
+          });
+          return true;
+        }
       }
       return false;
 

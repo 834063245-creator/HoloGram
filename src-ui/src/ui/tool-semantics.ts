@@ -36,3 +36,17 @@ export function displayToolName(toolName: string, argsJson?: string): string {
   if (!action || !DOMAIN_NAMES.has(toolName)) return toolName;
   return `${toolName}(${action})`;
 }
+
+/** 判断工具调用是否由子 Agent 专属卡片（SubAgentBlock）渲染，避免与 ToolCard 重复。
+ *  兼容收敛前的旧名 agent_spawn 与收敛后的领域调用 agent(action=spawn)。
+ *  partial=true 的分发（ToolCallStart，args 尚未流到）无法判定 action ——
+ *  agent 领域一律视为 spawn 嫌疑跳过建卡；非 spawn 动作待完整分发到达时
+ *  由 part-mutator 的 upsert 路径补建 ToolCard。 */
+export function isSubagentSpawnTool(name: string, argsJson?: string, partial?: boolean): boolean {
+  if (name === 'agent_spawn') return true;
+  if (name === 'agent') {
+    if (partial) return true;
+    return parseAction(argsJson) === 'spawn';
+  }
+  return false;
+}

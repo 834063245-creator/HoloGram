@@ -15,6 +15,7 @@ import type { StarGraph } from './graph';
 import type { AssistantMessage, ChatMessage, FileAttachment, MessageId, PlanPart, UserMessage } from './message-model';
 import { createAssistantMessage, createNoticeMessage, createUserMessage } from './message-model';
 import { applyEventToParts } from './part-mutator';
+import { isSubagentSpawnTool } from './tool-semantics';
 
 // ── 轮次配对类型（与 chat-session 共享）──
 type TurnPair = {
@@ -334,7 +335,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
         ctx._recordToolUsage(t.name, t.args || '');
         ctx._updateStatusBar('running', `执行 ${t.name}`);
         // agent_spawn（旧名）与 agent(spawn)（领域工具）都通过 SubAgentBlock 渲染 — 跳过 ToolCard
-        if (!isSubagentSpawnTool(t.name, t.args)) {
+        if (!isSubagentSpawnTool(t.name, t.args, t.partial)) {
           applyEventToParts(_streamingAssistant(ctx).parts, ev);
         }
         _streamingBump(ctx);
@@ -405,20 +406,6 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       console.warn('[chat] renderEvent: unknown event kind', (ev as any).kind);
       break;
   }
-}
-
-/** 判断工具调用是否由子 Agent 专属卡片（SubAgentBlock）渲染，避免与 ToolCard 重复。
- *  兼容收敛前的旧名 agent_spawn 与收敛后的领域调用 agent(action=spawn)。 */
-export function isSubagentSpawnTool(name: string, argsJson?: string): boolean {
-  if (name === 'agent_spawn') return true;
-  if (name === 'agent') {
-    try {
-      return (JSON.parse(argsJson || '{}') as { action?: unknown })?.action === 'spawn';
-    } catch {
-      return false;
-    }
-  }
-  return false;
 }
 
 // ═══════════════════════════════════════════════════════════
