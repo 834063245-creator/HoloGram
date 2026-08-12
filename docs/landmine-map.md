@@ -65,6 +65,7 @@
 
 **rpc 返回值 Value 化**：`rpc` 命令返回 `serde_json::Value` 替代预序列化 String，删除前端全部启发式解析。一次拆掉整个「双重编码」bug 家族。
 ✅ **已拍板立项（2026-08-08）**——用户确认必须做，不再等「下次大动 IPC 层」的自然触发（该前提可能永不出现：新功能都是往 rpc 加 match 分支，不会大动通道）。独立项目排期，暂未开工；开工前先拆 P2 双重编码残留（DataflowPanel 等局部启发式）做热身与范围勘定。
+📌 **前置已就位（2026-08-12，第二批）**：前端 138 处裸 `rpc` 调用已全量收敛到 `typedRpc`（rpc-contract.ts 单一入口，契约 result 一律 string，biome 禁令防新增）——届时 Value 化只需改 `typedRpc`/`rpc-contract.ts` 单点 + 收敛各调用点的 JSON.parse，不需要再全库扫调用面。
 
 ## 建议拆弹顺序
 

@@ -16,7 +16,7 @@
 //     `// text`  = 纯文本（文件内容、base64、错误信息等）。
 // - 新增前端一律用 typedRpc / typedListen，接线错误在编译期暴露。
 
-// biome-ignore lint/style/noRestrictedImports: typedRpc/typedListen 是唯一受权的裸 rpc/listen 出口
+// biome-ignore lint/style/noRestrictedImports: 唯二受权的裸 rpc/listen 出口之一（另一个是 tool.ts 的 agentInvoke 动态分发豁免）
 import { listen, rpc } from './bridge';
 
 // ─────────────────────────────────────────────────────────────

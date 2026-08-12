@@ -26,7 +26,7 @@
 
 - 阻塞操作（文件 IO、加解密、子进程等待、引擎调用）一律 `spawn_blocking`，不得内联在 tokio worker 上执行。
 - 锁内不 await、不阻塞 IO；持锁只做内存操作。
-- `Mutex::lock().unwrap()` 禁止；统一 `lock_or_err`。
+- `Mutex::lock().unwrap()` 禁止；统一 `lock_or_err`（src-tauri 域，utils.rs helper）；engine 域锁解锁用 `unwrap_or_else(|e| e.into_inner())`（std PoisonError 降级，先例 `engine/src/graph/id.rs`）。两条路都要求生产代码零裸 unwrap（2026-08-12 达成，见 CONVENTIONS.md）。
 - 判定问题：「这行代码会让 tokio worker 停着不动吗？」会即违例。
 
 ### 四、错误不静默 — 失败必须可见

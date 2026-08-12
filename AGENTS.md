@@ -98,6 +98,12 @@ flowchart LR
 - 领域动作通过 `resolveGuardToolName()` 映射回旧工具名，preflight 架构门禁、图增强 hooks、子 Agent `_callId` 关联均不失效；文件所有权包装的是内层旧工具，天然生效。
 - 新增工具/动作必须同步：`tools/domains.ts` 的 `DOMAIN_SPECS`（动作→旧工具名）+ `collectHiddenToolNames()`（需隐藏的旧名）+ 本文件。
 
+## RPC 契约纪律（2026-08-12）
+
+- 前端调后端一律 `typedRpc`（`src-ui/src/rpc-contract.ts`，方法名/参数键/结果类型受 `RpcContract` 编译期约束；参数键 snake_case）。biome `style/noRestrictedImports` 禁 `./bridge` 的 `rpc` 具名导入——**新增裸 `rpc('...')` 调用会被 lint 拦截**；唯二受权出口：`rpc-contract.ts`（typedRpc 实现）与 `agent/tool.ts`（agentInvoke 动态分发），均带 biome-ignore。
+- `bridge.ts` 的 `invoke<T>` / `listen<T>` / `rpc<T>` 泛型必填（无默认 any）；`listen` 用 `typedListen`（事件契约在 `EventContract`）。
+- Rust 侧生产代码零裸 `.unwrap()`（2026-08-12 达成）：锁解锁 `unwrap_or_else(|e| e.into_inner())`（std PoisonError，先例 `engine/src/graph/id.rs`；src-tauri 域另有 utils.rs 的 `lock_or_err` helper），静态正则 `expect("静态正则")`，捕获组 `expect("捕获组 n 必命中")`。新代码不得引入裸 unwrap（测试模块除外）。
+
 ## 不要做的事
 
 - 不要恢复 Python 引擎路径
