@@ -8,7 +8,7 @@
 import { getVersion } from '@tauri-apps/api/app';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { invoke } from '../../bridge';
+import { typedRpc } from '../../rpc-contract';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
 import type { AppSettings, ProviderId } from '../../settings';
@@ -154,7 +154,7 @@ const SettingsPanelApp: React.FC<{
     setLspLoading(true);
 
     const fetchStatus = () => {
-      invoke<string>('rpc', { method: 'hologram_call', params: { tool: 'engine_status', args: {} } })
+      typedRpc('hologram_call', { tool: 'engine_status', args: {} })
         .then((raw) => {
           const parsed = JSON.parse(raw);
           if (parsed?.lsp?.servers) {

@@ -599,7 +599,7 @@ pub(crate) async fn cdp_press(key: &str) -> Result<String, String> {
         _ => {
             // 单字符直接按键
             if key.len() == 1 {
-                let c = key.chars().next().unwrap();
+                let c = key.chars().next().expect("单字符按键必有且仅有一个字符");
                 (key, format!("Key{}", c.to_ascii_uppercase()), c.to_ascii_uppercase() as u32)
             } else {
                 return Err(format!("不支持的按键: {key}（支持 Enter/Tab/Escape/Backspace/方向键/单字符）"));

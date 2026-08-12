@@ -212,12 +212,12 @@ fn normalize_query_spelling(query: &str) -> String {
     // Erlang 元数：fn/N → fn
     static RE_ARITY: OnceLock<regex::Regex> = OnceLock::new();
     let re_arity = RE_ARITY.get_or_init(||
-        regex::Regex::new(r"\b([A-Za-z_][\w@]*)/\d{1,3}\b").unwrap()
+        regex::Regex::new(r"\b([A-Za-z_][\w@]*)/\d{1,3}\b").expect("静态正则")
     );
     // Lua mod:fn → mod.fn（但跳过协议前缀如 "kind:"、"lang:" 等）
     static RE_COLON: OnceLock<regex::Regex> = OnceLock::new();
     let re_colon = RE_COLON.get_or_init(||
-        regex::Regex::new(r"\b([a-z_][\w@]*):([A-Za-z_][\w@]*)\b").unwrap()
+        regex::Regex::new(r"\b([a-z_][\w@]*):([A-Za-z_][\w@]*)\b").expect("静态正则")
     );
     let s = re_arity.replace_all(query, "$1").to_string();
     re_colon.replace_all(&s, "$1.$2").to_string()
@@ -229,9 +229,9 @@ fn tokenize(query: &str) -> Vec<String> {
     static ID_RE: OnceLock<regex::Regex> = OnceLock::new();
     static EXT_RE: OnceLock<regex::Regex> = OnceLock::new();
 
-    let re = SPLIT_RE.get_or_init(|| regex::Regex::new(r"[\s,()\[\]]+").unwrap());
-    let id_re = ID_RE.get_or_init(|| regex::Regex::new(r"^[A-Za-z_$][\w$]*(?:(?:::|\.)[\w$]+)*$").unwrap());
-    let ext_re = EXT_RE.get_or_init(|| regex::Regex::new(r"\.(py|rs|ts|tsx|js|jsx|go|java|swift|c|h|cpp|rb|lua|cs|php|kt|dart|scala|hs|json|html|css|yaml|yml|toml|md|sh)$").unwrap());
+    let re = SPLIT_RE.get_or_init(|| regex::Regex::new(r"[\s,()\[\]]+").expect("静态正则"));
+    let id_re = ID_RE.get_or_init(|| regex::Regex::new(r"^[A-Za-z_$][\w$]*(?:(?:::|\.)[\w$]+)*$").expect("静态正则"));
+    let ext_re = EXT_RE.get_or_init(|| regex::Regex::new(r"\.(py|rs|ts|tsx|js|jsx|go|java|swift|c|h|cpp|rb|lua|cs|php|kt|dart|scala|hs|json|html|css|yaml|yml|toml|md|sh)$").expect("静态正则"));
 
     let mut tokens: Vec<String> = re.split(query)
         .map(|s| s.trim().to_string())

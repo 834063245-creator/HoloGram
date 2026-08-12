@@ -43,7 +43,7 @@ async function loadRealListen() {
  * 浏览器环境（npm run dev）下路由到 mock 数据。
  * Tauri 环境下调用真实后端。
  */
-export async function invoke<T = any>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (IS_TAURI) {
     await loadReal();
     log.debug('bridge', 'invoke', { command: cmd });
@@ -63,7 +63,7 @@ export async function invoke<T = any>(cmd: string, args?: Record<string, unknown
  * `listen`（来自 @tauri-apps/api/event）的直接替代品。
  * 浏览器环境下返回空操作 unlisten 函数。
  */
-export async function listen<T = any>(event: string, handler: (event: { payload: T }) => void): Promise<() => void> {
+export async function listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void> {
   if (IS_TAURI) {
     await loadRealListen();
     return _realListen(event, handler);
@@ -82,7 +82,7 @@ export function isMockMode(): boolean {
  * 替代单独的 invoke('cmd_name', params) 调用。
  * 自动将 camelCase 参数键转换为 snake_case 以适配 Rust 后端。
  */
-export async function rpc<T = any>(method: string, params?: Record<string, unknown>): Promise<T> {
+export async function rpc<T>(method: string, params?: Record<string, unknown>): Promise<T> {
   const normalized: Record<string, unknown> = {};
   if (params) {
     for (const [key, value] of Object.entries(params)) {
@@ -92,5 +92,5 @@ export async function rpc<T = any>(method: string, params?: Record<string, unkno
       normalized[snakeKey] = value;
     }
   }
-  return invoke('rpc', { method, params: normalized });
+  return invoke<T>('rpc', { method, params: normalized });
 }

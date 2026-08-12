@@ -573,12 +573,12 @@ impl LspManager {
 
     /// 检查 LSP 池是否已初始化（warm 已调用）。
     pub fn is_initialized() -> bool {
-        *Self::global().initialized.read().unwrap()
+        *Self::global().initialized.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// 检查项目根目录是否与上次 warm 时不同（工作区切换）。
     pub fn root_changed(new_root: &str) -> bool {
-        match Self::global().project_root.read().unwrap().as_ref() {
+        match Self::global().project_root.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
             Some(old) => old != new_root,
             None => true,
         }
@@ -600,8 +600,8 @@ impl LspManager {
     /// 应在索引完成后调用。
     pub fn warm(project_root: &str) {
         let mgr = Self::global();
-        *mgr.project_root.write().unwrap() = Some(project_root.to_string());
-        *mgr.initialized.write().unwrap() = true;
+        *mgr.project_root.write().unwrap_or_else(|e| e.into_inner()) = Some(project_root.to_string());
+        *mgr.initialized.write().unwrap_or_else(|e| e.into_inner()) = true;
 
         let root = project_root.to_string();
         for cfg in SERVER_CONFIGS {
@@ -609,7 +609,7 @@ impl LspManager {
             // 跳过池中已在运行的服务器 —— 避免在重复 warm 调用
             //（如 engine_status 轮询）时杀死健康的进程。
             {
-                let pool = mgr.pool.read().unwrap();
+                let pool = mgr.pool.read().unwrap_or_else(|e| e.into_inner());
                 if let Some(arc) = pool.get(cmd) {
                     if let Ok(guard) = arc.lock() {
                         if guard.is_some() {
@@ -627,9 +627,9 @@ impl LspManager {
                         tracing::info!(cmd, "[lsp_manager] server started");
                         mgr.pool
                             .write()
-                            .unwrap()
+                            .unwrap_or_else(|e| e.into_inner())
                             .insert(cmd, Arc::new(Mutex::new(Some(process))));
-                        mgr.last_warm_errors.write().unwrap().remove(cmd);
+                        mgr.last_warm_errors.write().unwrap_or_else(|e| e.into_inner()).remove(cmd);
                     }
                     Err(e) => {
                         let diagnosed = Self::diagnose_error(cmd, &e);
@@ -637,7 +637,7 @@ impl LspManager {
                         tracing::error!(cmd, err = %diagnosed, "[lsp_manager] server unavailable");
                         mgr.last_warm_errors
                             .write()
-                            .unwrap()
+                            .unwrap_or_else(|e| e.into_inner())
                             .insert(cmd.to_string(), err_msg);
                     }
                 }
@@ -657,8 +657,8 @@ impl LspManager {
     /// 如果 `ext_filter` 为空则启动全部。供压力测试按语言过滤使用。
     pub fn warm_blocking_filtered(project_root: &str, ext_filter: &[&str]) -> (usize, usize) {
         let mgr = Self::global();
-        *mgr.project_root.write().unwrap() = Some(project_root.to_string());
-        *mgr.initialized.write().unwrap() = true;
+        *mgr.project_root.write().unwrap_or_else(|e| e.into_inner()) = Some(project_root.to_string());
+        *mgr.initialized.write().unwrap_or_else(|e| e.into_inner()) = true;
 
         let root = project_root.to_string();
         let mut handles = Vec::new();
@@ -675,7 +675,7 @@ impl LspManager {
             // 跳过池中已在运行的服务器 —— 与 warm() 行为一致,
             // 避免压测/重复调用时杀死健康进程并重复全量索引
             {
-                let pool = mgr.pool.read().unwrap();
+                let pool = mgr.pool.read().unwrap_or_else(|e| e.into_inner());
                 if let Some(arc) = pool.get(cfg.command) {
                     if let Ok(guard) = arc.lock() {
                         if guard.is_some() {
@@ -695,9 +695,9 @@ impl LspManager {
                         tracing::info!(cmd, "[lsp_manager] server started (blocking)");
                         mgr.pool
                             .write()
-                            .unwrap()
+                            .unwrap_or_else(|e| e.into_inner())
                             .insert(cmd, Arc::new(Mutex::new(Some(process))));
-                        mgr.last_warm_errors.write().unwrap().remove(cmd);
+                        mgr.last_warm_errors.write().unwrap_or_else(|e| e.into_inner()).remove(cmd);
                         Ok(cmd)
                     }
                     Err(e) => {
@@ -706,7 +706,7 @@ impl LspManager {
                         tracing::error!(cmd, err = %diagnosed, "[lsp_manager] server unavailable (blocking)");
                         mgr.last_warm_errors
                             .write()
-                            .unwrap()
+                            .unwrap_or_else(|e| e.into_inner())
                             .insert(cmd.to_string(), err_msg);
                         Err(cmd)
                     }
@@ -839,7 +839,7 @@ impl LspManager {
             None => return false,
         };
         let mgr = Self::global();
-        let root = match mgr.project_root.read().unwrap().as_ref() {
+        let root = match mgr.project_root.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
             Some(r) => r.clone(),
             None => return false,
         };
@@ -849,9 +849,9 @@ impl LspManager {
                 tracing::info!(cmd, ext, "[lsp_manager] lazy warm succeeded");
                 mgr.pool
                     .write()
-                    .unwrap()
+                    .unwrap_or_else(|e| e.into_inner())
                     .insert(cmd, Arc::new(Mutex::new(Some(process))));
-                mgr.last_warm_errors.write().unwrap().remove(cmd);
+                mgr.last_warm_errors.write().unwrap_or_else(|e| e.into_inner()).remove(cmd);
                 true
             }
             Err(e) => {
@@ -859,7 +859,7 @@ impl LspManager {
                 tracing::error!(cmd, ext, err = %e, "[lsp_manager] lazy warm failed — retry exhausted");
                 mgr.last_warm_errors
                     .write()
-                    .unwrap()
+                    .unwrap_or_else(|e| e.into_inner())
                     .insert(cmd.to_string(), err_msg);
                 false
             }
@@ -954,7 +954,7 @@ impl LspManager {
     /// 按文件扩展名查找对应的 LSP 服务器。
     fn get_server(ext: &str) -> Option<Arc<Mutex<Option<LspProcess>>>> {
         let mgr = Self::global();
-        let pool = mgr.pool.read().unwrap();
+        let pool = mgr.pool.read().unwrap_or_else(|e| e.into_inner());
         for cfg in SERVER_CONFIGS {
             if cfg.extensions.contains(&ext) {
                 return pool.get(cfg.command).cloned();
@@ -984,7 +984,7 @@ impl LspManager {
                 .map(|c| c.command);
             if let Some(cmd) = cmd {
                 tracing::warn!(ext, "[lsp_manager] stale dead server removed, rebuilding");
-                mgr.pool.write().unwrap().remove(cmd);
+                mgr.pool.write().unwrap_or_else(|e| e.into_inner()).remove(cmd);
             }
         }
         tracing::info!(ext, "[lsp_manager] server not in pool, attempting lazy warm");
@@ -1030,14 +1030,14 @@ impl LspManager {
         ext: &str,
     ) -> Result<Vec<LspLocation>, String> {
         let mgr = Self::global();
-        if !*mgr.initialized.read().unwrap() {
+        if !*mgr.initialized.read().unwrap_or_else(|e| e.into_inner()) {
             return Err("LSP pool not initialized".into());
         }
         let server_arc = Self::get_or_warm_server(ext)?;
         let abs_path = if PathBuf::from(file_path).is_absolute() {
             file_path.to_string()
         } else {
-            let root = mgr.project_root.read().unwrap();
+            let root = mgr.project_root.read().unwrap_or_else(|e| e.into_inner());
             let root = root.as_ref().ok_or("no project root")?;
             format!("{}/{}", root, file_path)
         };
@@ -1107,7 +1107,7 @@ impl LspManager {
             file_path.to_string()
         } else {
             let mgr = Self::global();
-            let root = mgr.project_root.read().unwrap();
+            let root = mgr.project_root.read().unwrap_or_else(|e| e.into_inner());
             let root = root.as_ref().ok_or("no project root")?;
             format!("{}/{}", root, file_path)
         };
@@ -1136,7 +1136,7 @@ impl LspManager {
     ///
     /// 返回命令名 → 错误消息的映射。
     pub fn warm_errors() -> HashMap<String, String> {
-        Self::global().last_warm_errors.read().unwrap().clone()
+        Self::global().last_warm_errors.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// 在文件系统上解析命令的完整路径。
@@ -1179,8 +1179,8 @@ impl LspManager {
     /// `installed` 通过 PATH 检查——即使 warm() 未运行也可用。
     pub fn lsp_status() -> Vec<Value> {
         let mgr = Self::global();
-        let errors = mgr.last_warm_errors.read().unwrap().clone();
-        let pool = mgr.pool.read().unwrap();
+        let errors = mgr.last_warm_errors.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let pool = mgr.pool.read().unwrap_or_else(|e| e.into_inner());
         SERVER_CONFIGS
             .iter()
             .map(|cfg| {
@@ -1192,7 +1192,7 @@ impl LspManager {
                 let installed = available || Self::find_on_path(cfg.command);
                 // 兜底：已安装但不可用且无错误记录 → warm 可能在进行中或静默失败
                 let error = if installed && !available && error.is_none()
-                    && *mgr.initialized.read().unwrap()
+                    && *mgr.initialized.read().unwrap_or_else(|e| e.into_inner())
                 {
                     Some("warm in progress or silent failure — retry if persists".to_string())
                 } else {

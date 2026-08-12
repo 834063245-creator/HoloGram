@@ -6,8 +6,8 @@
 // 零 innerHTML、零 querySelector、零手动 class 切换。
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { rpc } from '../../bridge';
 import { useShellStore } from '../../app/shell-store';
+import { typedRpc } from '../../rpc-contract';
 import { getChatStore } from '../chat-store';
 
 // ── 类型 ──
@@ -108,7 +108,7 @@ export const AtAutocomplete = forwardRef<
         let cache = cacheRef.current;
         const projectPath = useShellStore.getState().projectPath || '.';
         if (!cache || Date.now() - cache.ts > CACHE_TTL || cache.path !== projectPath) {
-          const data = await rpc<string>('glob', {
+          const data = await typedRpc('glob', {
             pattern: '**/*.{ts,js,py,rs,html,css,vue,svelte,json,toml,yaml,yml,md}',
             path: projectPath,
           });

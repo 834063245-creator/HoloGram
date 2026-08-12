@@ -6,7 +6,7 @@
 //! 完全替代 src_python/mcp_server.py。
 //!
 //! 协议：从 stdin 逐行读取 JSON-RPC 请求，向 stdout 逐行写入 JSON-RPC 响应。
-//! 支持 `tools/list` 和 `tools/call`，通过 ToolRegistry 暴露全部 33 个 hologram_* 工具（默认激活；`symbol_history` 经 HOLOGRAM_MCP_TOOLS=* 放开）。
+//! 支持 `tools/list` 和 `tools/call`，通过 ToolRegistry 暴露全部 35 个 hologram_* 工具（默认激活 34 个；`symbol_history` 经 HOLOGRAM_MCP_TOOLS=* 放开）。
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -104,7 +104,7 @@ impl McpServer {
     /// 获取当前项目根目录的克隆。
     #[allow(dead_code)] // 遗留；工具现在使用全局 ENGINE
     fn project_root(&self) -> PathBuf {
-        self.project_root.lock().unwrap().clone()
+        self.project_root.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     // ── JSON-RPC 协议 ──

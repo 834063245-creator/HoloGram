@@ -82,12 +82,12 @@ function mockLiveFs(initial: Record<string, string> = {}): Map<string, string> {
   rpcMock.mockImplementation(async (method: string, params: Record<string, unknown>) => {
     if (method === 'create_directory') return null;
     if (method === 'write_file_content') {
-      files.set(params.filePath as string, params.content as string);
+      files.set(params.file_path as string, params.content as string);
       return '(mock: file saved)';
     }
     if (method === 'read_file_content') {
-      const v = files.get(params.filePath as string);
-      if (v === undefined) throw new Error(`ENOENT: ${params.filePath}`);
+      const v = files.get(params.file_path as string);
+      if (v === undefined) throw new Error(`ENOENT: ${params.file_path}`);
       return v;
     }
     if (method === 'delete_file_or_dir') {
@@ -101,7 +101,7 @@ function mockLiveFs(initial: Record<string, string> = {}): Map<string, string> {
     if (method === 'agent_session_append') {
       // P1-15: 模拟后端 — rewrite → truncate 重建；否则 append-only
       const p = params as any;
-      const nds = `${p.projectPath}/.hologram/agents/${p.agentId}/session.ndjson`;
+      const nds = `${p.project_path}/.hologram/agents/${p.agent_id}/session.ndjson`;
       const block = (p.messages as any[]).map((m) => JSON.stringify(m)).join('\n') + '\n';
       files.set(nds, p.rewrite ? block : (files.get(nds) ?? '') + block);
       return null;

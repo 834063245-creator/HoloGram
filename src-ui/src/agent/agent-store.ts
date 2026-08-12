@@ -5,8 +5,8 @@
 // 实现 agent 身份追踪、会话恢复和子 Agent 血缘关系
 // 模式参照 MemoryManager：rpc 文件 I/O、ensureDir、stripLineNumbers。
 
-import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
+import { typedRpc } from '../rpc-contract';
 import { stripNums } from './board-persistence';
 
 // ── 类型 ──
@@ -67,7 +67,7 @@ export class AgentStore {
   private async ensureDir(): Promise<void> {
     if (this.dirReady) return;
     try {
-      await rpc('create_directory', { path: this.baseDir });
+      await typedRpc('create_directory', { path: this.baseDir });
     } catch {
       /* 已存在 */
     }
@@ -77,7 +77,7 @@ export class AgentStore {
   private async ensureAgentDir(id: string): Promise<void> {
     await this.ensureDir();
     try {
-      await rpc('create_directory', { path: `${this.baseDir}/${id}` });
+      await typedRpc('create_directory', { path: `${this.baseDir}/${id}` });
     } catch {
       /* 已存在 */
     }
@@ -99,8 +99,8 @@ export class AgentStore {
       subagentDepth: partial.subagentDepth ?? 0,
     };
     // 状态文件 — 精简，总是写入
-    await rpc('write_file_content', {
-      filePath: this.statePath(id),
+    await typedRpc('write_file_content', {
+      file_path: this.statePath(id),
       content: JSON.stringify(record, null, 2),
     });
     // 索引 — 总是更新，保持 list() 一致
@@ -113,10 +113,10 @@ export class AgentStore {
     if (messages.length === 0) return;
     await this.ensureAgentDir(id);
     try {
-      await rpc('agent_session_append', {
-        projectPath: this.projectPath,
-        agentId: id,
-        messages,
+      await typedRpc('agent_session_append', {
+        project_path: this.projectPath,
+        agent_id: id,
+        messages: messages as unknown as Record<string, unknown>[],
         rewrite,
       });
     } catch (e) {
@@ -128,15 +128,15 @@ export class AgentStore {
   async load(id: string): Promise<AgentLoadResult | null> {
     await this.ensureDir();
     try {
-      const rawState = await rpc<string>('read_file_content', {
-        filePath: this.statePath(id),
+      const rawState = await typedRpc('read_file_content', {
+        file_path: this.statePath(id),
       });
       const record: AgentRecord = JSON.parse(stripNums(rawState));
       let messages: Message[] = [];
       // P1-15: 优先读 NDJSON 增量文件（逐行 parse）；回退旧 JSON 数组 session.json
       try {
-        const rawNds = await rpc<string>('read_file_content', {
-          filePath: this.sessionNdsPath(id),
+        const rawNds = await typedRpc('read_file_content', {
+          file_path: this.sessionNdsPath(id),
         });
         messages = stripNums(rawNds)
           .split('\n')
@@ -144,8 +144,8 @@ export class AgentStore {
           .map((l) => JSON.parse(l) as Message);
       } catch {
         try {
-          const rawSession = await rpc<string>('read_file_content', {
-            filePath: this.sessionPath(id),
+          const rawSession = await typedRpc('read_file_content', {
+            file_path: this.sessionPath(id),
           });
           messages = JSON.parse(stripNums(rawSession));
         } catch {
@@ -162,8 +162,8 @@ export class AgentStore {
   async list(): Promise<AgentRecord[]> {
     await this.ensureDir();
     try {
-      const raw = await rpc<string>('read_file_content', {
-        filePath: this.indexPath(),
+      const raw = await typedRpc('read_file_content', {
+        file_path: this.indexPath(),
       });
       return JSON.parse(stripNums(raw)) as AgentRecord[];
     } catch {
@@ -174,7 +174,7 @@ export class AgentStore {
   /** 删除 agent 的持久化状态。尽力而为 — 永不抛异常。 */
   async delete(id: string): Promise<void> {
     try {
-      await rpc('delete_file_or_dir', { path: `${this.baseDir}/${id}` });
+      await typedRpc('delete_file_or_dir', { path: `${this.baseDir}/${id}` });
     } catch {
       /* 尽力而为 */
     }
@@ -190,8 +190,8 @@ export class AgentStore {
       const all = await this.list();
       const next = fn(all);
       try {
-        await rpc('write_file_content', {
-          filePath: this.indexPath(),
+        await typedRpc('write_file_content', {
+          file_path: this.indexPath(),
           content: JSON.stringify(next, null, 2),
         });
       } catch {

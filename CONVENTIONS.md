@@ -113,7 +113,7 @@
 ```
 ✅ Result<T, anyhow::Error> 用于可能失败的操作
 ✅ Option<T> 用于可能缺失的值
-✅ .unwrap() 只用于测试和初始化代码，业务逻辑用 ? 或 .expect("why")
+✅ 生产代码 .unwrap() 清零（2026-08-12 达成）；锁解锁用 .unwrap_or_else(|e| e.into_inner())（std PoisonError 降级，先例 engine/src/graph/id.rs），其余失败路径用 ? 或 .expect("why")；静态正则用 Regex::new(...).expect("静态正则")
 ```
 
 ### 注释

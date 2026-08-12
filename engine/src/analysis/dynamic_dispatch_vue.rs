@@ -58,14 +58,14 @@ pub fn synthesize_vue_edges(
 
 fn synthesize_vue_handlers(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r#"(?:@|v-on:)[a-zA-Z][\w-]*(?:\.[\w]+)*\s*=\s*"([^"]+)""#).unwrap();
+    let re = regex::Regex::new(r#"(?:@|v-on:)[a-zA-Z][\w-]*(?:\.[\w]+)*\s*=\s*"([^"]+)""#).expect("静态正则");
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
     let caller = find_first_in_file(graph, file);
 
     for caps in re.captures_iter(source) {
         if added >= 30 { break; }
-        let handler_expr = caps.get(1).unwrap().as_str().to_string();
+        let handler_expr = caps.get(1).expect("捕获组 1 必命中").as_str().to_string();
         let fn_name = handler_expr.split('(').next().unwrap_or(&handler_expr).trim().to_string();
         if fn_name.is_empty() || seen.contains(&fn_name) { continue; }
         seen.insert(fn_name.clone());
@@ -91,14 +91,14 @@ fn synthesize_vue_handlers(graph: &mut Graph, file: &str, source: &str) -> usize
 
 fn synthesize_vue_composables(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r#"(?:const|let|var)\s*\{[^}]+\}\s*=\s*(\w+)\s*\("#).unwrap();
+    let re = regex::Regex::new(r#"(?:const|let|var)\s*\{[^}]+\}\s*=\s*(\w+)\s*\("#).expect("静态正则");
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
     let caller = find_first_in_file(graph, file);
 
     for caps in re.captures_iter(source) {
         if added >= 20 { break; }
-        let composable = caps.get(1).unwrap().as_str().to_string();
+        let composable = caps.get(1).expect("捕获组 1 必命中").as_str().to_string();
         if !composable.starts_with("use") || seen.contains(&composable) { continue; }
         seen.insert(composable.clone());
 
@@ -123,14 +123,14 @@ fn synthesize_vue_composables(graph: &mut Graph, file: &str, source: &str) -> us
 
 fn synthesize_vuex_dispatch(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r#"dispatch\s*\(\s*['"]([^'"]+)['"]"#).unwrap();
+    let re = regex::Regex::new(r#"dispatch\s*\(\s*['"]([^'"]+)['"]"#).expect("静态正则");
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
     let caller = find_first_in_file(graph, file);
 
     for caps in re.captures_iter(source) {
         if added >= 120 { break; }
-        let action = caps.get(1).unwrap().as_str().to_string();
+        let action = caps.get(1).expect("捕获组 1 必命中").as_str().to_string();
         if seen.contains(&action) { continue; }
         seen.insert(action.clone());
 
@@ -155,12 +155,12 @@ fn synthesize_vuex_dispatch(graph: &mut Graph, file: &str, source: &str) -> usiz
 
 fn synthesize_pinia(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r#"defineStore\s*\(\s*['"]([^'"]+)['"]"#).unwrap();
+    let re = regex::Regex::new(r#"defineStore\s*\(\s*['"]([^'"]+)['"]"#).expect("静态正则");
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let caller = find_first_in_file(graph, file);
 
     for caps in re.captures_iter(source) {
-        let store_name = caps.get(1).unwrap().as_str();
+        let store_name = caps.get(1).expect("捕获组 1 必命中").as_str();
         let store_fn_name = format!("use{}Store",
             store_name.chars().enumerate()
                 .map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c })

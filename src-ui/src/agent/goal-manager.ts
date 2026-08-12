@@ -10,8 +10,8 @@
 //
 // Pattern follows AgentStore: rpc file I/O, lazy ensureDir, stripLineNumbers.
 
-import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
+import { typedRpc } from '../rpc-contract';
 import { stripNums } from './board-persistence';
 
 // ── Types ──
@@ -77,7 +77,7 @@ export class GoalManager {
   private async ensureDir(): Promise<void> {
     if (this.dirReady) return;
     try {
-      await rpc('create_directory', { path: this.baseDir });
+      await typedRpc('create_directory', { path: this.baseDir });
     } catch {
       /* already exists */
     }
@@ -87,7 +87,7 @@ export class GoalManager {
   private async ensureGoalDir(id: string): Promise<void> {
     await this.ensureDir();
     try {
-      await rpc('create_directory', { path: `${this.baseDir}/${id}` });
+      await typedRpc('create_directory', { path: `${this.baseDir}/${id}` });
     } catch {
       /* already exists */
     }
@@ -119,7 +119,7 @@ export class GoalManager {
   async get(id: string): Promise<GoalRecord | null> {
     await this.ensureDir();
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: this.recordPath(id) });
+      const raw = await typedRpc('read_file_content', { file_path: this.recordPath(id) });
       return JSON.parse(stripNums(raw)) as GoalRecord;
     } catch {
       return null;
@@ -139,7 +139,7 @@ export class GoalManager {
   async list(): Promise<GoalRecord[]> {
     await this.ensureDir();
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: this.indexPath() });
+      const raw = await typedRpc('read_file_content', { file_path: this.indexPath() });
       // ⚠️ JSON.parse(null) 返回 null 而不抛错 — 必须显式校验数组，
       // 否则损坏/空 index.json 会让调用方 `all.filter` 崩溃。
       const parsed = JSON.parse(stripNums(raw)) as unknown;
@@ -172,7 +172,7 @@ export class GoalManager {
   /** 彻底删除目标记录与快照。 */
   async delete(id: string): Promise<void> {
     try {
-      await rpc('delete_file_or_dir', { path: `${this.baseDir}/${id}` });
+      await typedRpc('delete_file_or_dir', { path: `${this.baseDir}/${id}` });
     } catch {
       /* best effort */
     }
@@ -180,7 +180,7 @@ export class GoalManager {
     const filtered = all.filter((r) => r.id !== id);
     if (filtered.length < all.length) {
       try {
-        await rpc('write_file_content', { filePath: this.indexPath(), content: JSON.stringify(filtered, null, 2) });
+        await typedRpc('write_file_content', { file_path: this.indexPath(), content: JSON.stringify(filtered, null, 2) });
       } catch {
         /* index write is best-effort */
       }
@@ -192,8 +192,8 @@ export class GoalManager {
   /** 保存 goal 的对话现场到独立槽。 */
   async saveSession(id: string, messages: Message[]): Promise<void> {
     await this.ensureGoalDir(id);
-    await rpc('write_file_content', {
-      filePath: this.sessionPath(id),
+    await typedRpc('write_file_content', {
+      file_path: this.sessionPath(id),
       content: JSON.stringify(messages, null, 2),
     });
   }
@@ -202,7 +202,7 @@ export class GoalManager {
   async loadSession(id: string): Promise<Message[] | null> {
     await this.ensureDir();
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: this.sessionPath(id) });
+      const raw = await typedRpc('read_file_content', { file_path: this.sessionPath(id) });
       return JSON.parse(stripNums(raw)) as Message[];
     } catch {
       return null;
@@ -235,7 +235,7 @@ export class GoalManager {
     const legacyGoalPath = this.projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/agents/main/goal.json';
     let legacy: LegacyGoalState;
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: legacyGoalPath });
+      const raw = await typedRpc('read_file_content', { file_path: legacyGoalPath });
       legacy = JSON.parse(stripNums(raw)) as LegacyGoalState;
     } catch {
       return null; // 无旧档
@@ -252,14 +252,14 @@ export class GoalManager {
     try {
       const legacySessionPath =
         this.projectPath.replace(/\\/g, '/').replace(/\/$/, '') + '/.hologram/agents/main/session.json';
-      const rawSession = await rpc<string>('read_file_content', { filePath: legacySessionPath });
+      const rawSession = await typedRpc('read_file_content', { file_path: legacySessionPath });
       await this.saveSession(record.id, JSON.parse(stripNums(rawSession)) as Message[]);
     } catch {
       /* session 快照 best-effort */
     }
 
     try {
-      await rpc('delete_file_or_dir', { path: legacyGoalPath });
+      await typedRpc('delete_file_or_dir', { path: legacyGoalPath });
     } catch {
       /* best effort */
     }
@@ -270,8 +270,8 @@ export class GoalManager {
 
   private async _write(record: GoalRecord): Promise<void> {
     await this.ensureGoalDir(record.id);
-    await rpc('write_file_content', {
-      filePath: this.recordPath(record.id),
+    await typedRpc('write_file_content', {
+      file_path: this.recordPath(record.id),
       content: JSON.stringify(record, null, 2),
     });
     await this._upsertIndex(record);
@@ -287,7 +287,7 @@ export class GoalManager {
       all.push(record);
     }
     try {
-      await rpc('write_file_content', { filePath: this.indexPath(), content: JSON.stringify(all, null, 2) });
+      await typedRpc('write_file_content', { file_path: this.indexPath(), content: JSON.stringify(all, null, 2) });
     } catch {
       /* best effort */
     }

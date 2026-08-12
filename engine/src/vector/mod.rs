@@ -45,7 +45,7 @@ impl CodeVectorIndex {
     }
 
     fn ensure_index(&self, capacity: usize) -> Result<(), String> {
-        if self.index.read().unwrap().is_some() { return Ok(()); }
+        if self.index.read().unwrap_or_else(|e| e.into_inner()).is_some() { return Ok(()); }
         let options = usearch::IndexOptions {
             dimensions: VECTOR_DIM,
             metric: usearch::MetricKind::Cos,
@@ -59,7 +59,7 @@ impl CodeVectorIndex {
             .map_err(|e| format!("usearch index creation failed: {e}"))?;
         idx.reserve(capacity.max(1))
             .map_err(|e| format!("usearch reserve failed: {e}"))?;
-        *self.index.write().unwrap() = Some(idx);
+        *self.index.write().unwrap_or_else(|e| e.into_inner()) = Some(idx);
         Ok(())
     }
 
@@ -67,7 +67,7 @@ impl CodeVectorIndex {
     pub fn build(&self, nodes: &[Node]) -> Result<usize, String> {
         self.ensure_index(nodes.len())?;
         // 预留容量（始终执行，即使索引已初始化）
-        if let Some(ref idx) = *self.index.read().unwrap() {
+        if let Some(ref idx) = *self.index.read().unwrap_or_else(|e| e.into_inner()) {
             idx.reserve(nodes.len().max(1))
                 .map_err(|e| format!("usearch reserve failed: {e}"))?;
         }
@@ -131,8 +131,8 @@ impl CodeVectorIndex {
         }
 
         let mut slot = 0usize;
-        let mut slots = self.slots.write().unwrap();
-        let mut index = self.index.write().unwrap();
+        let mut slots = self.slots.write().unwrap_or_else(|e| e.into_inner());
+        let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
         let index = index.as_mut().ok_or("index not initialized")?;
 
         slots.clear();
@@ -154,9 +154,9 @@ impl CodeVectorIndex {
     pub fn search(&self, query: &str, top_k: usize) -> Result<Vec<(String, f32)>, String> {
         let q_vec = embed::embed(query);
 
-        let index = self.index.read().unwrap();
+        let index = self.index.read().unwrap_or_else(|e| e.into_inner());
         let index = index.as_ref().ok_or("index not initialized")?;
-        let slots = self.slots.read().unwrap();
+        let slots = self.slots.read().unwrap_or_else(|e| e.into_inner());
 
         if slots.is_empty() { return Ok(vec![]); }
 
@@ -176,7 +176,7 @@ impl CodeVectorIndex {
 
     /// 原子落盘：先写临时文件再 rename，崩溃不会留下 index/slots 不一致的半成品。
     pub fn save(&self) -> Result<(), String> {
-        let index = self.index.read().unwrap();
+        let index = self.index.read().unwrap_or_else(|e| e.into_inner());
         let index = index.as_ref().ok_or("index not initialized")?;
 
         // 1. 索引 → tmp → rename
@@ -190,7 +190,7 @@ impl CodeVectorIndex {
         // 2. slots（含嵌入后端标识）→ tmp → rename
         let slot_path = self.path.with_extension("slots.json");
         let tmp_slot = self.path.with_extension("slots.json.tmp");
-        let slots = self.slots.read().unwrap();
+        let slots = self.slots.read().unwrap_or_else(|e| e.into_inner());
         let data = serde_json::json!({
             "slots": *slots,
             "dim": VECTOR_DIM,
@@ -241,10 +241,10 @@ impl CodeVectorIndex {
             return Ok(0);
         }
 
-        *self.slots.write().unwrap() = loaded;
+        *self.slots.write().unwrap_or_else(|e| e.into_inner()) = loaded;
 
-        let count = self.slots.read().unwrap().len();
-        *self.index.write().unwrap() = Some(idx);
+        let count = self.slots.read().unwrap_or_else(|e| e.into_inner()).len();
+        *self.index.write().unwrap_or_else(|e| e.into_inner()) = Some(idx);
         info!("[vector] 已加载索引: {} 个向量", count);
         Ok(count)
     }
@@ -298,7 +298,7 @@ pub fn get_or_load_index(project_root: &std::path::Path) -> Result<(Arc<RwLock<O
         }
         *cache = Some(CachedIndex { vi, path, mtime: current_mtime });
     }
-    let c = cache.as_ref().unwrap();
+    let c = cache.as_ref().expect("索引缓存必已填充");
     Ok((c.vi.index.clone(), c.vi.slots.clone()))
 }
 

@@ -26,11 +26,12 @@ import { registerActions } from './app/actions';
 import { ChatCore } from './app/chat/chat-core';
 import { useCoreStore } from './app/chat/core-instance';
 import { useShellStore } from './app/shell-store';
-import { isMockMode, rpc } from './bridge';
+import { isMockMode } from './bridge';
 import { setLang } from './i18n';
 import { streamWithIdleTimeout } from './provider/idle-stream';
 import { ChunkType } from './provider/types';
 import { loadSettings } from './settings';
+import { typedListen, typedRpc } from './rpc-contract';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
 import { setDataflowQueryParser, setDockStarGraph } from './ui/dock-config';
@@ -219,7 +220,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     chatPanel.setProjectPath(folder);
     chatPanel.autoRestoreLastSession(folder).catch(() => {});
     ws.runCheck();
-    await rpc('workspace_start_watcher').catch(() => {});
+    await typedRpc('workspace_start_watcher', {}).catch(() => {});
   } finally {
     // 确保状态机未卡在 'switching' 状态
     if (wsMachine.state === 'switching') {
@@ -302,7 +303,7 @@ async function toggleDiff(): Promise<void> {
   }
   try {
     const beforePath = `${workspace.path}/.hologram/baseline.json`;
-    const diffJson = await rpc<string>('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
+    const diffJson = await typedRpc('hologram_call', { tool: 'graph_diff', args: { before_path: beforePath } });
     const diff = JSON.parse(diffJson);
     if (diff.is_empty) {
       pushStatus('已创建变更基线 · 再次分析后即可比较差异');
@@ -336,7 +337,7 @@ async function reanalyze(): Promise<void> {
   pushStatus('重新分析中…');
   try {
     console.log('[reanalyze] step 1: calling analyze_and_load', ws.path);
-    const raw = await rpc<string>('analyze_and_load', { path: ws.path, force: true });
+    const raw = await typedRpc('analyze_and_load', { path: ws.path, force: true });
     console.log('[reanalyze] step 2: analyze_and_load returned meta, length:', raw?.length);
     // 在漫长的 await 期间防止工作区切换。
     if (workspace !== ws) {
@@ -388,7 +389,7 @@ async function setupPlaceholderAgent(): Promise<void> {
   if (workspace) return;
   // 清除后端工作区绑定 — 防止上一个项目的 PermissionContext
   // 泄漏到占位工作区的 read_file / list_directory 调用中。
-  await rpc('workspace_activate', { path: '' }).catch(() => {});
+  await typedRpc('workspace_activate', { path: '' }).catch(() => {});
   const ws = Workspace.placeholder();
   ws.onStatusChange = (msg) => {
     pushStatus(msg);
@@ -411,19 +412,16 @@ async function init(): Promise<void> {
   starGraph?.resize(); // CSS 自定义属性变化 → 容器缩小 → canvas 必须跟随
 
   // Tauri 事件监听 — 纯浏览器 dev(mock) 环境无 __TAURI_INTERNALS__，
-  // listen 会抛错并中断 init；降级为静默跳过（权限卡在 mock 下不会出现）
+  // bridge.listen 返回空操作 unlisten（权限卡在 mock 下不会出现）
   try {
-    const { listen } = await import('@tauri-apps/api/event');
-
-    await listen('unity-event', (event: any) => {
-      const { event: evt, payload } = event.payload;
+    await typedListen('unity-event', ({ event: evt, payload }) => {
       console.log('[Unity]', evt, payload);
       if (evt === 'node_double_clicked') {
-        const parts = (payload as string).split('|');
+        const parts = payload.split('|');
         if (parts.length > 1 && parts[1]) shell.navigateToFile(parts[1]);
       }
       if (evt === 'path_selected') {
-        const parts = (payload as string).split('|');
+        const parts = payload.split('|');
         if (parts.length === 2) {
           chatPanel.open();
           chatPanel.ask(
@@ -433,28 +431,19 @@ async function init(): Promise<void> {
       }
     });
 
-        // ── 后端权限请求 → 前端内联聊天卡片桥接 ──
+    // ── 后端权限请求 → 前端内联聊天卡片桥接 ──
     // 白名单按后端 Tool.name() 匹配（payload.tool）：
     // "Edit" = edit_file/write_file/delete_file/move_file/create_directory/log_append。
     // 注意与 src-tauri permissions::auto_mode_allows 保持同一份名单（两端镜像）。
     const AUTO_WHITELIST = new Set(['Edit']);
     const timedOutRequests = new Set<string>();
-    await listen('permission-ask', (event: any) => {
-      const p = event.payload as {
-        requestId: string;
-        tool: string;
-        path: string;
-        reason: string;
-        danger?: string;
-        agentId?: string;
-        suggestions: Array<{ rule: string; behavior: string }>;
-      };
+    await typedListen('permission-ask', (p) => {
 
       // 权限模式旁路：yolo → 全部自动，auto → 仅安全编辑
       const permMode = getPanelStore(chatPanel.panelId).getState().permissionMode;
       if (permMode === 'yolo' || (permMode === 'auto' && AUTO_WHITELIST.has(p.tool))) {
-        rpc('permission_ask_response', {
-          requestId: p.requestId,
+        typedRpc('permission_ask_response', {
+          request_id: p.requestId,
           allow: true,
           remember: false,
         });
@@ -467,8 +456,8 @@ async function init(): Promise<void> {
 
       const timeoutId = setTimeout(() => {
         timedOutRequests.add(p.requestId);
-        rpc('permission_ask_response', {
-          requestId: p.requestId,
+        typedRpc('permission_ask_response', {
+          request_id: p.requestId,
           allow: false,
           remember: false,
         });
@@ -485,12 +474,12 @@ async function init(): Promise<void> {
           timedOutRequests.delete(p.requestId);
           return;
         }
-        rpc('permission_ask_response', {
-          requestId: p.requestId,
+        typedRpc('permission_ask_response', {
+          request_id: p.requestId,
           allow: result.allow,
           remember: result.remember || undefined,
-          ruleToAdd: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
-          ruleBehavior: result.remember && p.suggestions.length > 0 ? p.suggestions[0]?.behavior || 'allow' : undefined,
+          rule_to_add: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
+          rule_behavior: result.remember && p.suggestions.length > 0 ? p.suggestions[0]?.behavior || 'allow' : undefined,
         });
       }).catch((err) => {
         clearTimeout(timeoutId);
@@ -499,8 +488,8 @@ async function init(): Promise<void> {
           return;
         }
         console.error('[permission-ask]', err);
-        rpc('permission_ask_response', {
-          requestId: p.requestId,
+        typedRpc('permission_ask_response', {
+          request_id: p.requestId,
           allow: false,
           remember: false,
         });
@@ -570,7 +559,7 @@ async function init(): Promise<void> {
   })();
 
   // ── 沙箱健康检查 ──
-  rpc<string>('sandbox_status')
+  typedRpc('sandbox_status', {})
     .then((raw) => {
       const s = JSON.parse(raw);
       if (s.degraded) {
@@ -824,7 +813,7 @@ async function init(): Promise<void> {
   try {
     let graph: any;
     try {
-      const json = await rpc<string>('load_graph_json');
+      const json = await typedRpc('load_graph_json', {});
       graph = JSON.parse(json);
     } catch {
       // 无缓存图谱

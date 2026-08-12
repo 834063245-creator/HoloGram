@@ -80,7 +80,7 @@ pub(crate) fn parse_snapshot_header(bytes: &[u8]) -> Result<(String, usize), Str
     if bytes.len() < 8 {
         return Err(format!("snapshot header 截断（{} 字节）", bytes.len()));
     }
-    let len = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    let len = u64::from_le_bytes(bytes[..8].try_into().expect("长度 ≥ 8 已前置校验，切片必为 8 字节"));
     if len == 0 || len > MAX_TOKEN_LEN {
         return Err(format!("snapshot token 长度 {} 非法", len));
     }

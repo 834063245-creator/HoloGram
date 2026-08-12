@@ -73,7 +73,7 @@ fn run_tarjan(node_ids: &[&str], adj: &[Vec<usize>]) -> Vec<serde_json::Value> {
         }
         if lowlink[v] == idx[v] {
             let mut comp = Vec::new();
-            loop { let w = stack.pop().unwrap(); on_stack[w] = false; comp.push(w); if w == v { break; } }
+            loop { let w = stack.pop().expect("Tarjan 不变量：v 必在栈上，pop 必成功"); on_stack[w] = false; comp.push(w); if w == v { break; } }
             sccs.push(comp);
         }
     }

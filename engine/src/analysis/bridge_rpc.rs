@@ -46,7 +46,7 @@ pub fn synthesize_bridge_calls(
     }
 
     // Step 2: 扫描 TS 文件，找 rpc('xxx', ...) 调用
-    let re = regex::Regex::new(r#"\brpc\s*(?:<[^>]*>)?\s*\(\s*['"](\w+)['"]"#).unwrap();
+    let re = regex::Regex::new(r#"\brpc\s*(?:<[^>]*>)?\s*\(\s*['"](\w+)['"]"#).expect("静态正则");
 
     let mut files: HashSet<String> = HashSet::new();
     for p in discovered_files {
@@ -83,7 +83,7 @@ pub fn synthesize_bridge_calls(
         let mut seen_cmds: HashSet<String> = HashSet::new();
         for caps in re.captures_iter(&source) {
             if added >= 200 { break; }
-            let cmd = caps.get(1).unwrap().as_str().to_string();
+            let cmd = caps.get(1).expect("捕获组 1 必命中").as_str().to_string();
             if seen_cmds.contains(&cmd) { continue; }
             seen_cmds.insert(cmd.clone());
 

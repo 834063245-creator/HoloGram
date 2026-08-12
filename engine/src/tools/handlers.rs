@@ -35,7 +35,7 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
             Some(rid) => rid,
             None => return json!({"error": format!("Node {} not found", node_id)}),
         };
-        let node = idx.get_node(&resolved).unwrap().clone();
+        let node = idx.get_node(&resolved).expect("节点已解析").clone();
         let nb = idx.neighbors(&resolved, 1, None);
         let incoming = idx.get_incoming_edges(&resolved);
         let outgoing = idx.get_outgoing_edges(&resolved);
@@ -74,7 +74,7 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
             Some(rid) => rid,
             None => return json!({"error": format!("Node {} not found", node_id)}),
         };
-        let node = g.get_node(&resolved).unwrap();
+        let node = g.get_node(&resolved).expect("节点已解析");
         let nb = query::neighbors(g, &resolved, 1);
         let incoming: Vec<_> = g.incoming(&resolved).map(edge_to_value).collect();
         let outgoing: Vec<_> = g.outgoing(&resolved).map(edge_to_value).collect();
@@ -559,7 +559,7 @@ pub(crate) fn handler_grpc_services(_args: &Value) -> ToolResponse {
                 "package": pkg,
                 "methods": Vec::<serde_json::Value>::new(),
             }));
-            entry["methods"].as_array_mut().unwrap().push(json!({
+            entry["methods"].as_array_mut().expect("methods 必须是数组").push(json!({
                 "method": method,
                 "node": node.id,
                 "input": node.properties.get("inputType").cloned().unwrap_or(json!(null)),
@@ -717,12 +717,12 @@ pub(crate) fn merge_vector_hits(out: &mut Value, query: &str, limit: usize) {
         Ok(pair) => pair,
         Err(_) => return,
     };
-    let idx = index.read().unwrap();
+    let idx = index.read().unwrap_or_else(|e| e.into_inner());
     let idx = match idx.as_ref() {
         Some(i) => i,
         None => return,
     };
-    let slot_data = slots.read().unwrap();
+    let slot_data = slots.read().unwrap_or_else(|e| e.into_inner());
     if slot_data.is_empty() { return; }
 
     let q_vec = crate::vector::embed(query);
@@ -1418,7 +1418,7 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
             // 走进程级缓存（mtime 失效）——不再每次 status 调用都从磁盘全量加载索引
             let vi_count = if vi_exists {
                 crate::vector::get_or_load_index(&project_root())
-                    .map(|(_, slots)| slots.read().unwrap().len())
+                    .map(|(_, slots)| slots.read().unwrap_or_else(|e| e.into_inner()).len())
                     .unwrap_or(0)
             } else { 0 };
             ToolResponse::Success(json!({
@@ -1483,7 +1483,7 @@ pub(crate) fn handler_node(args: &Value) -> ToolResponse {
             Some(rid) => rid,
             None => return json!({"error": format!("Node '{}' not found in graph", node_id)}),
         };
-        let node = idx.get_node(&resolved).unwrap().clone();
+        let node = idx.get_node(&resolved).expect("节点已解析").clone();
         let incoming = idx.get_incoming_edges(&resolved);
         let outgoing = idx.get_outgoing_edges(&resolved);
         let group_by_kind = |edges: &[Edge]| -> serde_json::Map<String, Value> {
@@ -1494,7 +1494,7 @@ pub(crate) fn handler_node(args: &Value) -> ToolResponse {
                     .entry(k)
                     .or_insert_with(|| json!([]))
                     .as_array_mut()
-                    .unwrap()
+                    .expect("or_insert 后必为数组")
                     .push(json!({
                         "id": e.id,
                         "source": e.source,

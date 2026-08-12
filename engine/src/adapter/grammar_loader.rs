@@ -78,7 +78,7 @@ impl GrammarLoader {
             _lib: None,
             language: lang,
         });
-        let mut loaded = self.loaded.write().unwrap();
+        let mut loaded = self.loaded.write().unwrap_or_else(|e| e.into_inner());
         for ext in extensions {
             loaded.insert(ext.to_string(), grammar.clone());
         }
@@ -88,7 +88,7 @@ impl GrammarLoader {
     pub fn get(&self, ext: &str) -> Option<Language> {
         // 快速路径：已加载（静态或之前惰性加载的）
         {
-            let loaded = self.loaded.read().unwrap();
+            let loaded = self.loaded.read().unwrap_or_else(|e| e.into_inner());
             if let Some(g) = loaded.get(ext) {
                 return Some(g.language.clone());
             }
@@ -128,7 +128,7 @@ impl GrammarLoader {
                 language: language.clone(),
             });
 
-            let mut loaded = self.loaded.write().unwrap();
+            let mut loaded = self.loaded.write().unwrap_or_else(|e| e.into_inner());
             for e in extensions {
                 loaded.entry(e.clone()).or_insert_with(|| grammar.clone());
             }
@@ -138,7 +138,7 @@ impl GrammarLoader {
 
     /// 所有支持的扩展名（静态 + 已发现的）。
     pub fn supported_extensions(&self) -> Vec<String> {
-        let loaded = self.loaded.read().unwrap();
+        let loaded = self.loaded.read().unwrap_or_else(|e| e.into_inner());
         let mut exts: Vec<String> = loaded.keys().cloned().collect();
         // 也包括尚未加载但可用的
         for ext in self.available.keys() {

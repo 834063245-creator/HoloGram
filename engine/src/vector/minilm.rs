@@ -163,14 +163,14 @@ impl MiniLMEmbedder {
         for chunk in todo.chunks(Self::INFER_BATCH) {
             let batch = chunk.len();
             let max_len = chunk.iter()
-                .map(|&i| encoded[i].as_ref().unwrap().0.len())
+                .map(|&i| encoded[i].as_ref().expect("todo 索引对应槽位必有编码结果").0.len())
                 .max().unwrap_or(1);
 
             // 右侧零填充对齐到 batch 内最大长度（mask 同步填 0，池化时忽略）
             let mut ids = vec![0i64; batch * max_len];
             let mut mask = vec![0i64; batch * max_len];
             for (row, &i) in chunk.iter().enumerate() {
-                let (ri, rm) = encoded[i].as_ref().unwrap();
+                let (ri, rm) = encoded[i].as_ref().expect("todo 索引对应槽位必有编码结果");
                 let n = ri.len();
                 ids[row * max_len..row * max_len + n].copy_from_slice(ri);
                 mask[row * max_len..row * max_len + n].copy_from_slice(rm);
@@ -201,7 +201,7 @@ impl MiniLMEmbedder {
                 .map_err(|e| format!("输出提取失败: {e}"))?;
 
             for (row, &i) in chunk.iter().enumerate() {
-                let seq_len = encoded[i].as_ref().unwrap().0.len();
+                let seq_len = encoded[i].as_ref().expect("todo 索引对应槽位必有编码结果").0.len();
                 let item = &hidden[row * max_len * MINILM_DIM..(row + 1) * max_len * MINILM_DIM];
                 out[i] = pool_normalize(item, seq_len);
             }

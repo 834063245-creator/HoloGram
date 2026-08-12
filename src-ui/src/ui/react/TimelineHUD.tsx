@@ -6,8 +6,8 @@
 // 大点 = 重要事件（始终有标签），小点 = 普通（hover 才展开）。
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { rpc } from '../../bridge';
 import { useShellStore } from '../../app/shell-store';
+import { typedRpc } from '../../rpc-contract';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
 import { bus } from '../events';
@@ -72,7 +72,7 @@ export function TimelineHUD() {
     setLoading(true);
     try {
       const json = await Promise.race([
-        rpc<string>('hologram_call', { tool: 'project_timeline', args: { limit: 40 } }),
+        typedRpc('hologram_call', { tool: 'project_timeline', args: { limit: 40 } }),
         new Promise<string>((_, r) => setTimeout(() => r(new Error('timeout')), 8000)),
       ]);
       setEvents((JSON.parse(json) as { events: TimelineEvent[] }).events || []);

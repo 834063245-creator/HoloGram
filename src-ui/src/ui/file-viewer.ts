@@ -6,7 +6,7 @@
 // 支持拖拽移动、调整大小、多标签页、Ctrl+S 保存
 
 import * as monaco from 'monaco-editor';
-import { rpc } from '../bridge';
+import { typedRpc } from '../rpc-contract';
 import { askAgent } from './agent-visualizer';
 import { iconHtml, iconSvg } from './icons';
 
@@ -950,7 +950,7 @@ export class FileViewer {
     this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
 
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: filePath });
+      const raw = await typedRpc('read_file_content', { file_path: filePath });
       // ponytail: read_file_content 返回 cat -n 格式。传递给 Monaco/LSP 前需去除行号。
       const content = stripLineNumbers(raw);
 
@@ -1075,10 +1075,10 @@ export class FileViewer {
 
     const content = tab.model.getValue();
     try {
-      await rpc('write_file_content', { filePath: tab.filePath, content });
+      await typedRpc('write_file_content', { file_path: tab.filePath, content });
       // 记录时间线事件（异步触发）
-      rpc('hologram_record_event', {
-        eventType: 'file_changed',
+      typedRpc('hologram_record_event', {
+        event_type: 'file_changed',
         file: tab.filePath,
         summary: `保存: ${tab.fileName}`,
       }).catch(() => {
@@ -1249,7 +1249,7 @@ export class FileViewer {
   private async renderImagePreview(filePath: string): Promise<void> {
     this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--obs-text-2);">加载中...</div>`;
     try {
-      const b64 = await rpc<string>('read_file_base64', { filePath });
+      const b64 = await typedRpc('read_file_base64', { file_path: filePath });
       const ext = filePath.split('.').pop()?.toLowerCase() || 'png';
       const mimeMap: Record<string, string> = {
         jpg: 'image/jpeg',

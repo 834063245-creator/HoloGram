@@ -73,7 +73,7 @@ where
         "{} (尝试 {} 次后失败): {}",
         label,
         IO_RETRY_COUNT + 1,
-        last_err.unwrap().to_string()
+        last_err.map(|e| e.to_string()).unwrap_or_else(|| "未知 I/O 错误".to_string())
     ))
 }
 

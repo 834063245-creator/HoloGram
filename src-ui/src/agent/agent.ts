@@ -3,7 +3,7 @@
 
 // Agent 循环 — Run() → stream() → StreamingToolExecutor → 循环直到模型给出最终答案
 
-import { rpc } from '../bridge';
+import { typedRpc } from '../rpc-contract';
 import { z } from 'zod';
 import type { Message, Provider, ToolCall, ToolSchema, Usage } from '../provider/types';
 import { ChunkType } from '../provider/types';
@@ -442,7 +442,7 @@ export class Agent {
   async loadCompactionTracker(): Promise<void> {
     if (!this._compactionTrackerPath) return;
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: this._compactionTrackerPath });
+      const raw = await typedRpc('read_file_content', { file_path: this._compactionTrackerPath });
       const stripped = raw.replace(/^\s*\d+\t/gm, '');
       this.compactionTracker.deserializeState(stripped);
       const stats = this.compactionTracker.getStats(this.pricing);
@@ -461,8 +461,8 @@ export class Agent {
   private async saveCompactionTracker(): Promise<void> {
     if (!this._compactionTrackerPath) return;
     try {
-      await rpc('write_file_content', {
-        filePath: this._compactionTrackerPath,
+      await typedRpc('write_file_content', {
+        file_path: this._compactionTrackerPath,
         content: this.compactionTracker.serializeState(),
       });
     } catch {
@@ -474,7 +474,7 @@ export class Agent {
   async loadCompactionConfig(): Promise<CompactionConfig | null> {
     if (!this._compactionConfigPath) return null;
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: this._compactionConfigPath });
+      const raw = await typedRpc('read_file_content', { file_path: this._compactionConfigPath });
       // 去除 cat -n 行号
       const stripped = raw.replace(/^\s*\d+\t/gm, '');
       return JSON.parse(stripped);
@@ -527,8 +527,8 @@ export class Agent {
     // 持久化供下次会话使用
     if (this._compactionConfigPath) {
       try {
-        await rpc('write_file_content', {
-          filePath: this._compactionConfigPath,
+        await typedRpc('write_file_content', {
+          file_path: this._compactionConfigPath,
           content: JSON.stringify(config, null, 2),
         });
       } catch {
@@ -1163,9 +1163,9 @@ ${resumeNote}
         let planContent = '';
         if (this._planState.state.active && this._planState.state.planFilePath) {
           try {
-            const raw = await rpc<string>('read_file_content', {
-              filePath: this._planState.state.planFilePath,
-              isAgent: false,
+            const raw = await typedRpc('read_file_content', {
+              file_path: this._planState.state.planFilePath,
+              is_agent: false,
             });
             planContent = raw.replace(/^\s*\d+\t/gm, '');
           } catch {
@@ -1194,7 +1194,7 @@ ${resumeNote}
       // 在每次 stream() 调用前排空后台任务通知（临时 —
       // 轮次结束后进度更新无价值）
       try {
-        const notes = await rpc<string>('drain_bg_notifications');
+        const notes = await typedRpc('drain_bg_notifications', {});
         if (notes) {
           this._transientReminders.push(`<system-reminder>\n${notes}\n</system-reminder>`);
         }

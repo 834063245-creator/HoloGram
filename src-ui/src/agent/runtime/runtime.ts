@@ -12,7 +12,7 @@
 //
 // UI 层通过 setNotifier() 注入通知器，Runtime 通过它路由事件。
 
-import { rpc } from '../../bridge';
+import { typedRpc } from '../../rpc-contract';
 import type { Message, Provider } from '../../provider/types';
 import type { StoredThinking } from '../../provider/thinking';
 import type { Pricing } from '../agent-types';
@@ -350,7 +350,7 @@ export class AgentRuntime implements RuntimePort {
     // 迁移全局 discoveries.json
     const oldDiscPath = `${base}/.hologram/discoveries.json`;
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: oldDiscPath });
+      const raw = await typedRpc('read_file_content', { file_path: oldDiscPath });
       const arr = JSON.parse(raw.replace(/^\s*\d+\t/gm, ''));
       if (Array.isArray(arr) && arr.length > 0) {
         const db = this._getOrCreateDiscoveryBoard('default');
@@ -360,25 +360,25 @@ export class AgentRuntime implements RuntimePort {
         await db.flush();
       }
       // 迁移后删除旧文件
-      await rpc('delete_file_or_dir', { path: oldDiscPath }).catch(() => {});
+      await typedRpc('delete_file_or_dir', { path: oldDiscPath }).catch(() => {});
     } catch {
       /* 文件不存在 — 无需迁移 */
     }
     // 迁移全局 taskboard.json
     const oldTaskPath = `${base}/.hologram/taskboard.json`;
     try {
-      const raw = await rpc<string>('read_file_content', { filePath: oldTaskPath });
+      const raw = await typedRpc('read_file_content', { file_path: oldTaskPath });
       const arr = JSON.parse(raw.replace(/^\s*\d+\t/gm, ''));
       if (Array.isArray(arr) && arr.length > 0) {
         const tb = this._getOrCreateTaskBoard('default');
         // 直接将迁移的条目写入新路径
-        await rpc('write_file_content', {
-          filePath: `${base}/.hologram/taskboard/default.json`,
+        await typedRpc('write_file_content', {
+          file_path: `${base}/.hologram/taskboard/default.json`,
           content: JSON.stringify(arr, null, 2),
         });
       }
       // 迁移后删除旧文件
-      await rpc('delete_file_or_dir', { path: oldTaskPath }).catch(() => {});
+      await typedRpc('delete_file_or_dir', { path: oldTaskPath }).catch(() => {});
     } catch {
       /* 文件不存在 — 无需迁移 */
     }
@@ -416,7 +416,7 @@ export class AgentRuntime implements RuntimePort {
       }
       let claudeMd = '';
       try {
-        claudeMd = await rpc<string>('read_file_content', { filePath: `${config.projectPath}/CLAUDE.md` });
+        claudeMd = await typedRpc('read_file_content', { file_path: `${config.projectPath}/CLAUDE.md` });
       } catch {}
       const snap = config.graphData ? buildGraphSnapshot(config.graphData) : '';
 
@@ -424,7 +424,7 @@ export class AgentRuntime implements RuntimePort {
       // Agent 第一轮就知道命令跑在哪个解释器上，避免"猜语法"反复踩坑。
       let shellEnvSection = '';
       try {
-        const raw = await rpc<string>('shell_env');
+        const raw = await typedRpc('shell_env', {});
         const env = raw ? JSON.parse(raw) : null;
         if (env && typeof env === 'object' && env.shell) {
           if (env.shell === 'bash') {

@@ -142,11 +142,11 @@ describe('A6: two sessions flush to separate board files', () => {
     await boardB.flush();
 
     const writes = mockRpc.mock.calls.filter((c) => c[0] === 'write_file_content');
-    const paths = writes.map((c) => (c[1] as { filePath: string }).filePath);
+    const paths = writes.map((c) => (c[1] as { file_path: string }).file_path);
     expect(paths.some((p) => p.endsWith('.hologram/taskboard/session-a.json'))).toBe(true);
     expect(paths.some((p) => p.endsWith('.hologram/taskboard/session-b.json'))).toBe(true);
     // No cross-contamination: session-a's board never written to session-b's path
-    const aWrites = writes.filter((c) => (c[1] as { filePath: string }).filePath.includes('session-a'));
-    expect(aWrites.every((c) => !(c[1] as { filePath: string }).filePath.includes('session-b'))).toBe(true);
+    const aWrites = writes.filter((c) => (c[1] as { file_path: string }).file_path.includes('session-a'));
+    expect(aWrites.every((c) => !(c[1] as { file_path: string }).file_path.includes('session-b'))).toBe(true);
   });
 });

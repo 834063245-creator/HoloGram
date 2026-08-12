@@ -216,7 +216,7 @@ impl LanguageAdapter for QueryStructureAdapter {
                 }
                 *borrow = Some((p, lang, ext.to_string()));
             }
-            let (ref mut parser, _, _) = borrow.as_mut().unwrap();
+            let (ref mut parser, _, _) = borrow.as_mut().expect("TL_PARSER 复用或刚填充后必为 Some");
 
             let bytes = source.as_bytes();
             let len = bytes.len();

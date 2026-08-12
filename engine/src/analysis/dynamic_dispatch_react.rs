@@ -70,18 +70,16 @@ pub fn synthesize_react_edges(
 /// Channel A：JSX `<PascalCase ...>` → 组件函数/类。
 fn synthesize_jsx_children(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r"<\s*([A-Z][\w.]*)\b").unwrap();
+    let re = regex::Regex::new(r"<\s*([A-Z][\w.]*)\b").expect("静态正则");
 
-    let parent_id = find_first_in_file(graph, file);
-    if parent_id.is_none() { return 0; }
-    let parent_id = parent_id.unwrap();
+    let Some(parent_id) = find_first_in_file(graph, file) else { return 0; };
 
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
 
     for caps in re.captures_iter(source) {
         if added >= 30 { break; }
-        let tag = caps.get(1).unwrap().as_str().to_string();
+        let tag = caps.get(1).expect("捕获组 1 必命中").as_str().to_string();
         if seen.contains(&tag) { continue; }
         seen.insert(tag.clone());
 
@@ -136,7 +134,7 @@ fn synthesize_setstate_render(graph: &mut Graph, file: &str, source: &str) -> us
 /// Channel C：Redux thunk dispatch。
 fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r"dispatch\s*\(\s*(\w+)\s*\(").unwrap();
+    let re = regex::Regex::new(r"dispatch\s*\(\s*(\w+)\s*\(").expect("静态正则");
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -144,7 +142,7 @@ fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize 
 
     for caps in re.captures_iter(source) {
         if added >= 24 { break; }
-        let action = caps.get(1).unwrap().as_str().to_string();
+        let action = caps.get(1).expect("捕获组 1 必命中").as_str().to_string();
         if seen.contains(&action) { continue; }
         seen.insert(action.clone());
 
@@ -170,7 +168,7 @@ fn synthesize_redux_thunk(graph: &mut Graph, file: &str, source: &str) -> usize 
 /// Channel D：RTK Query hook → endpoint builder。
 fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r"\buse(?:Get|Post|Put|Delete|Patch)(\w+)(?:Query|Mutation)\b").unwrap();
+    let re = regex::Regex::new(r"\buse(?:Get|Post|Put|Delete|Patch)(\w+)(?:Query|Mutation)\b").expect("静态正则");
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
 
@@ -178,7 +176,7 @@ fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
 
     for caps in re.captures_iter(source) {
         if added >= 20 { break; }
-        let endpoint = caps.get(1).unwrap().as_str().to_string();
+        let endpoint = caps.get(1).expect("捕获组 1 必命中").as_str().to_string();
         if seen.contains(&endpoint) { continue; }
         seen.insert(endpoint.clone());
 
@@ -205,18 +203,16 @@ fn synthesize_rtk_query(graph: &mut Graph, file: &str, source: &str) -> usize {
 /// `getStaticPaths`）。从页面 File 节点到每个函数创建 Calls 边。
 fn synthesize_nextjs_data_fetch(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r"\b(getServerSideProps|getStaticProps|getStaticPaths)\b").unwrap();
+    let re = regex::Regex::new(r"\b(getServerSideProps|getStaticProps|getStaticPaths)\b").expect("静态正则");
 
-    let file_id = find_file_node(graph, file);
-    if file_id.is_none() { return 0; }
-    let file_id = file_id.unwrap();
+    let Some(file_id) = find_file_node(graph, file) else { return 0; };
 
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen: HashSet<String> = HashSet::new();
 
     for caps in re.captures_iter(source) {
         if added >= 30 { break; }
-        let func_name = caps.get(1).unwrap().as_str().to_string();
+        let func_name = caps.get(1).expect("捕获组 1 必命中").as_str().to_string();
         if seen.contains(&func_name) { continue; }
         seen.insert(func_name.clone());
 
@@ -245,18 +241,16 @@ fn synthesize_nextjs_data_fetch(graph: &mut Graph, file: &str, source: &str) -> 
 /// `zustand` 或 `set(` 来与 `createSlice` / `Object.create` 消歧。
 fn synthesize_zustand_store(graph: &mut Graph, file: &str, source: &str) -> usize {
     let mut added = 0usize;
-    let re = regex::Regex::new(r"\bcreate\s*\(").unwrap();
+    let re = regex::Regex::new(r"\bcreate\s*\(").expect("静态正则");
 
-    let file_id = find_file_node(graph, file);
-    if file_id.is_none() { return 0; }
-    let file_id = file_id.unwrap();
+    let Some(file_id) = find_file_node(graph, file) else { return 0; };
 
     let node_ids: Vec<String> = graph.node_ids().map(str::to_string).collect();
     let mut seen_create_target: HashSet<String> = HashSet::new();
 
     for caps in re.captures_iter(source) {
         if added >= 20 { break; }
-        let matched = caps.get(0).unwrap();
+        let matched = caps.get(0).expect("捕获组 0 必命中");
         let line_start = source[..matched.start()].rfind('\n').map_or(0, |i| i + 1);
         let line_end = source[matched.end()..].find('\n').map_or(source.len(), |i| matched.end() + i);
         let line = &source[line_start..line_end];

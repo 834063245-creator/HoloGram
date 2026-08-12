@@ -7,7 +7,7 @@
 // exit_plan_mode 通过 EventSink 发 PlanReview 事件到聊天流，
 // 由 chat-stream 创建 PlanPart 卡片（不是弹窗），用户在卡片上审批。
 
-import { rpc } from '../../bridge';
+import { typedRpc } from '../../rpc-contract';
 import { z } from 'zod';
 import type { EventSink } from '../agent-types';
 import { EventKind } from '../agent-types';
@@ -93,7 +93,7 @@ export function createExitPlanModeTool(
       // 读取计划文件内容
       let planContent: string;
       try {
-        planContent = await rpc<string>('read_file_content', { filePath: planPath });
+        planContent = await typedRpc('read_file_content', { file_path: planPath });
         planContent = planContent.replace(/^\s*\d+\t/gm, '');
       } catch {
         return `错误：计划文件不存在。先用 fs 的 write 动作写计划到 ${planPath}，再调 exit_plan_mode。`;

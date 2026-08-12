@@ -6,7 +6,7 @@
 // 右侧栏，检查失败时自动打开。
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { rpc } from '../../bridge';
+import { typedRpc } from '../../rpc-contract';
 import { askAgent } from '../agent-visualizer';
 import { shell } from '../app-shell';
 import { useDockStore } from '../dock-store';
@@ -178,7 +178,7 @@ export function CheckPanel() {
 
   const loadHistory = useCallback(async () => {
     try {
-      const json = await rpc<string>('hologram_call', { tool: 'project_timeline', args: { limit: 80 } });
+      const json = await typedRpc('hologram_call', { tool: 'project_timeline', args: { limit: 80 } });
       const data = JSON.parse(json) as {
         events: Array<{ timestamp: string; event_type: string; summary: string; properties?: any }>;
       };

@@ -59,7 +59,7 @@ impl Interner {
         let id = self.strings.len() as u32;
         self.strings.push(Some(Arc::from(s)));
         // clone 只增加引用计数,共享同一块 str 字节
-        self.lookup.insert(self.strings[id as usize].as_ref().unwrap().clone(), id);
+        self.lookup.insert(self.strings[id as usize].as_ref().expect("intern 刚写入的槽位必为 Some").clone(), id);
         id
     }
 

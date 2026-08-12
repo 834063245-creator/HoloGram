@@ -123,8 +123,8 @@ fn compile_pattern(pattern: &str) -> Result<Regex, String> {
 
 /// 从 JSON 解析规则定义。接受单个对象或数组。
 fn parse_rules(rules_json: &serde_json::Value) -> Result<Vec<PolicyRule>, String> {
-    let arr = if rules_json.is_array() {
-        rules_json.as_array().unwrap()
+    let arr = if let Some(arr) = rules_json.as_array() {
+        arr
     } else if rules_json.is_object() {
         // 单个规则对象 → 包装为 vec
         // 无法通过 as_array 获取 &Vec，因此通过原始指针转换处理

@@ -357,7 +357,7 @@ fn expand_cmd_vars(token: &str) -> String {
     let mut result = token.to_string();
 
     // 展开 cmd.exe %VAR% 语法（始终展开 — cmd.exe 无单引号语义）
-    let pct_re = regex::Regex::new(r"%([^%]+)%").unwrap();
+    let pct_re = regex::Regex::new(r"%([^%]+)%").expect("静态正则");
     result = pct_re.replace_all(&result, |caps: &regex::Captures| {
         let var = &caps[1];
         std::env::var(var).unwrap_or_else(|_| caps[0].to_string())
@@ -375,7 +375,7 @@ fn expand_cmd_vars(token: &str) -> String {
     let mut masked = result;
 
     // 展开 bash ${VAR} 语法
-    let brace_re = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
+    let brace_re = regex::Regex::new(r"\$\{([^}]+)\}").expect("静态正则");
     masked = brace_re.replace_all(&masked, |caps: &regex::Captures| {
         let var = &caps[1];
         std::env::var(var).unwrap_or_else(|_| caps[0].to_string())
@@ -383,7 +383,7 @@ fn expand_cmd_vars(token: &str) -> String {
     .to_string();
 
     // 展开 bash $VAR 语法
-    let dollar_re = regex::Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)").unwrap();
+    let dollar_re = regex::Regex::new(r"\$([A-Za-z_][A-Za-z0-9_]*)").expect("静态正则");
     masked = dollar_re.replace_all(&masked, |caps: &regex::Captures| {
         let var = &caps[1];
         std::env::var(var).unwrap_or_else(|_| caps[0].to_string())

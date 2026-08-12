@@ -176,12 +176,12 @@ impl Engine {
     /// 暴露 watcher 中待处理的文件变更，用于过期提示横幅。
     /// 返回 (path, timestamp_ms, is_indexing) 列表。
     pub fn get_pending_files(&self) -> Vec<(String, u64, bool)> {
-        self.pending_changes.lock().unwrap().clone()
+        self.pending_changes.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// 清除待处理的文件变更（成功重新索引后调用）。
     pub fn clear_pending_files(&self) {
-        self.pending_changes.lock().unwrap().clear();
+        self.pending_changes.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// 处理来自 watcher 的文件变更。先尝试增量更新，
@@ -205,7 +205,7 @@ impl Engine {
         {
             let engine_guard = super::ENGINE.read();
             if let Some(engine) = engine_guard.as_ref() {
-                let mut pending = engine.pending_changes.lock().unwrap();
+                let mut pending = engine.pending_changes.lock().unwrap_or_else(|e| e.into_inner());
                 for (path, _action) in changed_files {
                     pending.push((path.to_string_lossy().to_string(), now_ms, true));
                 }

@@ -639,7 +639,7 @@ pub fn query_dataflow_files(files: &[std::path::PathBuf]) -> Vec<DataflowFileRes
             .unwrap_or(0);
         let cache_key = (p.clone(), mtime);
         {
-            let cache = DF_CACHE.lock().unwrap();
+            let cache = DF_CACHE.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(cached) = cache.get(&cache_key) {
                 return cached.clone();
             }
@@ -685,7 +685,7 @@ pub fn query_dataflow_files(files: &[std::path::PathBuf]) -> Vec<DataflowFileRes
             file,
             result: query_file_dataflow(lang, &source, &tree, &config),
         };
-        DF_CACHE.lock().unwrap().insert(cache_key, result.clone());
+        DF_CACHE.lock().unwrap_or_else(|e| e.into_inner()).insert(cache_key, result.clone());
         result
     }).collect()
 }

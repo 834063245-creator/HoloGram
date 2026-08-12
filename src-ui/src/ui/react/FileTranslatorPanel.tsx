@@ -7,9 +7,9 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { rpc } from '../../bridge';
 import { createProvider } from '../../provider';
 import { ChunkType } from '../../provider/types';
+import { typedRpc } from '../../rpc-contract';
 import { getActiveProvider, loadSettingsWithSecrets, type ProviderSettings } from '../../settings';
 import { stripLineNumbers } from '../chat-session';
 import { iconHtml } from '../icons';
@@ -365,7 +365,7 @@ export const FileTranslatorApp: React.FC<{
         const hash = await hashContent(content);
         const cachePath = `.hologram/translations/${hash}.json`;
         try {
-          const raw = await rpc<string>('read_file_content', { filePath: cachePath });
+          const raw = await typedRpc('read_file_content', { file_path: cachePath });
           // read_file_content 返回 cat -n 行号格式，解析前须去除（参照 chat-session.ts:363）
           const cached: CacheData = JSON.parse(stripLineNumbers(raw));
           if (cached.lines && Array.isArray(cached.lines)) {
@@ -402,7 +402,7 @@ export const FileTranslatorApp: React.FC<{
           lines: aligned,
         };
         try {
-          await rpc('write_file_content', { filePath: cachePath, content: JSON.stringify(cacheData) });
+          await typedRpc('write_file_content', { file_path: cachePath, content: JSON.stringify(cacheData) });
         } catch {
           /* 忽略 */
         }

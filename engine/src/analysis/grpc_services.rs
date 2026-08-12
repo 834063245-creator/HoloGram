@@ -70,33 +70,33 @@ fn collect_proto_files(root: &Path, out: &mut Vec<String>) {
 
 /// 逐行解析 proto：跟踪 package / service / import 状态，提取 rpc 定义（含行号）
 fn parse_proto(file: &str, source: &str, defs: &mut Vec<RpcDef>) {
-    let package_re = regex::Regex::new(r#"^\s*package\s+([\w.]+)\s*;"#).unwrap();
-    let service_re = regex::Regex::new(r#"^\s*service\s+(\w+)\s*\{"#).unwrap();
-    let import_re = regex::Regex::new(r#"^\s*import\s+"([^"]+)";"#).unwrap();
+    let package_re = regex::Regex::new(r#"^\s*package\s+([\w.]+)\s*;"#).expect("静态正则");
+    let service_re = regex::Regex::new(r#"^\s*service\s+(\w+)\s*\{"#).expect("静态正则");
+    let import_re = regex::Regex::new(r#"^\s*import\s+"([^"]+)";"#).expect("静态正则");
     let rpc_re = regex::Regex::new(
         r#"^\s*rpc\s+(\w+)\s*\(\s*(stream\s+)?([\w.]+)\s*\)\s*returns\s*\(\s*(stream\s+)?([\w.]+)\s*\)\s*;"#,
     )
-    .unwrap();
+    .expect("静态正则");
 
     let mut package = String::new();
     let mut service = String::new();
     let mut imports: Vec<String> = Vec::new();
     for (i, line) in source.lines().enumerate() {
         if let Some(c) = package_re.captures(line) {
-            package = c.get(1).unwrap().as_str().to_string();
+            package = c.get(1).expect("捕获组 1 必命中").as_str().to_string();
         }
         if let Some(c) = service_re.captures(line) {
-            service = c.get(1).unwrap().as_str().to_string();
+            service = c.get(1).expect("捕获组 1 必命中").as_str().to_string();
         }
         if let Some(c) = import_re.captures(line) {
-            imports.push(c.get(1).unwrap().as_str().to_string());
+            imports.push(c.get(1).expect("捕获组 1 必命中").as_str().to_string());
         }
         if let Some(c) = rpc_re.captures(line) {
-            let method = c.get(1).unwrap().as_str().to_string();
+            let method = c.get(1).expect("捕获组 1 必命中").as_str().to_string();
             let input_stream = c.get(2).is_some();
-            let input = c.get(3).unwrap().as_str().to_string();
+            let input = c.get(3).expect("捕获组 3 必命中").as_str().to_string();
             let output_stream = c.get(4).is_some();
-            let output = c.get(5).unwrap().as_str().to_string();
+            let output = c.get(5).expect("捕获组 5 必命中").as_str().to_string();
             defs.push(RpcDef {
                 file: file.to_string(),
                 line: i + 1,
@@ -158,18 +158,18 @@ fn detect_client_bindings(file: &str, source: &str, bindings: &mut Vec<ClientBin
     let ts_re = regex::Regex::new(
         r#"(?:const|let|var)\s+(\w+)\s*=\s*new\s+(\w+)Client\s*\("#,
     )
-    .unwrap();
+    .expect("静态正则");
     // Go：client := NewGreeterClient(conn) / client = NewGreeterClient(conn)
-    let go_re = regex::Regex::new(r#"(\w+)\s*(?::=|=)\s*New(\w+)Client\s*\("#).unwrap();
+    let go_re = regex::Regex::new(r#"(\w+)\s*(?::=|=)\s*New(\w+)Client\s*\("#).expect("静态正则");
     // Rust（tonic）：let mut client = GreeterClient::new(conn)
-    let rust_re = regex::Regex::new(r#"let\s+mut\s+(\w+)\s*=\s*(\w+)Client::new\s*\("#).unwrap();
+    let rust_re = regex::Regex::new(r#"let\s+mut\s+(\w+)\s*=\s*(\w+)Client::new\s*\("#).expect("静态正则");
     // Python（grpcio）：stub = greeter_pb2_grpc.GreeterStub(channel)（可带模块前缀）
-    let py_re = regex::Regex::new(r#"(\w+)\s*=\s*([\w.]+)Stub\s*\("#).unwrap();
+    let py_re = regex::Regex::new(r#"(\w+)\s*=\s*([\w.]+)Stub\s*\("#).expect("静态正则");
     // Java（grpc）：final GreeterBlockingStub stub = GreeterGrpc.newBlockingStub(channel);
     let java_re = regex::Regex::new(
         r#"(?:final\s+)?(\w+)Stub\s+(\w+)\s*=\s*(\w+)Grpc\.new\w*Stub\s*\("#,
     )
-    .unwrap();
+    .expect("静态正则");
 
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut push = |var: &str, svc: &str, bindings: &mut Vec<ClientBinding>| {
@@ -182,26 +182,26 @@ fn detect_client_bindings(file: &str, source: &str, bindings: &mut Vec<ClientBin
     };
     if lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".js") {
         for c in ts_re.captures_iter(source) {
-            push(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), bindings);
+            push(c.get(1).expect("捕获组 1 必命中").as_str(), c.get(2).expect("捕获组 2 必命中").as_str(), bindings);
         }
     } else if lower.ends_with(".go") {
         for c in go_re.captures_iter(source) {
-            push(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), bindings);
+            push(c.get(1).expect("捕获组 1 必命中").as_str(), c.get(2).expect("捕获组 2 必命中").as_str(), bindings);
         }
     } else if lower.ends_with(".rs") {
         for c in rust_re.captures_iter(source) {
-            push(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), bindings);
+            push(c.get(1).expect("捕获组 1 必命中").as_str(), c.get(2).expect("捕获组 2 必命中").as_str(), bindings);
         }
     } else if lower.ends_with(".py") {
         for c in py_re.captures_iter(source) {
             // 模块前缀（greeter_pb2_grpc.Greeter）取最后一段
-            let svc = c.get(2).unwrap().as_str();
+            let svc = c.get(2).expect("捕获组 2 必命中").as_str();
             let svc = svc.rsplit('.').next().unwrap_or(svc);
-            push(c.get(1).unwrap().as_str(), svc, bindings);
+            push(c.get(1).expect("捕获组 1 必命中").as_str(), svc, bindings);
         }
     } else if lower.ends_with(".java") {
         for c in java_re.captures_iter(source) {
-            push(c.get(2).unwrap().as_str(), c.get(3).unwrap().as_str(), bindings);
+            push(c.get(2).expect("捕获组 2 必命中").as_str(), c.get(3).expect("捕获组 3 必命中").as_str(), bindings);
         }
     }
 }
@@ -301,11 +301,11 @@ pub fn detect_grpc_services(
         }
     }
 
-    let call_re = regex::Regex::new(r#"\b(\w+)\.(\w+)\s*\("#).unwrap();
+    let call_re = regex::Regex::new(r#"\b(\w+)\.(\w+)\s*\("#).expect("静态正则");
     // Java 链式调用（grpc-java 常见形态，无中间变量）：
     // GreeterGrpc.newBlockingStub(channel).sayHello(req)
     let java_chain_re =
-        regex::Regex::new(r#"(\w+)Grpc\.new\w*Stub\([^)]*\)\.(\w+)\s*\("#).unwrap();
+        regex::Regex::new(r#"(\w+)Grpc\.new\w*Stub\([^)]*\)\.(\w+)\s*\("#).expect("静态正则");
     for file in &files {
         let source = parse_cache
             .get(file)
@@ -369,8 +369,8 @@ pub fn detect_grpc_services(
                 if added >= 400 {
                     break;
                 }
-                let svc = caps.get(1).unwrap().as_str();
-                let call_method = caps.get(2).unwrap().as_str();
+                let svc = caps.get(1).expect("捕获组 1 必命中").as_str();
+                let call_method = caps.get(2).expect("捕获组 2 必命中").as_str();
                 let Some(proto_id) = proto_node_ids
                     .iter()
                     .find(|((s, m), _)| s == svc && normalize(m) == normalize(call_method))
@@ -397,8 +397,8 @@ pub fn detect_grpc_services(
             if added >= 400 {
                 break;
             }
-            let var = caps.get(1).unwrap().as_str();
-            let call_method = caps.get(2).unwrap().as_str();
+            let var = caps.get(1).expect("捕获组 1 必命中").as_str();
+            let call_method = caps.get(2).expect("捕获组 2 必命中").as_str();
             // 只处理绑定过的客户端变量
             let Some(b) = bindings.iter().find(|b| b.var == var) else {
                 continue;

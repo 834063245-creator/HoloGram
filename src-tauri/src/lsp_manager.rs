@@ -178,7 +178,7 @@ pub async fn lsp_start(
             }
         });
         let mut lock = crate::utils::lock_or_recover(&stdin);
-        writeln!(lock, "{}", serde_json::to_string(&init).unwrap()).ok();
+        writeln!(lock, "{}", serde_json::to_string(&init).expect("JSON 序列化")).ok();
         lock.flush().ok();
         // 注册一个转发到 mpsc 的 oneshot
         let (otx, orx) = oneshot::channel();
@@ -210,7 +210,7 @@ pub async fn lsp_start(
             "jsonrpc": "2.0", "method": "initialized", "params": {}
         });
         let mut lock = crate::utils::lock_or_recover(&stdin);
-        writeln!(lock, "{}", serde_json::to_string(&notif).unwrap()).ok();
+        writeln!(lock, "{}", serde_json::to_string(&notif).expect("JSON 序列化")).ok();
         lock.flush().ok();
     }
 
@@ -257,7 +257,7 @@ pub async fn lsp_request(
         };
 
         let mut lock = crate::utils::lock_or_recover(&server.stdin);
-        writeln!(*lock, "{}", serde_json::to_string(&msg).unwrap())
+        writeln!(*lock, "{}", serde_json::to_string(&msg).expect("JSON 序列化"))
             .map_err(|e| format!("LSP 写入失败: {e}"))?;
         lock.flush().ok();
 

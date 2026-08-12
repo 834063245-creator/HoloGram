@@ -42,8 +42,8 @@ function buildEntry(level: LogLevel, module: string, message: string, ctx?: Reco
 
 async function appendToFile(path: string, content: string): Promise<void> {
   try {
-    const { rpc } = await import('../bridge');
-    await rpc('log_append', { path, content });
+    const { typedRpc } = await import('../rpc-contract');
+    await typedRpc('log_append', { path, content });
   } catch {
     // 日志写入失败静默忽略 — 日志不能破坏应用
   }

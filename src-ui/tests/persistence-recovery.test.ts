@@ -51,11 +51,11 @@ function setupMemFs(fs: MemFS): void {
         return 'ok'
       }
       case 'write_file_content': {
-        fs.files.set(args.filePath as string, args.content as string)
+        fs.files.set(args.file_path as string, args.content as string)
         return 'ok'
       }
       case 'read_file_content': {
-        const content = fs.files.get(args.filePath as string)
+        const content = fs.files.get(args.file_path as string)
         if (content === undefined) throw new Error('file not found')
         return content
       }
@@ -141,7 +141,7 @@ describe("MessageBus — flush/restore 往返一致性", () => {
     )
     expect(writeCalls.length).toBeGreaterThanOrEqual(1)
 
-    const writtenPaths = writeCalls.map((c: any[]) => (c[1] as Record<string, unknown>).filePath as string)
+    const writtenPaths = writeCalls.map((c: any[]) => (c[1] as Record<string, unknown>).file_path as string)
     // agent-a 和 agent-b 的 inbox 都应该被写入
     expect(writtenPaths.some((p) => p.includes(".hologram/agents/agent-a/inbox.json"))).toBe(true)
     expect(writtenPaths.some((p) => p.includes(".hologram/agents/agent-b/inbox.json"))).toBe(true)
@@ -227,10 +227,10 @@ describe("TaskBoard — flush/restore 往返一致性", () => {
     )
     expect(writeCalls.length).toBeGreaterThanOrEqual(1)
     const boardWrite = writeCalls.find(
-      (c: any[]) => ((c[1] as Record<string, unknown>).filePath as string).includes(".hologram/taskboard/default.json"),
+      (c: any[]) => ((c[1] as Record<string, unknown>).file_path as string).includes(".hologram/taskboard/default.json"),
     )
     expect(boardWrite).toBeDefined()
-    const boardPath = (boardWrite![1] as Record<string, unknown>).filePath as string
+    const boardPath = (boardWrite![1] as Record<string, unknown>).file_path as string
     expect(boardPath).toContain(".hologram/taskboard/default.json")
 
     // 验证内容是合法 JSON 数组
@@ -512,7 +512,7 @@ describe("P0-6: JsonMessageStore 区分「不存在」与「读错误」", () =>
           if (p.endsWith('/agents')) return JSON.stringify([{ name: 'agent-x', is_dir: true }])
           return JSON.stringify([]) // agent 目录列为空 → delete 会继续删目录
         case 'read_file_content':
-          throw new Error(`路径不存在: ${(args.filePath ?? '') as string}`)
+          throw new Error(`路径不存在: ${(args.file_path ?? '') as string}`)
         case 'delete_file_or_dir':
           deleteCalls.push(p)
           return 'ok'

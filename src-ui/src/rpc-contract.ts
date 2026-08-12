@@ -16,6 +16,7 @@
 //     `// text`  = 纯文本（文件内容、base64、错误信息等）。
 // - 新增前端一律用 typedRpc / typedListen，接线错误在编译期暴露。
 
+// biome-ignore lint/style/noRestrictedImports: typedRpc/typedListen 是唯一受权的裸 rpc/listen 出口
 import { listen, rpc } from './bridge';
 
 // ─────────────────────────────────────────────────────────────
@@ -291,7 +292,7 @@ export interface EventContract {
     reason: string;
     danger: string;
     agentId: string;
-    suggestions: { rule: string; behavior: string }[];
+    suggestions: { rule: string; behavior: 'allow' | 'deny' | 'ask' }[];
   };
   /** Unity 外部进程事件 */
   'unity-event': { event: string; payload: string };

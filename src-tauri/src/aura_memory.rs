@@ -109,7 +109,7 @@ static AURA: Mutex<Option<(AuraHandle, AuraFns)>> = Mutex::new(None);
 // ── 辅助函数 ──
 
 fn to_cstring(s: &str) -> CString {
-    CString::new(s).unwrap_or_else(|_| CString::new("").unwrap())
+    CString::new(s).unwrap_or_else(|_| CString::new("").expect("空字符串不含 NUL，转换必然成功"))
 }
 
 fn from_cstr(ptr: *mut c_char) -> String {

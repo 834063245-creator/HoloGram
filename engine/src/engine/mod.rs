@@ -200,7 +200,7 @@ impl Engine {
 
     /// 项目根路径（如已初始化）。
     pub fn project_root(&self) -> PathBuf {
-        self.project_root.lock().unwrap().clone()
+        self.project_root.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// 引擎是否已准备好响应查询。
@@ -216,11 +216,11 @@ impl Engine {
     /// 已变更，旧的 store 将被替换。
     pub fn init(&mut self, project_root: &Path) -> Result<(), String> {
         let new_root = project_root.to_path_buf();
-        let old_root = self.project_root.lock().unwrap().clone();
+        let old_root = self.project_root.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         if old_root == new_root {
             // 相同项目 — 检查是否已初始化
-            let store_guard = self.store.lock().unwrap();
+            let store_guard = self.store.lock().unwrap_or_else(|e| e.into_inner());
             if store_guard.is_some() && self.is_ready() {
                 // 确保 watcher 正在运行（MCP 重连后可能已丢失）
                 if !self.is_watching() {
@@ -253,9 +253,9 @@ impl Engine {
         // 读取计数以用于 Ready 状态
         let (node_count, edge_count) = store.read(|idx| (idx.node_count(), idx.edge_count()));
 
-        *self.project_root.lock().unwrap() = new_root.clone();
-        *self.store.lock().unwrap() = Some(store);
-        *self.timeline_conn.lock().unwrap() = Some(timeline_conn);
+        *self.project_root.lock().unwrap_or_else(|e| e.into_inner()) = new_root.clone();
+        *self.store.lock().unwrap_or_else(|e| e.into_inner()) = Some(store);
+        *self.timeline_conn.lock().unwrap_or_else(|e| e.into_inner()) = Some(timeline_conn);
         *self.state.write() = EngineState::Ready {
             node_count,
             edge_count,

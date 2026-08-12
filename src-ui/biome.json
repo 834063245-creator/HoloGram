@@ -20,6 +20,25 @@
       },
       "style": {
         "noNonNullAssertion": "warn",
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "./bridge": {
+                "importNames": ["rpc"],
+                "message": "裸 rpc 调用已禁止——请改用 rpc-contract.ts 的 typedRpc（RpcContract 编译期约束）；仅 rpc-contract.ts / tool.ts 两个受权出口允许 import rpc"
+              },
+              "../bridge": {
+                "importNames": ["rpc"],
+                "message": "裸 rpc 调用已禁止——请改用 rpc-contract.ts 的 typedRpc（RpcContract 编译期约束）；仅 rpc-contract.ts / tool.ts 两个受权出口允许 import rpc"
+              },
+              "../../bridge": {
+                "importNames": ["rpc"],
+                "message": "裸 rpc 调用已禁止——请改用 rpc-contract.ts 的 typedRpc（RpcContract 编译期约束）；仅 rpc-contract.ts / tool.ts 两个受权出口允许 import rpc"
+              }
+            }
+          }
+        },
         "useTemplate": "off"
       }
     }

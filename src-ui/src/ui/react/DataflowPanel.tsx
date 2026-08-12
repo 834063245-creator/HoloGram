@@ -7,7 +7,7 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { rpc } from '../../bridge';
+import { typedRpc } from '../../rpc-contract';
 import { getDataflowQueryParser } from '../dock-config';
 import { useDockStore } from '../dock-store';
 import { bus } from '../events';
@@ -271,7 +271,7 @@ export function DataflowPanel() {
 
   const loadTraceList = useCallback(async () => {
     try {
-      const raw = await rpc<string>('dataflow_query', { list: true });
+      const raw = await typedRpc('dataflow_query', { list: true });
       const data = JSON.parse(raw);
       setTraces(data.traces || []);
       setTracesLoaded(true);
@@ -309,7 +309,7 @@ export function DataflowPanel() {
     setSelectedTraceId(tid);
     setRightHtml('<div class="df-loading">加载中…</div>');
     try {
-      const raw = await rpc<string>('dataflow_query', { traceId: tid });
+      const raw = await typedRpc('dataflow_query', { trace_id: tid });
       const trace = JSON.parse(raw);
       const content = trace.content;
       const exploreResult = trace.exploreResult
@@ -352,7 +352,7 @@ export function DataflowPanel() {
     async (e: React.MouseEvent, tid: string) => {
       e.stopPropagation();
       try {
-        await rpc<string>('dataflow_delete', { traceId: tid });
+        await typedRpc('dataflow_delete', { trace_id: tid });
         setTraces((prev) => prev.filter((t) => t.traceId !== tid));
         if (selectedTraceId === tid) {
           setSelectedTraceId(null);
@@ -373,7 +373,7 @@ export function DataflowPanel() {
     setRightHtml('<div class="df-loading">探索中…</div>');
 
     try {
-      let raw = await rpc<string>('hologram_call', {
+      let raw = await typedRpc('hologram_call', {
         tool: 'explore_deps',
         args: { query, symbols: [], includeSource: true },
       });
@@ -384,7 +384,7 @@ export function DataflowPanel() {
         try {
           const symbols = await onParseQuery(query);
           if (symbols.length > 0) {
-            raw = await rpc<string>('hologram_call', {
+            raw = await typedRpc('hologram_call', {
               tool: 'explore_deps',
               args: { query, symbols, includeSource: true },
             });
@@ -410,7 +410,7 @@ export function DataflowPanel() {
       const files = Array.from(fileSet);
       if (files.length > 0) {
         try {
-          const dfRaw = await rpc<string>('hologram_call', { tool: 'trace_dataflow', args: { files } });
+          const dfRaw = await typedRpc('hologram_call', { tool: 'trace_dataflow', args: { files } });
           dfPart = renderEngineDataflow(JSON.parse(dfRaw));
         } catch {
           /* 可选 */

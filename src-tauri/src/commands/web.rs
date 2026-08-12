@@ -70,10 +70,10 @@ fn bing_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
     let html = body.read_to_string().map_err(|e| format!("web_search: read error: {}", e))?;
 
     let mut results = Vec::new();
-    let block_re = regex::Regex::new(r#"<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)</li>"#).unwrap();
-    let link_re = regex::Regex::new(r#"<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a></h2>"#).unwrap();
-    let snippet_re = regex::Regex::new(r#"<p[^>]*>([\s\S]*?)</p>"#).unwrap();
-    let tag_re = regex::Regex::new(r"<[^>]*>").unwrap();
+    let block_re = regex::Regex::new(r#"<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)</li>"#).expect("静态正则");
+    let link_re = regex::Regex::new(r#"<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a></h2>"#).expect("静态正则");
+    let snippet_re = regex::Regex::new(r#"<p[^>]*>([\s\S]*?)</p>"#).expect("静态正则");
+    let tag_re = regex::Regex::new(r"<[^>]*>").expect("静态正则");
 
     for cap in block_re.captures_iter(&html) {
         let block = &cap[1];
@@ -119,13 +119,13 @@ fn duckduckgo_search(query: &str) -> Result<Vec<serde_json::Value>, String> {
     let mut results = Vec::new();
     let title_re = regex::Regex::new(
         r#"<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>"#
-    ).unwrap();
+    ).expect("静态正则");
     let snippet_re = regex::Regex::new(
         r#"<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)</a>"#
-    ).unwrap();
-    let tag_re = regex::Regex::new(r"<[^>]*>").unwrap();
+    ).expect("静态正则");
+    let tag_re = regex::Regex::new(r"<[^>]*>").expect("静态正则");
 
-    let split_re = regex::Regex::new(r#"<div[^>]*class="[^"]*result[^"]*"[^>]*>"#).unwrap();
+    let split_re = regex::Regex::new(r#"<div[^>]*class="[^"]*result[^"]*"[^>]*>"#).expect("静态正则");
     let blocks: Vec<&str> = split_re.split(&html).collect();
 
     for block in &blocks[1..] {
@@ -261,15 +261,15 @@ pub(crate) async fn web_fetch(
 
     let result = if content_type.contains("html") {
         let mut s = text;
-        s = regex::Regex::new(r"(?si)<script[^>]*>.*?</script>").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
-        s = regex::Regex::new(r"(?si)<style[^>]*>.*?</style>").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
-        s = regex::Regex::new(r"(?s)<!--.*?-->").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
-        s = regex::Regex::new(r"<[^>]*>").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"(?si)<script[^>]*>.*?</script>").unwrap_or_else(|_| regex::Regex::new(r"").expect("空正则")).replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"(?si)<style[^>]*>.*?</style>").unwrap_or_else(|_| regex::Regex::new(r"").expect("空正则")).replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"(?s)<!--.*?-->").unwrap_or_else(|_| regex::Regex::new(r"").expect("空正则")).replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"<[^>]*>").unwrap_or_else(|_| regex::Regex::new(r"").expect("空正则")).replace_all(&s, " ").to_string();
         s = s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
              .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
              .replace("&#x27;", "'").replace("&nbsp;", " ");
-        s = regex::Regex::new(r"[ \t]+").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, " ").to_string();
-        s = regex::Regex::new(r"\n{3,}").unwrap_or_else(|_| regex::Regex::new(r"").unwrap()).replace_all(&s, "\n\n").to_string();
+        s = regex::Regex::new(r"[ \t]+").unwrap_or_else(|_| regex::Regex::new(r"").expect("空正则")).replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"\n{3,}").unwrap_or_else(|_| regex::Regex::new(r"").expect("空正则")).replace_all(&s, "\n\n").to_string();
         s.trim().to_string()
     } else {
         text

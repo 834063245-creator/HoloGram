@@ -11,7 +11,7 @@
 //
 // 所有调用都能优雅降级 — 数据不可用时不注入任何内容。
 
-import { rpc } from '../bridge';
+import { typedRpc } from '../rpc-contract';
 import {
   getBlameCache,
   getBuildResultCache,
@@ -57,7 +57,7 @@ export async function refreshGitStatus(projectPath: string): Promise<void> {
   const cached = getGitCache();
   if (cached && now - getGitCacheTs() < GIT_CACHE_MS) return;
   try {
-    const json = await rpc<string>('git_status', { path: projectPath });
+    const json = await typedRpc('git_status', { path: projectPath });
     const raw = JSON.parse(json);
     setGitCache(
       {
@@ -86,7 +86,7 @@ export async function refreshGitBlame(projectPath: string, filePath: string): Pr
   if (hasBlameEntry(filePath)) return;
   if (!filePath.match(/\.(ts|tsx|js|jsx|rs|py|go|java|rb|cs|kt|swift|php|lua|css|html)$/)) return;
   try {
-    const raw = await rpc<string>('git_blame', { path: projectPath, file: filePath });
+    const raw = await typedRpc('git_blame', { path: projectPath, file: filePath });
     const lines = raw.split('\n');
     const authors = new Set<string>();
     let latestAuthor = '';
@@ -156,7 +156,7 @@ export async function refreshTimeline(projectPath: string): Promise<void> {
   const cached = getTimelineCache();
   if (cached.length > 0 && now - getTimelineCacheTs() < TIMELINE_CACHE_MS) return;
   try {
-    const json = await rpc<string>('hologram_call', {
+    const json = await typedRpc('hologram_call', {
       tool: 'project_timeline',
       args: { path: projectPath, limit: 8 },
     });

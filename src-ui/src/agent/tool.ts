@@ -3,6 +3,7 @@
 
 // Tool 系统 — Tool 接口 + Registry 注册表 + Hologram 工具定义
 
+// biome-ignore lint/style/noRestrictedImports: agentInvoke 动态方法名分发（工具名运行时确定），无法走 typedRpc
 import { rpc } from '../bridge';
 import type { ToolSchema } from '../provider/types';
 

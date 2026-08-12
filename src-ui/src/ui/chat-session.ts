@@ -8,8 +8,8 @@
 import { agentSessionState, type OwnedAgentHandle, type TurnPair } from '../agent/agent-session-state';
 import type { ChatAgentHandle } from '../agent/chat-agent-handle';
 import { createExecState, type ExecStateInstance } from '../agent/execution-state';
-import { rpc } from '../bridge';
 import type { Message } from '../provider/types';
+import { typedRpc } from '../rpc-contract';
 import { loadSettings, getActiveProvider } from '../settings';
 import { useAgentPanelStore } from './agent-panel-store';
 import { bumpSession, getChatStore, msgStoreFor } from './chat-store';
@@ -359,7 +359,7 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
 
 /** 读取会话文件并解析为 JSON。处理 read_file_content 的行号。 */
 async function readSessionJSON(filePath: string): Promise<any> {
-  const raw = await rpc<string>('read_file_content', { filePath });
+  const raw = await typedRpc('read_file_content', { file_path: filePath });
   return JSON.parse(stripLineNumbers(raw));
 }
 
@@ -382,7 +382,7 @@ function trackerFile(projectPath: string): string {
 /** 扫描会话目录，查找最大的数字会话 ID。无会话时返回 0。 */
 export async function scanMaxSessionId(projectPath: string): Promise<number> {
   try {
-    const raw = await rpc<string>('list_directory', { path: sessionsDir(projectPath), filter_ignored: false });
+    const raw = await typedRpc('list_directory', { path: sessionsDir(projectPath), filter_ignored: false });
     const entries: any[] = JSON.parse(raw);
     if (!Array.isArray(entries)) return 0;
     let maxId = 0;
@@ -438,8 +438,8 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
 
   // 2) 异步磁盘写入（原子操作：tmp → rename）
   try {
-    await rpc('write_file_content', {
-      filePath: sessionFile(projectPath, sMeta.id),
+    await typedRpc('write_file_content', {
+      file_path: sessionFile(projectPath, sMeta.id),
       content: json,
     });
   } catch (e) {
@@ -447,8 +447,8 @@ export async function saveActiveSession(ctx: SessionContext, projectPath: string
   }
 
   try {
-    await rpc('write_file_content', {
-      filePath: trackerFile(projectPath),
+    await typedRpc('write_file_content', {
+      file_path: trackerFile(projectPath),
       content: JSON.stringify({ lastId: sMeta.id, nextId: getChatStore(ctx.storeId).sess.getState().nextSessionId }),
     });
   } catch {
@@ -491,7 +491,7 @@ export async function appendLastMessage(ctx: SessionContext, projectPath: string
   if (!last || !last.content) return;
   if (isInternalMessage(last.content)) return;
   try {
-    await rpc('session_append', {
+    await typedRpc('session_append', {
       path: projectPath,
       session_id: String(sMeta.id),
       message: { role: last.role, content: typeof last.content === 'string' ? last.content : JSON.stringify(last.content) },
@@ -689,7 +689,7 @@ export async function listSavedSessions(
   const dirPath = sessionsDir(projectPath);
   let entries: any[];
   try {
-    const raw = await rpc<string>('list_directory', { path: dirPath, filter_ignored: false });
+    const raw = await typedRpc('list_directory', { path: dirPath, filter_ignored: false });
     entries = JSON.parse(raw);
   } catch (e) {
     console.error('[chat] listSavedSessions: list_directory failed', e);
@@ -835,8 +835,8 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
 export async function deleteSessionFile(ctx: SessionContext, projectPath: string, sessionId: number): Promise<void> {
   // 用删除标记覆盖 — listSavedSessions 会过滤掉这些
   try {
-    await rpc('write_file_content', {
-      filePath: sessionFile(projectPath, sessionId),
+    await typedRpc('write_file_content', {
+      file_path: sessionFile(projectPath, sessionId),
       content: JSON.stringify({ id: sessionId, deleted: true, label: '', messages: [], savedAt: '' }),
     });
   } catch (e) {
@@ -1141,7 +1141,7 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
       filters: [{ name: 'Markdown', extensions: ['md'] }],
     });
     if (filePath) {
-      await rpc('write_file_content', { filePath, content: md });
+      await typedRpc('write_file_content', { file_path: filePath, content: md });
       ctx.addNotice(`会话已导出: ${filePath}`, 'info');
     }
   } catch {

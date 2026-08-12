@@ -45,7 +45,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 │  │ 权限引擎  │ │ 沙箱    │ │ 隔离   │ │ 生命周期   │  │
 │  │Permission│ │ 双层沙箱 │ │worktree │ │Ledger     │  │
 │  └──────────┘ └─────────┘ └────────┘ └───────────┘  │
-│         单一 RPC 入口 (rpc.rs ~105 个方法)             │
+│         单一 RPC 入口 (rpc.rs ~101 个方法)             │
 └──────────────────────┬──────────────────────────────┘
                        │ Tauri IPC (invoke)
 ┌──────────────────────┴──────────────────────────────┐
@@ -59,7 +59,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 ```
 
 三层各自独立编译，通过明确边界通信：
-- **Engine** 是纯 Rust 库 + CLI 二进制，零外部依赖，可独立 `serve` 作为 MCP 服务器
+- **Engine** 是纯 Rust 库 + CLI 二进制，零外部运行时进程，可独立 `serve` 作为 MCP 服务器
 - **Tauri Shell** 是进程管理者和权限守卫，不做分析逻辑
 - **前端** 是 Agent 运行时和用户界面，通过单一 `rpc()` 函数与后端通信
 
@@ -140,7 +140,7 @@ has_permission_to_use_tool(ctx, agent_id) → PermissionResult
 
 - **Tool trait** 五类实现：`ReadTool / EditTool / BashTool / GitTool / WebFetchTool`
 - **规则**（`PermissionRules`）：system / project / session 三来源合并，持久化到 `permissions.json`；路径 glob、读写分类、危险操作标记
-- **bash 启发式**（`permissions/bash.rs`，1314 行）：命令 tokenize + 危险命令清单
+- **bash 启发式**（`permissions/bash.rs`，1237 行）：命令 tokenize + 危险命令清单
 - **worktree 感知**：规则匹配时物理路径 reverse-map 回主仓库逻辑路径，`Edit("src/**")` 在隔离环境下同样生效
 - **agent_id 显式传递**：所有涉路径命令接受 `_agent_id: Option<String>` 并 `.as_deref()` 传递，杜绝并行子 Agent 身份串扰
 
@@ -259,7 +259,7 @@ NetBenefit = |R|·c_in·(T-1) − |S|·c_out − L·avg_turn_cost
 
 Agent 可调用的工具分为四大类：
 
-**图谱工具**（34 个 schema，默认 MCP 暴露 33 个，`HOLOGRAM_MCP_TOOLS=*` 全量；从 Engine MCP 动态加载）：
+**图谱工具**（35 个 schema，默认 MCP 暴露 34 个，`HOLOGRAM_MCP_TOOLS=*` 全量；从 Engine MCP 动态加载）：
 `explore_deps`, `search_symbols`, `get_neighbors`, `trace_impact`, `find_dep_path`, `inspect_symbol`, `get_community`, `cluster_report`, `fragile_modules`, `detect_cycles`, `thread_conflicts`, `coupling_report`, `arch_blindspots`, `preflight_check`, `trace_dataflow`, `list_flows`, `get_flow`, `get_affected_flows`, `resolve_call`, `infer_type`, `find_implementations`, `find_references`, `analyze_project`, `project_health`, `rename_symbol`, `graph_diff`, `validate_project`, `engine_status`, `project_timeline`, `graph_summary`, `check_boundaries`, `find_unused`, `async_edges` 等（另含已弃用的 `symbol_history`，被 `inspect_symbol` 取代）
 
 **编码工具**（前端定义，`tools/coding.ts` + 子目录）：
@@ -383,7 +383,7 @@ Agent 可调用的工具分为四大类：
 
 ## 6. MCP 对外服务
 
-Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外暴露工具（注册表共 34 个 schema，默认暴露 33 个——含 `symbol_history` 的全部 34 个需 `HOLOGRAM_MCP_TOOLS=*`）。
+Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外暴露工具（注册表共 35 个 schema，默认暴露 34 个——含 `symbol_history` 的全部 35 个需 `HOLOGRAM_MCP_TOOLS=*`）。
 
 ### 6.1 接入方式
 
@@ -431,7 +431,7 @@ Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外
 
 ### 7.1 RPC 单一入口
 
-`rpc.rs` 一个 `#[tauri::command] rpc(method, params)` + 105 臂 match 替代了 103 个独立 command。分类：Engine 转发(2)、图(9)、Git(23)、文件系统(13)、搜索(3)、Web(2)、Shell(5)、编辑器(1)、身份/凭证(5)、Agent 隔离(7)、外部进程(6)、遗留 hologram(5)、工作区(3)、会话(2)、约束(2)、数据流(3)、Aura 记忆(7)、PTY(4)、LSP(3)。
+`rpc.rs` 一个 `#[tauri::command] rpc(method, params)` + 101 臂 match 替代了 103 个独立 command。分类：Engine 转发(2)、图(5)、Git(16)、文件系统(11)、搜索(2)、Web(2)、浏览器(12)、Shell(6)、编辑器(1)、身份/凭证(5)、Agent 隔离(6)、外部进程(6)、遗留 hologram(3)、工作区(3)、会话(2)、约束(2)、数据流(3)、Aura 记忆(7)、PTY(4)、LSP(3)。
 
 ### 7.2 ResourceLedger（统一生命周期）
 
@@ -563,7 +563,7 @@ HoloGramHG/
 │   │   ├── pty_manager.rs       # PTY 终端管理
 │   │   ├── unity_manager.rs     # Unity 集成
 │   │   ├── audit.rs             # 审计日志
-│   │   ├── rpc.rs               # 单一 RPC 入口 (105 个方法)
+│   │   ├── rpc.rs               # 单一 RPC 入口 (101 个方法)
 │   │   └── main.rs              # Tauri 应用入口 (模块声明权威清单)
 │   └── Cargo.toml
 │
@@ -620,7 +620,7 @@ Engine 编译为独立的 `hologram-engine.exe`，既可作为 Tauri 的子进�
 
 ### 10.2 为什么 Tauri 只做转发
 
-Tauri Shell 的 `rpc.rs` 有 105 个方法但几乎不含分析逻辑。所有图谱操作转发给 Engine，Shell 专注于进程管理、权限削决、沙箱隔离。这种分离使得：
+Tauri Shell 的 `rpc.rs` 有 101 个方法但几乎不含分析逻辑。所有图谱操作转发给 Engine，Shell 专注于进程管理、权限削决、沙箱隔离。这种分离使得：
 - 权限引擎在 Engine 不可用时仍然生效
 - Engine 的测试可以完全不涉及 Tauri
 - 非 Tauri 的 Engine 消费者（纯 MCP 客户端）也能获得完整图谱能力
@@ -667,9 +667,9 @@ EventBus 只覆盖不到一半通信，存在 5 个孤儿 emit、三层通信混
 
 | 层 | 命令 | 规模 |
 |----|------|------|
-| Engine | `cd engine && cargo test` | 481+ 用例（状态机/取消/增量/向量/盲点合成/图合并） |
-| Tauri Shell | `cd src-tauri && cargo test` | 173+ 用例（权限 19 个/生命周期/隔离） |
-| 前端 | `cd src-ui && npm test` | 588+ 用例（vitest + jsdom：生命周期/多 Agent/压缩管线/消息渲染） |
+| Engine | `cd engine && cargo test` | 658 用例（lib 630 + bin 27 + 集成 1；状态机/取消/增量/向量/盲点合成/图合并） |
+| Tauri Shell | `cd src-tauri && cargo test` | 259 用例（245 主测试 + 14 集成；权限/生命周期/隔离） |
+| 前端 | `cd src-ui && npm test` | 921 用例（vitest + jsdom：生命周期/多 Agent/压缩管线/消息渲染） |
 | 前端构建 | `cd src-ui && npm run build` | tsc --noEmit 零错误 |
 | 引擎构建 | `cd engine && cargo build` | 零警告（CI -D warnings 铁律） |
 | 全量 | `cargo tauri build` | 发布构建 |

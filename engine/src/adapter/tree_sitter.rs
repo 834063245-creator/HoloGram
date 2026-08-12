@@ -55,7 +55,7 @@ impl TreeSitterAdapter {
                 }
                 *borrow = Some((p, lang, ext.to_string()));
             }
-            let (ref mut parser, _, _) = borrow.as_mut().unwrap();
+            let (ref mut parser, _, _) = borrow.as_mut().expect("TL_PARSER 复用或刚填充后必为 Some");
             // 病态文件超时保护：progress callback 返回 true 即取消解析
             // （parse 返回 None，tree-sitter C 语义：true=cancel, false=continue）。
             // timeout API 已 deprecated，官方路径即此。

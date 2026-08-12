@@ -21,7 +21,7 @@ pub(crate) fn detect_slim_routes(file: &str, source: &str) -> Vec<DetectedRoute>
             if let Some(pos) = t.find(&pat) {
                 let rest = &t[pos + pat.len()..];
                 let path = if rest.starts_with('\'') || rest.starts_with('"') {
-                    let d = rest.chars().next().unwrap();
+                    let d = rest.chars().next().expect("引号开头必有首字符（starts_with 已保证）");
                     rest[1..].split(d).next().unwrap_or("").to_string()
                 } else { continue };
                 if !path.is_empty() {

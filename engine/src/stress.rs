@@ -128,7 +128,7 @@ impl ProjectGenerator {
     /// 返回生成的符号总数。
     fn generate(&mut self, root: &Path, file_count: usize) -> usize {
         let _ = fs::remove_dir_all(root);
-        fs::create_dir_all(root).unwrap();
+        fs::create_dir_all(root).expect("创建临时目录");
 
         // 规模越大，目录层级越深
         let dirs = [
@@ -136,7 +136,7 @@ impl ProjectGenerator {
             "dal", "middleware", "handlers", "schemas",
         ];
         for d in &dirs {
-            fs::create_dir_all(root.join(d)).unwrap();
+            fs::create_dir_all(root.join(d)).expect("创建子目录");
         }
 
         let files_per_dir = (file_count as f64 / dirs.len() as f64).ceil() as usize;
@@ -194,7 +194,7 @@ impl ProjectGenerator {
             }
 
             let path = root.join(dir).join(format!("mod_{}.py", file_idx));
-            let mut f = fs::File::create(&path).unwrap();
+            let mut f = fs::File::create(&path).expect("创建生成文件");
 
             // 导入——2-5 个跨模块导入，制造更密集的调用图
             let import_count = self.rng.gen_range(2..=5);
@@ -202,7 +202,7 @@ impl ProjectGenerator {
             for _ in 0..import_count {
                 if module_names.len() > 1 {
                     let target = loop {
-                        let t = module_names.choose(&mut self.rng).unwrap();
+                        let t = module_names.choose(&mut self.rng).expect("名称列表非空");
                         let current = format!("{}.mod_{}", dir, file_idx);
                         if *t != current { break t.clone(); }
                     };
@@ -215,12 +215,12 @@ impl ProjectGenerator {
                 let class_name = &class_names[class_idx];
                 class_idx += 1;
 
-                writeln!(f, "\nclass {}:", class_name).unwrap();
+                writeln!(f, "\nclass {}:", class_name).expect("写入生成文件");
                 // 2-5 个实例属性
                 let attr_count = self.rng.gen_range(2..=5);
-                writeln!(f, "    def __init__(self):").unwrap();
+                writeln!(f, "    def __init__(self):").expect("写入生成文件");
                 for a in 0..attr_count {
-                    writeln!(f, "        self.attr_{} = {}", a, self.rng.gen_range(0..100)).unwrap();
+                    writeln!(f, "        self.attr_{} = {}", a, self.rng.gen_range(0..100)).expect("写入生成文件");
                 }
 
                 // 计算此类的方法数（从 func_names 中连续匹配）
@@ -238,14 +238,14 @@ impl ProjectGenerator {
                     // 0-3 个参数
                     let param_count = self.rng.gen_range(0..=3);
                     let params: Vec<String> = (0..param_count).map(|i| format!("p{}", i)).collect();
-                    writeln!(f, "    def {}(self, {}):", func_name, params.join(", ")).unwrap();
+                    writeln!(f, "    def {}(self, {}):", func_name, params.join(", ")).expect("写入生成文件");
                     // 3-10 行方法体（调用表达式）
                     for _bl in 0..self.rng.gen_range(3..=10) {
-                        writeln!(f, "        {}", self.gen_call_expr(&module_names)).unwrap();
+                        writeln!(f, "        {}", self.gen_call_expr(&module_names)).expect("写入生成文件");
                     }
                     // 70% 概率有返回语句
                     if self.rng.gen_bool(0.7) {
-                        writeln!(f, "        {}", self.gen_ret_expr(&module_names)).unwrap();
+                        writeln!(f, "        {}", self.gen_ret_expr(&module_names)).expect("写入生成文件");
                     }
                 }
             }
@@ -256,21 +256,21 @@ impl ProjectGenerator {
                 symbol_idx += 1;
                 let param_count = self.rng.gen_range(0..=4);
                 let params: Vec<String> = (0..param_count).map(|i| format!("p{}", i)).collect();
-                writeln!(f, "\ndef {}({}):", func_name, params.join(", ")).unwrap();
+                writeln!(f, "\ndef {}({}):", func_name, params.join(", ")).expect("写入生成文件");
                 for _bl in 0..self.rng.gen_range(3..=8) {
-                    writeln!(f, "    {}", self.gen_call_expr(&module_names)).unwrap();
+                    writeln!(f, "    {}", self.gen_call_expr(&module_names)).expect("写入生成文件");
                 }
                 // 60% 概率有返回值
                 if self.rng.gen_bool(0.6) {
-                    writeln!(f, "    return {}", self.gen_ret_value()).unwrap();
+                    writeln!(f, "    return {}", self.gen_ret_value()).expect("写入生成文件");
                 }
             }
 
             // 将导入语句前置到文件开头
             let mut content = String::new();
             for imp in &imports { content.push_str(imp); }
-            content.push_str(&fs::read_to_string(&path).unwrap());
-            fs::write(&path, &content).unwrap();
+            content.push_str(&fs::read_to_string(&path).expect("读取生成文件"));
+            fs::write(&path, &content).expect("写入文件");
         }
         if show_progress { eprintln!("done"); }
 
@@ -286,13 +286,13 @@ impl ProjectGenerator {
             0..=2 => {
                 // 类实例化调用
                 if self.class_names.is_empty() { return "pass".into(); }
-                let class = self.class_names.choose(&mut self.rng).unwrap();
+                let class = self.class_names.choose(&mut self.rng).expect("名称列表非空");
                 format!("{}().do_work()", class.rsplit('_').next().unwrap_or("Unknown"))
             }
             3..=5 => {
                 // 函数调用
                 if self.func_names.is_empty() { return "pass".into(); }
-                let f = self.func_names.choose(&mut self.rng).unwrap();
+                let f = self.func_names.choose(&mut self.rng).expect("名称列表非空");
                 let short = f.rsplit('.').next().unwrap_or(f);
                 let arg_count = self.rng.gen_range(0..=2);
                 let args: Vec<String> = (0..arg_count).map(|i| format!("v{}", i)).collect();
@@ -301,13 +301,13 @@ impl ProjectGenerator {
             6..=7 => {
                 // self 方法调用
                 if self.func_names.is_empty() { return "pass".into(); }
-                let f = self.func_names.choose(&mut self.rng).unwrap();
+                let f = self.func_names.choose(&mut self.rng).expect("名称列表非空");
                 format!("self.{}()", f.rsplit('.').next().unwrap_or(f))
             }
             8 => {
                 // 内置函数调用
                 let builtins = ["len", "str", "int", "list", "dict", "sum", "max", "min", "sorted", "print"];
-                format!("{}(x)", builtins.choose(&mut self.rng).unwrap())
+                format!("{}(x)", builtins.choose(&mut self.rng).expect("名称列表非空"))
             }
             9 => "obj.prop.nested.leaf".into(), // 属性链
             _ => format!("x{} = {}", self.rng.gen_range(0..10), self.rng.gen_range(0..100)), // 赋值
@@ -321,7 +321,7 @@ impl ProjectGenerator {
             1 => {
                 // 函数调用
                 if self.func_names.is_empty() { return "None".into(); }
-                let f = self.func_names.choose(&mut self.rng).unwrap();
+                let f = self.func_names.choose(&mut self.rng).expect("名称列表非空");
                 format!("{}(p0)", f.rsplit('.').next().unwrap_or(f))
             }
             2 => "True".into(),
@@ -577,7 +577,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
 
     for si in 0..stage_count {
         let mut times: Vec<f64> = all_timings.iter().map(|t| t[si]).collect();
-        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        times.sort_by(|a, b| a.partial_cmp(b).expect("浮点排序比较"));
         let min_t = times.first().copied().unwrap_or(0.0);
         let max_t = times.last().copied().unwrap_or(0.0);
         let mean_t = times.iter().sum::<f64>() / times.len() as f64;
@@ -621,7 +621,7 @@ pub fn run_stress_real(project_path: &Path, iterations: usize) -> StressReport {
     // 打印稳定性报告
     if iterations > 1 {
         let mut sorted_totals = all_totals.clone();
-        sorted_totals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted_totals.sort_by(|a, b| a.partial_cmp(b).expect("浮点排序比较"));
         let min_t = sorted_totals.first().copied().unwrap_or(0.0);
         let max_t = sorted_totals.last().copied().unwrap_or(0.0);
         let range_pct = if mean_total > 0.0 { (max_t - min_t) / mean_total * 100.0 } else { 0.0 };
@@ -759,7 +759,7 @@ pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&st
 
     for si in 0..stage_count {
         let mut times: Vec<f64> = all_timings.iter().map(|t| t[si]).collect();
-        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        times.sort_by(|a, b| a.partial_cmp(b).expect("浮点排序比较"));
         let min_t = times.first().copied().unwrap_or(0.0);
         let max_t = times.last().copied().unwrap_or(0.0);
         let mean_t = times.iter().sum::<f64>() / times.len() as f64;
@@ -800,7 +800,7 @@ pub fn run_stress_full(project_path: &Path, iterations: usize, ext_filter: &[&st
 
     if iterations > 1 {
         let mut sorted_totals = all_totals.clone();
-        sorted_totals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted_totals.sort_by(|a, b| a.partial_cmp(b).expect("浮点排序比较"));
         let min_t = sorted_totals.first().copied().unwrap_or(0.0);
         let max_t = sorted_totals.last().copied().unwrap_or(0.0);
         let range_pct = if mean_total > 0.0 { (max_t - min_t) / mean_total * 100.0 } else { 0.0 };
@@ -881,10 +881,10 @@ pub fn run_stress_dataflow(project_path: &Path, iterations: usize) -> StressRepo
 
     if iterations > 1 {
         let mut sorted = all_times.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.partial_cmp(b).expect("浮点排序比较"));
         println!("Stability: {:.2}s–{:.2}s, range {:.1}% of mean",
             sorted.first().copied().unwrap_or(0.0), sorted.last().copied().unwrap_or(0.0),
-            if mean > 0.0 { (sorted.last().unwrap() - sorted.first().unwrap()) / mean * 100.0 } else { 0.0 });
+            if mean > 0.0 { (sorted.last().expect("排序后列表非空") - sorted.first().expect("排序后列表非空")) / mean * 100.0 } else { 0.0 });
         println!();
     }
 
@@ -955,10 +955,10 @@ pub fn run_stress_lsp(project_path: &Path, iterations: usize, ext_filter: &[&str
 
     if iterations > 1 {
         let mut sorted = all_times.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.partial_cmp(b).expect("浮点排序比较"));
         println!("Stability: {:.2}s–{:.2}s, range {:.1}% of mean",
             sorted.first().copied().unwrap_or(0.0), sorted.last().copied().unwrap_or(0.0),
-            if mean > 0.0 { (sorted.last().unwrap() - sorted.first().unwrap()) / mean * 100.0 } else { 0.0 });
+            if mean > 0.0 { (sorted.last().expect("排序后列表非空") - sorted.first().expect("排序后列表非空")) / mean * 100.0 } else { 0.0 });
         println!();
     }
 
@@ -1089,10 +1089,10 @@ mod tests {
         // 应正确统计源代码文件，忽略非源码文件
         let tmp = std::env::temp_dir().join("hologram_test_count");
         let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(tmp.join("src")).unwrap();
-        fs::write(tmp.join("src").join("main.py"), "x=1").unwrap();
-        fs::write(tmp.join("src").join("util.py"), "y=2").unwrap();
-        fs::write(tmp.join("README.md"), "doc").unwrap();
+        fs::create_dir_all(tmp.join("src")).expect("准备压力测试项目");
+        fs::write(tmp.join("src").join("main.py"), "x=1").expect("准备压力测试项目");
+        fs::write(tmp.join("src").join("util.py"), "y=2").expect("准备压力测试项目");
+        fs::write(tmp.join("README.md"), "doc").expect("准备压力测试项目");
 
         let count = count_source_files(&tmp);
         assert_eq!(count, 2, "should count 2 .py files");

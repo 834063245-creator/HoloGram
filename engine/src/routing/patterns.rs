@@ -18,7 +18,7 @@ impl Default for PatternMatcher {
 impl PatternMatcher {
     pub fn new() -> Self {
         fn compile(ps: &[&str]) -> Vec<Regex> {
-            ps.iter().map(|p| Regex::new(p).unwrap()).collect()
+            ps.iter().map(|p| Regex::new(p).unwrap_or_else(|e| panic!("invalid route pattern: {e}"))).collect()
         }
         Self {
             migration: compile(&[

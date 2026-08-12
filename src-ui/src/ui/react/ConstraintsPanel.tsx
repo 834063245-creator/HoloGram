@@ -6,9 +6,9 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { rpc } from '../../bridge';
-import { askAgent } from '../agent-visualizer';
 import { useShellStore } from '../../app/shell-store';
+import { typedRpc } from '../../rpc-contract';
+import { askAgent } from '../agent-visualizer';
 import { useDockStore } from '../dock-store';
 import { iconHtml } from '../icons';
 
@@ -151,7 +151,7 @@ const ConstraintsPanelApp: React.FC<{
     loadedPath.current = projectPath;
     setError('');
     setDirty(false);
-    rpc<string>('read_constraints', { projectPath })
+    typedRpc('read_constraints', { project_path: projectPath })
       .then((yaml) => {
         setRawYaml(yaml);
         setData(parseYamlSimple(yaml));
@@ -229,7 +229,7 @@ const ConstraintsPanelApp: React.FC<{
     setSaving(true);
     const yaml = dataToYaml(data);
     try {
-      await rpc('write_constraints', { projectPath, content: yaml });
+      await typedRpc('write_constraints', { project_path: projectPath, content: yaml });
       setRawYaml(yaml);
       setDirty(false);
       setSaveFeedback('ok');

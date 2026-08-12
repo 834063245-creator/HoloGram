@@ -25,7 +25,7 @@ import { TaskManager } from './agent/task';
 import type { Tool } from './agent/tool';
 import { ToolRegistry } from './agent/tool';
 import type { ChatCore } from './app/chat/chat-core';
-import { listen, rpc } from './bridge';
+import { typedListen, typedRpc } from './rpc-contract';
 import { createProvider } from './provider';
 import { mergeDynamicModels, getModel } from './provider/catalog';
 import { withThinkingDisabled } from './provider/thinking';
@@ -180,7 +180,7 @@ export class Workspace {
     // 1. 向后端注册工作区
     ws.onStatusChange?.('正在初始化引擎...');
     console.log('[Workspace.open] step 1: workspace_activate...');
-    await rpc('workspace_activate', { path }).catch((e) => {
+    await typedRpc('workspace_activate', { path }).catch((e) => {
       console.error('[Workspace.open] workspace_activate failed:', e);
     });
     console.log('[Workspace.open] step 1: done');
@@ -188,20 +188,18 @@ export class Workspace {
 
     // 2. 连接进度监听器（限定于本工作区）
     let currentPhase = '';
-    const unlistenProgress = await listen<{ current: number; total: number; file: string }>('analyze-progress', (e) => {
+    const unlistenProgress = await typedListen('analyze-progress', ({ current, total, file }) => {
       if (!ws._active) return;
-      const { current, total, file } = e.payload;
       const basename = file.replace(/.*[/\\]/, '');
       ws.onStatusChange?.(`${currentPhase ? currentPhase + ' — ' : ''}[${current}/${total}] ${basename}`);
     });
-    const unlistenPhase = await listen<{ phase: string; message: string }>('analyze-phase', (e) => {
+    const unlistenPhase = await typedListen('analyze-phase', (p) => {
       if (!ws._active) return;
-      currentPhase = e.payload.message || e.payload.phase;
+      currentPhase = p.message || p.phase;
       ws.onStatusChange?.(currentPhase);
     });
-    const unlistenHeartbeat = await listen<{ label: string; elapsed: string }>('analyze-heartbeat', (e) => {
+    const unlistenHeartbeat = await typedListen('analyze-heartbeat', ({ label, elapsed }) => {
       if (!ws._active) return;
-      const { label, elapsed } = e.payload;
       ws.onStatusChange?.(`${label} (${elapsed}...)`);
     });
 
@@ -232,7 +230,7 @@ export class Workspace {
         } else {
           // 旧格式全量缓存图兼容（load_graph_json 遗留磁盘文件小图路径）
           ws.graphData = opts.cachedGraph;
-          rpc('analyze_and_load', { path, force: false })
+          typedRpc('analyze_and_load', { path, force: false })
             .then(() => {
               if (!ws._active) return;
               ws._health = 'ready';
@@ -246,13 +244,13 @@ export class Workspace {
         // 仍触发 analyze_and_load（force=false），保留缓存过期→重分析能力：
         // direct_analyze 内部校验 SQLite 缓存新鲜度，过期则重建；
         // 分析完成后由 graph-updated 事件驱动图重载。
-        rpc('analyze_and_load', { path, force: false }).catch(() => {
+        typedRpc('analyze_and_load', { path, force: false }).catch(() => {
           /* 拉页路径已降级处理，此处静默 */
         });
       } else {
         // 完整分析：analyze_and_load 只回 meta + 分页信息，图数据逐页拉取。
         ws.onLoadingChange?.(true);
-        const raw = await rpc<string>('analyze_and_load', { path, force: false });
+        const raw = await typedRpc('analyze_and_load', { path, force: false });
         const meta = JSON.parse(raw);
         ws.graphData = {
           meta: meta.meta || {},
@@ -272,7 +270,7 @@ export class Workspace {
       try {
         const filesPath = path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
         const raw = await Promise.race([
-          rpc<string>('read_file_content', { filePath: filesPath }),
+          typedRpc('read_file_content', { file_path: filesPath }),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
         ]);
         ws.fileGraphData = JSON.parse(stripLineNumbers(raw));
@@ -312,10 +310,10 @@ export class Workspace {
 
       // 5. 连接持久事件监听器（graph-updated）
       console.log('[Workspace.open] step 5: wiring listeners...');
-      const unlistenGraphUpdated = await listen<string>('graph-updated', async (event) => {
+      const unlistenGraphUpdated = await typedListen('graph-updated', async (rawSummary) => {
         if (!ws._active) return;
         try {
-          const summary = JSON.parse(event.payload);
+          const summary = JSON.parse(rawSummary);
           const eventRoot = summary.meta?.source_root || '';
           if (eventRoot && !isSamePath(eventRoot, ws.path)) return;
           const nc = summary.total_nodes || summary.node_count || 0;
@@ -351,7 +349,7 @@ export class Workspace {
               try {
                 const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
                 ws.fileGraphData = JSON.parse(
-                  stripLineNumbers(await rpc<string>('read_file_content', { filePath: filesPath })),
+                  stripLineNumbers(await typedRpc('read_file_content', { file_path: filesPath })),
                 );
               } catch {
                 /* 文件图谱可能尚不存在 */
@@ -434,7 +432,7 @@ export class Workspace {
 
     // 停止 watcher 并清除后端状态
     try {
-      await rpc('workspace_deactivate');
+      await typedRpc('workspace_deactivate', {});
     } catch {
       /* 忽略 */
     }
@@ -634,7 +632,7 @@ export class Workspace {
       ps.setPermissionMode(sAgent.permissionMode);
     }
     // 模式镜像到后端 — 后台任务（同步权限路径）靠它决定是否旁路 Ask
-    rpc('set_permission_mode', { mode: ps.permissionMode }).catch(() => {});
+    typedRpc('set_permission_mode', { mode: ps.permissionMode }).catch(() => {});
 
     const active = getActiveProvider(settings);
 
@@ -658,7 +656,7 @@ export class Workspace {
     let memorySection = '';
     let globalDir: string | undefined;
     try {
-      globalDir = await rpc<string>('get_global_memory_dir');
+      globalDir = await typedRpc('get_global_memory_dir', {});
     } catch {
       /* 忽略 */
     }
@@ -864,7 +862,7 @@ export class Workspace {
     this.checkRunning = true;
     this.checkPending = false;
     try {
-      const json = await rpc<string>('hologram_run_check', { path: this.path });
+      const json = await typedRpc('hologram_run_check', { path: this.path });
       try {
         const result: CheckResult = JSON.parse(json);
         const dock = useDockStore.getState();
@@ -1025,7 +1023,7 @@ export async function loadGraphPages(
   const totalPages = paged.total_pages ?? 1;
   for (let page = 0; page < totalPages; page++) {
     if (!ws.active) return false;
-    const raw = await rpc<string>('get_graph_page', { page, page_size: pageSize });
+    const raw = await typedRpc('get_graph_page', { page, page_size: pageSize });
     if (!ws.active) return false;
     const p = JSON.parse(raw);
     const root = p.meta?.source_root || '';
@@ -1047,7 +1045,7 @@ export async function loadGraphPages(
 
 /** 分页全量重载：get_graph_meta → 重置 graphData → 逐页重建（事件兜底/重分析用）。 */
 async function reloadGraphPaged(ws: Workspace, starGraph: StarGraph): Promise<void> {
-  const raw = await rpc<string>('get_graph_meta');
+  const raw = await typedRpc('get_graph_meta', {});
   const meta = JSON.parse(raw);
   if (!meta.paged) throw new Error('引擎未返回分页信息');
   ws.graphData = {

@@ -26,12 +26,12 @@ function mockLiveFs(initial: Record<string, string> = {}): Map<string, string> {
   rpcMock.mockImplementation(async (method: string, params: Record<string, unknown>) => {
     if (method === 'create_directory') return null;
     if (method === 'write_file_content') {
-      files.set(params.filePath as string, params.content as string);
+      files.set(params.file_path as string, params.content as string);
       return '(mock: file saved)';
     }
     if (method === 'read_file_content') {
-      const v = files.get(params.filePath as string);
-      if (v === undefined) throw new Error(`ENOENT: ${params.filePath}`);
+      const v = files.get(params.file_path as string);
+      if (v === undefined) throw new Error(`ENOENT: ${params.file_path}`);
       return v;
     }
     if (method === 'delete_file_or_dir') {

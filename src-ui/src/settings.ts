@@ -193,12 +193,12 @@ export async function persistSecrets(s: AppSettings): Promise<string[]> {
     return k && k !== 'null';
   });
   try {
-    const { rpc } = await import('./bridge');
+    const { typedRpc } = await import('./rpc-contract');
     for (const p of withKey) {
       const key = p.apiKey!.trim();
       // 「null」字面量护栏：毒化残留的 apiKey:"null" 绝非真 key，绝不写入凭据库
       try {
-        await rpc('credential_store', { provider: p.name, key });
+        await typedRpc('credential_store', { provider: p.name, key });
       } catch (e) {
         // 雷区地图 P0-7：写失败必须上抛给 UI——「失败报已保存」会让用户重启丢 key
         console.warn(`[settings] credential_store(${p.name}) 失败:`, e);
@@ -216,8 +216,8 @@ export async function persistSecrets(s: AppSettings): Promise<string[]> {
  *  调用时机：保存「删除 Provider」或「清除已保存 Key」的暂存操作时。 */
 export async function removeSecret(providerName: ProviderId): Promise<void> {
   try {
-    const { rpc } = await import('./bridge');
-    await rpc('credential_delete', { provider: providerName });
+    const { typedRpc } = await import('./rpc-contract');
+    await typedRpc('credential_delete', { provider: providerName });
   } catch {
     /* 无加密存储或 Key 未找到 — 非关键 */
   }
@@ -249,11 +249,11 @@ export function parseRpcString(raw: unknown): string | null {
 /** 从系统加密存储恢复 API Key（仅填充 apiKey 为空的 provider）。loadSettings 后用。 */
 export async function restoreSecrets(s: AppSettings): Promise<AppSettings> {
   try {
-    const { rpc } = await import('./bridge');
+    const { typedRpc } = await import('./rpc-contract');
     for (const p of s.providers) {
       if (!p.apiKey || p.apiKey.trim() === '') {
         try {
-          const stored = await rpc('credential_get', { provider: p.name });
+          const stored = await typedRpc('credential_get', { provider: p.name });
           const key = parseRpcString(stored);
           // 长度护栏：>4096 的「key」必是编码 bug 毒值（2026-08-08 事故：128MiB 毒值
           // 经 IPC 回传 256MB 响应击毁 WebView2）——拒收，按无 key 处理

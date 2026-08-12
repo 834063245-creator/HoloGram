@@ -14,7 +14,7 @@
 
 import type { Tool, ToolExecutor } from '../tool';
 import { ToolRegistry, agentInvoke } from '../tool';
-import { rpc } from '../../bridge';
+import { typedRpc } from '../../rpc-contract';
 import { z } from 'zod';
 import { createCompactionTools } from '../compaction-model';
 import type { GraphContext } from '../hooks';
@@ -85,7 +85,7 @@ interface McpSchema {
 
 export async function loadHologramSchemas(): Promise<McpSchema[]> {
   try {
-    const raw = await rpc<string>('hologram_tools_list');
+    const raw = await typedRpc('hologram_tools_list', {});
     return JSON.parse(raw) as McpSchema[];
   } catch {
     return [];
@@ -306,7 +306,7 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
   // ── Hologram tools ──
   if (graphData) {
     const holoExec: ToolExecutor = async (name, args) => {
-      const result = await rpc<string>('hologram_call', { tool: name, args });
+      const result = await typedRpc('hologram_call', { tool: name, args });
       return typeof result === 'string' ? result : JSON.stringify(result);
     };
     const schemas = await loadHologramSchemas();
@@ -467,10 +467,10 @@ export function registerCompactionTools(agent: Agent, reg: ToolRegistry): void {
 export async function loadEngineSnapshot(ctx: GraphContext, projectPath: string, isRefresh = false): Promise<void> {
   try {
     const [fragileRaw, cycleRaw, healthRaw, blindspotsRaw] = await Promise.all([
-      rpc<string>('hologram_call', { tool: 'fragile_modules', args: { limit: 15 } }),
-      rpc<string>('hologram_call', { tool: 'detect_cycles', args: { mode: 'all' } }),
-      rpc<string>('hologram_call', { tool: 'project_health', args: { path: projectPath, days: 30 } }),
-      rpc<string>('hologram_call', { tool: 'arch_blindspots', args: { filter: 'all' } }).catch(() => '{"blindspots":[]}'),
+      typedRpc('hologram_call', { tool: 'fragile_modules', args: { limit: 15 } }),
+      typedRpc('hologram_call', { tool: 'detect_cycles', args: { mode: 'all' } }),
+      typedRpc('hologram_call', { tool: 'project_health', args: { path: projectPath, days: 30 } }),
+      typedRpc('hologram_call', { tool: 'arch_blindspots', args: { filter: 'all' } }).catch(() => '{"blindspots":[]}'),
     ]);
     const fragileData = JSON.parse(fragileRaw);
     const fragilityRanks: Array<{ file: string; score: number }> = [];
@@ -493,7 +493,7 @@ export async function loadEngineSnapshot(ctx: GraphContext, projectPath: string,
     const lspCallers = new Map<string, Array<{ symbol: string; count: number }>>();
     for (const r of fragilityRanks.slice(0, 3)) {
       try {
-        const resolveRaw = await rpc<string>('hologram_call', { tool: 'resolve_call', args: { file: r.file } }).catch(() => '{}');
+        const resolveRaw = await typedRpc('hologram_call', { tool: 'resolve_call', args: { file: r.file } }).catch(() => '{}');
         const resolveData = JSON.parse(resolveRaw);
         if (resolveData.calls && Array.isArray(resolveData.calls)) {
           const fc = new Map<string, number>();
@@ -508,7 +508,7 @@ export async function loadEngineSnapshot(ctx: GraphContext, projectPath: string,
       const symbol = r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
       if (!symbol) continue;
       try {
-        const searchRaw = await rpc<string>('hologram_call', { tool: 'search_symbols', args: { query: symbol, limit: 5 } }).catch(() => '{"results":[]}');
+        const searchRaw = await typedRpc('hologram_call', { tool: 'search_symbols', args: { query: symbol, limit: 5 } }).catch(() => '{"results":[]}');
         const searchData = JSON.parse(searchRaw);
         const results = searchData.results || [];
         const neighbors = results.filter((s: any) => (s.name || '').toLowerCase() !== symbol.toLowerCase()).slice(0, 3).map((s: any) => ({ name: s.name || '', file: s.location || s.file || '' }));

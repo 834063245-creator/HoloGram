@@ -7,7 +7,7 @@
 // 模式参照 agent-store.ts：rpc 文件 I/O、ensureDir、stripNums。
 // 所有操作 best-effort — 永不抛异常阻塞主流程。
 
-import { rpc } from '../bridge'
+import { typedRpc } from '../rpc-contract'
 import type { AgentMessage, MessageStore } from './message-types'
 import { stripNums } from './board-persistence'
 
@@ -29,7 +29,7 @@ export class JsonMessageStore implements MessageStore {
   private async ensureDir(): Promise<void> {
     if (this.dirReady) return
     try {
-      await rpc('create_directory', { path: this.baseDir })
+      await typedRpc('create_directory', { path: this.baseDir })
     } catch {
       /* already exists */
     }
@@ -43,9 +43,9 @@ export class JsonMessageStore implements MessageStore {
       try {
         // 空 inbox 不写文件
         if (msgs.length === 0) continue
-        await rpc('create_directory', { path: `${this.baseDir}/${agentId}` })
-        await rpc('write_file_content', {
-          filePath: this.inboxPath(agentId),
+        await typedRpc('create_directory', { path: `${this.baseDir}/${agentId}` })
+        await typedRpc('write_file_content', {
+          file_path: this.inboxPath(agentId),
           content: JSON.stringify(msgs, null, 2),
         })
       } catch {
@@ -59,7 +59,7 @@ export class JsonMessageStore implements MessageStore {
   async restore(): Promise<Map<string, AgentMessage[]>> {
     const result = new Map<string, AgentMessage[]>()
     try {
-      const raw = await rpc<string>('list_directory', { path: this.baseDir, filter_ignored: false })
+      const raw = await typedRpc('list_directory', { path: this.baseDir, filter_ignored: false })
       const entries = JSON.parse(raw) as Array<{ name: string; is_dir: boolean }>
       if (!Array.isArray(entries)) return result
 
@@ -67,8 +67,8 @@ export class JsonMessageStore implements MessageStore {
         if (!entry.is_dir) continue
         const agentId = entry.name
         try {
-          const rawInbox = await rpc<string>('read_file_content', {
-            filePath: this.inboxPath(agentId),
+          const rawInbox = await typedRpc('read_file_content', {
+            file_path: this.inboxPath(agentId),
           })
           const msgs = JSON.parse(stripNums(rawInbox)) as AgentMessage[]
           if (Array.isArray(msgs) && msgs.length > 0) {
@@ -100,13 +100,13 @@ export class JsonMessageStore implements MessageStore {
     try {
       const dirPath = `${this.baseDir}/${agentId}`
       // 删 inbox.json
-      await rpc('delete_file_or_dir', { path: this.inboxPath(agentId) })
+      await typedRpc('delete_file_or_dir', { path: this.inboxPath(agentId) })
       // 尝试删 agent 目录（如果为空）
       try {
-        const raw = await rpc<string>('list_directory', { path: dirPath, filter_ignored: false })
+        const raw = await typedRpc('list_directory', { path: dirPath, filter_ignored: false })
         const entries = JSON.parse(raw)
         if (Array.isArray(entries) && entries.length === 0) {
-          await rpc('delete_file_or_dir', { path: dirPath })
+          await typedRpc('delete_file_or_dir', { path: dirPath })
         }
       } catch {
         // 目录已不存在或不可访问 — 无需处理

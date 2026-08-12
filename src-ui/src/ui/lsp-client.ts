@@ -11,7 +11,8 @@
 //   服务端推送通知（publishDiagnostics）→ lsp-message 事件。
 
 import type { editor, IDisposable, IRange, languages } from 'monaco-editor';
-import { listen, rpc } from '../bridge';
+import { listen } from '../bridge';
+import { typedRpc } from '../rpc-contract';
 
 const lspSessions = new Map<string, number>(); // 语言 → session_id
 let completionProviders: IDisposable[] = [];
@@ -121,7 +122,7 @@ const lspWarned = new Set<string>();
 export async function startLsp(language: string, rootUri: string): Promise<number | null> {
   if (lspSessions.has(language)) return lspSessions.get(language)!;
   try {
-    const sid = await rpc<number>('lsp_start', { language, rootUri });
+    const sid = Number(await typedRpc('lsp_start', { language, root_uri: rootUri }));
     lspSessions.set(language, sid);
     return sid;
   } catch {
@@ -135,8 +136,8 @@ export async function startLsp(language: string, rootUri: string): Promise<numbe
 
 /** 通知 LSP 文档已打开。在 Monaco 中打开文件时调用。 */
 export function didOpen(sessionId: number, uri: string, language: string, text: string): void {
-  rpc('lsp_request', {
-    sessionId,
+  typedRpc('lsp_request', {
+    session_id: sessionId,
     method: 'textDocument/didOpen',
     params: {
       textDocument: { uri, languageId: language, version: 1, text },
@@ -146,8 +147,8 @@ export function didOpen(sessionId: number, uri: string, language: string, text: 
 
 /** 通知 LSP 文档已变更。从 model.onDidChangeContent 调用。 */
 export function didChange(sessionId: number, uri: string, text: string): void {
-  rpc('lsp_request', {
-    sessionId,
+  typedRpc('lsp_request', {
+    session_id: sessionId,
     method: 'textDocument/didChange',
     params: {
       textDocument: { uri, version: Date.now() },
@@ -158,8 +159,8 @@ export function didChange(sessionId: number, uri: string, text: string): void {
 
 /** 通知 LSP 文档已关闭。关闭标签页时调用。 */
 export function didClose(sessionId: number, uri: string): void {
-  rpc('lsp_request', {
-    sessionId,
+  typedRpc('lsp_request', {
+    session_id: sessionId,
     method: 'textDocument/didClose',
     params: { textDocument: { uri } },
   }).catch(() => {});
@@ -176,7 +177,7 @@ export async function stopAllLsp(): Promise<void> {
   definitionProviders = [];
   referenceProviders = [];
   for (const [_language, sid] of lspSessions) {
-    await rpc('lsp_stop', { sessionId: sid }).catch(() => {});
+    await typedRpc('lsp_stop', { session_id: sid }).catch(() => {});
   }
   lspSessions.clear();
 }
@@ -191,8 +192,10 @@ export function registerCompletionProvider(
     triggerCharacters: ['.', ':', '"', "'", '/', ' '],
     provideCompletionItems: async (model, position) => {
       try {
-        const result = await rpc<any>('lsp_request', {
-          sessionId,
+        // 注：Rust 侧 lsp_request 经 ok_json 返回 JSON 字符串，此处按对象消费是既有行为
+        // （潜在 parse 缺失属 LSP 功能专项，不在本批次行为改动范围）
+        const result: any = await typedRpc('lsp_request', {
+          session_id: sessionId,
           method: 'textDocument/completion',
           params: {
             textDocument: { uri: model.uri.toString() },
@@ -223,8 +226,8 @@ export function registerHoverProvider(lang: string, sessionId: number, monaco: t
   const provider = monaco.languages.registerHoverProvider(lang, {
     provideHover: async (model, position) => {
       try {
-        const result = await rpc<any>('lsp_request', {
-          sessionId,
+        const result: any = await typedRpc('lsp_request', {
+          session_id: sessionId,
           method: 'textDocument/hover',
           params: {
             textDocument: { uri: model.uri.toString() },
@@ -272,8 +275,8 @@ export function registerDefinitionProvider(
   const provider = monaco.languages.registerDefinitionProvider(lang, {
     provideDefinition: async (model, position) => {
       try {
-        const result = await rpc<any>('lsp_request', {
-          sessionId,
+        const result: any = await typedRpc('lsp_request', {
+          session_id: sessionId,
           method: 'textDocument/definition',
           params: {
             textDocument: { uri: model.uri.toString() },
@@ -319,8 +322,8 @@ export function registerReferencesProvider(
   const provider = monaco.languages.registerReferenceProvider(lang, {
     provideReferences: async (model, position, _context) => {
       try {
-        const result = await rpc<any>('lsp_request', {
-          sessionId,
+        const result: any = await typedRpc('lsp_request', {
+          session_id: sessionId,
           method: 'textDocument/references',
           params: {
             textDocument: { uri: model.uri.toString() },
