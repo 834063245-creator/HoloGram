@@ -169,6 +169,65 @@ impl Tool for GitTool {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// BrowserTool — browser_launch / browser_attach / browser_eval 等
+// ═══════════════════════════════════════════════════════════════
+
+pub struct BrowserTool {
+    pub action: String,
+    pub agent_id: Option<String>,
+}
+
+impl Tool for BrowserTool {
+    fn name(&self) -> &'static str {
+        "Browser"
+    }
+
+    fn get_path(&self) -> Option<PathBuf> {
+        None // 浏览器控制不针对单个文件
+    }
+
+    fn is_read_only(&self) -> bool {
+        matches!(self.action.as_str(), "targets" | "inspect" | "report" | "status")
+    }
+
+    fn is_destructive(&self) -> bool {
+        !self.is_read_only()
+    }
+
+    fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+
+    fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
+        use crate::permissions::PermissionUpdate;
+        let rules = ctx.read_rules();
+        // 1. 工具级 Deny — 最高优先级
+        if let Some(rule) = rules.find_deny("Browser", None) {
+            return PermissionResult::Deny {
+                reason: rule.explain(),
+            };
+        }
+        // 2. 工具级 Allow — 用户已批准"始终允许"
+        if rules.find_allow("Browser", None).is_some() {
+            return PermissionResult::Allow;
+        }
+        // 3. 只读动作放行（targets/inspect/report/status — 不改变任何状态）
+        if self.is_read_only() {
+            return PermissionResult::Passthrough;
+        }
+        // 4. 高危动作：launch（启动受控浏览器）/ attach（接管外部页面）/ eval（任意 JS）→ Ask
+        PermissionResult::Ask {
+            reason: format!("Agent 请求控制浏览器（动作: {}）", self.action),
+            suggestions: vec![PermissionUpdate {
+                rule: "Browser".into(),
+                behavior: "allow".into(),
+            }],
+            danger: Some("browser 控制".into()),
+        }
+    }
+}
+
 // WebFetchTool — web_fetch
 // ═══════════════════════════════════════════════════════════════
 

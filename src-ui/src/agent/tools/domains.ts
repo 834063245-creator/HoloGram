@@ -212,6 +212,27 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       delete: 'hologram_memory_delete',
     },
   },
+  {
+    name: 'browser',
+    description:
+      'Browser control: launch a controlled Chrome/Edge (isolated profile), list/attach pages, inspect/report visual state, and operate (click/type/press/scroll/eval). ' +
+      'target="self" = HoloGram webview 内直读（仅 inspect/report/status 支持）；省略 target = 已 attach 的外部页面。' +
+      'attach 用 targetId（来自 browser(targets) 的 CDP target id）。',
+    actions: {
+      launch: 'browser_launch',
+      kill: 'browser_kill',
+      targets: 'browser_targets',
+      attach: 'browser_attach',
+      inspect: 'browser_inspect',
+      report: 'browser_report',
+      click: 'browser_click',
+      type: 'browser_type',
+      press: 'browser_press',
+      scroll: 'browser_scroll',
+      eval: 'browser_eval',
+      status: 'browser_status',
+    },
+  },
 ];
 
 function buildDomainTool(registry: ToolRegistry, spec: DomainSpec): Tool | null {
@@ -260,6 +281,23 @@ export function collectHiddenToolNames(): string[] {
   const names = new Set<string>(['read_file', 'symbol_history']);
   for (const spec of DOMAIN_SPECS) {
     for (const oldName of Object.values(spec.actions)) names.add(oldName);
+  }
+  // browser 领域的细粒度工具全部隐藏 — 领域工具 browser 是唯一可见入口
+  for (const n of [
+    'browser_launch',
+    'browser_kill',
+    'browser_targets',
+    'browser_attach',
+    'browser_inspect',
+    'browser_report',
+    'browser_click',
+    'browser_type',
+    'browser_press',
+    'browser_scroll',
+    'browser_eval',
+    'browser_status',
+  ]) {
+    names.add(n);
   }
   // 运行时后注册的细粒度工具（runtime.ts createAgent 中注入）
   for (const n of [

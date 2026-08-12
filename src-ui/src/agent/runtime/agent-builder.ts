@@ -67,6 +67,8 @@ export interface BuilderDeps {
     onOutput(streamId: string, cb: (chunk: string) => void): () => void;
     onDone(streamId: string, cb: (exitCode: number, error?: string) => void): () => void;
   };
+  /** browser 工具的 self 探针（webview 内直读 DOM；缺省用 defaultDomProbe） */
+  domProbe?: import('../tools/browser').DomProbe;
 }
 
 // ── MCP Schema loading ──
@@ -210,7 +212,13 @@ export function buildSystemPrompt(
 11. **用户犯错时指出来**。用户说错了就直接说，不要为了讨好而同意。
 12. **改完后检查**。注释和文档是否过时，一起更新。
 13. **别用 shell(run) 搜文件/搜代码/操作 Git**。找文件用 fs(glob)，搜文本用 search(content)，Git 用 git(…)。shell(run) 只用于构建和测试。
-14. **工具调用一律用领域工具名**（fs/shell/git/search/web/agent/task/memory/ask_user/Skill/wait/plan）。历史会话里出现的旧名（run_shell/write_file/read_file_content/edit_file/search_content/git_* 等）不要再用。
+14. **工具调用一律用领域工具名**（fs/shell/git/search/web/agent/task/memory/ask_user/Skill/wait/plan/browser）。历史会话里出现的旧名（run_shell/write_file/read_file_content/edit_file/search_content/git_* 等）不要再用。
+
+## 视觉自评纪律（改 UI 后必做）
+- 改完 UI 相关文件（css/tsx/html）后，**不要默认"写完了"** —— 你写的是代码，不是看到的画面。
+- 用 browser 工具自查渲染结果：先 \`browser(report)\` 拿问题清单，再 \`browser(inspect, selector)\` 定位具体元素，修改后复查。
+- 迭代上限 3 轮：改 1 次 → report 1 次 → 问题清零或收敛到可接受。
+- 自家 webview 用 \`target: "self"\`（内直读）；操作外部页面（用户给的 Chrome 等）先 launch → targets → attach，外部 attach 需用户批准。
 ${modeBlock}`;
 
   let suffix = `\n## 模型身份
@@ -434,6 +442,16 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
   if (subAgentSpawner) {
     registry.register(createSubAgentTool(subAgentSpawner, subAgentPool));
     registry.register(createAgentStatusTool(subAgentPool));
+  }
+
+  // ── Browser tools（Agent 观察/操作前端 — CDP 双通道）──
+  // 只注册细粒度 browser_* 工具；领域收敛（browser 领域）由 convergeRegistry
+  // 统一处理（DOMAIN_SPECS 已含 browser）。self 探针：webview 内直读 DOM，
+  // 由 UI 装配层注入（缺省 defaultDomProbe）— 保持 agent 层零 UI 依赖。
+  {
+    const { createBrowserTools, defaultDomProbe } = await import('../tools/browser');
+    const probe = deps.domProbe ?? defaultDomProbe;
+    for (const t of createBrowserTools({ domProbe: probe })) registry.register(t);
   }
 
   // ── wait 工具 — 替代轮询循环（agent_status/bash_output 反复刷屏）。

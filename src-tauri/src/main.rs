@@ -29,6 +29,7 @@ mod commands;
 mod confined_fs;
 mod rpc;
 mod lifecycle;
+mod cdp;
 
 use std::sync::Arc;
 use std::sync::Mutex;
