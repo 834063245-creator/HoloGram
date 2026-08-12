@@ -7,11 +7,18 @@
 const IS_TAURI = '__TAURI_INTERNALS__' in window;
 
 import { log } from './agent/logger';
-// ── 模拟 invoke ──
-import { mockInvoke } from './mock-data';
 
 let _realInvoke: any;
 let _realListen: any;
+let _mockInvoke: ((cmd: string, args?: Record<string, unknown>) => string) | undefined;
+
+async function loadMock(): Promise<(cmd: string, args?: Record<string, unknown>) => string> {
+  if (!_mockInvoke) {
+    const mock = await import('./mock-data');
+    _mockInvoke = mock.mockInvoke;
+  }
+  return _mockInvoke;
+}
 
 async function loadReal() {
   if (!_realInvoke) {
@@ -49,7 +56,7 @@ export async function invoke<T = any>(cmd: string, args?: Record<string, unknown
     }
   }
   // 浏览器 mock 模式
-  return mockInvoke(cmd, args) as T;
+  return (await loadMock())(cmd, args) as T;
 }
 
 /**

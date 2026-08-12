@@ -109,7 +109,7 @@ Agent 在执行文件编辑前必须经过 `preflight_check`，引擎根据图�
 三层隔离机制：
 
 **OS 层沙箱** (`os_sandbox.rs`，跨平台)：
-- Windows：Job Object（子进程随父进程死亡）+ AppContainer
+- Windows：Job Object（子进程随父进程死亡，64 进程 / 1 GiB 内存上限；AppContainer 已移除）
 - macOS：sandbox-exec；Linux：bubblewrap
 - 所有 Engine 进程、Memory Bundle 进程纳入 OS 沙箱
 
@@ -557,7 +557,7 @@ HoloGramHG/
 │   │   ├── mcp_manager.rs       # MCP 子进程管理
 │   │   ├── sandbox.rs           # 路径沙箱 (resolve_read/write)
 │   │   ├── confined_fs.rs       # 统一受限文件系统 + ACL
-│   │   ├── os_sandbox.rs        # OS 层沙箱 (Job Object/AppContainer/sandbox-exec/bubblewrap)
+│   │   ├── os_sandbox.rs        # OS 层沙箱 (Job Object/sandbox-exec/bubblewrap)
 │   │   ├── aura_memory.rs       # Aura SDK FFI 桥接
 │   │   ├── credential.rs        # 加密凭证存储
 │   │   ├── pty_manager.rs       # PTY 终端管理
