@@ -448,7 +448,6 @@ export class AgentRuntime implements RuntimePort {
         memSection,
         snap,
         claudeMd,
-        config.collaborationMode ?? 'normal',
         config.provider.name(),
         shellEnvSection,
       );

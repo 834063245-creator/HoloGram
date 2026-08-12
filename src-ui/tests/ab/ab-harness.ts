@@ -51,7 +51,7 @@ export function buildTrialAgent(
     preflightHooks.register(createGraphPreflightHook(ctx));
   }
 
-  const systemPrompt = buildSystemPrompt(graph as any, worktree, '', '', '', 'normal', 'DeepSeek');
+  const systemPrompt = buildSystemPrompt(graph as any, worktree, '', '', '', 'DeepSeek');
   const agent = new Agent(provider, registry, systemPrompt, {
     agentId: `ab-${arm}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     contextWindow: 131072,

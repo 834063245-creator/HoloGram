@@ -206,14 +206,13 @@ describe("端到端：bus 唤醒 idle agent", () => {
 // ═══════════════════════════════════════════════════════
 
 describe("端到端：系统提示词验证", () => {
-  it("normal 模式包含多 Agent 协作段落", () => {
+  it("系统提示词包含多 Agent 协作段落", () => {
     const prompt = buildSystemPrompt(
       { nodes: [], edges: [] },
       "/fake/project",
       "",
       "",
       "",
-      "normal",
       "deepseek",
     )
 
@@ -225,20 +224,22 @@ describe("端到端：系统提示词验证", () => {
     expect(prompt).toContain("决策指南")
   })
 
-  it("plan 模式不包含多 Agent 协作段落", () => {
+  it("系统提示词模式无关：多 Agent 段落在规划/执行模式下一致", () => {
+    // 协作模式不再影响系统提示词（footer 热切换不重建，避免击穿前缀缓存）；
+    // 规划模式约束由 PlanModeInjector 的运行时提醒下发。
     const prompt = buildSystemPrompt(
       { nodes: [], edges: [] },
       "/fake/project",
       "",
       "",
       "",
-      "plan",
       "deepseek",
     )
 
-    expect(prompt).not.toContain("多 Agent 协作")
-    expect(prompt).not.toContain("异步子 Agent")
+    expect(prompt).toContain("多 Agent 协作")
+    expect(prompt).toContain("## 协作模式")
     expect(prompt).toContain("规划模式")
+    expect(prompt).not.toContain("当前激活")
   })
 })
 

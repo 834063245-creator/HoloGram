@@ -83,15 +83,16 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('- 测试记忆');
   });
 
-  it('loaded graph prompt includes collaboration mode block', () => {
+  it('loaded graph prompt has a mode-neutral collaboration block', () => {
+    // 系统提示词不随协作模式变化（热切换不重建，前缀缓存不击穿）——
+    // 规划模式的完整工作流由 PlanModeInjector 的运行时提醒携带。
     const prompt = buildSystemPrompt(
       { nodes: [1], edges: [1] },
       'D:\\proj',
-      '',
-      '',
-      '',
-      'plan',
     );
+    expect(prompt).toContain('## 协作模式');
     expect(prompt).toContain('规划模式');
+    expect(prompt).toContain('执行模式');
+    expect(prompt).not.toContain('当前激活');
   });
 });

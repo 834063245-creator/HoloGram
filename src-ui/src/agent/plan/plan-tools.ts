@@ -96,7 +96,7 @@ export function createExitPlanModeTool(
         planContent = await rpc<string>('read_file_content', { filePath: planPath });
         planContent = planContent.replace(/^\s*\d+\t/gm, '');
       } catch {
-        return `错误：计划文件不存在。先用 write_file 写计划到 ${planPath}，再调 exit_plan_mode。`;
+        return `错误：计划文件不存在。先用 fs 的 write 动作写计划到 ${planPath}，再调 exit_plan_mode。`;
       }
       if (!planContent.trim()) {
         return `错误：计划文件为空。先写好计划再提交。路径：${planPath}`;

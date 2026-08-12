@@ -146,7 +146,6 @@ export function buildSystemPrompt(
   memorySection = '',
   graphSnapshot = '',
   claudeMdSection = '',
-  collaborationMode: 'normal' | 'plan' = 'normal',
   providerName?: string,
   shellEnvSection = '',
 ): string {
@@ -171,30 +170,13 @@ export function buildSystemPrompt(
     return prompt;
   }
 
-  const modeBlock = collaborationMode === 'plan'
-    ? `
-## 规划模式（当前激活）
-你只有只读工具 + 写计划文件的权限。不能写其他文件、跑命令、Git 操作。
-
-### 工作流程
-1. **探索** — 用 fs(read/list/glob) / search(content) / explore_deps / trace_impact / fragile_modules 充分理解代码
-2. **设计** — 确定最佳方案，考虑权衡
-3. **写计划** — 用 write_file 写到计划文件（路径见 enter_plan_mode 返回值）
-4. **提交** — 调 exit_plan_mode 提交计划给用户审批
-
-### 计划要求
-- 列出具体步骤，引用真实文件名和函数名
-- 包含「影响面分析」部分（图引擎会自动注入辅助数据）
-- 如有多方案，用 exit_plan_mode 的 options 参数列出
-- 不要用 ask_user 问「计划行不行」— 那是 exit_plan_mode 的事
-
-### 图引擎辅助
-- 读文件时自动显示该文件的下游依赖和脆弱度
-- 写计划文件时自动追加影响面分析
-- 主动调 trace_impact / explore_deps / fragile_modules 查依赖关系`
-    : `
-## 执行模式
-你有写文件、跑命令、Git 的全部工具。用户说"修"就直接修，修完跑测试验证。`;
+  // 协作模式块必须模式无关：footer 热切换 / enter_plan_mode 都不重建系统提示词
+  // （重建会击穿前缀缓存）。规划模式的完整工作流由 PlanModeInjector 的运行时
+  // system-reminder 携带（plan/plan-prompts.ts），此处只写两种模式的静态约定。
+  const modeBlock = `
+## 协作模式
+- 默认为**执行模式**：写文件、跑命令、Git 的全部工具可用。用户说"修"就直接修，修完跑测试验证。
+- 用户可随时切入**规划模式**（只读分析 + 写计划文件）：经 enter_plan_mode 或界面切换。当前模式以运行时 system-reminder 为准；规划模式下写操作在执行层拦截（写计划文件除外），不要硬试。`;
 
   const staticRules = `你是 HoloGram 的编码 Agent。
 
@@ -226,8 +208,9 @@ ${modeBlock}`;
 - ${modelIdentity}
 - 项目: \`${projectPath}\``;
 
-  if (collaborationMode !== 'plan') {
-    suffix += `\n\n## 多 Agent 协作
+  // 多 Agent 段落无条件包含：规划模式下 agent(spawn) 仍可用（子 Agent 静态
+  // 降级为只读克隆，见 planRegistry），内容在两种模式下都成立。
+  suffix += `\n\n## 多 Agent 协作
 
 ### 子 Agent
 - agent(spawn) 阻塞到子 Agent 完成，结果就是工具返回值。同一轮发多个可并行。大任务才委派，小任务自己做。
@@ -276,7 +259,6 @@ ${modeBlock}`;
 - **范围硬约束**：写类任务必须给每个子 Agent 不重叠的文件范围；两个子 Agent 可能改同一文件时，改为串行或合并成一个任务。
 - **读类任务可放宽**：只读/检查/回报类子 Agent 范围可以适度重叠，用 **fresh 模式**（不隔离、低开销、直接改主工作区）；写类任务用 **fork 模式**（worktree 隔离，靠 agent(merge) 合并回来）。
 - **不自己包揽主活**：拆分清楚后，把各子任务交给子 Agent，别在主 Agent 里重复做。`;
-  }
 
   if (graphSnapshot) {
     suffix += `\n\n## 项目架构快照\n\`\`\`\n${graphSnapshot}\n\`\`\``;
