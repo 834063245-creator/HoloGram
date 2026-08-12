@@ -52,6 +52,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     await loadReal();
     log.debug('bridge', 'invoke', { command: cmd });
     try {
+      if (!_realInvoke) throw new Error('invoke bridge not initialized');
       const result = await _realInvoke(cmd, args);
       return result as T;
     } catch (e) {
@@ -70,6 +71,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 export async function listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void> {
   if (IS_TAURI) {
     await loadRealListen();
+    if (!_realListen) throw new Error('listen bridge not initialized');
     return _realListen(event, handler);
   }
   // 浏览器：无文件监听 — 返回一个空 unlisten

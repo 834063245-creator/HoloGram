@@ -6,7 +6,7 @@
 
 import { clampMaxTokens } from './catalog';
 import { sendWithRetry } from './retry';
-import { extractWritePreview, fetchJsonWithTimeout, prewarmEndpoint, sseEvents } from './shared';
+import { extractWritePreview, fetchJsonWithTimeout, prewarmEndpoint, sseEvents, type SseEvent } from './shared';
 import {
   effortVendor,
   isThinkingMode,

@@ -999,7 +999,7 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
   // 在 mock 响应中查找
   if (cmd in MOCK_TOOL_RESPONSES) {
     const v = MOCK_TOOL_RESPONSES[cmd];
-    return typeof v === 'function' ? v(args) : v;
+    return (typeof v === 'function' ? v(args) : v) as string;
   }
 
   // 回退

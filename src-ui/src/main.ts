@@ -205,18 +205,21 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     wsMachine.transition(ws._health === 'degraded' ? 'degraded' : 'active');
     await notifyAllPanels(ws);
 
-    const nodeCount = Array.isArray(ws.graphData.nodes)
-      ? ws.graphData.nodes.length
-      : Object.keys(ws.graphData.nodes || {}).length;
-    const genTime = ws.graphData.meta?.generated_at
-      ? new Date(ws.graphData.meta.generated_at).toLocaleTimeString()
-      : '';
+    const gd = ws.graphData;
+    const nodeCount = gd
+      ? (Array.isArray(gd.nodes) ? gd.nodes.length : Object.keys(gd.nodes || {}).length)
+      : 0;
+    const genRaw = gd?.meta?.generated_at;
+    const genTime =
+      typeof genRaw === 'string' || typeof genRaw === 'number'
+        ? new Date(genRaw).toLocaleTimeString()
+        : '';
     pushStatus(`✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`);
     log.info('main', 'project loaded', {
       nodes: nodeCount,
-      edges: Array.isArray(ws.graphData.edges)
-        ? ws.graphData.edges.length
-        : Object.keys(ws.graphData.edges || {}).length,
+      edges: gd
+        ? (Array.isArray(gd.edges) ? gd.edges.length : Object.keys(gd.edges || {}).length)
+        : 0,
     });
     setLoading(false);
 
@@ -628,7 +631,7 @@ async function init(): Promise<void> {
     navigateToNode: (name) => starGraph?.focusNode(name),
     navigateToFile: async (path, line) => {
       await loadFileViewer();
-      FV().get().open(path, { line });
+      FV()?.get().open(path, { line });
     },
     highlightFile: (path) => starGraph?.highlightFile(path),
     highlightFolder: (path) => starGraph?.highlightFolder(path),

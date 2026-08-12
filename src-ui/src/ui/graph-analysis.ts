@@ -7,6 +7,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
+import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { useShellStore } from '../app/shell-store';
 
 // ── Types ────────────────────────────────────────────────────

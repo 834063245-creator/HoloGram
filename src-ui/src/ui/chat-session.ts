@@ -366,6 +366,9 @@ interface StoredSession {
   messages?: Message[];
   tokensUsed?: number;
   deleted?: boolean;
+  /** _active.json 跟踪文件字段（与单个会话文件形状不同） */
+  lastId?: number;
+  nextId?: number;
 }
 
 /** list_directory 返回的目录项。 */

@@ -7,6 +7,11 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
+import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import type { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import type { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { communityColor, edgeColorByType, edgeOpacityByDepth, GLOW_COLORS } from './graph-colors';
 import { useShellStore } from '../app/shell-store';
 import type { CommunityData, EdgeData, GraphNode } from './graph-types';
