@@ -6,13 +6,13 @@
 
 ## 一句话
 
-把代码库变成可对话的 3D 依赖星图——18 语言统一 IR，25 个 MCP 工具直查图，不是让 LLM 猜源码。
+把代码库变成可对话的 3D 依赖星图——27 语言统一 IR（20 种带专用 .scm 查询），33 个 MCP 工具直查图，不是让 LLM 猜源码。
 
 ## 目录结构
 
 ```
 HoloGramHG/
-├── engine/          Rust 分析引擎（25 MCP 工具）
+├── engine/          Rust 分析引擎（33 MCP 工具）
 ├── src-tauri/       Tauri 2 壳（命令桥接 + 安全沙箱）
 ├── src-ui/          TypeScript 前端（Three.js + Agent + Monaco；观测台重构 P0–P6 + 视觉深化 P7 全系列已竣工）
 ├── tests/           遗留 Python 测试（引擎已 Rust 化，部分仍可用）
@@ -41,7 +41,7 @@ HoloGramHG/
 flowchart LR
   UI[src-ui Three.js + Agent] -->|invoke| Tauri[src-tauri]
   Tauri -->|TCP :9777| Engine[engine/]
-  Engine -->|tree-sitter| AST[18 语言 AST]
+  Engine -->|tree-sitter| AST[27 语言 AST]
   Engine -->|GraphStore| DB[(hologram.db + FTS5)]
   MCP[Cursor MCP] -->|stdio serve| Engine
 ```

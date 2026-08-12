@@ -6,7 +6,7 @@
 //! 完全替代 src_python/mcp_server.py。
 //!
 //! 协议：从 stdin 逐行读取 JSON-RPC 请求，向 stdout 逐行写入 JSON-RPC 响应。
-//! 支持 `tools/list` 和 `tools/call`，通过 ToolRegistry 暴露全部 28+ 个 hologram_* 工具。
+//! 支持 `tools/list` 和 `tools/call`，通过 ToolRegistry 暴露全部 33 个 hologram_* 工具（默认激活；`symbol_history` 经 HOLOGRAM_MCP_TOOLS=* 放开）。
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};

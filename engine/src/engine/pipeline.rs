@@ -304,7 +304,7 @@ impl Engine {
         result.parse_cache.clear();
         result.parse_cache.shrink_to_fit();
 
-        // 7. 社区检测（Leiden 扁平 + Louvain 层次）
+        // 7. 社区检测（Louvain 压缩 + Leiden 阶段 2 精化）
         set_progress("社区检测", 0, 0, "");
         let stage_start = std::time::Instant::now();
 

@@ -721,7 +721,18 @@ pub(crate) fn handler_explore(args: &Value) -> ToolResponse {
     }
     let include_source = args.get("includeSource").and_then(|v| v.as_bool()).unwrap_or(true);
     let root = project_root();
-    ToolResponse::Success(with_graph(|g| explore(g, &root, &symbols, query_str.as_deref(), include_source)))
+    ToolResponse::Success(with_graph(|g| {
+        let mut out = explore(g, &root, &symbols, query_str.as_deref(), include_source);
+        // 语义召回附加（仅 NL query 场景）：parse_nl_query 是名称匹配，
+        // 词汇不匹配的查询（如 "memory management"）由向量命中补齐。
+        // 与 search_symbols 共用 merge_vector_hits：即发即忘，无索引静默跳过。
+        if let Some(q) = query_str.as_deref() {
+            if !q.trim().is_empty() {
+                merge_vector_hits(&mut out, q, 5);
+            }
+        }
+        out
+    }))
 }
 
 pub(crate) fn handler_graph_summary(_args: &Value) -> ToolResponse {
@@ -2290,4 +2301,51 @@ pub(crate) fn handler_affected_flows(args: &Value) -> ToolResponse {
             "total": affected.len(),
         })
     }))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::engine_init;
+
+    fn init_tmp_project(name: &str) -> std::path::PathBuf {
+        let tmp = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        engine_init(&tmp).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn explore_requires_symbols_or_query() {
+        let _ = init_tmp_project("hologram_test_explore_degraded");
+        match handler_explore(&json!({})) {
+            ToolResponse::Degraded { guidance, .. } => {
+                assert!(!guidance.is_empty());
+            }
+            other => panic!("expected Degraded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn explore_nl_query_without_vector_index_skips_silently() {
+        let _ = init_tmp_project("hologram_test_explore_noidx");
+        // 空项目无向量索引 → merge_vector_hits 即发即忘：
+        // 主结构完整、不注入 vector 字段、不报错。
+        let resp = handler_explore(&json!({
+            "query": "memory management",
+            "includeSource": false,
+        }));
+        match resp {
+            ToolResponse::Success(v) => {
+                assert!(v.get("flow").is_some(), "explore 主结构应保留");
+                assert!(v.get("meta").is_some(), "explore meta 应保留");
+                let vh = v.get("vector_hits");
+                assert!(
+                    vh.is_none() || vh.and_then(|x| x.as_array()).map_or(true, |a| a.is_empty()),
+                    "无索引时应无向量命中"
+                );
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
 }
