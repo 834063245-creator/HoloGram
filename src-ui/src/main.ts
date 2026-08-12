@@ -42,19 +42,28 @@ import { GraphInteraction } from './ui/graph-interaction';
 import { getPanelStore } from './ui/panel-store';
 import { installResizeZones } from './ui/resize-zones';
 import type { CheckResult } from './ui/react/CheckPanel';
-import { isSamePath, loadGraphPages, Workspace } from './workspace';
+import { isSamePath, loadGraphPages, Workspace, type CachedGraphMeta } from './workspace';
 import { WorkspaceStateMachine } from './lifecycle/state-machine';
 import { withTimeout } from './lifecycle/timeout';
+import type { GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
+
+/** 冷启动缓存载荷 — 分页 meta（P0-2）或旧格式全量图（兼容）。 */
+interface CachedGraphPayload {
+  paged?: boolean;
+  meta?: { node_count?: number; source_root?: string; [key: string]: unknown };
+  nodes?: GraphNode[] | Record<string, GraphNode>;
+  edges?: GraphEdge[] | Record<string, GraphEdge>;
+}
 
 // 懒加载 FileViewer — 避免将 Monaco（~5MB）拉入初始 bundle
-let _FileViewer: any = null;
+let _FileViewer: (typeof import('./ui/file-viewer'))['FileViewer'] | null = null;
 async function loadFileViewer(): Promise<void> {
   if (!_FileViewer) {
     const mod = await import('./ui/file-viewer');
     _FileViewer = mod.FileViewer;
   }
 }
-function FV(): any {
+function FV(): (typeof import('./ui/file-viewer'))['FileViewer'] | null {
   return _FileViewer;
 }
 // ponytail：权限对话框现在通过 ChatPanel.showPermissionCard 内联嵌入
@@ -117,7 +126,7 @@ async function pickFolder(): Promise<string | null> {
 // switchWorkspace — 统一入口
 // ═══════════════════════════════════════════════════════════════
 
-async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; cachedGraph?: any }): Promise<void> {
+async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; cachedGraph?: CachedGraphMeta }): Promise<void> {
   if (!starGraph) {
     pushStatus('3D 渲染不可用（WebGL2 初始化失败），无法打开项目');
     return;
@@ -176,7 +185,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
       console.log('[switchWorkspace] calling Workspace.open...');
       ws = await Workspace.open(folder, starGraph, chatPanel, opts, { onStatusChange, onLoadingChange });
       console.log('[switchWorkspace] Workspace.open returned');
-    } catch (err: any) {
+    } catch (err) {
       console.error('[switchWorkspace] Workspace.open threw:', err);
       pushStatus(`分析失败: ${err}`);
       setLoading(false);
@@ -259,7 +268,7 @@ async function notifyAllPanels(ws: Workspace): Promise<void> {
   useShellStore.getState().setView('graph');
   chatPanel.setProjectPath(ws.path);
   await loadFileViewer();
-  FV().get().setProjectPath(ws.path);
+  FV()?.get().setProjectPath(ws.path);
   bus.emit('workspace:switched');
 }
 
@@ -315,7 +324,7 @@ async function toggleDiff(): Promise<void> {
         `+${diff.added_nodes?.length || 0} / -${diff.removed_nodes?.length || 0} / ~${diff.modified_nodes?.length || 0}`,
       );
     }
-  } catch (err: any) {
+  } catch (err) {
     pushStatus(`变更分析失败: ${err}`);
   }
 }
@@ -346,7 +355,7 @@ async function reanalyze(): Promise<void> {
       return;
     }
     // P0-2 分页化：analyze_and_load 只回 meta，图数据逐页拉取重建。
-    const meta = JSON.parse(raw);
+    const meta = JSON.parse(raw) as CachedGraphMeta;
     ws.graphData = {
       meta: meta.meta || {},
       nodes: [],
@@ -355,13 +364,13 @@ async function reanalyze(): Promise<void> {
       hierarchical_communities: [],
     };
     await loadGraphPages(ws, starGraph, meta);
-    console.log('[reanalyze] step 3: pages loaded, nodes:', ws.graphData.nodes.length);
     const nc = Array.isArray(ws.graphData.nodes)
       ? ws.graphData.nodes.length
       : Object.keys(ws.graphData.nodes || {}).length;
+    console.log('[reanalyze] step 3: pages loaded, nodes:', nc);
     pushStatus(`✨ ${nc} 节点已就绪`);
     console.log('[reanalyze] step 4: done');
-  } catch (e: any) {
+  } catch (e) {
     console.error('[reanalyze] FAILED:', e);
     pushStatus(`重分析失败: ${e}`);
   } finally {
@@ -380,7 +389,7 @@ function escLayer(): void {
   else if (dock.isOpen('check')) dock.closePanel('check');
   else if (dock.isOpen('constraints')) dock.closePanel('constraints');
   else if (chatPanel.isOpen()) chatPanel.close();
-  else if (FV()?.get().isOpen) FV().get().close();
+  else if (FV()?.get().isOpen) FV()?.get().close();
   else starGraph?.clearAgentHighlight();
 }
 
@@ -811,10 +820,10 @@ async function init(): Promise<void> {
   // ═══════════════════════════════════════════════════════════════
 
   try {
-    let graph: any;
+    let graph: CachedGraphPayload | null = null;
     try {
       const json = await typedRpc('load_graph_json', {});
-      graph = JSON.parse(json);
+      graph = JSON.parse(json) as CachedGraphPayload;
     } catch {
       // 无缓存图谱
     }
@@ -836,7 +845,7 @@ async function init(): Promise<void> {
       const root: string = graph.meta?.source_root || '';
       if (!root) {
         // 图谱存在但无路径 — 无工作区渲染
-        starGraph?.render(graph);
+        starGraph?.render(graph as GraphJSON);
         pushStatus('⚠️ 缓存图谱已加载，但工作区路径丢失 — 请重新打开项目');
         useShellStore.getState().setProjectPath('');
         setLoading(false);

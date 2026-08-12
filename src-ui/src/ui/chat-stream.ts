@@ -64,7 +64,7 @@ export interface StreamContext {
   saveActiveSession: (path: string) => Promise<void>;
   scheduleAutoSave: (path: string) => void;
   bumpPillBadge: () => void;
-  animateBubbleIn: (el: HTMLElement, delay?: number) => any;
+  animateBubbleIn: (el: HTMLElement, delay?: number) => void;
   setRunning: (r: boolean) => void;
   abort: () => void;
   _updateStatusBar: (state: 'idle' | 'thinking' | 'running' | 'error', detail?: string) => void;
@@ -225,9 +225,9 @@ function _finaliseStreamingAssistant(ctx: StreamContext): void {
   if (assistant) {
     assistant.status = 'done';
     for (const part of assistant.parts) {
-      if (part.type === 'text') (part as any).finalised = true;
-      if (part.type === 'tool' && ((part as any).status === 'running' || (part as any).status === 'pending')) {
-        (part as any).status = 'error';
+      if (part.type === 'text') part.finalised = true;
+      if (part.type === 'tool' && (part.status === 'running' || part.status === 'pending')) {
+        part.status = 'error';
       }
     }
     // 替换为新的消息对象：AssistantBubble 的 memo 比较器在
@@ -403,7 +403,7 @@ export function renderEvent(ctx: StreamContext, ev: AgentEvent): void {
       break;
 
     default:
-      console.warn('[chat] renderEvent: unknown event kind', (ev as any).kind);
+      console.warn('[chat] renderEvent: unknown event kind', ev.kind);
       break;
   }
 }

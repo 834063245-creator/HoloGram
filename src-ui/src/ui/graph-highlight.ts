@@ -15,6 +15,11 @@ import { edgeOpacityByDepth } from './graph-colors';
 import type { GraphFocusController } from './graph-focus-controller';
 import type { EdgeData, GraphNode } from './graph-types';
 
+/** 边线对象 + 文件高亮临时保存的原始透明度（挂在实例上的扩展字段）。 */
+interface EdgeLinesWithPrevOpacity extends LineSegments2 {
+  __prevOpacity?: number;
+}
+
 // ── HighlightHost — GraphHighlight 需要从 StarGraph 访问的成员 ──
 
 export interface HighlightHost {
@@ -142,12 +147,13 @@ export class GraphHighlight {
     // 边线：高亮时全部调暗
     for (const lines of this.host.edgeLineGroups) {
       const mat = lines.material as LineMaterial;
+      const withPrev = lines as EdgeLinesWithPrevOpacity;
       if (hl) {
-        (lines as any).__prevOpacity = mat.opacity;
+        withPrev.__prevOpacity = mat.opacity;
         mat.opacity = 0.015;
-      } else if ((lines as any).__prevOpacity !== undefined) {
-        mat.opacity = (lines as any).__prevOpacity;
-        delete (lines as any).__prevOpacity;
+      } else if (withPrev.__prevOpacity !== undefined) {
+        mat.opacity = withPrev.__prevOpacity;
+        delete withPrev.__prevOpacity;
       }
     }
 

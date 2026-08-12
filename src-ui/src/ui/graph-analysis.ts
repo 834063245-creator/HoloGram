@@ -55,7 +55,7 @@ export interface AnalysisHost {
 
   // 场景
   highlightEdgeGroup: THREE.Group;
-  edgeLineGroups: any[];
+  edgeLineGroups: LineSegments2[];
 
   // 颜色缓存
   nodeGlowColors: number[];
@@ -68,9 +68,6 @@ export interface AnalysisHost {
   // 工具
   _hitNode(e: PointerEvent | MouseEvent): number;
   _findNodeIndexByName(query: string): number;
-
-  // DOM / 事件
-  bus: any;
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -8,8 +8,10 @@ const IS_TAURI = '__TAURI_INTERNALS__' in window;
 
 import { log } from './agent/logger';
 
-let _realInvoke: any;
-let _realListen: any;
+type RealInvoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+type RealListen = <T>(event: string, handler: (event: { payload: T }) => void) => Promise<() => void>;
+let _realInvoke: RealInvoke | null = null;
+let _realListen: RealListen | null = null;
 let _mockInvoke: ((cmd: string, args?: Record<string, unknown>) => string) | undefined;
 
 async function loadMock(): Promise<(cmd: string, args?: Record<string, unknown>) => string> {
@@ -20,21 +22,23 @@ async function loadMock(): Promise<(cmd: string, args?: Record<string, unknown>)
   return _mockInvoke;
 }
 
-async function loadReal() {
+async function loadReal(): Promise<void> {
   if (!_realInvoke) {
     const core = await import('@tauri-apps/api/core').catch(() => {
       throw new Error('Failed to load Tauri core API — is the app running in Tauri shell?');
     });
-    _realInvoke = core.invoke;
+    _realInvoke = core.invoke as unknown as RealInvoke;
   }
 }
 
-async function loadRealListen() {
+async function loadRealListen(): Promise<void> {
   if (!_realListen) {
     const event = await import('@tauri-apps/api/event').catch(() => {
       throw new Error('Failed to load Tauri event API — is the app running in Tauri shell?');
     });
-    _realListen = event.listen;
+    // Tauri 的 EventCallback<T> 携带 event/id 元字段 — 本桥接层只暴露 payload，
+    // 类型边界收窄在模块加载点一次性完成（运行时直通）。
+    _realListen = event.listen as unknown as RealListen;
   }
 }
 
@@ -49,8 +53,8 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     log.debug('bridge', 'invoke', { command: cmd });
     try {
       const result = await _realInvoke(cmd, args);
-      return result;
-    } catch (e: any) {
+      return result as T;
+    } catch (e) {
       log.error('bridge', 'invoke failed', { command: cmd, error: String(e) });
       throw e;
     }

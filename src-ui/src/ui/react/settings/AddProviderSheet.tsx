@@ -140,7 +140,7 @@ export function AddProviderSheet({ open, existingNames, onClose, onAdd }: AddPro
           </div>
           <div className="pp-fg">
             <label>协议</label>
-            <select className="sp-select" value={kind} onChange={(e) => setKind(e.target.value as any)}>
+            <select className="sp-select" value={kind} onChange={(e) => setKind(e.target.value as Protocol)}>
               <option value="openai">OpenAI 兼容</option>
               <option value="anthropic">Anthropic</option>
             </select>

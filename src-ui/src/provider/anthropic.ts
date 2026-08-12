@@ -19,6 +19,30 @@ import {
 } from './types';
 
 const ANTHROPIC_VERSION = '2023-06-01';
+
+/** Anthropic Messages API 的 SSE 事件形状（本文件消费的子集）。 */
+interface AnthropicSseEvent extends SseEvent {
+  message?: {
+    usage?: {
+      input_tokens: number;
+      cache_creation_input_tokens: number;
+      cache_read_input_tokens: number;
+      output_tokens: number;
+    };
+  };
+  content_block?: { type?: string; id: string; name: string };
+  index: number;
+  delta?: {
+    type?: string;
+    text?: string;
+    thinking?: string;
+    signature?: string;
+    partial_json: string;
+    stop_reason?: string;
+  };
+  usage?: { output_tokens: number };
+  error?: { message?: string };
+}
 /** Anthropic 官方端点 — 字面量唯一事实源；settings.PROVIDER_PROTOCOL_DEFAULTS 引用此值。 */
 export const ANTHROPIC_DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_MAX_TOKENS = 32000; // ponytail：跨提供商的安全上限
@@ -321,7 +345,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
   let finishReason = '';
   let haveUsage = false;
 
-  for await (const ev of sseEvents(body, name, signal)) {
+  for await (const ev of sseEvents<AnthropicSseEvent>(body, name, signal)) {
     switch (ev.type) {
       case 'message_start':
         if (ev.message?.usage) {

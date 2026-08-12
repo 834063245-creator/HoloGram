@@ -8,6 +8,9 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
+import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import type { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { bus } from './events';
@@ -37,9 +40,9 @@ export interface LifecycleHost {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
-  controls: any; // OrbitControls
-  composer: any; // EffectComposer
-  bloomPass: any; // UnrealBloomPass
+  controls: OrbitControls;
+  composer: EffectComposer;
+  bloomPass: UnrealBloomPass;
   animId: number;
   holoGrid: THREE.Mesh;
   holoGridY: number;
@@ -200,14 +203,14 @@ export class GraphSceneLifecycle {
         deg[s]++;
         deg[t]++;
         const crossFile = nodeFile.get(s) !== nodeFile.get(t);
-                eData.push({
+        eData.push({
           s,
           t,
-          couplingDepth: ((e as any).coupling_depth as number) || 0,
+          couplingDepth: e.coupling_depth || 0,
           edgeType: e.type || '',
-          direction: (e as any).direction || '',
+          direction: e.direction || '',
           crossFile,
-          ambiguous: !!(e.metadata as any)?.ambiguous,
+          ambiguous: !!e.metadata?.ambiguous,
         });
       }
     }
@@ -232,9 +235,8 @@ export class GraphSceneLifecycle {
     // 优先使用层级（多级）而非扁平社区
     // P0-2 修复：空数组在 JS 里是真值 — 分页空壳的 hierarchical_communities:[]
     // 会阻断回退到 communities，布局丢失社区分组（目录分组兜底 → 一锅粥）。
-    const hc = (graph as any).hierarchical_communities;
-    this.host.communities = ((Array.isArray(hc) && hc.length > 0 ? hc : (graph as any).communities) ||
-      []) as CommunityData[];
+    const hc = graph.hierarchical_communities;
+    this.host.communities = (Array.isArray(hc) && hc.length > 0 ? hc : graph.communities) || [];
     this.host.nodeCommMap.clear();
     // 调试：记录社区数据
     const level0Comms = this.host.communities.filter((c) => !c.level || c.level === 0);
@@ -864,9 +866,8 @@ export class GraphSceneLifecycle {
     this.host._nodes._syncNodeCoreMatrices();
 
     // 8. 从完整图更新社区（空数组是真值 — 分页中间页必须回退到 communities）
-    const hcDiff = (fullGraph as any).hierarchical_communities;
-    this.host.communities = ((Array.isArray(hcDiff) && hcDiff.length > 0 ? hcDiff : (fullGraph as any).communities) ||
-      []) as CommunityData[];
+    const hcDiff = fullGraph.hierarchical_communities;
+    this.host.communities = (Array.isArray(hcDiff) && hcDiff.length > 0 ? hcDiff : fullGraph.communities) || [];
 
     // 9. 清除指向死亡节点的过期交互状态
     if (this.host.hoveredIdx >= 0 && this.host._deadIndices.has(this.host.hoveredIdx)) {

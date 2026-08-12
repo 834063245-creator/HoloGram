@@ -61,7 +61,7 @@ export interface BusEvents {
   'dataflow:saved': [];
 }
 
-type Handler = (...args: any[]) => void;
+type Handler = (...args: unknown[]) => void;
 
 class EventBus {
   private handlers = new Map<string, Handler[]>();

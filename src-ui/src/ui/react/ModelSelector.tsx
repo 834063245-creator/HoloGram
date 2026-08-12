@@ -60,9 +60,9 @@ export function ModelSelector({ value, onChange, providerName, kind, onRefreshMo
       const count = await onRefreshModels();
       setDynamicCount(getDynamicModelCount(providerName));
       setRefreshMsg(count > 0 ? `已发现 ${count} 个模型` : '未获取到新模型');
-    } catch (e: any) {
+    } catch (e) {
       // 无 Key / 网络失败等真实原因透出，避免「未获取到新模型」误导
-      setRefreshMsg(e?.message || String(e) || '获取失败');
+      setRefreshMsg((e instanceof Error ? e.message || String(e) : String(e)) || '获取失败');
     } finally {
       setRefreshing(false);
       setTimeout(() => setRefreshMsg(''), 3000);

@@ -39,19 +39,19 @@ export interface FoldHost {
   _glow2Rgba: Float32Array;
 
   // 场景对象
-  edgeLineGroups: any[]; // LineSegments2[]
+  edgeLineGroups: LineSegments2[];
   highlightEdgeGroup: THREE.Group;
   galaxyGroup: THREE.Group;
   scene: THREE.Scene;
 
   // 相机
   camera: THREE.PerspectiveCamera;
-  controls: any; // OrbitControls
+  controls: OrbitControls;
 
   // 渲染
   renderer: THREE.WebGLRenderer;
-  composer: any; // EffectComposer
-  bloomPass: any; // UnrealBloomPass
+  composer: EffectComposer;
+  bloomPass: UnrealBloomPass;
   glowTex: THREE.Texture;
 
   // DOM
@@ -70,7 +70,7 @@ export interface FoldHost {
   focusNodeIdx: number;
   focusFlash: number;
   _userInteracting: boolean;
-  _flyDebounce: any;
+  _flyDebounce: ReturnType<typeof setTimeout> | null;
 
   // 空间
   _graphRadius: number;
@@ -342,7 +342,7 @@ export class GraphFold {
     }
     for (const lines of this.host.edgeLineGroups) {
       lines.visible = true;
-      (lines.material as any).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
+      (lines.material as LineMaterial).opacity = edgeOpacityByDepth((lines.userData.edgeDepth as number) ?? 0);
     }
     this._disposeFoldChildren();
     this.clearCrossEdgeFlow();
@@ -353,11 +353,12 @@ export class GraphFold {
   _disposeFoldChildren(): void {
     while (this.commFoldGroup.children.length) {
       const child = this.commFoldGroup.children[0];
-      if ((child as any).geometry) (child as any).geometry.dispose();
-      const mat = (child as any).material;
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      const mat = mesh.material;
       if (mat) {
-        if (Array.isArray(mat)) mat.forEach((m: THREE.Material) => m.dispose());
-        else (mat as THREE.Material).dispose();
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else mat.dispose();
       }
       this.commFoldGroup.remove(child);
     }

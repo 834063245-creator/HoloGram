@@ -279,7 +279,7 @@ export const FileTranslatorApp: React.FC<{
         else if (chunk.type === ChunkType.Error) throw chunk.err!;
       }
 
-      let parsed: any;
+      let parsed: { lines: TranslationLine[] };
       try {
         parsed = JSON.parse(rawText);
       } catch {
@@ -412,10 +412,10 @@ export const FileTranslatorApp: React.FC<{
         setTranslatedAt(null);
         setMode('content');
         computeStats(aligned);
-      } catch (e: any) {
-        if (e?.name === 'AbortError') return;
+      } catch (e) {
+        if (e instanceof Error && e.name === 'AbortError') return;
         setMode('error');
-        setErrorMsg(e?.message || '翻译失败');
+        setErrorMsg(e instanceof Error ? e.message || '翻译失败' : '翻译失败');
       } finally {
         if (waitTimerRef.current) {
           clearInterval(waitTimerRef.current);

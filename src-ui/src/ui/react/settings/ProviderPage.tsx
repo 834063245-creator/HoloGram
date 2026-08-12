@@ -167,9 +167,9 @@ export function ProviderPage({
       const result: ConnectionProbe = { status: 'ok', latencyMs, at: Date.now(), message: msg };
       onPersistSettings(updateProvider(settingsRef.current, name, { lastTest: result }));
       setTests((t) => new Map(t).set(name, { phase: 'ok', msg }));
-    } catch (e: any) {
+    } catch (e) {
       const latencyMs = Math.round(performance.now() - started);
-      const msg = e?.message || String(e);
+      const msg = e instanceof Error ? e.message || String(e) : String(e);
       const result: ConnectionProbe = { status: 'fail', latencyMs, at: Date.now(), message: msg };
       onPersistSettings(updateProvider(settingsRef.current, name, { lastTest: result }));
       setTests((t) => new Map(t).set(name, { phase: 'fail', msg }));
@@ -199,7 +199,7 @@ export function ProviderPage({
         setSelected(entry.name);
         setAddOpen(false);
         requestFocusKey();
-      } catch (e: any) {
+      } catch (e) {
         // 弹层已做重复名校验；此处仅兜底
         console.warn('[provider] 添加失败:', e);
       }
@@ -231,7 +231,7 @@ export function ProviderPage({
         next.delete(delTarget);
         return next;
       });
-    } catch (e: any) {
+    } catch (e) {
       console.warn('[provider] 删除失败:', e);
       setDelTarget(null);
     }

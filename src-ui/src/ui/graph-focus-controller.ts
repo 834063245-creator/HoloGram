@@ -8,6 +8,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
+import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { t } from '../i18n';
@@ -22,7 +23,7 @@ import { iconHtml } from './icons';
 export interface FocusHost {
   container: HTMLElement;
   camera: THREE.PerspectiveCamera;
-  controls: any; // OrbitControls
+  controls: OrbitControls;
 
   // 飞行/聚焦状态（facade 持有，GraphFold 也直接读写）
   focusTarget: THREE.Vector3;
@@ -150,7 +151,7 @@ export class GraphFocusController {
   focusNode(query: string): boolean {
     const q = query.trim().toLowerCase();
     if (!q || this.host._nodeCount === 0) return false;
-    const isAlive = (n: any, i: number) => n && !this.host._deadIndices.has(i);
+    const isAlive = (n: GraphNode | undefined, i: number) => !!n && !this.host._deadIndices.has(i);
     let idx = this.host.graphNodes.findIndex((n, i) => isAlive(n, i) && n.name.toLowerCase() === q);
     if (idx < 0) idx = this.host.graphNodes.findIndex((n, i) => isAlive(n, i) && n.name.toLowerCase().startsWith(q));
     if (idx < 0) idx = this.host.graphNodes.findIndex((n, i) => isAlive(n, i) && n.name.toLowerCase().includes(q));

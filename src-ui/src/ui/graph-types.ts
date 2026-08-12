@@ -10,6 +10,8 @@ export interface GraphNode {
   kind?: string;
   location?: string;
   properties?: Record<string, unknown>;
+  /** 引擎序列化节点携带的 level-0 社区 id。 */
+  community_id?: number | string;
 }
 export interface GraphEdge {
   id: string;
@@ -18,11 +20,19 @@ export interface GraphEdge {
   type?: string;
   properties?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  /** 引擎序列化边携带的耦合深度。 */
+  coupling_depth?: number;
+  /** 引擎序列化边携带的方向。 */
+  direction?: string;
 }
 export interface GraphJSON {
   nodes: GraphNode[] | Record<string, GraphNode>;
   edges: GraphEdge[] | Record<string, GraphEdge>;
   meta?: Record<string, unknown>;
+  /** 扁平社区 — 引擎序列化图携带。 */
+  communities?: CommunityData[];
+  /** 层级社区 — 引擎序列化图携带。 */
+  hierarchical_communities?: CommunityData[];
 }
 
 export interface EdgeData {

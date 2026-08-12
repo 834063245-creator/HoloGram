@@ -13,6 +13,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import type { AgentEvent } from '../../agent/agent-types';
+import type { RuntimePort } from '../../agent/runtime/types';
 import type { OwnedAgentHandle } from '../../agent/agent-session-state';
 import type { ChatAgentHandle, GoalRunResult } from '../../agent/chat-agent-handle';
 import { createExecState, type ExecStateInstance } from '../../agent/execution-state';
@@ -510,7 +511,7 @@ export class ChatCore {
         s.setDraftText('');
       },
       getStarGraph: () => this.starGraph,
-      getRuntime: () => useAgentPanelStore.getState().runtimeRef as any,
+      getRuntime: () => useAgentPanelStore.getState().runtimeRef as RuntimePort | null,
     };
   }
 

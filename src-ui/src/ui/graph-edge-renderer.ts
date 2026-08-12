@@ -141,11 +141,11 @@ export class GraphEdgeRenderer {
       eData.push({
         s,
         t,
-        couplingDepth: ((e as any).coupling_depth as number) || 0,
+        couplingDepth: e.coupling_depth || 0,
         edgeType: e.type || '',
-        direction: (e as any).direction || '',
+        direction: e.direction || '',
         crossFile: nodeFile.get(s) !== nodeFile.get(t),
-        ambiguous: !!(e.metadata as any)?.ambiguous,
+        ambiguous: !!e.metadata?.ambiguous,
       });
     }
     this.host.deg = deg;

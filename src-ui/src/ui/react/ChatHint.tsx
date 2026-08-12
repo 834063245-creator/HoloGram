@@ -43,7 +43,7 @@ export function ChatHint({ panelId }: { panelId: string }) {
   const activeSid = useStore(sessStore, (s) => s.sessions[s.activeIdx]?.id ?? null);
 
   const msgStore = useMemo(() => (activeSid != null ? msgStoreFor(panelId, activeSid) : null), [panelId, activeSid]);
-  const messages = useStore(msgStore ?? panelStore, (s) => ('messages' in s ? (s as any).messages : EMPTY_MSGS));
+  const messages = useStore(msgStore ?? panelStore, (s) => ('messages' in s ? s.messages : EMPTY_MSGS));
 
   // 仅在消息列表为空时显示
   if (!Array.isArray(messages) || messages.length > 0) return null;

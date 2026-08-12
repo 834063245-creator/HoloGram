@@ -358,10 +358,27 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
 
 // ── 会话持久化 — 每个会话一个文件，localStorage 备份 ──
 
+/** 会话文件的持久化形状（磁盘 JSON / localStorage 备份）。 */
+interface StoredSession {
+  id: number;
+  label?: string;
+  savedAt?: string;
+  messages?: Message[];
+  tokensUsed?: number;
+  deleted?: boolean;
+}
+
+/** list_directory 返回的目录项。 */
+interface DirectoryEntry {
+  name: string;
+  path: string;
+  is_dir?: boolean;
+}
+
 /** 读取会话文件并解析为 JSON。处理 read_file_content 的行号。 */
-async function readSessionJSON(filePath: string): Promise<any> {
+async function readSessionJSON(filePath: string): Promise<StoredSession> {
   const raw = await typedRpc('read_file_content', { file_path: filePath });
-  return JSON.parse(stripLineNumbers(raw));
+  return JSON.parse(stripLineNumbers(raw)) as StoredSession;
 }
 
 function lsKey(projectPath: string, id: number): string {
@@ -384,8 +401,9 @@ function trackerFile(projectPath: string): string {
 export async function scanMaxSessionId(projectPath: string): Promise<number> {
   try {
     const raw = await typedRpc('list_directory', { path: sessionsDir(projectPath), filter_ignored: false });
-    const entries: any[] = JSON.parse(raw);
-    if (!Array.isArray(entries)) return 0;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return 0;
+    const entries = parsed as DirectoryEntry[];
     let maxId = 0;
     for (const e of entries) {
       if (e.is_dir || !e.name || e.name === '_active.json') continue;
@@ -569,7 +587,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   }
 
   // ── 加载会话数据（优先文件，回退 localStorage）──
-  let data: any = null;
+  let data: StoredSession | null = null;
   // 1) 尝试磁盘文件
   try {
     data = await readSessionJSON(sessionFile(projectPath, lastId));
@@ -582,7 +600,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     const lsRaw = localStorage.getItem(lsKey(projectPath, lastId));
     if (lsRaw) {
       try {
-        const lsData = JSON.parse(lsRaw);
+        const lsData = JSON.parse(lsRaw) as StoredSession;
         // P1-14: 复活守卫 — 仅当磁盘文件有效（存在且未标记删除）时才允许
         // localStorage 覆盖。已删会话磁盘文件是 {deleted:true, savedAt:''}，
         // 旧代码因 !data?.savedAt 采纳 localStorage 残留 → 会话复活。
@@ -602,7 +620,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   // ponytail: 若跟踪的会话无用户消息（仅有系统提示），
   // 扫描 localStorage 查找有实际对话的会话（不依赖后端）
   {
-    const convMsgs = (data.messages as any[]).filter((m: any) => m.role !== 'system');
+    const convMsgs = data.messages.filter((m) => m.role !== 'system');
     if (convMsgs.length === 0 && typeof localStorage !== 'undefined') {
       const wsPrefix = lsKey(projectPath, 0).replace(/_0$/, '_');
       let bestId = 0;
@@ -611,12 +629,12 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
         const key = localStorage.key(i);
         if (!key?.startsWith(wsPrefix)) continue;
         try {
-          const d = JSON.parse(localStorage.getItem(key)!);
-          if (d.id && !d.deleted && d.savedAt > bestTs) {
+          const d = JSON.parse(localStorage.getItem(key)!) as StoredSession;
+          if (d.id && !d.deleted && (d.savedAt ?? '') > bestTs) {
             // 快速检查：是否有非系统消息？
-            const hasConv = (d.messages as any[])?.some?.((m: any) => m.role !== 'system');
+            const hasConv = (d.messages ?? []).some((m) => m.role !== 'system');
             if (hasConv) {
-              bestTs = d.savedAt;
+              bestTs = d.savedAt ?? '';
               bestId = d.id;
             }
           }
@@ -632,7 +650,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
           if (disk && !disk.deleted) {
             const lsRaw = localStorage.getItem(lsKey(projectPath, bestId));
             if (lsRaw) {
-              data = JSON.parse(lsRaw);
+              data = JSON.parse(lsRaw) as StoredSession;
               lastId = bestId;
             }
           }
@@ -650,7 +668,7 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
   }
 
   const freshSys = newAgent.getSession().filter((m: Message) => m.role === 'system');
-  const conv = (data.messages as Message[]).filter((m: Message) => m.role !== 'system');
+  const conv = (data.messages as Message[]).filter((m) => m.role !== 'system');
   newAgent.setSession([...freshSys, ...conv]);
 
   const curSt = getChatStore(ctx.storeId).sess.getState();
@@ -688,10 +706,10 @@ export async function listSavedSessions(
   projectPath: string,
 ): Promise<Array<{ id: number; label: string; msgCount: number; savedAt: string }>> {
   const dirPath = sessionsDir(projectPath);
-  let entries: any[];
+  let entries: DirectoryEntry[];
   try {
     const raw = await typedRpc('list_directory', { path: dirPath, filter_ignored: false });
-    entries = JSON.parse(raw);
+    entries = JSON.parse(raw) as DirectoryEntry[];
   } catch (e) {
     console.error('[chat] listSavedSessions: list_directory failed', e);
     return [];
@@ -722,7 +740,7 @@ export async function listSavedSessions(
       return {
         id: d.id || sid,
         label: d.label || `会话 ${sid}`,
-        msgCount: (d.messages as any[])?.filter((m: any) => m.role !== 'system').length || 0,
+        msgCount: (d.messages ?? []).filter((m) => m.role !== 'system').length,
         savedAt: d.savedAt || '',
       };
     } catch (err) {
@@ -754,7 +772,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     return;
   }
 
-  let data: any;
+  let data: StoredSession | null = null;
   // 1) 尝试磁盘文件
   try {
     data = await readSessionJSON(sessionFile(projectPath, sessionId));
@@ -767,7 +785,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
     const lsRaw = localStorage.getItem(lsKey(projectPath, sessionId));
     if (lsRaw) {
       try {
-        data = JSON.parse(lsRaw);
+        data = JSON.parse(lsRaw) as StoredSession;
       } catch {
         /* 损坏 */
       }
@@ -785,7 +803,7 @@ export async function loadSessionFromDisk(ctx: SessionContext, projectPath: stri
   }
 
   const freshSys = newAgent.getSession().filter((m: Message) => m.role === 'system');
-  const conv = (data.messages as Message[]).filter((m: Message) => m.role !== 'system');
+  const conv = (data.messages as Message[]).filter((m) => m.role !== 'system');
   newAgent.setSession([...freshSys, ...conv]);
 
   const firstUser = conv.find((m: Message) => m.role === 'user' && !isInternalMessage(m.content));
@@ -1071,7 +1089,7 @@ export function _retractUserMessage(ctx: SessionContext, msg: UserMessage): void
   if (sid == null) return;
 
   const msgs = msgStoreFor(ctx.storeId, sid).getState().messages;
-  const idx = msgs.indexOf(msg as any as ChatMessage);
+  const idx = msgs.indexOf(msg);
   if (idx >= 0) {
     const toRemove: number[] = [idx];
     for (let i = idx + 1; i < msgs.length; i++) {
@@ -1128,8 +1146,8 @@ export async function exportSession(ctx: SessionContext): Promise<void> {
     }
     if (m.role === 'assistant') {
       md += `## Agent\n${m.content || ''}\n`;
-      if ((m as any).tool_calls && (m as any).tool_calls.length > 0) {
-        for (const tc of (m as any).tool_calls) {
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        for (const tc of m.tool_calls) {
           md += `\n### 工具调用: ${tc.name}\n`;
           md += `> 参数: \`${tc.arguments || ''}\`\n`;
         }

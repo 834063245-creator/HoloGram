@@ -21,6 +21,70 @@ interface TraceSummary {
   hasContent: boolean;
 }
 
+// ── 引擎原始结果形状（explore_deps / trace_dataflow 的 JSON）──
+
+interface ExploreStep {
+  edge?: string;
+  kind?: string;
+  name?: string;
+  file?: string;
+  line?: number;
+}
+interface ExploreEdge {
+  source: string;
+  target: string;
+}
+interface SourceSnippet {
+  file?: string;
+  line?: number;
+  code?: string;
+}
+interface DependentRef {
+  name: string;
+  file?: string;
+  line?: number;
+}
+interface ExploreResult {
+  meta?: Record<string, unknown>;
+  flow?: { path?: ExploreStep[] };
+  relationships?: Record<string, ExploreEdge[]>;
+  sourceCode?: SourceSnippet[];
+  blastRadius?: { dependents?: DependentRef[]; tests?: DependentRef[] };
+  architectureAlerts?: Record<string, unknown>;
+}
+interface DfScope {
+  name: string;
+  reads?: string[];
+  writes?: string[];
+  triggers?: string[];
+  awaits_callbacks?: string[];
+  sequence_calls?: string[];
+}
+interface DfSharedVar {
+  var: string;
+  readers?: string[];
+  writers?: string[];
+}
+interface DfFileResult {
+  file: string;
+  error?: string;
+  scopes?: DfScope[];
+  shared?: DfSharedVar[];
+}
+interface DataflowResult {
+  results?: DfFileResult[];
+}
+
+/** dataflow_query 返回的追踪记录。 */
+interface StoredTrace {
+  content?: string;
+  exploreResult?: unknown;
+  dataflowResult?: unknown;
+  createdAt?: string;
+  query?: string;
+  traceId?: string;
+}
+
 // ── 辅助函数 ──
 
 function fmtTime(iso: string): string {
@@ -104,7 +168,7 @@ function renderMd(text: string): string {
 
 // ── 引擎数据渲染器（仍以 HTML 字符串拼接，逻辑不变） ──
 
-function renderEngineExplore(explore: any): string {
+function renderEngineExplore(explore: ExploreResult): string {
   const parts: string[] = [];
   const meta = explore.meta || {};
   const flow = explore.flow;
@@ -121,7 +185,7 @@ function renderEngineExplore(explore: any): string {
   if (flow?.path) {
     const steps = flow.path || [];
     const rows = steps
-      .map((s: any) => {
+      .map((s) => {
         if (s.edge)
           return `<div class="df-flow-edge"><span class="df-flow-arrow">↓</span><span class="df-flow-ekind">${escapeHtml(s.edge)}</span></div>`;
         return `<div class="df-flow-node"><span class="df-flow-kind">${escapeHtml(s.kind || '')}</span><span class="df-flow-name">${escapeHtml(s.name || '')}</span><span class="df-flow-loc">${escapeHtml(s.file ? `${s.file}${s.line ? ':' + s.line : ''}` : '—')}</span></div>`;
@@ -140,7 +204,7 @@ function renderEngineExplore(explore: any): string {
         const items = edges
           .slice(0, 30)
           .map(
-            (e: any) =>
+            (e) =>
               `<div class="df-rel-item"><span class="df-rel-src">${escapeHtml(e.source)}</span> → <span class="df-rel-tgt">${escapeHtml(e.target)}</span></div>`,
           )
           .join('');
@@ -155,7 +219,7 @@ function renderEngineExplore(explore: any): string {
     const snippets = sourceCode
       .slice(0, 8)
       .map(
-        (s: any) =>
+        (s) =>
           `<div class="df-src-item"><div class="df-src-loc">${escapeHtml(s.file || '')}${s.line ? ':' + s.line : ''}</div><pre class="df-src-code">${escapeHtml(s.code || '')}</pre></div>`,
       )
       .join('');
@@ -172,14 +236,14 @@ function renderEngineExplore(explore: any): string {
     const depItems = deps
       .slice(0, 20)
       .map(
-        (d: any) =>
+        (d) =>
           `<div class="df-br-item">${escapeHtml(d.name)} <span class="df-br-loc">${escapeHtml(d.file || '')}${d.line ? ':' + d.line : ''}</span></div>`,
       )
       .join('');
     const testItems = tests
       .slice(0, 10)
       .map(
-        (t: any) =>
+        (t) =>
           `<div class="df-br-item df-br-test">🧪 ${escapeHtml(t.name)} <span class="df-br-loc">${escapeHtml(t.file || '')}${t.line ? ':' + t.line : ''}</span></div>`,
       )
       .join('');
@@ -205,8 +269,8 @@ function renderEngineExplore(explore: any): string {
   return parts.join('');
 }
 
-function renderEngineDataflow(dfResult: any): string {
-  const results: any[] = dfResult.results || [];
+function renderEngineDataflow(dfResult: DataflowResult): string {
+  const results: DfFileResult[] = dfResult.results || [];
   if (results.length === 0) return '';
   let html = `<div class="df-section"><div class="df-section-hdr">数据流引擎 (tree-sitter)</div>`;
   for (const r of results) {
@@ -214,8 +278,8 @@ function renderEngineDataflow(dfResult: any): string {
       html += `<div class="df-df-file"><span class="df-df-fname">${escapeHtml(r.file)}</span> <span class="df-meta-hint">${escapeHtml(r.error)}</span></div>`;
       continue;
     }
-    const scopes: any[] = r.scopes || [];
-    const shared: any[] = r.shared || [];
+    const scopes: DfScope[] = r.scopes || [];
+    const shared: DfSharedVar[] = r.shared || [];
     if (scopes.length === 0 && shared.length === 0) continue;
     html += `<div class="df-df-file"><div class="df-df-fname">${escapeHtml(r.file)}</div>`;
     if (scopes.length > 0) {
@@ -310,21 +374,21 @@ export function DataflowPanel() {
     setRightHtml('<div class="df-loading">加载中…</div>');
     try {
       const raw = await typedRpc('dataflow_query', { trace_id: tid });
-      const trace = JSON.parse(raw);
+      const trace = JSON.parse(raw) as StoredTrace;
       const content = trace.content;
       const exploreResult = trace.exploreResult
-        ? typeof trace.exploreResult === 'string'
-          ? JSON.parse(trace.exploreResult)
-          : trace.exploreResult
+        ? ((typeof trace.exploreResult === 'string'
+            ? JSON.parse(trace.exploreResult)
+            : trace.exploreResult) as ExploreResult)
         : null;
       const dataflowResult = trace.dataflowResult
-        ? typeof trace.dataflowResult === 'string'
-          ? JSON.parse(trace.dataflowResult)
-          : trace.dataflowResult
+        ? ((typeof trace.dataflowResult === 'string'
+            ? JSON.parse(trace.dataflowResult)
+            : trace.dataflowResult) as DataflowResult)
         : null;
 
       const parts: string[] = [];
-      const timeStr = fmtTime(trace.createdAt);
+      const timeStr = fmtTime(trace.createdAt || '');
       parts.push(`<div class="df-trace-meta-bar">
         <span class="df-trace-meta-q">${escapeHtml(trace.query || '')}</span>
         <span class="df-trace-meta-t">${timeStr}</span>
@@ -341,8 +405,8 @@ export function DataflowPanel() {
       }
       if (!content && !exploreResult && !dataflowResult) parts.push('<div class="df-empty">此追踪内容为空。</div>');
       setRightHtml(parts.join(''));
-    } catch (e: any) {
-      setRightHtml(`<div class="df-empty">加载失败: ${e?.message || e}</div>`);
+    } catch (e) {
+      setRightHtml(`<div class="df-empty">加载失败: ${e instanceof Error ? e.message : String(e)}</div>`);
     }
   }, []);
 
@@ -377,7 +441,7 @@ export function DataflowPanel() {
         tool: 'explore_deps',
         args: { query, symbols: [], includeSource: true },
       });
-      let explore = JSON.parse(raw);
+      let explore = JSON.parse(raw) as ExploreResult;
 
       const onParseQuery = getDataflowQueryParser();
       if ((explore.meta?.totalSymbolsFound || 0) === 0 && onParseQuery) {
@@ -388,7 +452,7 @@ export function DataflowPanel() {
               tool: 'explore_deps',
               args: { query, symbols, includeSource: true },
             });
-            explore = JSON.parse(raw);
+            explore = JSON.parse(raw) as ExploreResult;
           }
         } catch {
           /* Agent 不可用 */
@@ -396,13 +460,13 @@ export function DataflowPanel() {
       }
 
       const fileSet = new Set<string>();
-      (explore.flow?.path || []).forEach((s: any) => {
+      (explore.flow?.path || []).forEach((s) => {
         if (s.file) fileSet.add(s.file);
       });
-      (explore.sourceCode || []).forEach((s: any) => {
+      (explore.sourceCode || []).forEach((s) => {
         if (s.file) fileSet.add(s.file);
       });
-      (explore.blastRadius?.dependents || []).forEach((d: any) => {
+      (explore.blastRadius?.dependents || []).forEach((d) => {
         if (d.file) fileSet.add(d.file);
       });
 
@@ -411,15 +475,15 @@ export function DataflowPanel() {
       if (files.length > 0) {
         try {
           const dfRaw = await typedRpc('hologram_call', { tool: 'trace_dataflow', args: { files } });
-          dfPart = renderEngineDataflow(JSON.parse(dfRaw));
+          dfPart = renderEngineDataflow(JSON.parse(dfRaw) as DataflowResult);
         } catch {
           /* 可选 */
         }
       }
 
       setRightHtml(renderEngineExplore(explore) + dfPart);
-    } catch (e: any) {
-      setRightHtml(`<div class="df-empty">探索失败: ${e?.message || e}</div>`);
+    } catch (e) {
+      setRightHtml(`<div class="df-empty">探索失败: ${e instanceof Error ? e.message : String(e)}</div>`);
     }
   }, []);
 

@@ -313,8 +313,12 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
   // 否则会被美化分支截胡（收敛前即死代码）。
   if (name === 'glob') {
     try {
-      const data = JSON.parse(text);
-      const lines = (data.results || []).map((r: any) => `<span class="glob-entry">📄 ${escapeHtml(r.path)}</span>`);
+      const data = JSON.parse(text) as {
+        results?: Array<{ path: string }>;
+        count?: number;
+        truncated?: boolean;
+      };
+      const lines = (data.results || []).map((r) => `<span class="glob-entry">📄 ${escapeHtml(r.path)}</span>`);
       const header = `<div class="glob-summary">${data.count} 个文件${data.truncated ? ' (结果已截断)' : ''}</div>`;
       return {
         kind: 'html',

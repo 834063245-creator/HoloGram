@@ -81,7 +81,52 @@ const LSP_TO_MONACO_KIND: Record<number, number> = {
   25: 24, // TypeParameter
 };
 
-function mapCompletionItem(item: any, monaco: typeof import('monaco-editor')): languages.CompletionItem {
+// ── LSP 响应形状（Tauri invoke 自动解析 JSON，运行时为对象）──
+
+interface LspPosition {
+  line: number;
+  character: number;
+}
+interface LspRange {
+  start: LspPosition;
+  end: LspPosition;
+}
+interface LspCompletionItem {
+  label?: string;
+  kind?: number;
+  detail?: string;
+  documentation?: string | { value: string };
+  sortText?: string;
+  filterText?: string;
+  insertText?: string;
+  textEdit?: { newText: string; range?: LspRange };
+}
+interface LspCompletionList {
+  items: LspCompletionItem[];
+  isIncomplete?: boolean;
+}
+interface LspMarkupContent {
+  value?: string;
+}
+interface LspLocation {
+  uri?: string;
+  range?: LspRange;
+}
+interface LspDiagnosticPayload {
+  severity?: number;
+  message: string;
+  range: LspRange;
+  source?: string;
+  code?: string | number;
+}
+
+/** 契约层 lsp_request 声明 result 为 string，但 Tauri invoke 自动解析 JSON —
+ *  运行时实际是对象。此函数仅做类型边界标注（运行时直通），不改变既有行为。 */
+function lspPayload<T>(raw: string): T {
+  return raw as unknown as T;
+}
+
+function mapCompletionItem(item: LspCompletionItem, monaco: typeof import('monaco-editor')): languages.CompletionItem {
   const kind: languages.CompletionItemKind | undefined =
     item.kind != null ? (LSP_TO_MONACO_KIND[item.kind] ?? item.kind) : undefined;
 
@@ -194,22 +239,24 @@ export function registerCompletionProvider(
       try {
         // 注：Rust 侧 lsp_request 经 ok_json 返回 JSON 字符串，此处按对象消费是既有行为
         // （潜在 parse 缺失属 LSP 功能专项，不在本批次行为改动范围）
-        const result: any = await typedRpc('lsp_request', {
-          session_id: sessionId,
-          method: 'textDocument/completion',
-          params: {
-            textDocument: { uri: model.uri.toString() },
-            position: { line: position.lineNumber - 1, character: position.column - 1 },
-          },
-        });
+        const result = lspPayload<LspCompletionItem[] | LspCompletionList>(
+          await typedRpc('lsp_request', {
+            session_id: sessionId,
+            method: 'textDocument/completion',
+            params: {
+              textDocument: { uri: model.uri.toString() },
+              position: { line: position.lineNumber - 1, character: position.column - 1 },
+            },
+          }),
+        );
         // result 是 JSON-RPC 的 `result` 字段 — CompletionItem[] 或 CompletionList
         if (!result) return { suggestions: [] };
 
-        const items: any[] = Array.isArray(result) ? result : result.items || [];
+        const items: LspCompletionItem[] = Array.isArray(result) ? result : result.items || [];
         const isIncomplete = !Array.isArray(result) ? result.isIncomplete : undefined;
 
         return {
-          suggestions: items.map((item: any) => mapCompletionItem(item, monaco)),
+          suggestions: items.map((item) => mapCompletionItem(item, monaco)),
           incomplete: isIncomplete,
         };
       } catch (e) {
@@ -226,24 +273,29 @@ export function registerHoverProvider(lang: string, sessionId: number, monaco: t
   const provider = monaco.languages.registerHoverProvider(lang, {
     provideHover: async (model, position) => {
       try {
-        const result: any = await typedRpc('lsp_request', {
-          session_id: sessionId,
-          method: 'textDocument/hover',
-          params: {
-            textDocument: { uri: model.uri.toString() },
-            position: { line: position.lineNumber - 1, character: position.column - 1 },
-          },
-        });
+        const result = lspPayload<{
+          contents?: string | LspMarkupContent | LspMarkupContent[];
+          range?: LspRange;
+        }>(
+          await typedRpc('lsp_request', {
+            session_id: sessionId,
+            method: 'textDocument/hover',
+            params: {
+              textDocument: { uri: model.uri.toString() },
+              position: { line: position.lineNumber - 1, character: position.column - 1 },
+            },
+          }),
+        );
         // result 是 LSP Hover 结果：{ contents: ..., range: ... }
         if (result?.contents) {
           let value: string;
           if (typeof result.contents === 'string') {
             value = result.contents;
-          } else if (result.contents.value) {
+          } else if (!Array.isArray(result.contents) && result.contents.value) {
             value = result.contents.value;
           } else if (Array.isArray(result.contents)) {
             // MarkupContent[]
-            value = result.contents.map((c: any) => c.value || '').join('\n\n---\n\n');
+            value = result.contents.map((c) => c.value || '').join('\n\n---\n\n');
           } else {
             value = JSON.stringify(result.contents);
           }
@@ -275,18 +327,20 @@ export function registerDefinitionProvider(
   const provider = monaco.languages.registerDefinitionProvider(lang, {
     provideDefinition: async (model, position) => {
       try {
-        const result: any = await typedRpc('lsp_request', {
-          session_id: sessionId,
-          method: 'textDocument/definition',
-          params: {
-            textDocument: { uri: model.uri.toString() },
-            position: { line: position.lineNumber - 1, character: position.column - 1 },
-          },
-        });
+        const result = lspPayload<LspLocation | LspLocation[] | null>(
+          await typedRpc('lsp_request', {
+            session_id: sessionId,
+            method: 'textDocument/definition',
+            params: {
+              textDocument: { uri: model.uri.toString() },
+              position: { line: position.lineNumber - 1, character: position.column - 1 },
+            },
+          }),
+        );
         // LSP 定义结果：Location | Location[] | null
         if (!result) return null;
 
-        const locations: any[] = Array.isArray(result) ? result : [result];
+        const locations: LspLocation[] = Array.isArray(result) ? result : [result];
         const links: languages.Location[] = [];
         for (const loc of locations) {
           if (!loc?.uri) continue;
@@ -322,15 +376,17 @@ export function registerReferencesProvider(
   const provider = monaco.languages.registerReferenceProvider(lang, {
     provideReferences: async (model, position, _context) => {
       try {
-        const result: any = await typedRpc('lsp_request', {
-          session_id: sessionId,
-          method: 'textDocument/references',
-          params: {
-            textDocument: { uri: model.uri.toString() },
-            position: { line: position.lineNumber - 1, character: position.column - 1 },
-            context: { includeDeclaration: true },
-          },
-        });
+        const result = lspPayload<LspLocation[] | null>(
+          await typedRpc('lsp_request', {
+            session_id: sessionId,
+            method: 'textDocument/references',
+            params: {
+              textDocument: { uri: model.uri.toString() },
+              position: { line: position.lineNumber - 1, character: position.column - 1 },
+              context: { includeDeclaration: true },
+            },
+          }),
+        );
         if (!result || !Array.isArray(result)) return null;
 
         const locations: languages.Location[] = [];
@@ -364,55 +420,57 @@ export function listenForDiagnostics(
   _monacoEditor: editor.IStandaloneCodeEditor,
   monaco: typeof import('monaco-editor'),
 ): void {
-  listen<{ session_id: number; message: any }>('lsp-message', (event) => {
-    const msg = (event as any).payload?.message;
-    if (msg?.method !== 'textDocument/publishDiagnostics') return;
-    const params = msg.params;
-    if (!params?.uri || !params?.diagnostics) return;
+  listen<{ session_id: number; message: { method?: string; params?: { uri: string; diagnostics: LspDiagnosticPayload[] } } }>(
+    'lsp-message',
+    (event) => {
+      const msg = event.payload.message;
+      if (msg?.method !== 'textDocument/publishDiagnostics') return;
+      const params = msg.params;
+      if (!params?.uri || !params?.diagnostics) return;
 
-    const markers: editor.IMarkerData[] = params.diagnostics.map((d: any) => ({
-      severity:
-        d.severity === 1
-          ? monaco.MarkerSeverity.Error
-          : d.severity === 2
-            ? monaco.MarkerSeverity.Warning
-            : d.severity === 3
-              ? monaco.MarkerSeverity.Info
-              : monaco.MarkerSeverity.Hint,
-      message: d.message,
-      startLineNumber: (d.range.start.line || 0) + 1,
-      startColumn: (d.range.start.character || 0) + 1,
-      endLineNumber: (d.range.end.line || 0) + 1,
-      endColumn: (d.range.end.character || 0) + 1,
-    }));
-
-    // 填充诊断缓存供 agent 状态钩子使用（发后即忘）
-    diagnosticsCache.set(
-      params.uri,
-      params.diagnostics.map((d: any) => ({
-        severity: (d.severity === 1
-          ? 'error'
-          : d.severity === 2
-            ? 'warning'
-            : d.severity === 3
-              ? 'info'
-              : 'hint') as LspDiagnostic['severity'],
+      const markers: editor.IMarkerData[] = params.diagnostics.map((d) => ({
+        severity:
+          d.severity === 1
+            ? monaco.MarkerSeverity.Error
+            : d.severity === 2
+              ? monaco.MarkerSeverity.Warning
+              : d.severity === 3
+                ? monaco.MarkerSeverity.Info
+                : monaco.MarkerSeverity.Hint,
         message: d.message,
-        startLine: d.range.start.line || 0,
-        startColumn: d.range.start.character || 0,
-        endLine: d.range.end.line || 0,
-        endColumn: d.range.end.character || 0,
-        source: d.source,
-        code: d.code,
-      })),
-    );
+        startLineNumber: (d.range.start.line || 0) + 1,
+        startColumn: (d.range.start.character || 0) + 1,
+        endLineNumber: (d.range.end.line || 0) + 1,
+        endColumn: (d.range.end.character || 0) + 1,
+      }));
 
-    const uri = monaco.Uri.parse(params.uri);
-    const model = monaco.editor.getModel(uri);
-    if (model) {
-      monaco.editor.setModelMarkers(model, 'lsp', markers);
-    }
-  }).catch(() => {});
+      // 填充诊断缓存供 agent 状态钩子使用（发后即忘）
+      diagnosticsCache.set(
+        params.uri,
+        params.diagnostics.map((d) => ({
+          severity: (d.severity === 1
+            ? 'error'
+            : d.severity === 2
+              ? 'warning'
+              : d.severity === 3
+                ? 'info'
+                : 'hint') as LspDiagnostic['severity'],
+          message: d.message,
+          startLine: d.range.start.line || 0,
+          startColumn: d.range.start.character || 0,
+          endLine: d.range.end.line || 0,
+          endColumn: d.range.end.character || 0,
+          source: d.source,
+          code: d.code,
+        })),
+      );
+
+      const uri = monaco.Uri.parse(params.uri);
+      const model = monaco.editor.getModel(uri);
+      if (model) {
+        monaco.editor.setModelMarkers(model, 'lsp', markers);
+      }
+    }).catch(() => {});
 }
 
 /** 释放所有已注册的 provider。 */

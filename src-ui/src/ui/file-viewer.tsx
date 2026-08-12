@@ -1035,7 +1035,7 @@ export class FileViewer {
       this.activeIdx = this.tabs.length - 1;
       this.editor.setModel(model);
       this.renderTabs();
-    } catch (err: any) {
+    } catch (err) {
       console.error('[FileViewer] read failed:', err);
       loadingModel.dispose();
       const errMsg = `❌ 读取失败: ${err}`;
@@ -1088,7 +1088,7 @@ export class FileViewer {
       tab.dirty = false;
       tab.error = '';
       this.renderTabs();
-    } catch (err: any) {
+    } catch (err) {
       alert(`保存失败: ${err}`);
     }
   }
@@ -1268,7 +1268,7 @@ export class FileViewer {
       };
       const mime = mimeMap[ext] || 'image/png';
       this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:200px;"><img src="data:${mime};base64,${b64}" alt="${filePath.replace(/\\/g, '/').split('/').pop()}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;box-shadow:0 4px 24px rgba(0,0,0,0.4);" /></div>`;
-    } catch (err: any) {
+    } catch (err) {
       this.previewContainer.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--obs-text-2);">⚠ 无法加载图片: ${String(err)}</div>`;
     }
   }

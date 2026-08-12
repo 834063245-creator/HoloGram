@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -110,7 +111,7 @@ export class StarGraph {
   // ponytail: 生产构建时 constructor 内 handleResize/setupHover 先于
   // render 执行，这些字段在渲染时才赋值。显式初始化为安全值防崩。
   mouse = new THREE.Vector2();
-  edgeLineGroups: any[] = [];
+  edgeLineGroups: LineSegments2[] = [];
   nodeLabelIdx: number[] = [];
   labelDivs: HTMLDivElement[] = [];
   nodePositions = new Float32Array(0);

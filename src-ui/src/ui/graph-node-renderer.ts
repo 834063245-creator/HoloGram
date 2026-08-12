@@ -17,7 +17,7 @@ import {
   makeGlowInstancedMesh,
 } from './graph-glow-instanced';
 import { makeCoreFresnelMaterial, makeGlowPointMaterial } from './graph-shaders';
-import type { CommunityData, GraphJSON, GraphNode } from './graph-types';
+import type { GraphJSON, GraphNode } from './graph-types';
 
 // ── NodeRendererHost — GraphNodeRenderer 需要从 StarGraph 访问的成员 ──
 
@@ -434,9 +434,8 @@ export class GraphNodeRenderer {
     // ponytail: 只取 level0 社区 — 与 _renderImpl 的 nodeCommMap 层级一致
     // P0-2 修复：空数组是真值 — 分页中间页的 hierarchical_communities:[]
     // 不能阻断回退到 communities（否则新节点失去社区质心锚定）。
-    const hc = (fullGraph as any).hierarchical_communities;
-    const allComms = ((Array.isArray(hc) && hc.length > 0 ? hc : (fullGraph as any).communities) ||
-      []) as CommunityData[];
+    const hc = fullGraph.hierarchical_communities;
+    const allComms = (Array.isArray(hc) && hc.length > 0 ? hc : fullGraph.communities) || [];
     const comms = allComms.filter((c) => !c.level || c.level === 0);
     const nodeComm = new Map<string, string>();
     for (const c of comms) for (const nid of c.node_ids) nodeComm.set(nid, c.id);

@@ -53,7 +53,7 @@ export interface CheckResult {
 interface HistoryEvent {
   timestamp: string;
   summary: string;
-  props: any;
+  props?: CheckResult;
 }
 
 function fmtTime(iso: string): string {
@@ -180,7 +180,7 @@ export function CheckPanel() {
     try {
       const json = await typedRpc('hologram_call', { tool: 'project_timeline', args: { limit: 80 } });
       const data = JSON.parse(json) as {
-        events: Array<{ timestamp: string; event_type: string; summary: string; properties?: any }>;
+        events: Array<{ timestamp: string; event_type: string; summary: string; properties?: CheckResult }>;
       };
       const events = (data.events || [])
         .filter((e) => e.event_type === 'commit_clean' || e.event_type === 'commit_violation')

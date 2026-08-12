@@ -116,8 +116,8 @@ export const AtAutocomplete = forwardRef<
           cacheRef.current = cache;
         }
 
-        const parsed = JSON.parse(cache.data);
-        files = (parsed.results || []).map((r: any) => r.path).slice(0, 100);
+        const parsed = JSON.parse(cache.data) as { results?: Array<{ path: string }> };
+        files = (parsed.results || []).map((r) => r.path).slice(0, 100);
       } catch {
         /* glob 失败 — 使用空数组 */
       }

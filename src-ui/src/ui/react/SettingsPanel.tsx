@@ -96,9 +96,9 @@ const SettingsPanelApp: React.FC<{
         setUpdateStatus('done');
         setUpdateMsg('已是最新版本');
       }
-    } catch (e: any) {
+    } catch (e) {
       setUpdateStatus('error');
-      setUpdateMsg(e?.message || String(e));
+      setUpdateMsg(e instanceof Error ? e.message || String(e) : String(e));
     }
   }, []);
   const doUpdate = useCallback(async () => {
@@ -117,9 +117,9 @@ const SettingsPanelApp: React.FC<{
       });
       setUpdateStatus('done');
       setUpdateMsg('下载完成，下次启动生效');
-    } catch (e: any) {
+    } catch (e) {
       setUpdateStatus('error');
-      setUpdateMsg(e?.message || String(e));
+      setUpdateMsg(e instanceof Error ? e.message || String(e) : String(e));
     }
   }, []);
 
@@ -156,15 +156,13 @@ const SettingsPanelApp: React.FC<{
     const fetchStatus = () => {
       typedRpc('hologram_call', { tool: 'engine_status', args: {} })
         .then((raw) => {
-          const parsed = JSON.parse(raw);
+          const parsed = JSON.parse(raw) as { lsp?: LspData };
           if (parsed?.lsp?.servers) {
             setLspStatus(parsed.lsp);
             // 当所有已安装服务器都已确定状态（运行或错误）时停止，
             // 或轮询次数足够时停止。
             lspPollCount.current += 1;
-            const allResolved = parsed.lsp.servers.every(
-              (s: any) => s.available || s.error || !s.installed,
-            );
+            const allResolved = parsed.lsp.servers.every((s) => s.available || s.error || !s.installed);
             if ((allResolved || lspPollCount.current >= MAX_LSP_POLLS) && lspPollTimer.current) {
               clearInterval(lspPollTimer.current);
               lspPollTimer.current = null;
@@ -486,16 +484,16 @@ const SettingsPanelApp: React.FC<{
                   <div className="sp-hint" style={{ marginBottom: 10 }}>
                     {[
                       lspStatus.available.length > 0 && `${lspStatus.available.length} 运行中`,
-                      lspStatus.servers.filter((s) => !s.available && (s as any).installed).length > 0 &&
-                        `${lspStatus.servers.filter((s) => !s.available && (s as any).installed).length} 待启动`,
-                      lspStatus.servers.filter((s) => !s.available && !(s as any).installed).length > 0 &&
-                        `${lspStatus.servers.filter((s) => !s.available && !(s as any).installed).length} 未安装`,
+                      lspStatus.servers.filter((s) => !s.available && s.installed).length > 0 &&
+                        `${lspStatus.servers.filter((s) => !s.available && s.installed).length} 待启动`,
+                      lspStatus.servers.filter((s) => !s.available && !s.installed).length > 0 &&
+                        `${lspStatus.servers.filter((s) => !s.available && !s.installed).length} 未安装`,
                     ]
                       .filter(Boolean)
                       .join('  ·  ') || '没有检测到已安装的语言服务器'}
                   </div>
                   {lspStatus.servers.map((srv) => {
-                    const installed = (srv as any).installed === true;
+                    const installed = srv.installed === true;
                     let icon: string, statusText: string, color: string, rowClass: string;
                     if (srv.available) {
                       icon = 'check-circle';

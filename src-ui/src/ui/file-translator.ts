@@ -16,7 +16,7 @@ export class FileTranslator {
   private _onLayoutChange: () => void;
   private _getEditorContent: () => string | null;
 
-  constructor(parentEl: HTMLElement, onLayoutChange: () => void, getEditor: () => any) {
+  constructor(parentEl: HTMLElement, onLayoutChange: () => void, getEditor: () => { getModel(): { getValue(): string } | null } | null) {
     this._onLayoutChange = onLayoutChange;
     this._getEditorContent = () => {
       try {

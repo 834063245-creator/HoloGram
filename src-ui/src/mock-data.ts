@@ -4,6 +4,8 @@
 // Mock 数据 — 浏览器开发模式下的真实依赖图
 // 模拟一个虚构的 "Nebula" Web 框架项目，约 40 个节点
 
+import type { GraphEdge } from './ui/graph-types';
+
 // ── 图节点 ──
 const MOCK_NODES = [
   // Core — SYMBOL（蓝色）
@@ -92,7 +94,7 @@ const MOCK_NODES = [
 ];
 
 // ── 边 ──
-function makeEdge(id: string, source: string, target: string, type: string, depth = 1): any {
+function makeEdge(id: string, source: string, target: string, type: string, depth = 1): GraphEdge {
   return { id, source, target, type, properties: { coupling_depth: depth } };
 }
 
@@ -395,7 +397,11 @@ const MOCK_DIFF = {
 };
 
 // ── Agent 工具 mock 响应 ──
-const MOCK_TOOL_RESPONSES: Record<string, any> = {
+type MockToolResponse =
+  | string
+  | unknown[]
+  | ((args?: Record<string, unknown>) => unknown);
+const MOCK_TOOL_RESPONSES: Record<string, MockToolResponse> = {
   analyze_project: JSON.stringify({
     nodes: MOCK_NODES.length,
     edges: MOCK_EDGES.length,
@@ -814,7 +820,8 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     const toolName = args?.tool as string;
     if (toolName && toolName in MOCK_TOOL_RESPONSES) {
       const v = MOCK_TOOL_RESPONSES[toolName];
-      return typeof v === 'function' ? v(args?.args as Record<string, unknown>) : v;
+      // 部分 mock（list_directory 等）直接返回对象而非 JSON 字符串 — 既有行为，保持原样
+      return (typeof v === 'function' ? v(args?.args as Record<string, unknown>) : v) as string;
     }
     console.warn(`[mock] hologram_call — no mock for tool: ${toolName}`, args);
     return JSON.stringify({ mock: true, cmd: 'hologram_call', tool: toolName, note: 'No mock data for this tool' });

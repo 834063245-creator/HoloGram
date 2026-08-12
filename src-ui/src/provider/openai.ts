@@ -29,6 +29,26 @@ import {
 
 const DEFAULT_MAX_TOKENS = 32000; // ponytail：跨提供商的安全上限（GLM 上限 131072）
 
+/** OpenAI 兼容 API 的 SSE 事件形状（本文件消费的子集）。 */
+interface OpenAiSseEvent extends SseEvent {
+  error?: { message?: string };
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+    completion_tokens_details?: { reasoning_tokens?: number };
+  };
+  choices?: Array<{
+    delta: {
+      content?: string;
+      reasoning_content?: string;
+      tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
+    };
+    finish_reason?: string;
+  }>;
+}
+
 interface OpenAIConfig {
   name?: string;
   apiKey: string;
@@ -244,11 +264,10 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
   const toolsByIndex = new Map<number, { id: string; name: string; arguments: string }>();
   let usage: Chunk['usage'];
 
-  for await (const ev of sseEvents(body, name, signal)) {
+  for await (const ev of sseEvents<OpenAiSseEvent>(body, name, signal)) {
     // 来自 OpenAI 兼容 API 的流内错误（DeepSeek 过载、限流等）
-    if ((ev as { error?: { message?: string } }).error) {
-      const e = (ev as { error?: { message?: string } }).error!;
-      yield { type: ChunkType.Error, err: new Error(`${name}: ${e.message || JSON.stringify(e)}`) };
+    if (ev.error) {
+      yield { type: ChunkType.Error, err: new Error(`${name}: ${ev.error.message || JSON.stringify(ev.error)}`) };
       return;
     }
 
@@ -267,7 +286,7 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
       };
     }
 
-    for (const choice of ev.choices) {
+    for (const choice of ev.choices || []) {
       const delta = choice.delta;
 
       // 文本内容

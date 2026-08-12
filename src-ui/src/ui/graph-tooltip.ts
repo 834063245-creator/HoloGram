@@ -87,10 +87,10 @@ export class GraphTooltip {
   updateTooltip(
     hoveredIdx: number,
     hoveredGalaxyIdx: number,
-    communities: any[],
+    communities: CommunityData[],
     nodeCommMap: Map<number, string>,
     foldMode: boolean,
-    _fold: { galaxyMeta: any[]; enteredGalaxyId: string | null; galaxyGlows: any[] },
+    _fold: GraphFold,
     container: HTMLElement,
     camera: THREE.Camera,
     _nodeCount: number,

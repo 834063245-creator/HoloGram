@@ -36,7 +36,7 @@ import { useDockStore } from './ui/dock-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
 import { bus, type AgentConfigChangeReason } from './ui/events';
 import type { StarGraph } from './ui/graph';
-import type { GraphDiffJson } from './ui/graph-types';
+import type { CommunityData, GraphDiffJson, GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
 import { getDiagnosticsForFile } from './ui/lsp-client';
 import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
@@ -79,13 +79,38 @@ export function isSamePath(a: string, b: string): boolean {
 
 // ── Workspace 类 ─────────────────────────────────────────────────
 
+/** analyze_and_load / get_graph_meta 返回的分页元信息（冷启动缓存图）。 */
+export interface CachedGraphMeta {
+  paged?: boolean;
+  meta?: Record<string, unknown>;
+  page_size?: number;
+  total_pages?: number;
+}
+
+/** get_graph_page 的单页载荷。 */
+interface GraphPage {
+  meta?: { source_root?: string };
+  nodes?: GraphNode[];
+  edges?: GraphEdge[];
+  communities?: CommunityData[];
+  hierarchical_communities?: CommunityData[];
+}
+
+/** graph-updated 事件载荷（workspace.rs 发射的 JSON 摘要）。 */
+interface GraphUpdatedSummary {
+  meta?: { source_root?: string };
+  total_nodes?: number;
+  node_count?: number;
+  diff?: GraphDiffJson;
+}
+
 export class Workspace {
   // ── 标识 ──
   readonly path: string;
 
   // ── 图数据 ──
-  graphData: any = null;
-  fileGraphData: any = null;
+  graphData: GraphJSON | null = null;
+  fileGraphData: unknown = null;
 
   // ── 视图状态 ──
   diffActive: boolean = false;
@@ -164,7 +189,7 @@ export class Workspace {
     path: string,
     starGraph: StarGraph,
     _chatPanel: ChatCore,
-    opts?: { skipAnalysis?: boolean; cachedGraph?: any },
+    opts?: { skipAnalysis?: boolean; cachedGraph?: CachedGraphMeta },
     callbacks?: { onStatusChange?: (msg: string) => void; onLoadingChange?: (loading: boolean) => void },
   ): Promise<Workspace> {
     const ws = new Workspace(path);
@@ -229,7 +254,7 @@ export class Workspace {
             });
         } else {
           // 旧格式全量缓存图兼容（load_graph_json 遗留磁盘文件小图路径）
-          ws.graphData = opts.cachedGraph;
+          ws.graphData = opts.cachedGraph as unknown as GraphJSON;
           typedRpc('analyze_and_load', { path, force: false })
             .then(() => {
               if (!ws._active) return;
@@ -251,7 +276,7 @@ export class Workspace {
         // 完整分析：analyze_and_load 只回 meta + 分页信息，图数据逐页拉取。
         ws.onLoadingChange?.(true);
         const raw = await typedRpc('analyze_and_load', { path, force: false });
-        const meta = JSON.parse(raw);
+        const meta = JSON.parse(raw) as CachedGraphMeta;
         ws.graphData = {
           meta: meta.meta || {},
           nodes: [],
@@ -296,9 +321,10 @@ export class Workspace {
         try {
           // P0-2 分页化：完整分析路径已在 loadGraphPages 中渲染（含首页全量
           // 布局）。此处仅在「有图但尚未渲染」（旧 cachedGraph 兼容 / 竞态）时补渲染。
-          const nc = Array.isArray(ws.graphData?.nodes) ? ws.graphData.nodes.length : 0;
-          if (nc > 0 && !starGraph.hasGraph) {
-            await starGraph.render(ws.graphData);
+          const gd = ws.graphData;
+          const nc = gd && Array.isArray(gd.nodes) ? gd.nodes.length : 0;
+          if (nc > 0 && !starGraph.hasGraph && gd) {
+            await starGraph.render(gd);
           }
         } catch {
           /* 渲染器自行处理错误 */
@@ -313,7 +339,7 @@ export class Workspace {
       const unlistenGraphUpdated = await typedListen('graph-updated', async (rawSummary) => {
         if (!ws._active) return;
         try {
-          const summary = JSON.parse(rawSummary);
+          const summary = JSON.parse(rawSummary) as GraphUpdatedSummary;
           const eventRoot = summary.meta?.source_root || '';
           if (eventRoot && !isSamePath(eventRoot, ws.path)) return;
           const nc = summary.total_nodes || summary.node_count || 0;
@@ -403,7 +429,7 @@ export class Workspace {
       unlistenPhase();
       unlistenHeartbeat();
       console.log('[Workspace.open] all done, returning workspace');
-    } catch (err: any) {
+    } catch (err) {
       console.error('[Workspace.open] FAILED:', err);
       unlistenProgress();
       unlistenPhase();
@@ -595,7 +621,7 @@ export class Workspace {
   private _modeState(): { collaborationMode: 'normal' | 'plan'; permissionMode: 'ask' | 'auto' | 'yolo' } {
     try {
       const ps = getPanelStore(this._storeId).getState();
-      return { collaborationMode: ps.collaborationMode as any, permissionMode: ps.permissionMode as any };
+      return { collaborationMode: ps.collaborationMode, permissionMode: ps.permissionMode };
     } catch (e) {
       console.warn('[Workspace] _modeState failed, falling back to normal/ask:', e);
       return { collaborationMode: 'normal', permissionMode: 'ask' };
@@ -885,7 +911,7 @@ export class Workspace {
         console.error('[runCheck] JSON parse failed:', parseErr, 'raw:', json.slice(0, 200));
         this.onStatusChange?.('简报解析失败');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Check failed:', err);
       this.onStatusChange?.('简报请求失败');
     } finally {
@@ -914,21 +940,23 @@ export class Workspace {
   // ═══════════════════════════════════════════════════════════════
   // doGraphUpdate — 处理来自 watcher 的图谱更新（diff 可用时增量更新）
   // ═══════════════════════════════════════════════════════════════
-  doGraphUpdate(starGraph: StarGraph, diff?: any): void {    if (!this.graphData) return;
-    const nodeCount = Array.isArray(this.graphData.nodes)
-      ? this.graphData.nodes.length
-      : Object.keys(this.graphData.nodes || {}).length;
+  doGraphUpdate(starGraph: StarGraph, diff?: GraphDiffJson): void {
+    const gd = this.graphData;
+    if (!gd) return;
+    const nodeCount = Array.isArray(gd.nodes)
+      ? gd.nodes.length
+      : Object.keys(gd.nodes || {}).length;
     // ponytail: 增量路径 — 不 clearGraph，不重置相机，仅对新节点做局部布局松弛
     if (diff && starGraph.hasGraph) {
       starGraph
-        .applyGraphDiff(diff, this.graphData)
+        .applyGraphDiff(diff, gd)
         .then(() => {
           this.onStatusChange?.(`已增量更新 (${nodeCount} 节点)`);
           this.runCheck();
         })
         .catch((e) => {
           console.error('[doGraphUpdate] incremental failed, falling back to full render:', e);
-          starGraph.render(this.graphData);
+          starGraph.render(gd);
           this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
           if (this.diffActive) {
             starGraph.clearDiff();
@@ -937,7 +965,7 @@ export class Workspace {
           this.runCheck();
         });
     } else {
-      starGraph.render(this.graphData);
+      starGraph.render(gd);
       this.onStatusChange?.(`已更新 (${nodeCount} 节点)`);
       if (this.diffActive) {
         starGraph.clearDiff();
@@ -956,7 +984,7 @@ export class Workspace {
 // 支持 nodes/edges 的数组（引擎 serialize_cached_graph 输出）与
 // Record（id → 节点）两种形态；communiities/meta 不随 diff 变更，保持原样。
 // ⚠️ 原地修改 graphData — 调用方持有同一引用，无需重新赋值。
-function mergeGraphDiff(graphData: { nodes?: any; edges?: any }, diff: GraphDiffJson): void {
+function mergeGraphDiff(graphData: GraphJSON, diff: GraphDiffJson): void {
   const removedIds = new Set(diff.removed_nodes.map((n) => n.id));
   if (Array.isArray(graphData.nodes)) {
     for (const n of diff.added_nodes) graphData.nodes.push(n);
@@ -1017,15 +1045,16 @@ function mergeGraphDiff(graphData: { nodes?: any; edges?: any }, diff: GraphDiff
 export async function loadGraphPages(
   ws: Workspace,
   starGraph: StarGraph,
-  paged: { meta?: any; page_size?: number; total_pages?: number },
+  paged: { page_size?: number; total_pages?: number },
 ): Promise<boolean> {
+  if (!ws.graphData) return false;
   const pageSize = paged.page_size || 12000;
   const totalPages = paged.total_pages ?? 1;
   for (let page = 0; page < totalPages; page++) {
     if (!ws.active) return false;
     const raw = await typedRpc('get_graph_page', { page, page_size: pageSize });
     if (!ws.active) return false;
-    const p = JSON.parse(raw);
+    const p = JSON.parse(raw) as GraphPage;
     const root = p.meta?.source_root || '';
     if (root && !isSamePath(root, ws.path)) continue; // 引擎已被切走，丢弃错页
     const diff = mergePageIntoGraph(ws.graphData, p);
@@ -1046,7 +1075,7 @@ export async function loadGraphPages(
 /** 分页全量重载：get_graph_meta → 重置 graphData → 逐页重建（事件兜底/重分析用）。 */
 async function reloadGraphPaged(ws: Workspace, starGraph: StarGraph): Promise<void> {
   const raw = await typedRpc('get_graph_meta', {});
-  const meta = JSON.parse(raw);
+  const meta = JSON.parse(raw) as CachedGraphMeta;
   if (!meta.paged) throw new Error('引擎未返回分页信息');
   ws.graphData = {
     meta: meta.meta || {},
@@ -1059,17 +1088,17 @@ async function reloadGraphPaged(ws: Workspace, starGraph: StarGraph): Promise<vo
 }
 
 /** 把一页数据并入 graphData（节点/边按 id 去重）；返回渲染层 diff（仅新增项）。 */
-function mergePageIntoGraph(graphData: { nodes?: any; edges?: any; communities?: any }, page: any): GraphDiffJson {
+function mergePageIntoGraph(graphData: GraphJSON, page: GraphPage): GraphDiffJson {
   if (!Array.isArray(graphData.nodes)) graphData.nodes = [];
   if (!Array.isArray(graphData.edges)) graphData.edges = [];
-  const nodes = graphData.nodes as any[];
-  const edges = graphData.edges as any[];
+  const nodes = graphData.nodes;
+  const edges = graphData.edges;
   const existingNodeIds = new Set<string>();
   for (const n of nodes) existingNodeIds.add(n.id);
   const existingEdgeIds = new Set<string>();
   for (const e of edges) existingEdgeIds.add(e.id);
-  const added_nodes: any[] = [];
-  const added_edges: any[] = [];
+  const added_nodes: GraphNode[] = [];
+  const added_edges: GraphEdge[] = [];
   for (const n of page.nodes || []) {
     if (!existingNodeIds.has(n.id)) {
       existingNodeIds.add(n.id);
@@ -1090,7 +1119,7 @@ function mergePageIntoGraph(graphData: { nodes?: any; edges?: any; communities?:
 }
 
 /** 从节点的 community_id 重建 level-0 社区（端口自引擎 derive_community_label）。 */
-function rebuildLevel0Communities(nodes: any[]): any[] {
+function rebuildLevel0Communities(nodes: GraphNode[]): CommunityData[] {
   const map = new Map<string, string[]>();
   for (const n of nodes) {
     if (n.community_id == null) continue;
