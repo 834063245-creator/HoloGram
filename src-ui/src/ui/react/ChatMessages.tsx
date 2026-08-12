@@ -16,6 +16,7 @@ import remarkGfm from 'remark-gfm';
 import { useStore } from 'zustand';
 import { iconSvg } from '../icons';
 import { computeSimpleDiff, formatToolResult } from '../chat-utils';
+import { displayToolName, resolveSemanticToolName } from '../tool-semantics';
 import { estimateMessageHeight, getMessageGap } from '../message-height';
 import type {
   AssistantMessage,
@@ -305,7 +306,8 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
   } catch {
     return null;
   }
-  const name = part.name;
+  // 工具收敛后模型调用领域工具（fs）— 归一化回旧语义名匹配写入预览
+  const name = resolveSemanticToolName(part.name, part.args);
 
   // write_file_content — 显示正在写入的文件内容
   if ((name === 'write_file' || name === 'write_file_content') && typeof args.content === 'string') {
@@ -394,7 +396,7 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
     <div className={`msg-tool-card${toolDone ? ' tool-done' : ''}${isExpanded ? ' tool-expanded' : ''}`}>
       <div className="msg-tool-header" onClick={onToggle}>
         <span className="msg-tool-icon" dangerouslySetInnerHTML={{ __html: icon }} />
-        <span className="tool-name">{part.name}</span>
+        <span className="tool-name">{displayToolName(part.name, part.args)}</span>
         <span className="tool-args">
           {part.args && part.args.length > 60 ? part.args.slice(0, 57) + '…' : part.args || ''}
         </span>
@@ -434,7 +436,7 @@ const ToolSummary: React.FC<{
   onCollapseAll: () => void;
 }> = ({ tools, expandedTools, onExpandAll, onCollapseAll }) => {
   const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
-  const names = doneTools.map((t) => t.label || t.name);
+  const names = doneTools.map((t) => displayToolName(t.name, t.args));
   const unique = [...new Set(names)];
   const allExpanded = doneTools.every((t) => expandedTools.has(t.toolId));
   return (

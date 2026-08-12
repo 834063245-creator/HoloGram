@@ -43,6 +43,7 @@ import { userContext, createStableSchemaSelector, type StableSchemaSelector } fr
 import { planGateCheck, planRegistry, type PlanGate } from './plan/plan-registry';
 import { foldToolResults, nextFoldBoundary, DEFAULT_TOOL_FOLD_BATCH } from './tool-fold';
 import { defineTool } from './tools/define-tool';
+import { resolveGuardToolName } from './tools/domains';
 
 /** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
  *  原始 Tool 永远不会被修改 — 这点至关重要，因为父 Agent
@@ -1344,8 +1345,15 @@ ${resumeNote}
       // tracker 用真实损失数据喂给压缩自动调优。
       const stormNudge = this._stormNudge(calls, resultsByCallId);
       for (const call of calls) {
-        this.compactionTracker.recordToolCall(call.name, call.arguments || '{}');
-        if (call.name === 'read_file_content' || call.name === 'read_file') {
+        // 领域调用（fs/shell/...）解析回旧语义名 — 压缩追踪按旧名统计
+        let guardName: string;
+        try {
+          guardName = resolveGuardToolName(this.tools, call.name, JSON.parse(call.arguments || '{}'));
+        } catch {
+          guardName = call.name;
+        }
+        this.compactionTracker.recordToolCall(guardName, call.arguments || '{}');
+        if (guardName === 'read_file_content' || guardName === 'read_file') {
           const fp = parseFilePathArg(call.arguments);
           if (fp) this.compactionTracker.recordFileRead(fp);
         }
@@ -2086,7 +2094,7 @@ ${resumeNote}
     const inputBudget = window - SUMMARY_OUTPUT_BUDGET - SUMMARY_PROMPT_BUDGET;
     if (inputBudget < SUMMARY_MIN_INPUT) {
       log.warn('agent', `summary model window too small (${window}) — 走机械摘要`);
-      return { text: digestMessages(msgs), degraded: true };
+      return { text: digestMessages(msgs, this.tools), degraded: true };
     }
     const chunkCap = Math.floor(inputBudget * 0.8);
     const chunks = chunkMessages(msgs, chunkCap);
@@ -2111,7 +2119,7 @@ ${resumeNote}
     let startIdx = 0;
     if (chunks.length > SUMMARY_MAX_LLM_CHUNKS) {
       const oldMsgs = chunks.slice(0, chunks.length - SUMMARY_MAX_LLM_CHUNKS).flat();
-      partials.push('## 早期历史（机械提取）\n' + digestMessages(oldMsgs));
+      partials.push('## 早期历史（机械提取）\n' + digestMessages(oldMsgs, this.tools));
       startIdx = chunks.length - SUMMARY_MAX_LLM_CHUNKS;
       degraded = true;
     }
@@ -2127,7 +2135,7 @@ ${resumeNote}
       } catch (e: any) {
         if (signal.aborted) throw e;
         log.warn('agent', `chunk ${i + 1}/${chunks.length} summary failed (${e?.message || e}) — 该块机械提取`);
-        partials.push(digestMessages(chunks[i]));
+        partials.push(digestMessages(chunks[i], this.tools));
         degraded = true;
       }
     }
@@ -2863,7 +2871,7 @@ function explodeTranscript(m: Message, capTokens: number): Message[] {
  *  从消息里机械提取结构化简报：用户目标、文件读写、命令与退出码、
  *  错误、工具使用统计、最近助手结论。瞬时、零 token、永不超时。
  *  质量低于 LLM 摘要，但保证压缩管线在任何失败下都能落地。 */
-function digestMessages(msgs: Message[]): string {
+function digestMessages(msgs: Message[], registry?: ToolRegistry): string {
   const filesRead = new Set<string>();
   const filesWritten = new Set<string>();
   const commands: string[] = [];
@@ -2886,19 +2894,21 @@ function digestMessages(msgs: Message[]): string {
     if (m.role === 'assistant') {
       if (m.content) lastAssistant = m.content;
       for (const tc of m.tool_calls ?? []) {
-        toolCounts.set(tc.name, (toolCounts.get(tc.name) ?? 0) + 1);
         let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(tc.arguments || '{}');
         } catch {}
-        callInfo.set(tc.id, { name: tc.name, args });
-        if (tc.name === 'read_file_content' || tc.name === 'read_file') {
+        // 领域调用（fs/shell/...）解析回旧语义名 — 机械摘要按旧名统计
+        const guardName = registry ? resolveGuardToolName(registry, tc.name, args) : tc.name;
+        toolCounts.set(guardName, (toolCounts.get(guardName) ?? 0) + 1);
+        callInfo.set(tc.id, { name: guardName, args });
+        if (guardName === 'read_file_content' || guardName === 'read_file') {
           const fp = parseFilePathArg(tc.arguments);
           if (fp) filesRead.add(fp);
-        } else if (WRITE_TOOLS.has(tc.name)) {
-          const fp = extractFilePath(tc.name, args);
+        } else if (WRITE_TOOLS.has(guardName)) {
+          const fp = extractFilePath(guardName, args);
           if (fp) filesWritten.add(fp);
-        } else if (SHELL_TOOLS.has(tc.name)) {
+        } else if (SHELL_TOOLS.has(guardName)) {
           const cmd = String(args.command || args.cmd || '').trim();
           // 相邻去重 — 重试场景下同一命令常连续出现
           if (cmd && commands[commands.length - 1] !== cmd) commands.push(cmd);

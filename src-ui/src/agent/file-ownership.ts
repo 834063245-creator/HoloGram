@@ -39,23 +39,24 @@ export class FileOwnership {
   }
 }
 
-/** 从工具参数中提取写类工具的目标文件路径。 */
+/** 从工具参数中提取写类工具的目标文件路径。
+ *  工具名按模型可见注册名匹配（coding.ts）；领域工具调用（fs 等）
+ *  由调用方 resolveGuardToolName 归一化后再传入。 */
 export function extractFilePath(toolName: string, args: Record<string, unknown>): string | null {
   switch (toolName) {
     case 'write_file':
     case 'edit_file':
-      return (args.filePath as string) || null;
-    case 'delete_file_or_dir':
-      return (args.path as string) || null;
+      return (args.filePath as string) || (args.file_path as string) || null;
+    case 'delete_file':
+    case 'rename_file':
+      return (args.path as string) || (args.filePath as string) || (args.file_path as string) || null;
     case 'move_file':
       // 同时声明源和目标
       return (args.from as string) || null;
-    case 'rename_file':
-      return (args.path as string) || null;
     default:
       return null;
   }
 }
 
-/** 修改文件且应受所有权检查约束的工具。 */
-export const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'delete_file_or_dir', 'move_file', 'rename_file']);
+/** 修改文件且应受所有权检查约束的工具（模型可见注册名）。 */
+export const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'move_file', 'rename_file']);

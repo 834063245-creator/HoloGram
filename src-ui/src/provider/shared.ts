@@ -4,10 +4,18 @@
 // provider 实现的共享工具函数 — 从 anthropic.ts 和 openai.ts 中提取
 
 /** 从流式 JSON 参数中提取 write/edit 工具的部分内容。
- *  处理不完整的 JSON — content 字符串可能尚未闭合。 */
+ *  处理不完整的 JSON — content 字符串可能尚未闭合。
+ *  工具收敛后模型调用领域工具 fs(action=write/edit)：从部分参数中正则提取 action。 */
 export function extractWritePreview(toolName: string, args: string): string | null {
-  const isWrite = toolName === 'write_file' || toolName === 'write_file_content';
-  const isEdit = toolName === 'edit_file';
+  let isWrite = toolName === 'write_file' || toolName === 'write_file_content';
+  let isEdit = toolName === 'edit_file';
+  if (toolName === 'fs' && !isWrite && !isEdit) {
+    const m = args.match(/"action"\s*:\s*"(write|edit)"/);
+    if (m) {
+      isWrite = m[1] === 'write';
+      isEdit = m[1] === 'edit';
+    }
+  }
   if (!isWrite && !isEdit) return null;
 
   const key = isEdit ? 'newString' : 'content';

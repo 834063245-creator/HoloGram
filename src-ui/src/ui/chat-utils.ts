@@ -7,6 +7,7 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { iconHtml } from './icons';
+import { resolveSemanticToolName } from './tool-semantics';
 
 // ═══════════════════════════════════════════════════════════════════
 // escapeHtml
@@ -27,7 +28,8 @@ export function formatDiffResult(body: string, argsJson?: string): string {
   if (argsJson) {
     try {
       const args = JSON.parse(argsJson);
-      filePath = args.file_path || args.path || '';
+      // 旧工具用 file_path/path；领域工具 fs(write/edit) 用 camelCase filePath
+      filePath = args.file_path || args.path || args.filePath || '';
     } catch {}
   }
 
@@ -296,43 +298,19 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
   let body = text;
   if (truncated) body += '\n…[截断]…';
 
+  // 工具收敛后模型调用领域工具（fs/shell/search/...）— 归一化回旧语义名匹配特殊渲染
+  const name = resolveSemanticToolName(toolName, args);
+
   // ── trace_dataflow — 内联流程卡片 ──
-  if (toolName === 'trace_dataflow') {
+  if (name === 'trace_dataflow') {
     const card = formatDataflowCard(text);
     if (card) return card;
   }
 
-  // ── JSON：美化打印到代码块 ──
-  try {
-    const parsed = JSON.parse(body);
-    const formatted = JSON.stringify(parsed, null, 2);
-    return `<pre><code class="language-json">${escapeHtml(formatted)}</code></pre>`;
-  } catch {}
-
-  // ── 空或极短 ──
-  if (!body.trim()) return escapeHtml('(无输出)');
-  if (body.length < 60 && !body.includes('\n')) return escapeHtml(body);
-
-  // ── edit_file / write_file / read_file_content 的 diff 视图（第 7 项）──
-  if (
-    toolName === 'edit_file' ||
-    toolName === 'write_file' ||
-    toolName === 'write_file_content' ||
-    toolName === 'read_file_content'
-  ) {
-    return formatDiffResult(body, args);
-  }
-
-    // ── 代码：run_shell、bash_output、bash_wait → 代码块 ──
-  if (toolName === 'run_shell' || toolName === 'bash_output' || toolName === 'bash_wait') {
-    return `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`;
-  }
-  if (toolName === 'search_content') {
-    return `<pre><code>${escapeHtml(body)}</code></pre>`;
-  }
-
   // ── Glob / list_directory — 紧凑列表 ──
-  if (toolName === 'glob') {
+  // 注意：必须在 JSON 美化分支之前 — glob 输出本身是合法 JSON，
+  // 否则会被美化分支截胡（收敛前即死代码）。
+  if (name === 'glob') {
     try {
       const data = JSON.parse(text);
       const lines = (data.results || []).map((r: any) => `<span class="glob-entry">📄 ${escapeHtml(r.path)}</span>`);
@@ -348,7 +326,35 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
     }
   }
 
-  // ── Hologram 工具：尝试解析为 JSON（已在上方处理），穿透 ──
+  // ── JSON：美化打印到代码块 ──
+  try {
+    const parsed = JSON.parse(body);
+    const formatted = JSON.stringify(parsed, null, 2);
+    return `<pre><code class="language-json">${escapeHtml(formatted)}</code></pre>`;
+  } catch {}
+
+  // ── 空或极短 ──
+  if (!body.trim()) return escapeHtml('(无输出)');
+  if (body.length < 60 && !body.includes('\n')) return escapeHtml(body);
+
+  // ── edit_file / write_file / read_file_content 的 diff 视图（第 7 项）──
+  if (
+    name === 'edit_file' ||
+    name === 'write_file' ||
+    name === 'write_file_content' ||
+    name === 'read_file_content'
+  ) {
+    return formatDiffResult(body, args);
+  }
+
+    // ── 代码：run_shell、bash_output、bash_wait → 代码块 ──
+  if (name === 'run_shell' || name === 'bash_output' || name === 'bash_wait') {
+    return `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`;
+  }
+  if (name === 'search_content') {
+    return `<pre><code>${escapeHtml(body)}</code></pre>`;
+  }
+
   // ── 默认：渲染为 markdown（支持表格、列表等）──
   try {
     const html = DOMPurify.sanitize(marked.parse(body) as string);

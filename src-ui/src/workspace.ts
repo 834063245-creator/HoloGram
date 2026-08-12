@@ -31,6 +31,7 @@ import { mergeDynamicModels, getModel } from './provider/catalog';
 import { withThinkingDisabled } from './provider/thinking';
 import { defaultPricing, getActiveProvider, loadSettingsWithSecrets, type AppSettings } from './settings';
 import { stripLineNumbers } from './ui/chat-session';
+import { resolveSemanticToolName } from './ui/tool-semantics';
 import { useDockStore } from './ui/dock-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
 import { bus, type AgentConfigChangeReason } from './ui/events';
@@ -386,8 +387,10 @@ export class Workspace {
         'run_shell',
         'rename_symbol',
       ]);
-      const onToolDone = (evt: { toolName: string }) => {
-        if (FILE_MODIFY_TOOLS.has(evt.toolName)) {
+      const onToolDone = (evt: { toolName: string; args: Record<string, unknown> }) => {
+        // 工具收敛后模型调用领域工具（fs/git/shell）— 归一化回旧语义名匹配
+        const sem = resolveSemanticToolName(evt.toolName, JSON.stringify(evt.args || {}));
+        if (FILE_MODIFY_TOOLS.has(sem)) {
           ws.scheduleCheck();
           bus.emit('timeline:refresh');
           // 刷新引擎快照 — 跟踪累积结构漂移

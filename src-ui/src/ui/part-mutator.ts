@@ -9,6 +9,7 @@ import type { AgentEvent } from '../agent/agent-types';
 import { EventKind } from '../agent/agent-types';
 import type { AssistantPart } from './message-model';
 import { findToolPart, lastTextPart } from './message-model';
+import { resolveSemanticToolName } from './tool-semantics';
 
 /**
  * 将一个 AgentEvent 应用到 parts 数组。原地变更。
@@ -83,8 +84,13 @@ export function applyEventToParts(parts: AssistantPart[], ev: AgentEvent): boole
           tp.status = 'running';
           if (ev.tool.output) {
             // ponytail: 写入/编辑工具替换（预览内容随模型流式增长），
-            // shell 工具追加（stdout 块累积）
-            const isWrite = tp.name === 'write_file' || tp.name === 'write_file_content' || tp.name === 'edit_file';
+            // shell 工具追加（stdout 块累积）。
+            // 工具收敛后 name 是领域名（fs/shell）— 归一化回旧语义名判断。
+            const sem = resolveSemanticToolName(tp.name, tp.args);
+            // fs 领域的流式输出只可能来自 ToolArgPreview（write/edit 参数预览）—
+            // args 未流到时按领域名兜底为替换语义。
+            const isWrite =
+              sem === 'write_file' || sem === 'write_file_content' || sem === 'edit_file' || tp.name === 'fs';
             tp.output = isWrite ? ev.tool.output : (tp.output || '') + ev.tool.output;
           }
           return true;
