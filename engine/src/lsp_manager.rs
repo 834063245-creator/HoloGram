@@ -1303,7 +1303,6 @@ mod tests {
         // ponytail: 服务器一次 write 粘连多条消息（帧+帧），
         // 曾导致 read_line 行边界错位、body 读进帧头。
         // 验证新解析器能精确拆帧。
-        use std::io::Write;
         use std::process::{Command, Stdio};
         // 用一个子进程模拟服务器：输出两条粘连的 LSP 帧
         let mut child = Command::new("python")
