@@ -335,78 +335,100 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（11 个命令）
-        // 权限：launch/attach/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
+        // CDP 浏览器控制（12 个命令）
+        // 权限：launch/kill/attach/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
         //       inspect/report/targets/status 只读放行；click/type/press/scroll
         //       依赖 attach 时已获批准的 target，不再重复弹窗。
+        // 会话：所有命令按 _agent_id 键控路由到各 Agent 自己的 CDP 会话
+        //       （端口/attach/Chrome 进程互不干扰；无 _agent_id 共用 default）。
         // ═══════════════════════════════════════════════════════
         "browser_launch" => {
             let agent_id = opt_str(&params, "_agent_id");
             {
                 let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "launch".into(), agent_id };
+                let tool = crate::tools::BrowserTool { action: "launch".into(), agent_id: agent_id.clone() };
                 crate::utils::check_permission(&tool, &ctx, &app).await?;
             }
             let url = opt_str(&params, "url");
             let port = opt_u64(&params, "port").map(|n| n as u16);
-            crate::cdp::cdp_launch(url, port).await
+            crate::cdp::cdp_launch(url, port, agent_id.as_deref()).await
         }
-        "browser_kill" => crate::cdp::cdp_kill(),
-        "browser_targets" => crate::cdp::cdp_targets(),
+        "browser_kill" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::BrowserTool { action: "kill".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            crate::cdp::cdp_kill(agent_id.as_deref())
+        }
+        "browser_targets" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            crate::cdp::cdp_targets(agent_id.as_deref())
+        }
         "browser_attach" => {
             let agent_id = opt_str(&params, "_agent_id");
             {
                 let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "attach".into(), agent_id };
+                let tool = crate::tools::BrowserTool { action: "attach".into(), agent_id: agent_id.clone() };
                 crate::utils::check_permission(&tool, &ctx, &app).await?;
             }
             // 前端 schema 用 targetId（camelCase → target_id）；兼容旧调用方的 target
             let target = opt_str(&params, "target_id")
                 .or_else(|| opt_str(&params, "target"))
                 .ok_or_else(|| "browser_attach: missing 'targetId'".to_string())?;
-            crate::cdp::cdp_attach(&target)
+            crate::cdp::cdp_attach(&target, agent_id.as_deref())
         }
         "browser_inspect" => {
+            let agent_id = opt_str(&params, "_agent_id");
             let selector = req_str(&params, "selector", "browser_inspect")?;
             let props = params.get("props")
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<String>>());
             let max_results = opt_usize(&params, "max_results");
-            crate::cdp::cdp_inspect(&selector, props, max_results).await
+            crate::cdp::cdp_inspect(&selector, props, max_results, agent_id.as_deref()).await
         }
         "browser_report" => {
+            let agent_id = opt_str(&params, "_agent_id");
             let scope = opt_str(&params, "scope");
-            crate::cdp::cdp_report(scope).await
+            crate::cdp::cdp_report(scope, agent_id.as_deref()).await
         }
         "browser_click" => {
+            let agent_id = opt_str(&params, "_agent_id");
             let selector = req_str(&params, "selector", "browser_click")?;
-            crate::cdp::cdp_click(&selector).await
+            crate::cdp::cdp_click(&selector, agent_id.as_deref()).await
         }
         "browser_type" => {
+            let agent_id = opt_str(&params, "_agent_id");
             let selector = req_str(&params, "selector", "browser_type")?;
             let text = req_str(&params, "text", "browser_type")?;
-            crate::cdp::cdp_type(&selector, &text).await
+            crate::cdp::cdp_type(&selector, &text, agent_id.as_deref()).await
         }
         "browser_press" => {
+            let agent_id = opt_str(&params, "_agent_id");
             let key = req_str(&params, "key", "browser_press")?;
-            crate::cdp::cdp_press(&key).await
+            crate::cdp::cdp_press(&key, agent_id.as_deref()).await
         }
         "browser_scroll" => {
+            let agent_id = opt_str(&params, "_agent_id");
             let selector = opt_str(&params, "selector");
             let direction = opt_str(&params, "direction");
-            crate::cdp::cdp_scroll(selector, direction).await
+            crate::cdp::cdp_scroll(selector, direction, agent_id.as_deref()).await
         }
         "browser_eval" => {
             let agent_id = opt_str(&params, "_agent_id");
             {
                 let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "eval".into(), agent_id };
+                let tool = crate::tools::BrowserTool { action: "eval".into(), agent_id: agent_id.clone() };
                 crate::utils::check_permission(&tool, &ctx, &app).await?;
             }
             let expr = req_str(&params, "expr", "browser_eval")?;
-            crate::cdp::cdp_eval(&expr).await
+            crate::cdp::cdp_eval(&expr, agent_id.as_deref()).await
         }
-        "browser_status" => Ok(crate::cdp::cdp_status()),
+        "browser_status" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            Ok(crate::cdp::cdp_status(agent_id.as_deref()))
+        }
 
         // ═══════════════════════════════════════════════════════
         // Shell（3 个命令）

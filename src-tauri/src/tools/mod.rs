@@ -170,7 +170,7 @@ impl Tool for GitTool {
 
 // ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
-// BrowserTool — browser_launch / browser_attach / browser_eval 等
+// BrowserTool — browser_launch / browser_kill / browser_attach / browser_eval 等
 // ═══════════════════════════════════════════════════════════════
 
 pub struct BrowserTool {
@@ -216,9 +216,19 @@ impl Tool for BrowserTool {
         if self.is_read_only() {
             return PermissionResult::Passthrough;
         }
-        // 4. 高危动作：launch（启动受控浏览器）/ attach（接管外部页面）/ eval（任意 JS）→ Ask
+        // 4. 高危动作：launch/kill（受控浏览器进程）/ attach（接管外部页面）/
+        //    eval（任意 JS）→ Ask。文案写实：attach 批准意味着该页面内的任意
+        //    点击/输入操作不再二次确认（click/type 依赖 attach 时的授权）。
+        let reason = match self.action.as_str() {
+            "attach" => "Agent 请求接管一个浏览器页面。批准后 Agent 可在该页面上执行点击、输入等任意操作，\
+                 且这些操作不会再次确认——建议只对无敏感信息的页面批准。"
+                .into(),
+            "eval" => "Agent 请求在该页面执行任意 JS（受基础白名单限制）".into(),
+            "kill" => "Agent 请求终止其启动的受控浏览器".into(),
+            _ => format!("Agent 请求控制浏览器（动作: {}）", self.action),
+        };
         PermissionResult::Ask {
-            reason: format!("Agent 请求控制浏览器（动作: {}）", self.action),
+            reason,
             suggestions: vec![PermissionUpdate {
                 rule: "Browser".into(),
                 behavior: "allow".into(),
