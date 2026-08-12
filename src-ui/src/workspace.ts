@@ -243,8 +243,8 @@ export class Workspace {
             });
         }
         // 仍触发 analyze_and_load（force=false），保留缓存过期→重分析能力：
-        // direct_analyze 内部校验 SQLite 缓存新鲜度，过期则重建并触发
-        // analysis-complete 事件（其处理器 reloadGraphPaged 拉取新图）。
+        // direct_analyze 内部校验 SQLite 缓存新鲜度，过期则重建；
+        // 分析完成后由 graph-updated 事件驱动图重载。
         rpc('analyze_and_load', { path, force: false }).catch(() => {
           /* 拉页路径已降级处理，此处静默 */
         });
@@ -309,7 +309,7 @@ export class Workspace {
         ws.runCheck();
       }, 0);
 
-      // 5. 连接持久事件监听器（graph-updated、analysis-complete、analysis-failed）
+      // 5. 连接持久事件监听器（graph-updated）
       console.log('[Workspace.open] step 5: wiring listeners...');
       const unlistenGraphUpdated = await listen<string>('graph-updated', async (event) => {
         if (!ws._active) return;
@@ -396,37 +396,6 @@ export class Workspace {
       };
       bus.on('agent:tool-done', onToolDone);
       ws._unlisteners.push(() => bus.off('agent:tool-done', onToolDone));
-
-      const unlistenAnalysisComplete = await listen<string>('analysis-complete', async (event) => {
-        if (!ws._active) return;
-        try {
-          const summary = JSON.parse(event.payload);
-          if (!isSamePath(ws.path, summary.path)) return;
-          // P0-2 分页化：分页全量重载新图（原 get_full_graph 大仓库会超 IPC 护栏）
-          await reloadGraphPaged(ws, starGraph);
-          try {
-            const filesPath = ws.path.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
-            ws.fileGraphData = JSON.parse(
-              stripLineNumbers(await rpc<string>('read_file_content', { filePath: filesPath })),
-            );
-          } catch {
-            /* 将由 watcher 重新生成 */
-          }
-          ws.runCheck();
-          bus.emit('timeline:refresh');
-        } catch (e) {
-          console.error('[analysis-complete] failed to reload graph:', e);
-        }
-      });
-      ws._unlisteners.push(unlistenAnalysisComplete);
-
-      const unlistenAnalysisFailed = await listen<{ path: string; error: string }>('analysis-failed', (event) => {
-        if (!ws._active) return;
-        if (!isSamePath(ws.path, event.payload.path)) return;
-        const short = (event.payload.error || '未知错误').slice(0, 80);
-        ws.onStatusChange?.(`⚠️ 后台分析失败: ${short}`);
-      });
-      ws._unlisteners.push(unlistenAnalysisFailed);
 
       // 清理进度监听器（仅在初始分析期间存活）
       unlistenProgress();

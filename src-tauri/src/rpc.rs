@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 //
-// RPC — 替代 103 个独立 #[tauri::command] 函数的单一 IPC 入口。
+// RPC — 替代 89 个独立 #[tauri::command] 函数的单一 IPC 入口。
 // 所有命令通过 invoke("rpc", {method, params}) 路由，而非
 // 独立的 invoke("git_status", ...) 调用。
 //
