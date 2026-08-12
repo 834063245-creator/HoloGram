@@ -24,7 +24,7 @@ url = "2"
 portable-pty = "0.9"
 chrono = "0.4"
 tokio = { version = "1", features = ["sync", "time", "net", "io-util", "rt"] }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
 libloading = "0.9"
 tracing = "0.1"
