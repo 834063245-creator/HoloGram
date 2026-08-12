@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
-// Code editor: edit_file + build_edit_snippet.
+// Code editor: edit_file + 真实行级 diff（build_line_diff）.
 
 use hologram_engine::engine as engine_api;
 use hologram_engine::pipeline::discovery::is_ignored_path;
@@ -175,10 +175,11 @@ pub(crate) async fn edit_file(
 // ═══════════════════════════════════════════════════════════
 // 真实行级 diff（2026-08：替代伪造 snippet，防止模型误解改动范围）
 // ═══════════════════════════════════════════════════════════
-// 对替换前/后内容做行级 LCS diff，输出标准 unified diff 格式。
-// 行内子串替换只显示那一行的 - / +（真实差异）；replace_all 显示
-// 全部 hunk；容错模式显示实际写入前后的差异。模型看到的永远是
-// 文件里真实发生的变化。
+// 对替换前/后内容做行级 LCS diff，输出标准 unified diff 格式：
+// @@ 头在上下文之前、每个 hunk 独立头、间隔 ≤ 2*CTX 的变化合并
+// （git 行为）。行内子串替换只显示那一行的 - / +（真实差异）；
+// replace_all 显示全部 hunk；容错模式显示实际写入前后的差异。
+// 模型看到的永远是文件里真实发生的变化。
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DiffOp {
@@ -227,60 +228,8 @@ fn line_diff(a: &[&str], b: &[&str]) -> Vec<DiffOp> {
     ops
 }
 
-/// hunk 元数据 — ops 区间 + 行号（1-based）+ 变化行数。
-struct Hunk {
-    start: usize,
-    end: usize,
-    a_line: usize,
-    b_line: usize,
-    del: usize,
-    ins: usize,
-}
-
-fn collect_hunks(ops: &[DiffOp]) -> Vec<Hunk> {
-    let mut hunks: Vec<Hunk> = Vec::new();
-    let mut cur: Option<Hunk> = None;
-    let (mut ai, mut bi) = (0usize, 0usize);
-    for (idx, op) in ops.iter().enumerate() {
-        match op {
-            DiffOp::Keep => {
-                if let Some(h) = cur.take() { hunks.push(h); }
-                ai += 1;
-                bi += 1;
-            }
-            DiffOp::Del => {
-                let h = cur.get_or_insert_with(|| Hunk {
-                    start: idx,
-                    end: idx + 1,
-                    a_line: ai + 1, // 删除首行 = a[ai]，1-based = ai+1
-                    b_line: bi + 1,
-                    del: 0,
-                    ins: 0,
-                });
-                h.end = idx + 1;
-                h.del += 1;
-                ai += 1;
-            }
-            DiffOp::Ins => {
-                let h = cur.get_or_insert_with(|| Hunk {
-                    start: idx,
-                    end: idx + 1,
-                    a_line: ai, // 纯插入：a 侧为插入点（0-based 游标 = 插入前的行数）
-                    b_line: bi + 1,
-                    del: 0,
-                    ins: 0,
-                });
-                h.end = idx + 1;
-                h.ins += 1;
-                bi += 1;
-            }
-        }
-    }
-    if let Some(h) = cur.take() { hunks.push(h); }
-    hunks
-}
-
-/// 渲染 unified diff：每个 hunk 前后 3 行上下文，超长截断保护。
+/// 渲染标准 unified diff：每个 hunk 以 @@ 头开始，前后各 3 行上下文；
+/// 间隔 ≤ 2*CTX 的变化区间合并为一个 hunk（git 行为）；超长截断保护。
 fn build_line_diff(before: &str, after: &str) -> String {
     let a: Vec<&str> = before.lines().collect();
     let b: Vec<&str> = after.lines().collect();
@@ -315,102 +264,103 @@ fn build_line_diff(before: &str, after: &str) -> String {
     let mid_len = mid_ops.len();
     ops.extend(mid_ops);
     ops.resize(pre + mid_len + suf, DiffOp::Keep);
-    let hunks = collect_hunks(&ops);
-    if hunks.is_empty() {
-        return String::new();
+
+    // 每个 op 位置两侧的 0-based 行游标（= 该 op 之前已消费的行数）。
+    // Keep/Del 的行文本 = a[a_pos[idx]]；Keep/Ins 的行文本 = b[b_pos[idx]]。
+    let mut a_pos = vec![0usize; ops.len()];
+    let mut b_pos = vec![0usize; ops.len()];
+    {
+        let (mut ai, mut bi) = (0usize, 0usize);
+        for (idx, op) in ops.iter().enumerate() {
+            a_pos[idx] = ai;
+            b_pos[idx] = bi;
+            match op {
+                DiffOp::Keep => {
+                    ai += 1;
+                    bi += 1;
+                }
+                DiffOp::Del => ai += 1,
+                DiffOp::Ins => bi += 1,
+            }
+        }
     }
 
     const CTX: usize = 3;
     const MAX_LINES: usize = 400;
+
+    // 变化区间（ops 下标，半开）；间隔 ≤ 2*CTX 的相邻区间合并为一个 hunk。
+    let mut regions: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < ops.len() {
+        if ops[i] == DiffOp::Keep {
+            i += 1;
+            continue;
+        }
+        let s = i;
+        while i < ops.len() && ops[i] != DiffOp::Keep {
+            i += 1;
+        }
+        match regions.last_mut() {
+            Some(last) if s - last.1 <= 2 * CTX => last.1 = i,
+            _ => regions.push((s, i)),
+        }
+    }
+    if regions.is_empty() {
+        return String::new();
+    }
+
     let mut out = String::new();
-    let (mut ai, mut bi) = (0usize, 0usize);
-    let mut hi = 0usize;
-    let mut ctx_buf: Vec<&str> = Vec::new(); // 未入 hunk 时缓存的最近 CTX 行
-    let mut in_hunk = false;
-    let mut tail = 0usize;
     let mut emitted = 0usize;
     let mut truncated = false;
+    let mut prev_end = 0usize;
+    'hunks: for (hidx, &(rs, re)) in regions.iter().enumerate() {
+        // 上下文：首 hunk 之前/末 hunk 之后按文件边界收敛；hunk 间距 > 2*CTX
+        // 保证相邻 hunk 的上下文不重叠。
+        let lead = CTX.min(rs - prev_end);
+        let trail = if hidx + 1 < regions.len() {
+            CTX
+        } else {
+            CTX.min(ops.len() - re)
+        };
+        let s0 = rs - lead;
+        let e0 = (re + trail).min(ops.len());
+        prev_end = re;
 
-    for (idx, op) in ops.iter().enumerate() {
-        if hi < hunks.len() && hunks[hi].start == idx {
-            for text in ctx_buf.drain(..) {
-                if emitted >= MAX_LINES {
-                    truncated = true;
-                } else {
-                    out.push_str("  ");
-                    out.push_str(text);
-                    out.push('\n');
-                    emitted += 1;
-                }
-            }
-            let h = &hunks[hi];
+        let a_count = ops[s0..e0].iter().filter(|o| **o != DiffOp::Ins).count();
+        let b_count = ops[s0..e0].iter().filter(|o| **o != DiffOp::Del).count();
+        // 起点行号（1-based，含上下文行）：锚定区间内首条本侧行；纯插入/纯删除
+        // （count = 0）时锚点为插入点前的行数（git 约定的 -k,0 / +k,0）。
+        let a_start = ops[s0..e0]
+            .iter()
+            .position(|o| *o != DiffOp::Ins)
+            .map(|p| a_pos[s0 + p] + 1)
+            .unwrap_or(a_pos[s0]);
+        let b_start = ops[s0..e0]
+            .iter()
+            .position(|o| *o != DiffOp::Del)
+            .map(|p| b_pos[s0 + p] + 1)
+            .unwrap_or(b_pos[s0]);
+        out.push_str(&format!("@@ -{},{} +{},{} @@\n", a_start, a_count, b_start, b_count));
+        emitted += 1;
+
+        for (idx, op) in ops.iter().enumerate().take(e0).skip(s0) {
             if emitted >= MAX_LINES {
                 truncated = true;
-            } else {
-                out.push_str(&format!("@@ -{},{} +{},{} @@\n", h.a_line, h.del, h.b_line, h.ins));
-                emitted += 1;
+                break 'hunks;
             }
-            in_hunk = true;
-            tail = 0;
-        }
-        match op {
-            DiffOp::Keep => {
-                if in_hunk && tail < CTX {
-                    if emitted >= MAX_LINES {
-                        truncated = true;
-                    } else {
-                        out.push_str("  ");
-                        out.push_str(a[ai]);
-                        out.push('\n');
-                        emitted += 1;
-                    }
-                    tail += 1;
-                } else if !in_hunk {
-                    ctx_buf.push(a[ai]);
-                    if ctx_buf.len() > CTX {
-                        ctx_buf.remove(0);
-                    }
-                }
-                ai += 1;
-                bi += 1;
-                if in_hunk && hi < hunks.len() && idx + 1 == hunks[hi].end {
-                    in_hunk = false;
-                    tail = 0;
-                    hi += 1;
-                }
-            }
-            DiffOp::Del => {
-                if in_hunk {
-                    if emitted >= MAX_LINES {
-                        truncated = true;
-                    } else {
-                        out.push_str("- ");
-                        out.push_str(a[ai]);
-                        out.push('\n');
-                        emitted += 1;
-                    }
-                    tail = 0;
-                }
-                ai += 1;
-            }
-            DiffOp::Ins => {
-                if in_hunk {
-                    if emitted >= MAX_LINES {
-                        truncated = true;
-                    } else {
-                        out.push_str("+ ");
-                        out.push_str(b[bi]);
-                        out.push('\n');
-                        emitted += 1;
-                    }
-                    tail = 0;
-                }
-                bi += 1;
-            }
+            let (prefix, text) = match op {
+                DiffOp::Keep => ("  ", a[a_pos[idx]]),
+                DiffOp::Del => ("- ", a[a_pos[idx]]),
+                DiffOp::Ins => ("+ ", b[b_pos[idx]]),
+            };
+            out.push_str(prefix);
+            out.push_str(text);
+            out.push('\n');
+            emitted += 1;
         }
     }
     if truncated {
-        out.push_str(&format!("\n...(diff 过长已截断，仅显示前 {} 行)", MAX_LINES));
+        out.push_str(&format!("...(diff 过长已截断，仅显示前 {} 行)", MAX_LINES));
     }
     out.trim_end().to_string()
 }
@@ -452,23 +402,43 @@ mod tests {
 
     #[test]
     fn diff_multiple_hunks_all_shown() {
-        // replace_all 场景：两处分离的修改都要出现在 diff 里。
-        let d = diff_of("a\nx1\nb\nx2\nc\n", "a\ny1\nb\ny2\nc\n");
+        // replace_all 场景：两处相距 > 2*CTX 行的修改必须是两个独立 hunk，
+        // 各自带 @@ 头（回归：旧渲染器 off-by-one 导致第二个 hunk 起丢头，
+        // 无头变化直接拼接在上一 hunk 尾部，严重误导模型）。
+        let mids = (0..10).map(|i| format!("mid{i}")).collect::<Vec<_>>().join("\n");
+        let before = format!("x1\n{mids}\nx2\n");
+        let after = before.replacen("x1", "y1", 1).replacen("x2", "y2", 1);
+        let d = diff_of(&before, &after);
         assert!(d.contains("- x1"), "hunk 1 missing: {d}");
         assert!(d.contains("+ y1"), "hunk 1 missing: {d}");
         assert!(d.contains("- x2"), "hunk 2 missing: {d}");
         assert!(d.contains("+ y2"), "hunk 2 missing: {d}");
-        assert_eq!(d.matches("@@").count(), 2, "expected 2 hunks: {d}");
+        assert_eq!(d.matches("@@ -").count(), 2, "expected 2 hunk headers: {d}");
+        assert!(d.contains("@@ -1,4 +1,4 @@"), "hunk 1 header: {d}");
+        assert!(d.contains("@@ -9,4 +9,4 @@"), "hunk 2 header: {d}");
+    }
+
+    #[test]
+    fn diff_close_changes_merge_into_one_hunk() {
+        // 间隔 ≤ 2*CTX 的变化合并为一个 hunk（git 行为），不得出现无头变化段。
+        let d = diff_of("a\nx1\nb\nx2\nc\n", "a\ny1\nb\ny2\nc\n");
+        assert_eq!(d.matches("@@ -").count(), 1, "expected 1 merged hunk: {d}");
+        assert!(d.contains("- x1"), "unexpected diff: {d}");
+        assert!(d.contains("+ y2"), "unexpected diff: {d}");
     }
 
     #[test]
     fn diff_header_line_numbers() {
-        // 文件头插入 → @@ -0,0 +1,1 @@
+        // 标准 unified diff：@@ 头在最前，行号含上下文行。
+        // 文件头插入（全文仅 2 行，全部成为上下文）→ @@ -1,2 +1,3 @@
         let d = diff_of("a\nb\n", "new\na\nb\n");
-        assert!(d.contains("@@ -0,0 +1,1 @@"), "unexpected diff: {d}");
-        // 第 2 行替换 → @@ -2,1 +2,1 @@
+        assert!(d.starts_with("@@ -1,2 +1,3 @@\n+ new\n  a\n  b"), "unexpected diff: {d}");
+        // 第 2 行替换（3 行文件全上下文）→ @@ -1,3 +1,3 @@
         let d2 = diff_of("a\nold\nc\n", "a\nnew\nc\n");
-        assert!(d2.contains("@@ -2,1 +2,1 @@"), "unexpected diff: {d2}");
+        assert!(d2.starts_with("@@ -1,3 +1,3 @@\n  a\n- old\n+ new\n  c"), "unexpected diff: {d2}");
+        // 纯插入且前方无上下文 → git 约定锚点 -k,0
+        let d3 = diff_of("", "x\n");
+        assert!(d3.starts_with("@@ -0,0 +1,1 @@"), "unexpected diff: {d3}");
     }
 
     #[test]
