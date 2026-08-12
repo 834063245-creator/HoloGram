@@ -9,33 +9,7 @@
 import * as THREE from 'three';
 import { communityColor, edgeColorByType, edgeOpacityByDepth, GLOW_COLORS } from './graph-colors';
 import { useShellStore } from '../app/shell-store';
-
-// ── Types ────────────────────────────────────────────────────
-
-interface GraphNode {
-  id: string;
-  name: string;
-  type?: string;
-  kind?: string;
-  location?: string;
-  properties?: Record<string, unknown>;
-}
-interface EdgeData {
-  s: number;
-  t: number;
-  couplingDepth: number;
-  edgeType: string;
-  direction: string;
-  crossFile: boolean;
-  ambiguous: boolean;
-}
-interface CommunityData {
-  id: string;
-  label: string;
-  node_ids: string[];
-  level?: number;
-  parent_id?: string | null;
-}
+import type { CommunityData, EdgeData, GraphNode } from './graph-types';
 
 export interface GalaxyMeta {
   id: string;
