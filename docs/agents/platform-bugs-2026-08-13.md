@@ -111,6 +111,13 @@ read_text → 本地替换 → 写前重读磁盘
   无需区分改动来源
 - 零静默丢失；锁内不再需要任何整文件相等检查
 
+**测试现状（2026-08-13 查证）**：editor.rs 有测试模块但 8 个测试全针对
+`build_line_diff` 渲染，写入路径/并发行为零覆盖。仓库已有同类问题的
+**现成先例可直接抄**：`src-tauri/src/credential.rs` 的 `CRED_WRITE_LOCK`
+（`OnceLock<Mutex<()>>` 进程级写锁，串行化读-改-写）+ 测试
+`test_concurrent_stores_do_not_lose_keys`（8 线程并发写、断言零丢失）。
+修复 edit_file 时按该模式加 per-file 写锁 + 并发回归测试即可。
+
 ### B2. git rename/mv 半拉子（上批任务 12 遗留）
 
 **现象**：任务 12 执行 `git mv file-viewer.ts → file-viewer.tsx`，实际只有
