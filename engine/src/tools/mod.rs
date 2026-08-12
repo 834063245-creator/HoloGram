@@ -87,6 +87,7 @@ impl ToolRegistry {
         "coupling_report",
         "project_timeline",
         "arch_blindspots",
+        "grpc_services",
         "preflight_check",
         "graph_summary",
         "cluster_report",
@@ -142,6 +143,7 @@ impl ToolRegistry {
             "coupling_report" => handlers::handler_coupling_report(args),
             "project_timeline" => handlers::handler_timeline(args),
             "arch_blindspots" => handlers::handler_blindspots(args),
+            "grpc_services" => handlers::handler_grpc_services(args),
             "preflight_check" => handlers::handler_preflight(args),
             "search_symbols" => handlers::handler_search(args),
             "explore_deps" => handlers::handler_explore(args),
@@ -199,6 +201,7 @@ fn suggestions_for(name: &str) -> &'static [&'static str] {
         "thread_conflicts" => &["trace_dataflow", "arch_blindspots", "preflight_check"],
         "coupling_report" => &["fragile_modules", "detect_cycles", "arch_blindspots"],
         "arch_blindspots" => &["preflight_check", "coupling_report", "thread_conflicts"],
+        "grpc_services" => &["search_symbols", "inspect_symbol", "trace_impact"],
         "check_boundaries" => &["preflight_check", "arch_blindspots", "coupling_report"],
         // ── 数据流 ──
         "trace_dataflow" => &["thread_conflicts", "preflight_check", "async_edges"],
@@ -484,6 +487,14 @@ fn all_schemas() -> &'static [ToolSchema] {
             category: "graph",
         },
         // ── 分析 ──
+        ToolSchema {
+            name: "grpc_services",
+            description: "gRPC/protobuf service map — every service and rpc method from .proto files, each method's implementation status (implemented / missing) and client call-site count. Use for microservice architecture understanding and finding unimplemented contracts. For a single method's callers, use inspect_symbol or trace_impact.",
+            params: &[],
+            required: &[],
+            read_only: true,
+            category: "analysis",
+        },
         ToolSchema {
                         name: "fragile_modules",
             description: "Top N most coupled modules ranked by structural fan-in/fan-out and coupling depth. High score = core hub with many dependents (well-designed hubs naturally rank high). For data-flow coupling (reads/writes) and temporal coupling (triggers/awaits), use trace_dataflow or async_edges.",

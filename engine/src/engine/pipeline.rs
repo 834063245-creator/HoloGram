@@ -18,6 +18,7 @@ use crate::analysis::dynamic_dispatch::synthesize_dynamic_edges;
 use crate::analysis::dynamic_dispatch_react::synthesize_react_edges;
 use crate::analysis::dynamic_dispatch_vue::synthesize_vue_edges;
 use crate::analysis::bridge_rpc::synthesize_bridge_calls;
+use crate::analysis::grpc_services::detect_grpc_services;
 use crate::analysis::flows::detect_all_flows;
 use crate::analysis::framework_routes::detect_framework_routes;
 use crate::community::detect_communities_and_hierarchy;
@@ -170,6 +171,18 @@ impl Engine {
             name: "Bridge / RPC".into(),
             elapsed_secs: stage_start.elapsed().as_secs_f64(),
             detail: format!("{} edges", bridge_edges),
+        });
+
+        // 5.4. gRPC 服务检测（.proto 定义 → 节点 + 实现/客户端匹配）
+        set_progress("gRPC服务检测", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let grpc_added = detect_grpc_services(&mut result.graph, project_root, &result.parse_cache, &result.discovered_files);
+        eprintln!("[engine] stage: grpc-services done in {:.1}s ({} nodes+edges)",
+            stage_start.elapsed().as_secs_f64(), grpc_added);
+        stage_timings.push(StageTiming {
+            name: "gRPC Services".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: format!("{} nodes+edges", grpc_added),
         });
 
         // 5.5. DI / 反射检测

@@ -56,6 +56,7 @@ test_projects/
 
 # Project-local runtime data (generated per project)
 .hologram/
+.zcode/
 *.db
 .last_project
 hologram_graph.json

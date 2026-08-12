@@ -514,6 +514,72 @@ pub(crate) fn handler_blindspots(args: &Value) -> ToolResponse {
     }))
 }
 
+pub(crate) fn handler_grpc_services(_args: &Value) -> ToolResponse {
+    ToolResponse::Success(with_store(|idx| {
+        // 收集 grpc 节点（properties.kind == "grpc"，合成器产出的契约节点）
+        let grpc_ids: std::collections::HashSet<String> = idx
+            .nodes_iter()
+            .filter(|n| n.properties.get("kind") == Some(&json!("grpc")))
+            .map(|n| n.id.to_string())
+            .collect();
+
+        // 边统计：出边（proto→impl）为实现边；入边（caller→proto）为客户端调用点
+        let mut impl_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut client_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (source, targets) in idx.edges_iter() {
+            for (target, _, _, _) in targets {
+                if grpc_ids.contains(&source) {
+                    *impl_count.entry(source.clone()).or_insert(0) += 1;
+                }
+                if grpc_ids.contains(&target) {
+                    *client_count.entry(target.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        // 按 service 分组，方法按名排序
+        let mut services: std::collections::BTreeMap<String, serde_json::Value> = std::collections::BTreeMap::new();
+        let mut total_methods = 0usize;
+        let mut implemented = 0usize;
+        let mut missing = 0usize;
+        let mut nodes: Vec<&crate::graph::Node> = idx
+            .nodes_iter()
+            .filter(|n| n.properties.get("kind") == Some(&json!("grpc")))
+            .collect();
+        nodes.sort_by(|a, b| a.name.cmp(&b.name));
+        for node in nodes {
+            let svc = node.properties.get("service").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+            let pkg = node.properties.get("package").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let method = node.properties.get("method").and_then(|v| v.as_str()).unwrap_or(&node.name).to_string();
+            let is_impl = impl_count.get(&node.id.to_string()).copied().unwrap_or(0) > 0;
+            total_methods += 1;
+            if is_impl { implemented += 1; } else { missing += 1; }
+            let entry = services.entry(svc.clone()).or_insert_with(|| json!({
+                "service": svc,
+                "package": pkg,
+                "methods": Vec::<serde_json::Value>::new(),
+            }));
+            entry["methods"].as_array_mut().unwrap().push(json!({
+                "method": method,
+                "node": node.id,
+                "input": node.properties.get("inputType").cloned().unwrap_or(json!(null)),
+                "output": node.properties.get("outputType").cloned().unwrap_or(json!(null)),
+                "streaming": node.properties.get("isStreaming").cloned().unwrap_or(json!(false)),
+                "implemented": is_impl,
+                "client_call_sites": client_count.get(&node.id.to_string()).copied().unwrap_or(0),
+            }));
+        }
+
+        json!({
+            "total_services": services.len(),
+            "total_methods": total_methods,
+            "implemented": implemented,
+            "missing": missing,
+            "services": services.into_values().collect::<Vec<_>>(),
+        })
+    }))
+}
+
 pub(crate) fn handler_preflight(args: &Value) -> ToolResponse {
     let files: Vec<String> = args
         .get("files")

@@ -18,6 +18,7 @@ pub mod dynamic_dispatch_vue;
 pub mod di_reflection;
 pub mod policy_check;
 pub mod bridge_rpc;
+pub mod grpc_services;
 
 pub mod dataflow_synthesis;
 pub mod dataflow_engine;
@@ -45,5 +46,6 @@ pub use di_reflection::detect_di_reflection;
 pub use di_reflection::detect_dynamic_imports;
 pub use di_reflection::detect_eval;
 pub use di_reflection::detect_cross_lang_calls;
+pub use grpc_services::detect_grpc_services;
 pub use dataflow_synthesis::synthesize_dataflow_edges;
 pub use policy_check::policy_check_from_index;

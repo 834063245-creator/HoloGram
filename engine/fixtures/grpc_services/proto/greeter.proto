@@ -1,0 +1,20 @@
+syntax = "proto3";
+package helloworld.v1;
+
+service Greeter {
+  rpc SayHello (HelloRequest) returns (HelloReply);
+  rpc SendEmail (EmailRequest) returns (EmailReply);
+}
+
+message HelloRequest {
+  string name = 1;
+}
+message HelloReply {
+  string message = 1;
+}
+message EmailRequest {
+  string to = 1;
+}
+message EmailReply {
+  bool sent = 1;
+}
