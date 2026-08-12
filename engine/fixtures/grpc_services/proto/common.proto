@@ -1,0 +1,12 @@
+syntax = "proto3";
+package helloworld.common;
+
+message PageMeta {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message Money {
+  string currency = 1;
+  int64 amount = 2;
+}

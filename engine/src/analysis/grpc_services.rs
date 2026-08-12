@@ -34,6 +34,7 @@ struct RpcDef {
     input: String,
     output: String,
     streaming: bool,
+    imports: Vec<String>,
 }
 
 /// 客户端连接识别结果：变量名 → 服务名
@@ -67,10 +68,11 @@ fn collect_proto_files(root: &Path, out: &mut Vec<String>) {
     }
 }
 
-/// 逐行解析 proto：跟踪 package / service 状态，提取 rpc 定义（含行号）
+/// 逐行解析 proto：跟踪 package / service / import 状态，提取 rpc 定义（含行号）
 fn parse_proto(file: &str, source: &str, defs: &mut Vec<RpcDef>) {
     let package_re = regex::Regex::new(r#"^\s*package\s+([\w.]+)\s*;"#).unwrap();
     let service_re = regex::Regex::new(r#"^\s*service\s+(\w+)\s*\{"#).unwrap();
+    let import_re = regex::Regex::new(r#"^\s*import\s+"([^"]+)";"#).unwrap();
     let rpc_re = regex::Regex::new(
         r#"^\s*rpc\s+(\w+)\s*\(\s*(stream\s+)?([\w.]+)\s*\)\s*returns\s*\(\s*(stream\s+)?([\w.]+)\s*\)\s*;"#,
     )
@@ -78,12 +80,16 @@ fn parse_proto(file: &str, source: &str, defs: &mut Vec<RpcDef>) {
 
     let mut package = String::new();
     let mut service = String::new();
+    let mut imports: Vec<String> = Vec::new();
     for (i, line) in source.lines().enumerate() {
         if let Some(c) = package_re.captures(line) {
             package = c.get(1).unwrap().as_str().to_string();
         }
         if let Some(c) = service_re.captures(line) {
             service = c.get(1).unwrap().as_str().to_string();
+        }
+        if let Some(c) = import_re.captures(line) {
+            imports.push(c.get(1).unwrap().as_str().to_string());
         }
         if let Some(c) = rpc_re.captures(line) {
             let method = c.get(1).unwrap().as_str().to_string();
@@ -100,6 +106,7 @@ fn parse_proto(file: &str, source: &str, defs: &mut Vec<RpcDef>) {
                 input,
                 output,
                 streaming: input_stream || output_stream,
+                imports: imports.clone(),
             });
         }
     }
@@ -156,31 +163,45 @@ fn detect_client_bindings(file: &str, source: &str, bindings: &mut Vec<ClientBin
     let go_re = regex::Regex::new(r#"(\w+)\s*(?::=|=)\s*New(\w+)Client\s*\("#).unwrap();
     // Rust（tonic）：let mut client = GreeterClient::new(conn)
     let rust_re = regex::Regex::new(r#"let\s+mut\s+(\w+)\s*=\s*(\w+)Client::new\s*\("#).unwrap();
+    // Python（grpcio）：stub = greeter_pb2_grpc.GreeterStub(channel)（可带模块前缀）
+    let py_re = regex::Regex::new(r#"(\w+)\s*=\s*([\w.]+)Stub\s*\("#).unwrap();
+    // Java（grpc）：final GreeterBlockingStub stub = GreeterGrpc.newBlockingStub(channel);
+    let java_re = regex::Regex::new(
+        r#"(?:final\s+)?(\w+)Stub\s+(\w+)\s*=\s*(\w+)Grpc\.new\w*Stub\s*\("#,
+    )
+    .unwrap();
 
     let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut push = |var: &str, svc: &str, bindings: &mut Vec<ClientBinding>| {
+        if seen.insert((var.to_string(), svc.to_string())) {
+            bindings.push(ClientBinding {
+                var: var.to_string(),
+                service: svc.to_string(),
+            });
+        }
+    };
     if lower.ends_with(".ts") || lower.ends_with(".tsx") || lower.ends_with(".js") {
         for c in ts_re.captures_iter(source) {
-            let var = c.get(1).unwrap().as_str().to_string();
-            let svc = c.get(2).unwrap().as_str().to_string();
-            if seen.insert((var.clone(), svc.clone())) {
-                bindings.push(ClientBinding { var, service: svc });
-            }
+            push(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), bindings);
         }
     } else if lower.ends_with(".go") {
         for c in go_re.captures_iter(source) {
-            let var = c.get(1).unwrap().as_str().to_string();
-            let svc = c.get(2).unwrap().as_str().to_string();
-            if seen.insert((var.clone(), svc.clone())) {
-                bindings.push(ClientBinding { var, service: svc });
-            }
+            push(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), bindings);
         }
     } else if lower.ends_with(".rs") {
         for c in rust_re.captures_iter(source) {
-            let var = c.get(1).unwrap().as_str().to_string();
-            let svc = c.get(2).unwrap().as_str().to_string();
-            if seen.insert((var.clone(), svc.clone())) {
-                bindings.push(ClientBinding { var, service: svc });
-            }
+            push(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), bindings);
+        }
+    } else if lower.ends_with(".py") {
+        for c in py_re.captures_iter(source) {
+            // 模块前缀（greeter_pb2_grpc.Greeter）取最后一段
+            let svc = c.get(2).unwrap().as_str();
+            let svc = svc.rsplit('.').next().unwrap_or(svc);
+            push(c.get(1).unwrap().as_str(), svc, bindings);
+        }
+    } else if lower.ends_with(".java") {
+        for c in java_re.captures_iter(source) {
+            push(c.get(2).unwrap().as_str(), c.get(3).unwrap().as_str(), bindings);
         }
     }
 }
@@ -243,6 +264,7 @@ pub fn detect_grpc_services(
             "inputType": def.input,
             "outputType": def.output,
             "isStreaming": def.streaming,
+            "imports": def.imports,
         });
         graph.add_node(node);
         added += 1;
@@ -272,26 +294,27 @@ pub fn detect_grpc_services(
             || lower.ends_with(".js")
             || lower.ends_with(".go")
             || lower.ends_with(".rs")
+            || lower.ends_with(".py")
+            || lower.ends_with(".java")
         {
             files.insert(s);
         }
     }
 
     let call_re = regex::Regex::new(r#"\b(\w+)\.(\w+)\s*\("#).unwrap();
+    // Java 链式调用（grpc-java 常见形态，无中间变量）：
+    // GreeterGrpc.newBlockingStub(channel).sayHello(req)
+    let java_chain_re =
+        regex::Regex::new(r#"(\w+)Grpc\.new\w*Stub\([^)]*\)\.(\w+)\s*\("#).unwrap();
     for file in &files {
         let source = parse_cache
             .get(file)
             .map(|(src, _)| src.clone())
             .or_else(|| std::fs::read_to_string(file).ok());
         let Some(source) = source else { continue };
-        if !source.contains("Client") && !source.contains("client") {
-            continue;
-        }
-
-        // 同文件绑定：变量 → 服务名
-        let mut bindings: Vec<ClientBinding> = Vec::new();
-        detect_client_bindings(file, &source, &mut bindings);
-        if bindings.is_empty() {
+        if !source.contains("Stub") && !source.contains("stub") && !source.contains("Client")
+            && !source.contains("client")
+        {
             continue;
         }
 
@@ -311,6 +334,65 @@ pub fn detect_grpc_services(
             .collect();
 
         let mut seen_edges: HashSet<String> = HashSet::new();
+        let mut connect = |proto_id: &str, edge_tag: String| -> usize {
+            let mut n = 0usize;
+            if caller_nodes.is_empty() {
+                if let Some(file_id) = find_file_node(graph, file) {
+                    graph.add_edge_unchecked(Edge::synthesized(
+                        format!("{edge_tag}_file"),
+                        &file_id,
+                        proto_id,
+                        EdgeKind::Calls,
+                        "grpc-client",
+                    ));
+                    n += 1;
+                }
+            } else {
+                for caller in &caller_nodes {
+                    edge_seq += 1;
+                    graph.add_edge_unchecked(Edge::synthesized(
+                        format!("grpc_client_{edge_seq}"),
+                        caller,
+                        proto_id,
+                        EdgeKind::Calls,
+                        "grpc-client",
+                    ));
+                    n += 1;
+                }
+            }
+            n
+        };
+
+        // Java 链式调用优先（无需变量绑定）
+        if file.to_lowercase().ends_with(".java") {
+            for caps in java_chain_re.captures_iter(&source) {
+                if added >= 400 {
+                    break;
+                }
+                let svc = caps.get(1).unwrap().as_str();
+                let call_method = caps.get(2).unwrap().as_str();
+                let Some(proto_id) = proto_node_ids
+                    .iter()
+                    .find(|((s, m), _)| s == svc && normalize(m) == normalize(call_method))
+                    .map(|(_, id)| id)
+                else {
+                    continue;
+                };
+                let tag = format!("grpc_jchain_{}_{}", svc, normalize(call_method));
+                if !seen_edges.insert(tag.clone()) {
+                    continue;
+                }
+                added += connect(proto_id, tag);
+            }
+        }
+
+        // 同文件绑定：变量 → 服务名
+        let mut bindings: Vec<ClientBinding> = Vec::new();
+        detect_client_bindings(file, &source, &mut bindings);
+        if bindings.is_empty() {
+            continue;
+        }
+
         for caps in call_re.captures_iter(&source) {
             if added >= 400 {
                 break;
@@ -334,30 +416,7 @@ pub fn detect_grpc_services(
             if !seen_edges.insert(edge_id.clone()) {
                 continue;
             }
-            if caller_nodes.is_empty() {
-                if let Some(file_id) = find_file_node(graph, file) {
-                    graph.add_edge_unchecked(Edge::synthesized(
-                        format!("{edge_id}_file"),
-                        &file_id,
-                        proto_id,
-                        EdgeKind::Calls,
-                        "grpc-client",
-                    ));
-                    added += 1;
-                }
-            } else {
-                for caller in &caller_nodes {
-                    edge_seq += 1;
-                    graph.add_edge_unchecked(Edge::synthesized(
-                        format!("grpc_client_{edge_seq}"),
-                        caller,
-                        proto_id,
-                        EdgeKind::Calls,
-                        "grpc-client",
-                    ));
-                    added += 1;
-                }
-            }
+            added += connect(proto_id, edge_id);
         }
     }
 
@@ -385,6 +444,7 @@ mod tests {
         let src = r#"
 syntax = "proto3";
 package helloworld.v1;
+import "common.proto";
 
 service Greeter {
   rpc SayHello (HelloRequest) returns (HelloReply);
@@ -401,8 +461,9 @@ service Greeter {
         assert_eq!(d.input, "HelloRequest");
         assert_eq!(d.output, "HelloReply");
         assert!(!d.streaming);
+        assert_eq!(d.imports, vec!["common.proto"], "import 应被解析");
         assert!(defs[1].streaming, "stream rpc 应标记");
-        assert_eq!(defs[0].line, 6);
+        assert_eq!(defs[0].line, 7);
     }
 
     #[test]
@@ -457,6 +518,33 @@ resp, err := client.SayHello(ctx, req)
     }
 
     #[test]
+    fn test_detect_client_bindings_python() {
+        let src = r#"
+channel = grpc.insecure_channel("localhost:50051")
+stub = greeter_pb2_grpc.GreeterStub(channel)
+resp = stub.SayHello(greeter_pb2.HelloRequest(name=name))
+"#;
+        let mut bindings = Vec::new();
+        detect_client_bindings("client.py", src, &mut bindings);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].var, "stub");
+        assert_eq!(bindings[0].service, "Greeter");
+    }
+
+    #[test]
+    fn test_detect_client_bindings_java() {
+        let src = r#"
+GreeterBlockingStub stub = GreeterGrpc.newBlockingStub(channel);
+HelloReply resp = stub.sayHello(req);
+"#;
+        let mut bindings = Vec::new();
+        detect_client_bindings("Client.java", src, &mut bindings);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].var, "stub");
+        assert_eq!(bindings[0].service, "Greeter");
+    }
+
+    #[test]
     fn test_full_detection_fixture() {
         let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures/grpc_services");
@@ -478,16 +566,24 @@ resp, err := client.SayHello(ctx, req)
         let discovered: Vec<std::path::PathBuf> = vec![
             fixture.join("client/ts_client.ts"),
             fixture.join("client/go_client.go"),
+            fixture.join("client/python_client.py"),
+            fixture.join("client/java_client.java"),
             fixture.join("server/rust_impl.rs"),
         ];
 
         // 模拟阶段 1 已解析的客户端函数节点（location 用反斜杠验证归一化比较）
         let ts_file = discovered[0].to_string_lossy().replace('\\', "/");
         let go_file = discovered[1].to_string_lossy().replace('\\', "/");
+        let py_file = discovered[2].to_string_lossy().replace('\\', "/");
+        let java_file = discovered[3].to_string_lossy().replace('\\', "/");
         graph.add_node(Node::new("ts_greet", "greet", NodeKind::Function));
         graph.get_node_mut("ts_greet").unwrap().location = Some(format!("{ts_file}:4"));
         graph.add_node(Node::new("go_main", "main", NodeKind::Function));
         graph.get_node_mut("go_main").unwrap().location = Some(format!("{go_file}:11"));
+        graph.add_node(Node::new("py_greet", "greet", NodeKind::Function));
+        graph.get_node_mut("py_greet").unwrap().location = Some(format!("{py_file}:6"));
+        graph.add_node(Node::new("java_greet", "greet", NodeKind::Function));
+        graph.get_node_mut("java_greet").unwrap().location = Some(format!("{java_file}:10"));
 
         let added = detect_grpc_services(&mut graph, &fixture, &cache, &discovered);
 
@@ -499,6 +595,16 @@ resp, err := client.SayHello(ctx, req)
             .collect();
         assert_eq!(proto_nodes.len(), 2, "应有 2 个 grpc 节点");
 
+        // import 已解析进 properties
+        for nid in &proto_nodes {
+            let n = graph.get_node(nid).unwrap();
+            assert_eq!(
+                n.properties.get("imports"),
+                Some(&json!(["common.proto"])),
+                "节点应带 import 信息"
+            );
+        }
+
         // 实现匹配：say_hello / send_email 各一条合成边（channel grpc）
         let grpc_edges = graph
             .edges_iter()
@@ -506,13 +612,78 @@ resp, err := client.SayHello(ctx, req)
             .count();
         assert_eq!(grpc_edges, 2, "实现匹配应有 2 条边");
 
-        // 客户端调用边：ts + go 各命中
+        // 客户端调用边：ts + go + py + java（链式 + 变量式）各命中
         let client_edges = graph
             .edges_iter()
             .filter(|(_, e)| e.metadata.as_ref().map_or(false, |m| m["synthesizedBy"] == json!("grpc-client")))
             .count();
-        assert!(client_edges >= 2, "客户端调用应有 ≥2 条边，实际 {client_edges}");
+        assert_eq!(client_edges, 5, "客户端调用应有 5 条边（ts/go/py/java链式/java变量），实际 {client_edges}");
 
-        assert!(added >= 2 + 2 + 2, "总数应涵盖节点与边，实际 {added}");
+        assert!(added >= 2 + 2 + 5, "总数应涵盖节点与边，实际 {added}");
+    }
+
+    #[test]
+    fn test_grpc_services_full_pipeline() {
+        // 真实项目级验证：完整 pipeline 解析 fixture（客户端文件真实解析出节点，
+        // 实现/调用匹配走真实 location 与名称）
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/grpc_services");
+        let mut engine = crate::engine::Engine::new();
+        engine.init(&fixture).unwrap();
+        let result = engine.analyze(&fixture);
+        assert!(result.is_ok(), "analyze failed: {:?}", result.err());
+
+        // grpc 节点进图 + 实现/客户端边统计
+        let (grpc_count, impl_edges, client_edges) = engine
+            .read(|idx| {
+                let grpc: std::collections::HashSet<String> = idx
+                    .nodes_iter()
+                    .filter(|n| n.properties.get("kind") == Some(&json!("grpc")))
+                    .map(|n| n.id.to_string())
+                    .collect();
+                let mut impl_edges = 0usize;
+                let mut client_edges = 0usize;
+                for (src, targets) in idx.edges_iter() {
+                    for (tgt, _, _, _) in targets {
+                        if grpc.contains(&src) {
+                            impl_edges += 1;
+                        }
+                        if grpc.contains(&tgt) {
+                            client_edges += 1;
+                        }
+                    }
+                }
+                (grpc.len(), impl_edges, client_edges)
+            })
+            .unwrap();
+        assert_eq!(grpc_count, 2, "真实解析后应有 2 个 grpc 节点");
+        assert_eq!(impl_edges, 2, "实现匹配应命中 say_hello/send_email");
+        assert!(
+            client_edges >= 3,
+            "客户端调用边应 ≥3（ts/go/py/java 真实解析），实际 {client_edges}"
+        );
+
+        // grpc_services 工具输出验证（走全局引擎状态）
+        crate::engine::engine_init(&fixture).unwrap();
+        match crate::tools::handlers::handler_grpc_services(&json!({})) {
+            crate::tools::response::ToolResponse::Success(v) => {
+                assert_eq!(v["total_services"], 1, "应聚合出 1 个服务");
+                assert_eq!(v["total_methods"], 2);
+                assert_eq!(v["implemented"], 2, "两个方法都应有实现");
+                assert_eq!(v["missing"], 0);
+                let methods = v["services"][0]["methods"].as_array().unwrap();
+                assert_eq!(methods.len(), 2);
+                for m in methods {
+                    assert_eq!(m["implemented"], true, "{} 应已实现", m["method"]);
+                    let sites = m["client_call_sites"].as_u64().unwrap_or(0);
+                    if m["method"] == "SayHello" {
+                        assert!(sites >= 4, "SayHello 应有 ≥4 客户端调用点（ts/go/py/java），实际 {sites}");
+                    } else {
+                        assert_eq!(sites, 0, "SendEmail 在 fixture 中无客户端调用点");
+                    }
+                }
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
     }
 }

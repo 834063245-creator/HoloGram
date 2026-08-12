@@ -75,8 +75,12 @@ impl Engine {
 
             // 源文件扩展名 — 从 grammar_loader 派生，使新安装的
             // 语法 DLL 无需修改代码即可自动跟踪。
-            let source_exts: std::collections::HashSet<String> =
+            let mut source_exts: std::collections::HashSet<String> =
                 GRAMMAR_LOADER.supported_extensions().into_iter().collect();
+            // gRPC 合成器（analysis/grpc_services.rs）依赖 .proto 定义；
+            // 不在 grammar 扩展名白名单内，需显式纳入监听，
+            // 否则 .proto 变更不会触发增量重分析，服务端节点保持陈旧。
+            source_exts.insert("proto".to_string());
 
             let mut pending = false;
             let mut changed_paths: Vec<(PathBuf, String)> = Vec::new();
