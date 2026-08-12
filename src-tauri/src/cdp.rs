@@ -360,7 +360,7 @@ const INSPECT_PROBE: &str = r#"(selector, props, maxResults) => {
     }
     return out;
   });
-})"#;
+}"#;
 
 pub(crate) async fn cdp_inspect(
     selector: &str,
@@ -507,7 +507,7 @@ const REPORT_PROBE: &str = r#"(scope) => {
   }
   issues.push(...overflowIssues.slice(0, 5));
   return { issues: issues.slice(0, 30), ok: issues.length === 0 };
-})"#;
+}"#;
 
 pub(crate) async fn cdp_report(scope: Option<String>) -> Result<String, String> {
     let expr = format!(
