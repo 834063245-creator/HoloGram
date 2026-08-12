@@ -4,8 +4,6 @@
 // Chat 工具函数 — 从 chat.ts 提取的纯静态辅助函数
 // 不依赖 ChatPanel 状态。可从任何位置安全导入。
 
-import DOMPurify from 'dompurify';
-import { marked } from 'marked';
 import { iconHtml } from './icons';
 import { resolveSemanticToolName } from './tool-semantics';
 
@@ -293,8 +291,11 @@ function formatDataflowCard(text: string): string | null {
 // formatToolResult
 // ═══════════════════════════════════════════════════════════════════
 
+/** 工具输出的渲染形态：结构化 HTML（特殊视图）或 markdown 文本（react-markdown 渲染）。 */
+export type ToolResultRender = { kind: 'html'; html: string } | { kind: 'markdown'; text: string };
+
 /** 格式化工具输出用于显示 — JSON 美化打印，代码高亮。 */
-export function formatToolResult(toolName: string, text: string, truncated: boolean, args?: string): string {
+export function formatToolResult(toolName: string, text: string, truncated: boolean, args?: string): ToolResultRender {
   let body = text;
   if (truncated) body += '\n…[截断]…';
 
@@ -304,7 +305,7 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
   // ── trace_dataflow — 内联流程卡片 ──
   if (name === 'trace_dataflow') {
     const card = formatDataflowCard(text);
-    if (card) return card;
+    if (card) return { kind: 'html', html: card };
   }
 
   // ── Glob / list_directory — 紧凑列表 ──
@@ -315,14 +316,16 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
       const data = JSON.parse(text);
       const lines = (data.results || []).map((r: any) => `<span class="glob-entry">📄 ${escapeHtml(r.path)}</span>`);
       const header = `<div class="glob-summary">${data.count} 个文件${data.truncated ? ' (结果已截断)' : ''}</div>`;
-      return (
-        header +
-        (lines.length > 30
-          ? lines.slice(0, 30).join('\n') + `\n<div class="glob-truncated">… 及其他 ${lines.length - 30} 个结果</div>`
-          : lines.join('\n'))
-      );
+      return {
+        kind: 'html',
+        html:
+          header +
+          (lines.length > 30
+            ? lines.slice(0, 30).join('\n') + `\n<div class="glob-truncated">… 及其他 ${lines.length - 30} 个结果</div>`
+            : lines.join('\n')),
+      };
     } catch {
-      return escapeHtml(body);
+      return { kind: 'html', html: escapeHtml(body) };
     }
   }
 
@@ -330,12 +333,12 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
   try {
     const parsed = JSON.parse(body);
     const formatted = JSON.stringify(parsed, null, 2);
-    return `<pre><code class="language-json">${escapeHtml(formatted)}</code></pre>`;
+    return { kind: 'html', html: `<pre><code class="language-json">${escapeHtml(formatted)}</code></pre>` };
   } catch {}
 
   // ── 空或极短 ──
-  if (!body.trim()) return escapeHtml('(无输出)');
-  if (body.length < 60 && !body.includes('\n')) return escapeHtml(body);
+  if (!body.trim()) return { kind: 'html', html: escapeHtml('(无输出)') };
+  if (body.length < 60 && !body.includes('\n')) return { kind: 'html', html: escapeHtml(body) };
 
   // ── edit_file / write_file / read_file_content 的 diff 视图（第 7 项）──
   if (
@@ -344,21 +347,17 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
     name === 'write_file_content' ||
     name === 'read_file_content'
   ) {
-    return formatDiffResult(body, args);
+    return { kind: 'html', html: formatDiffResult(body, args) };
   }
 
     // ── 代码：run_shell、bash_output、bash_wait → 代码块 ──
   if (name === 'run_shell' || name === 'bash_output' || name === 'bash_wait') {
-    return `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>`;
+    return { kind: 'html', html: `<pre><code class="language-bash">${escapeHtml(body)}</code></pre>` };
   }
   if (name === 'search_content') {
-    return `<pre><code>${escapeHtml(body)}</code></pre>`;
+    return { kind: 'html', html: `<pre><code>${escapeHtml(body)}</code></pre>` };
   }
 
-  // ── 默认：渲染为 markdown（支持表格、列表等）──
-  try {
-    const html = DOMPurify.sanitize(marked.parse(body) as string);
-    if (html && html !== body) return html;
-  } catch {}
-  return escapeHtml(body);
+  // ── 默认：交给上游 react-markdown 渲染（新路径，安全默认）──
+  return { kind: 'markdown', text: body };
 }

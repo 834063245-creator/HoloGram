@@ -25,8 +25,6 @@ vi.mock('../src/settings', () => ({
   saveSettings: vi.fn(),
   CHAT_MODES: [{ id: 'general', label: '通用', description: '', temperature: 0.7, maxSteps: 50 }],
 }));
-vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
-vi.mock('marked', () => ({ marked: { parse: (s: string) => s } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
 // ═══════════════════════════════════════════════════════════════════

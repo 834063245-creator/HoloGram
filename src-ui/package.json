@@ -25,10 +25,8 @@
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@types/three": "^0.185.1",
-    "dompurify": "^3.4.13",
     "gpt-tokenizer": "^3.4.0",
     "highlight.js": "^11.11.1",
-    "marked": "^18.0.5",
     "monaco-editor": "^0.55.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.8",
@@ -37,9 +35,6 @@
     "three": "^0.185.1",
     "zod": "^4.4.3",
     "zustand": "^5.0.14"
-  },
-  "overrides": {
-    "dompurify": "^3.4.13"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",

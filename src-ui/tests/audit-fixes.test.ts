@@ -59,8 +59,6 @@ vi.mock('gsap', () => {
     gsap: { set: vi.fn() },
   };
 });
-vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
-vi.mock('marked', () => ({ marked: { parse: (s: string) => s } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
 // ═══════════════════════════════════════════════════════════════════

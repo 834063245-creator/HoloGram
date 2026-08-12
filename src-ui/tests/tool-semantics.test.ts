@@ -26,8 +26,6 @@ vi.mock('../src/settings', () => ({
   saveSettings: vi.fn(),
   CHAT_MODES: [{ id: 'general', label: '通用', description: '', temperature: 0.7, maxSteps: 50 }],
 }));
-vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
-vi.mock('marked', () => ({ marked: { parse: (s: string) => s } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
 // ═══════════════════════════════════════════════════════════════════
@@ -95,7 +93,8 @@ describe('formatToolResult — 领域工具结果特殊渲染', () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
     // write 结果无 old/new 参数 — 走兜底：显示 filePath 头部 + 代码块（body 需过短文本分支）
     const args = JSON.stringify({ action: 'write', filePath: '/tmp/a.ts', content: 'x\n'.repeat(30) });
-    const html = formatToolResult('fs', 'file saved\n' + 'log line\n'.repeat(10), false, args);
+    const r = formatToolResult('fs', 'file saved\n' + 'log line\n'.repeat(10), false, args);
+    const html = r.kind === 'html' ? r.html : '';
     expect(html).toContain('diff-header');
     expect(html).toContain('/tmp/a.ts');
   });
@@ -109,7 +108,8 @@ describe('formatToolResult — 领域工具结果特殊渲染', () => {
       oldString: 'a\nb',
       newString: 'a\nX',
     });
-    const html = formatToolResult('fs', body, false, args);
+    const r = formatToolResult('fs', body, false, args);
+    const html = r.kind === 'html' ? r.html : '';
     expect(html).toContain('diff-lines');
     expect(html).toContain('diff-added');
     expect(html).toContain('diff-removed');
@@ -118,24 +118,27 @@ describe('formatToolResult — 领域工具结果特殊渲染', () => {
 
   it('shell(run) 走 bash 代码块', async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
-    const html = formatToolResult('shell', 'npm test\n\n PASS tests/unit\n', false, '{"action":"run"}');
+    const r = formatToolResult('shell', 'npm test\n\n PASS tests/unit\n', false, '{"action":"run"}');
+    const html = r.kind === 'html' ? r.html : '';
     expect(html).toContain('language-bash');
   });
 
   it('search(content) 走代码块（非 markdown 误渲染）', async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
-    const html = formatToolResult('search', 'foo.ts:12: const x = 1\nbar.ts:34: const x = 2\n', false, '{"action":"content"}');
+    const r = formatToolResult('search', 'foo.ts:12: const x = 1\nbar.ts:34: const x = 2\n', false, '{"action":"content"}');
+    const html = r.kind === 'html' ? r.html : '';
     expect(html).toContain('<pre><code>');
   });
 
   it('fs(glob) JSON 输出走紧凑列表（glob 分支位于 JSON 美化之前）', async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
-    const html = formatToolResult(
+    const r = formatToolResult(
       'fs',
       JSON.stringify({ count: 1, results: [{ path: 'a.ts' }] }),
       false,
       '{"action":"glob"}',
     );
+    const html = r.kind === 'html' ? r.html : '';
     expect(html).toContain('glob-summary');
     expect(html).toContain('a.ts');
     expect(html).toContain('1 个文件');
@@ -143,15 +146,15 @@ describe('formatToolResult — 领域工具结果特殊渲染', () => {
 
   it('旧工具名行为不回归', async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
-    expect(formatToolResult('run_shell', 'out\n', false)).toContain('language-bash');
-    expect(
-      formatToolResult(
-        'edit_file',
-        'body\n',
-        false,
-        JSON.stringify({ file_path: '/a.ts', oldString: 'a', newString: 'b' }),
-      ),
-    ).toContain('diff-lines');
+    const shellR = formatToolResult('run_shell', 'out\n', false);
+    expect(shellR.kind === 'html' ? shellR.html : '').toContain('language-bash');
+    const editR = formatToolResult(
+      'edit_file',
+      'body\n',
+      false,
+      JSON.stringify({ file_path: '/a.ts', oldString: 'a', newString: 'b' }),
+    );
+    expect(editR.kind === 'html' ? editR.html : '').toContain('diff-lines');
   });
 });
 

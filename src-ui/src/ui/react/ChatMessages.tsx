@@ -363,6 +363,37 @@ function handleToolResultClick(e: React.MouseEvent<HTMLDivElement>): void {
 // ponytail: 未用 React.memo 包装 — part-mutator 就地修改 ToolCallPart
 // (tr.status = 'error')，因此对象引用不变。React.memo
 // 会在工具状态转换时阻止重新渲染（如 pending→running→done/error）。
+
+// ── 工具结果视图 ──
+// 特殊渲染（JSON 美化 / diff / dataflow 卡片等）产出结构化 HTML，
+// 经 dangerouslySetInnerHTML 注入；默认分支为 markdown 文本，
+// 走 react-markdown 新路径（渲染收敛后不再经 marked+DOMPurify）。
+const ToolResultView: React.FC<{
+  toolName: string;
+  output: string;
+  truncated: boolean;
+  args?: string;
+  onClick: (e: React.MouseEvent<HTMLDivElement>) => void;
+}> = ({ toolName, output, truncated, args, onClick }) => {
+  const rendered = formatToolResult(toolName, output, truncated, args);
+  if (rendered.kind === 'html') {
+    return <div className="msg-tool-result" onClick={onClick} dangerouslySetInnerHTML={{ __html: rendered.html }} />;
+  }
+  return (
+    <div className="msg-tool-result" onClick={onClick}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code: MarkdownCode,
+          pre: ({ children }) => <>{children}</>,
+        }}
+      >
+        {rendered.text}
+      </ReactMarkdown>
+    </div>
+  );
+};
+
 const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () => void }> = ({
   part,
   expanded,
@@ -403,10 +434,12 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
         <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
       </div>
       {isExpanded && part.output && (
-        <div
-          className="msg-tool-result"
+        <ToolResultView
+          toolName={part.name}
+          output={part.output}
+          truncated={part.truncated ?? false}
+          args={part.args}
           onClick={handleToolResultClick}
-          dangerouslySetInnerHTML={{ __html: formatToolResult(part.name, part.output, part.truncated ?? false, part.args) }}
         />
       )}
       {isExpanded && !part.output && part.status === 'running' && (

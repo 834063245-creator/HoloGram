@@ -16,9 +16,8 @@ vi.mock('../src/settings', () => ({
     display: { language: 'zh', fontScale: 1 },
   })),
   saveSettings: vi.fn(),
-  CHAT_MODES: [{ id: 'general', label: '通用', description: '', temperature: 0.7, maxSteps: 50 }],
+  CHAT_MODES: [{ id: 'general', label: '閫氱敤', description: '', temperature: 0.7, maxSteps: 50 }],
 }));
-vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 vi.mock('gsap', () => {
   const tween = () => ({ kill: vi.fn(), play: vi.fn(), pause: vi.fn() });
@@ -53,7 +52,7 @@ let _streamingTargetSid: number | null = null;
 
 function makeCtx(): StreamContext {
   getSessionStore(STORE_ID).setState({
-    sessions: [{ id: SESSION_A, label: '会话 A' }],
+    sessions: [{ id: SESSION_A, label: '浼氳瘽 A' }],
     activeIdx: 0,
     sessionTokens: {},
     nextSessionId: 2,
@@ -127,7 +126,7 @@ function toolResultEvent(): AgentEvent {
   } as AgentEvent;
 }
 
-describe('messages store — single write path (touchMessage)', () => {
+describe('messages store 鈥?single write path (touchMessage)', () => {
   beforeEach(() => {
     _streamingId = null;
     _streamingTargetSid = null;
@@ -171,7 +170,7 @@ describe('messages store — single write path (touchMessage)', () => {
 
     const after = assistantMsg();
     expect(after).not.toBe(before);
-    // The part object itself is NOT copied — sink keeps writing into it
+    // The part object itself is NOT copied 鈥?sink keeps writing into it
     expect(after.parts[after.parts.length - 1]).toBe(subPart);
   });
 
@@ -184,7 +183,7 @@ describe('messages store — single write path (touchMessage)', () => {
   });
 });
 
-describe('streaming pipeline — reference swap on every committed mutation', () => {
+describe('streaming pipeline 鈥?reference swap on every committed mutation', () => {
   beforeEach(() => {
     _streamingId = null;
     _streamingTargetSid = null;
@@ -208,7 +207,7 @@ describe('streaming pipeline — reference swap on every committed mutation', ()
     expect(refC).not.toBe(refB);
   });
 
-  it('finalize swaps the reference for the streaming→done transition', () => {
+  it('finalize swaps the reference for the streaming鈫抎one transition', () => {
     const ctx = makeCtx();
     ctx.setStreamingTargetSid(SESSION_A);
     appendUserBubble(ctx, 'hi');
@@ -224,7 +223,7 @@ describe('streaming pipeline — reference swap on every committed mutation', ()
   });
 });
 
-describe('session rebuild — sub-agent parts survive', () => {
+describe('session rebuild 鈥?sub-agent parts survive', () => {
   it('rebuildMessagesFromMessages re-attaches the same SubAgentPart object', () => {
     const ctx = makeCtx();
     ctx.setStreamingTargetSid(SESSION_A);
@@ -253,8 +252,119 @@ describe('session rebuild — sub-agent parts survive', () => {
     const rebuilt = assistantMsg();
     const subs = rebuilt.parts.filter((p) => p.type === 'subagent');
     expect(subs.length).toBe(1);
-    // Same object identity — the live sink is not orphaned
+    // Same object identity 鈥?the live sink is not orphaned
     expect(subs[0]).toBe(subPart);
     expect((subs[0] as SubAgentPart).status).toBe('running');
+  });
+});
+
+
+describe('subagent spawn — no duplicate ToolCard', () => {
+  beforeEach(() => {
+    _streamingId = null;
+    _streamingTargetSid = null;
+  });
+
+  it('partial agent dispatch does not create a tool part; spawn full dispatch stays cardless', () => {
+    const ctx = makeCtx();
+    ctx.setStreamingTargetSid(SESSION_A);
+    appendUserBubble(ctx, 'hi');
+    renderEvent(ctx, { kind: EventKind.Text, text: 'working' } as AgentEvent);
+
+    // ToolCallStart：partial，args 为空 —— 不得建 tool part
+    renderEvent(ctx, {
+      kind: EventKind.ToolDispatch,
+      tool: { id: 'sa1', name: 'agent', args: '', read_only: false, partial: true },
+    } as AgentEvent);
+    expect(assistantMsg().parts.filter((p) => p.type === 'tool')).toHaveLength(0);
+
+    // 完整分发：action=spawn —— SubAgentBlock 接管，仍不得建 tool part
+    renderEvent(ctx, {
+      kind: EventKind.ToolDispatch,
+      tool: { id: 'sa1', name: 'agent', args: '{"action":"spawn","description":"x"}', read_only: false, partial: false },
+    } as AgentEvent);
+    renderEvent(ctx, {
+      kind: EventKind.ToolResult,
+      tool: { id: 'sa1', name: 'agent', output: 'sub-1 started' },
+    } as AgentEvent);
+    expect(assistantMsg().parts.filter((p) => p.type === 'tool')).toHaveLength(0);
+  });
+
+  it('non-spawn agent action still gets a ToolCard once full args arrive', () => {
+    const ctx = makeCtx();
+    ctx.setStreamingTargetSid(SESSION_A);
+    appendUserBubble(ctx, 'hi');
+    renderEvent(ctx, { kind: EventKind.Text, text: 'working' } as AgentEvent);
+
+    renderEvent(ctx, {
+      kind: EventKind.ToolDispatch,
+      tool: { id: 'k1', name: 'agent', args: '', read_only: false, partial: true },
+    } as AgentEvent);
+    expect(assistantMsg().parts.filter((p) => p.type === 'tool')).toHaveLength(0);
+
+    // 完整分发到达：非 spawn —— part-mutator upsert 路径补建 ToolCard
+    renderEvent(ctx, {
+      kind: EventKind.ToolDispatch,
+      tool: { id: 'k1', name: 'agent', args: '{"action":"kill","agent_id":"sub-1"}', read_only: false, partial: false },
+    } as AgentEvent);
+    const tools = assistantMsg().parts.filter((p) => p.type === 'tool');
+    expect(tools).toHaveLength(1);
+    expect((tools[0] as { status?: string }).status).toBe('running');
+  });
+
+  it('failed spawn leaves an error ToolCard (错误不静默)', () => {
+    const ctx = makeCtx();
+    ctx.setStreamingTargetSid(SESSION_A);
+    appendUserBubble(ctx, 'hi');
+    renderEvent(ctx, { kind: EventKind.Text, text: 'working' } as AgentEvent);
+
+    // partial + 完整分发都被跳过（SubAgentBlock 接管语义）—— 但执行失败
+    renderEvent(ctx, {
+      kind: EventKind.ToolDispatch,
+      tool: { id: 'f1', name: 'agent', args: '', read_only: false, partial: true },
+    } as AgentEvent);
+    renderEvent(ctx, {
+      kind: EventKind.ToolDispatch,
+      tool: { id: 'f1', name: 'agent', args: '{"action":"spawn","description":"x"}', read_only: false, partial: false },
+    } as AgentEvent);
+    renderEvent(ctx, {
+      kind: EventKind.ToolResult,
+      tool: { id: 'f1', name: 'agent', args: '{"action":"spawn","description":"x"}', err: 'subagent pool exhausted' },
+    } as AgentEvent);
+
+    // 失败必须留痕：补建错误 ToolCard，携带失败原因与参数
+    const tools = assistantMsg().parts.filter((p) => p.type === 'tool');
+    expect(tools).toHaveLength(1);
+    expect((tools[0] as { status?: string }).status).toBe('error');
+    expect((tools[0] as { err?: string }).err).toBe('subagent pool exhausted');
+    expect((tools[0] as { args?: string }).args).toContain('spawn');
+  });
+
+  it('rebuildMessagesFromMessages filters spawn tool_calls (no duplicate after restore/retract)', () => {
+    makeCtx();
+
+    rebuildMessagesFromMessages(
+      [
+        { role: 'user', content: 'hi' },
+        {
+          role: 'assistant',
+          content: 'done',
+          tool_calls: [
+            { id: 'c1', name: 'agent', arguments: '{"action":"spawn","description":"x"}' },
+            { id: 'c2', name: 'agent', arguments: '{"action":"status"}' },
+            { id: 'c3', name: 'agent_spawn', arguments: '{"description":"legacy"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', content: 'sub-1 started' },
+        { role: 'tool', tool_call_id: 'c2', content: 'running' },
+        { role: 'tool', tool_call_id: 'c3', content: 'sub-2 started' },
+      ] as never,
+      STORE_ID,
+      SESSION_A,
+    );
+
+    const tools = assistantMsg().parts.filter((p) => p.type === 'tool');
+    expect(tools).toHaveLength(1);
+    expect((tools[0] as { toolId?: string }).toolId).toBe('c2');
   });
 });

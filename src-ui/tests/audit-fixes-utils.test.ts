@@ -7,8 +7,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
-vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
-vi.mock('marked', () => ({ marked: { parse: (s: string) => s } }));
 
 // ═══════════════════════════════════════════════════════════════════
 // #6 — computeSimpleDiff produces real LCS diff (not all-removed/all-added)

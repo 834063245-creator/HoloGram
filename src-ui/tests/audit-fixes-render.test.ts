@@ -26,8 +26,6 @@ vi.mock('../src/settings', () => ({
   saveSettings: vi.fn(),
   CHAT_MODES: [{ id: 'general', label: '通用', description: '', temperature: 0.7, maxSteps: 50 }],
 }));
-vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
-vi.mock('marked', () => ({ marked: { parse: (s: string) => s } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
 // ═══════════════════════════════════════════════════════════════════
@@ -99,7 +97,8 @@ describe('#5 formatToolResult integration', () => {
   it('formats JSON output as pretty-printed', { timeout: 20_000 }, async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
     const json = '{"key":"value","num":42}';
-    const html = formatToolResult('some_tool', json, false);
+    const r = formatToolResult('some_tool', json, false);
+    const html = r.kind === 'html' ? r.html : '';
     // Should contain pretty-printed JSON in a code block
     expect(html).toContain('language-json');
     expect(html).toContain('"key"');
@@ -117,7 +116,8 @@ describe('#5 formatToolResult integration', () => {
 
   it('appends truncation marker when truncated=true', { timeout: 20_000 }, async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
-    const html = formatToolResult('run_shell', 'output', true);
+    const r = formatToolResult('run_shell', 'output', true);
+    const html = r.kind === 'html' ? r.html : '';
     expect(html).toContain('截断');
   });
 });

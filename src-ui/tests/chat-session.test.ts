@@ -78,9 +78,6 @@ vi.mock('gsap', () => {
   return { default: gsap, gsap };
 });
 
-// marked returns sanitized HTML — DOMPurify needs a real window in jsdom
-vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
-vi.mock('marked', () => ({ marked: { parse: (s: string) => s, lexer: (_s: string) => [] } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 
 import { ChatCore } from '../src/app/chat/chat-core';

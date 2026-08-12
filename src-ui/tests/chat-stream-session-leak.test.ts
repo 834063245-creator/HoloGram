@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+﻿import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '' }));
@@ -16,9 +16,8 @@ vi.mock('../src/settings', () => ({
     display: { language: 'zh', fontScale: 1 },
   })),
   saveSettings: vi.fn(),
-  CHAT_MODES: [{ id: 'general', label: '通用', description: '', temperature: 0.7, maxSteps: 50 }],
+  CHAT_MODES: [{ id: 'general', label: '閫氱敤', description: '', temperature: 0.7, maxSteps: 50 }],
 }));
-vi.mock('dompurify', () => ({ default: { sanitize: (s: string) => s } }));
 vi.mock('highlight.js', () => ({ default: { highlightElement: vi.fn() } }));
 vi.mock('gsap', () => {
   const tween = () => ({ kill: vi.fn(), play: vi.fn(), pause: vi.fn() });
@@ -56,8 +55,8 @@ const SESSION_B = 2;
 function setupSessions(activeSession: number = SESSION_A) {
   getSessionStore(STORE_ID).setState({
     sessions: [
-      { id: SESSION_A, label: '会话 A' },
-      { id: SESSION_B, label: '会话 B' },
+      { id: SESSION_A, label: '浼氳瘽 A' },
+      { id: SESSION_B, label: '浼氳瘽 B' },
     ],
     activeIdx: activeSession === SESSION_A ? 0 : 1,
     sessionTokens: {},
@@ -148,7 +147,7 @@ describe('cross-session streaming leak regression', () => {
     // User switches to session B
     getSessionStore(STORE_ID).setState({ activeIdx: 1 });
 
-    // Text event arrives AFTER tab switch — must route to pending session A
+    // Text event arrives AFTER tab switch 鈥?must route to pending session A
     renderEvent(ctx, textEvent('Hello!'));
 
     const msgsA = msgStoreFor(STORE_ID, SESSION_A).getState().messages;
