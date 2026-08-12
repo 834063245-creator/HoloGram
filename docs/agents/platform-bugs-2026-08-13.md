@@ -1,4 +1,4 @@
-# 平台缺陷登记（2026-08-13 发现，待修）
+# 平台缺陷登记（2026-08-13 发现；同日修复，详见文末「修复状态」）
 
 > 来源：第三批任务执行期（11b 重切 / 14 any 清理 / 11c 拆分 agent.ts）。
 > 性质：HoloGram 平台自身缺陷——发现者（编码 Agent）同时跑在 HoloGram 内、工作在 HoloGram 源码工作区，
@@ -156,3 +156,30 @@ HEAD 一直携带旧 `.ts` 文件（其中 import 已删除的 marked/dompurify�
 3. 预期符号/结构是否可检索到（search 工具）。
 
 三条任一不满足 → 视为子 Agent 未产出，按失败处理（重做或亲自做），不要被"合并成功"字样误导。
+
+---
+
+## 修复状态（2026-08-13 同日修复，回归测试 `src-ui/tests/parallel-subagent-bugs.test.ts` 17 例）
+
+| 条目 | 状态 | 修复点 |
+|------|------|--------|
+| A1 报告混淆动作与产物 | ✅ | merge 返回文本据实转述（`agent.ts _finalizeIsolation` / `merge.ts` 解析「没有变更需要合并」→ 无产出不报 ✅）；Rust `cherry_pick_and_clean` 清理失败不再返回 Err（commit 已落主仓，文案带清理告警+残留路径）；merge 报告附 commit hash |
+| A2 空报告/疑似提前终止 | ✅ | 摘要 <50 字符（提纯后仍无效）→ 结果显式带 `[报告缺失]` 警告；提纯失败写 log（原静默 catch） |
+| A3 并发清理踩踏 | ✅（部分） | merge/discard 本就走 isolation 队列；冲突路径不再删 worktree（保留现场）；清理失败降级为警告。磁盘预检（C1）未做 |
+| A4 合并后无法追问 | ✅（缓解） | A1 的产物摘要（commit hash/无产出标记）+ 冲突保留 worktree 即为此目的的替代机制 |
+| B1 fs(edit) 并发静默丢写 | ✅ | 三处根因全修：① `coding.ts` edit_file/rename_file 重建参数丢 `_agent_id`（fork 的 edit 直写主仓）→ 全量透传；② `editor.rs` 乐观检查 TOCTOU + `if let Ok` fail-open → `checked_write_atomic` 进程级锁临界区 + fail-closed；③ 所有权包装被 `fs` 领域工具绕过（闭包绑父注册表）→ spawn 时 `convergeRegistry(subTools)` 重建（顺带堵住 shell 领域工具绕过构建禁令） |
+| B2 git rename/mv 半拉子 | ⚠️ 未复现 | 疑与 R6（git_* 在主仓执行）相关——该根因已修（`git_exec_path` 全命令映射）；rename 本身无专用工具，建议观察是否再现 |
+| C1 磁盘水位无预检 | ❌ 未修 | 需引入磁盘探测能力（windows crate / sysinfo），另立小项；环境层用户已自行清理 |
+
+额外修复（排查中确诊、报告未列出）：
+- **TTL 误杀**（`lifecycle-manager`）：30min 自动 discard 前必须先抓 diff 回 board；抓不到记录则不清理只告警；处置结果经 bus 通知父 Agent 模型上下文（原仅 UI 可见）。
+- **多 commit 丢失**：worktree 多个 commit 只 cherry-pick HEAD → 改范围 `original_head..HEAD`。
+- **降级静默**：worktree 创建失败空 catch → `[隔离降级]` 告警置顶 spawn 结果 + 系统提示据实 + 兜底启用文件所有权。
+- **并发 merge 假冲突**：`agent_merge` 串行化。
+- **所有权键未归一**：`D:\p\a.ts` vs `D:/p/a.ts` 双双 claim 成功 → 斜杠归一。
+- **merge.ts 冲突后 diff 重抓返回值被丢弃** → 写回 board。
+
+已知残留（未修，记录在案）：
+- 会话重启/恢复后父子失配：board 条目 parentAgentId 是旧父 id + Rust isolation 注册表在内存 → 重启后 worktree 变孤儿，merge 永远「没有活跃的隔离环境」。需要注册表持久化/按目录重建，另立项。
+- `agent_board` 只展示 diff 前 500 字符（board-status.ts）——R3 保留 worktree 后缓解，完整 diff 落盘文件的能力未做。
+- `write_file`（全量覆写）无并发检查——所有权层覆盖子 Agent 场景；父 Agent 与子 Agent 并发覆写同一文件仍是裸奔。

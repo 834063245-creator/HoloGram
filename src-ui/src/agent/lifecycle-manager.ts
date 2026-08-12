@@ -131,7 +131,11 @@ export class AgentLifecycleManager {
     )
   }
 
-  /** worktree TTL 清理：finishedAt 超过 30 分钟仍未 merge，自动清理 worktree */
+  /** worktree TTL 清理：finishedAt 超过 30 分钟仍未 merge，自动清理 worktree。
+   *  R4 修复（2026-08-13 事故）：清理前必须把最新 diff 抓回 board —— 完成时抓的
+   *  diff 可能为空（子 Agent 在 worktree 里 commit 过，git diff HEAD 看不到）。
+   *  抓不到任何记录时放弃清理（销毁无记录的工作成果 = 静默数据丢失），
+   *  并同步通知父 Agent 的模型上下文（UI Notice 模型看不见）。 */
   private _enforceTTL(): void {
     const now = Date.now()
     const allEntries = this._collectAllEntries()
@@ -147,12 +151,54 @@ export class AgentLifecycleManager {
       const isolationId = entry.isolationId!
       // discard 操作通过 isolation queue 串行化，避免 git index lock 竞争
       enqueueIsolationOp(async () => {
+        let freshDiff = ""
+        try {
+          freshDiff = await this.exec("agent_isolation_diff", { agent_id: isolationId })
+        } catch {
+          /* diff 不可用 — 下面按无记录处理 */
+        }
+        if (freshDiff && freshDiff.length > (entry.diff?.length ?? 0)) {
+          this.board.complete(entry.agentId, entry.summary ?? "", freshDiff)
+        }
+        const preserved = (freshDiff || entry.diff || "").trim().length > 0
+        if (!preserved) {
+          // 无任何记录可保全 — 不清理，告警一次（warnedKeys 去重）
+          if (!this.warnedKeys.has(entry.agentId)) {
+            this.warnedKeys.add(entry.agentId)
+            this._notify(
+              "warn",
+              `⚠️ 子 Agent ${entry.agentId} 的 worktree 已超过 30 分钟未合并，且无法提取 diff 记录 — 已保留现场不清理，请尽快用 agent_merge / agent_isolation_diff 核实`,
+            )
+            this._notifyParent(entry, isolationId, false)
+          }
+          return
+        }
         await this.exec("agent_isolation_discard", { agent_id: isolationId }).catch(() => {})
+        // 标记 board 状态为 stopped（复用现有 BoardStatus）
+        this.board.stop(entry.agentId)
+        this.warnedKeys.delete(entry.agentId)
+        this._notify(
+          "warn",
+          `⚠️ 子 Agent ${entry.agentId} 的 worktree 已超过 30 分钟未合并，已自动清理（diff 已保全在 TaskBoard）`,
+        )
+        this._notifyParent(entry, isolationId, true)
       })
-      // 标记 board 状态为 stopped（复用现有 BoardStatus）
-      this.board.stop(entry.agentId)
-      this.warnedKeys.delete(entry.agentId)
-      this._notify("warn", `⚠️ 子 Agent ${entry.agentId} 的 worktree 已超过 30 分钟未合并，已自动清理`)
+    }
+  }
+
+  /** TTL 处置同步给父 Agent 的模型上下文 — UI Notice 只在界面上，模型看不见。 */
+  private _notifyParent(entry: BoardEntry, isolationId: string, discarded: boolean): void {
+    try {
+      this.bus.send({
+        from: "lifecycle-manager",
+        to: entry.parentAgentId,
+        type: "notification",
+        payload: discarded
+          ? `⏰ worktree TTL 到期：子 Agent ${entry.agentId}（${entry.description}）的 worktree（${isolationId}）已自动清理，diff 已保全在 TaskBoard，可用 agent_board 查看后手动应用。`
+          : `⏰ worktree TTL 到期：子 Agent ${entry.agentId}（${entry.description}）的 worktree（${isolationId}）超过 30 分钟未合并且 diff 提取失败，现场已保留，请尽快处理。`,
+      })
+    } catch {
+      /* 父 Agent 可能已注销 — UI Notice 已兜底 */
     }
   }
 

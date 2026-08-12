@@ -134,7 +134,7 @@ describe("集成：3 个异步 spawn 并行 → 统一 merge 无冲突", () => {
 // ═══════════════════════════════════════════════════════
 
 describe("集成：2 个异步 spawn 改同一文件 → merge 冲突", () => {
-  it("第二个 merge 冲突时保全 diff + 清理 worktree", async () => {
+  it("第二个 merge 冲突时保全 diff + 保留 worktree（2026-08-13 起不清理现场）", async () => {
     const pool = new SubAgentPool()
     const board = new TaskBoard()
     const bus = new MessageBus()
@@ -189,7 +189,8 @@ describe("集成：2 个异步 spawn 改同一文件 → merge 冲突", () => {
 
     expect(result).toContain("1 个冲突")
     expect(result).toContain("CONFLICT")
-    expect(result).toContain("diff 已保存在 TaskBoard")
+    // 2026-08-13 规格变更：冲突 worktree 保留不删（diff 截断 32KB，worktree 是全量现场）
+    expect(result).toContain("worktree 已保留")
 
     // 冲突的条目仍为 completed（未被 markMerged）
     const children = board.getChildren("main")

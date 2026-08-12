@@ -12,17 +12,25 @@
 
 /** 会话内所有子 Agent 共享的文件所有权注册表。 */
 export class FileOwnership {
-  private claimed = new Map<string, string>(); // filePath → agentId
+  private claimed = new Map<string, string>(); // 归一化 filePath → agentId
+
+  /** 归一化 claim 键：统一斜杠方向、折叠重复斜杠、去尾斜杠。
+   *  不做大小写归一（Linux 文件系统大小写敏感，小写化会把不同文件误判为同一）。
+   *  不归一化时 `D:\p\a.ts` 与 `D:/p/a.ts` 是两个键，两个 Agent 会双双 claim 成功。 */
+  private static key(filePath: string): string {
+    return filePath.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+  }
 
   /** 尝试为 Agent 声明一个文件。
    *  如果该 Agent 现在拥有该文件（或已经拥有）则返回 true。
    *  如果另一个 Agent 已拥有该文件则返回 false。 */
   claim(filePath: string, agentId: string): { ok: true } | { ok: false; owner: string } {
-    const existing = this.claimed.get(filePath);
+    const key = FileOwnership.key(filePath);
+    const existing = this.claimed.get(key);
     if (existing && existing !== agentId) {
       return { ok: false, owner: existing };
     }
-    this.claimed.set(filePath, agentId);
+    this.claimed.set(key, agentId);
     return { ok: true };
   }
 
@@ -35,7 +43,7 @@ export class FileOwnership {
 
   /** 查看谁拥有某文件（用于调试 / agent_inbox 式查询）。 */
   ownerOf(filePath: string): string | undefined {
-    return this.claimed.get(filePath);
+    return this.claimed.get(FileOwnership.key(filePath));
   }
 }
 

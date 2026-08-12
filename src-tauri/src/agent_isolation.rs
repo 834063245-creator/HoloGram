@@ -231,16 +231,40 @@ impl AgentIsolation {
             run_git(wt, &["add", "-A"])?;
             run_git(wt, &["commit", "-m", "Agent worktree changes"])?;
             let head = git_rev_parse(wt, "HEAD")?;
-            return self.cherry_pick_and_clean(&head, wt);
+            let short = &head[..8.min(head.len())];
+            return self.cherry_pick_and_clean(&head, wt, format!("已合并变更 (commit: {short})"));
         }
 
-        self.cherry_pick_and_clean(&head, wt)
+        // head != original_head — 范围 cherry-pick：original_head..head 之间的
+        // 全部 commit 按序应用（旧实现只 cherry-pick 单个 HEAD，更早的 commit
+        // 会随 worktree 删除静默丢失）。
+        let range = format!("{}..{}", self.original_head, head);
+        let revs = run_git(wt, &["rev-list", "--reverse", &range])?;
+        let commits: Vec<&str> = revs.lines().filter(|l| !l.trim().is_empty()).collect();
+        let head_short = &head[..8.min(head.len())];
+        // 范围为空 = head 不是 original_head 的后代（reset / 切了无关分支）—
+        // 退回单 commit cherry-pick（旧行为），别让空范围把 git 打挂。
+        if commits.is_empty() {
+            return self.cherry_pick_and_clean(&head, wt, format!("已合并变更 (commit: {head_short})"));
+        }
+        let label = if commits.len() > 1 {
+            let first = commits[0];
+            let first_short = &first[..8.min(first.len())];
+            format!("已合并变更 ({} commits: {first_short}..{head_short})", commits.len())
+        } else {
+            format!("已合并变更 (commit: {head_short})")
+        };
+        self.cherry_pick_and_clean(&range, wt, label)
     }
 
-    fn cherry_pick_and_clean(&self, commit: &str, wt: &Path) -> Result<String, String> {
+    /// cherry-pick `rev`（单 commit 或 A..B 范围）到主仓，成功后清理 worktree。
+    /// cherry-pick 失败 → abort 保持主仓干净并返回 Err；
+    /// cherry-pick 成功但 worktree 清理失败 → 仍返回 Ok（commit 已落主仓，
+    /// 清理失败不得误报为合并失败），文案保留「已合并变更 (」前缀供前端解析。
+    fn cherry_pick_and_clean(&self, rev: &str, wt: &Path, label: String) -> Result<String, String> {
         let main = normalize(&self.main_repo_path);
         let output = git_cmd()
-            .args(["-C", &main, "cherry-pick", commit])
+            .args(["-C", &main, "cherry-pick", rev])
             .output()
             .map_err(|e| format!("git cherry-pick 失败: {e}"))?;
 
@@ -258,9 +282,13 @@ impl AgentIsolation {
             return Err(format!("合并失败 (cherry-pick 已中止): {stderr}"));
         }
 
-        remove_worktree(&self.main_repo_path, wt)?;
-        let short = &commit[..8.min(commit.len())];
-        Ok(format!("已合并变更 (commit: {short})"))
+        if let Err(e) = remove_worktree(&self.main_repo_path, wt) {
+            return Ok(format!(
+                "{label}，但 worktree 清理失败: {e}（变更已在主仓；残留 worktree 可手动清理: {}）",
+                normalize(wt)
+            ));
+        }
+        Ok(label)
     }
 
     /// 丢弃 worktree 变更并移除它。
@@ -734,5 +762,103 @@ mod tests {
             "error should mention directory not existing, got: {}",
             err
         );
+    }
+
+    /// 测试仓库脚手架：init + config + 首个 commit，返回仓库路径。
+    fn setup_repo(tag: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(tag);
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let git = |args: &[&str]| {
+            let st = git_cmd().args(["-C"]).arg(&tmp).args(args).status().unwrap();
+            assert!(st.success(), "git {:?} failed", args);
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(tmp.join("base.txt"), "base").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "init", "--quiet"]);
+        tmp
+    }
+
+    fn wt_git(wt: &Path, args: &[&str]) {
+        let st = git_cmd().args(["-C"]).arg(wt).args(args).status().unwrap();
+        assert!(st.success(), "git {:?} failed", args);
+    }
+
+    /// 回归：多 commit worktree 必须合并 original_head..HEAD 全部 commit。
+    /// 旧实现只 cherry-pick 单个 HEAD，更早的 commit 随 worktree 删除静默丢失。
+    #[test]
+    fn test_merge_to_main_multi_commit_range() {
+        let tmp = setup_repo("hologram_test_merge_multi_commit");
+        let iso = AgentIsolation::create_worktree(&tmp, "agent-test-multi-commit").expect("worktree create");
+        let wt = iso.worktree_path.as_ref().unwrap().clone();
+
+        // worktree 内分两次 commit，各改一个文件（不带尾换行 — 本机 autocrlf
+        // 会把 \n 检出为 \r\n，断言写成无换行避免平台差异）
+        std::fs::write(wt.join("first.txt"), "first").unwrap();
+        wt_git(&wt, &["add", "-A"]);
+        wt_git(&wt, &["commit", "-m", "first", "--quiet"]);
+        std::fs::write(wt.join("second.txt"), "second").unwrap();
+        wt_git(&wt, &["add", "-A"]);
+        wt_git(&wt, &["commit", "-m", "second", "--quiet"]);
+
+        let result = iso.merge_to_main().expect("merge should succeed");
+        assert!(result.starts_with("已合并变更 ("), "前缀必须保持: {result}");
+        assert!(result.contains("2 commits"), "文案必须列出合并的 commit 数: {result}");
+
+        // 两个 commit 的改动都必须在主仓落地（第一个 commit 是旧实现会丢的）
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("first.txt")).unwrap(),
+            "first",
+            "HEAD 之前的 commit 不得丢失"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("second.txt")).unwrap(),
+            "second"
+        );
+        assert!(!wt.exists(), "merge 成功后 worktree 应被清理");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 回归：cherry-pick 成功后 worktree 清理失败不得误报为合并失败
+    /// （commit 已落主仓，返回 Err 会让前端把已合并的变更报成失败）。
+    /// Windows 上以打开的文件句柄（无 DELETE share）阻止目录删除来制造清理失败。
+    #[cfg(windows)]
+    #[test]
+    fn test_merge_to_main_cleanup_failure_still_reports_merged() {
+        let tmp = setup_repo("hologram_test_merge_cleanup_fail");
+        let iso = AgentIsolation::create_worktree(&tmp, "agent-test-cleanup-fail").expect("worktree create");
+        let wt = iso.worktree_path.as_ref().unwrap().clone();
+
+        std::fs::write(wt.join("merged.txt"), "merged").unwrap();
+        wt_git(&wt, &["add", "-A"]);
+        wt_git(&wt, &["commit", "-m", "work", "--quiet"]);
+
+        // 持有 worktree 内文件的读句柄，且 share_mode 只给 FILE_SHARE_READ(1)、
+        // 不含 FILE_SHARE_DELETE（Rust 默认含 DELETE，挡不住删除）→
+        // Windows 上 git worktree remove 删到该文件必失败。
+        use std::os::windows::fs::OpenOptionsExt;
+        let hold = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(wt.join("merged.txt"))
+            .unwrap();
+
+        let result = iso.merge_to_main().expect("清理失败不得导致 merge 返回 Err");
+        assert!(result.starts_with("已合并变更 ("), "前缀必须保持: {result}");
+        assert!(result.contains("worktree 清理失败"), "必须说明清理失败: {result}");
+        assert!(result.contains("变更已在主仓"), "必须说明变更已落主仓: {result}");
+        assert!(result.contains(&normalize(&wt)), "必须给出残留 worktree 路径: {result}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("merged.txt")).unwrap(),
+            "merged",
+            "commit 必须已落主仓"
+        );
+
+        drop(hold);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -770,6 +770,41 @@ mod regression {
         ));
     }
 
+    /// 回归（缺陷 5）— git_* 命令的执行路径必须走 worktree 映射。
+    /// 修前: require_git_dispatch 按 _agent_id 把主仓路径映射进 worktree 做规则匹配，
+    ///       但 run_git 仍用主仓原始路径执行 — fork 子 Agent 的 git_commit/git_stage
+    ///       直接污染主仓。修后: git_cmds 统一经 git_exec_path（forward_map_path）
+    ///       换算执行路径。这里锁 ctx 层：注册 Worktree 隔离后 forward_map_path
+    ///       必须把主仓路径映射进 worktree，且不影响其他 agent / None。
+    #[test]
+    fn r7_forward_map_path_with_worktree_isolation() {
+        let root = tmp_project();
+        let ctx = PermissionContext::new(&root);
+        let wt = root.join(".hologram/worktrees/agent-x");
+        ctx.set_isolation(
+            "agent-x",
+            crate::agent_isolation::AgentIsolation {
+                kind: crate::agent_isolation::IsolationKind::Worktree,
+                worktree_path: Some(wt.clone()),
+                original_head: "abc123".into(),
+                main_repo_path: root.clone(),
+            },
+        );
+        let main_file = root.join("src/main.rs");
+        assert_eq!(
+            ctx.forward_map_path(&main_file, Some("agent-x")),
+            wt.join("src/main.rs"),
+            "注册 Worktree 隔离后主仓路径必须映射进 worktree"
+        );
+        // 无隔离的调用方不受影响（幂等）
+        assert_eq!(ctx.forward_map_path(&main_file, None), main_file);
+        assert_eq!(
+            ctx.forward_map_path(&main_file, Some("agent-other")),
+            main_file,
+            "其他 agent 无隔离时不得被映射"
+        );
+    }
+
     /// Gap 5 — 系统 Ask 规则必须带 suggestion
     /// Git(push) 有系统 Ask 规则（load_system_rules），返回的 Ask 必须包含非空 suggestions。
     #[test]

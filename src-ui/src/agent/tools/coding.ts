@@ -209,17 +209,9 @@ export function createCodingTools(exec: ToolExecutor, ui?: CodingToolsUI): Tool[
           .optional()
           .describe('Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.'),
       }),
-      execute: (args, onProgress) =>
-        exec(
-          'edit_file',
-          {
-            filePath: args.filePath,
-            oldString: args.oldString,
-            newString: args.newString,
-            replaceAll: args.replaceAll,
-          },
-          onProgress,
-        ),
+      // 全量透传（含 executor 注入的 _agent_id）— fork 子 Agent 的
+      // worktree 路由完全依赖该参数；重建参数对象会把 edit 静默导向主仓。
+      execute: (args, onProgress) => exec('edit_file', args, onProgress),
     }),
     defineTool({
       name: 'list_directory',
@@ -583,8 +575,12 @@ export function createCodingTools(exec: ToolExecutor, ui?: CodingToolsUI): Tool[
           .optional()
           .describe('Bypass the architecture gate for HIGH-risk writes. Set to true only after confirming safety via trace_impact.'),
       }),
-      execute: (args, onProgress) =>
-        exec('rename_file_or_dir', { filePath: args.path, newName: args.new_name }, onProgress),
+      // 键名映射（path→filePath、new_name→newName）并剥掉原始键，
+      // 其余全量透传 — 必须保留 _agent_id（worktree 路由），否则 rename 静默落到主仓。
+      execute: (args, onProgress) => {
+        const { path, new_name, ...rest } = args
+        return exec('rename_file_or_dir', { ...rest, filePath: path, newName: new_name }, onProgress)
+      },
     }),
 
     // ── Phase 2b: Git 操作（Tauri 命令已存在） ──

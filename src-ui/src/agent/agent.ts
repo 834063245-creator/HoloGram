@@ -43,7 +43,7 @@ import { userContext, createStableSchemaSelector, type StableSchemaSelector } fr
 import { planGateCheck, planRegistry, type PlanGate } from './plan/plan-registry';
 import { foldToolResults, nextFoldBoundary, DEFAULT_TOOL_FOLD_BATCH } from './tool-fold';
 import { defineTool } from './tools/define-tool';
-import { resolveGuardToolName } from './tools/domains';
+import { resolveGuardToolName, convergeRegistry } from './tools/domains';
 
 /** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
  *  原始 Tool 永远不会被修改 — 这点至关重要，因为父 Agent
@@ -2303,18 +2303,26 @@ ${resumeNote}
       abortSources.length > 1 ? AbortSignal.any(abortSources) : (abortSources[0] ?? new AbortController().signal);
 
     // 自动隔离: 为 fork 子 Agent 创建 git worktree，使文件修改
-    // 被沙箱化并可在合并前审阅（diff）。隔离工具不可用或创建失败时
-    // 降级为直接模式。
+    // 被沙箱化并可在合并前审阅（diff）。隔离工具不可用时静默降级为直接模式
+    // （headless/测试环境无 git 隔离）；创建失败必须显式告警 —— 静默降级意味着
+    // 子 Agent 裸写主仓且无人知晓（2026-08-13 事故 R2）。
     let isolationId: string | null = null;
+    let isolationError: string | null = null;
     if (mode === 'fork' && this.tools.get('agent_isolation_create')) {
       isolationId = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       try {
         const createT = this.tools.get('agent_isolation_create');
         if (createT) await createT.execute({ agent_id: isolationId });
-      } catch {
+      } catch (e: any) {
+        isolationError = e?.message || String(e);
         isolationId = null;
+        log.warn('agent', `fork 子 Agent worktree 创建失败，降级为直写主仓: ${isolationError}`);
       }
     }
+    const degradeNote = isolationError
+      ? `⚠️ [隔离降级] worktree 创建失败（${isolationError}）。该子 Agent 的修改直接写入主仓工作区、未经隔离；` +
+        '请用 git_status / git_diff 核验其实际改动，不要按「已隔离合并」处理。'
+      : '';
 
     // 从父 Agent 克隆工具 — 如指定则应用允许列表过滤。
     // plan 模式：主 Agent 是单一注册表 + 执行层门禁（schema 恒定保缓存），
@@ -2371,7 +2379,8 @@ ${resumeNote}
     // 先写者声明文件；其他子 Agent 被拒绝。
     // 防止多个 fresh Agent 并发编辑同一工作区时
     // 静默的"后写覆盖先写"。
-    if (mode === 'fresh') {
+    // fork 隔离创建失败（降级直写主仓）时同样需要所有权兜底。
+    if (mode === 'fresh' || (mode === 'fork' && !isolationId)) {
       if (!this._fileOwnership) {
         this._fileOwnership = new FileOwnership();
       }
@@ -2404,6 +2413,14 @@ ${resumeNote}
       }
     }
 
+    // ── 领域工具必须对 subTools 重建 ──
+    // 克隆进来的 fs/shell 等领域工具对象，其 execute 闭包绑定的是**父注册表**
+    // （domains.ts buildDomainTool 在构建时捕获 registry）。不重建的话，
+    // 子 Agent 走 fs(edit)/shell(...) 会查到父注册表里的未包装工具 —
+    // 上面的所有权包装与构建/测试禁令全部被旁路（2026-08-13 事故 R13）。
+    // 顺带把旧工具名在子 Agent 里也隐藏（与主 Agent 可见面一致）。
+    convergeRegistry(subTools);
+
     let subSystem: string;
 
     if (mode === 'fork') {
@@ -2424,7 +2441,11 @@ ${prompt}
 3. **先查后动** — 涉及代码库的，先查再动手
 4. **直接给结论** — 不要反问、不要建议下一步、不要写论文
 5. **不跑构建/测试** — 不要跑 cargo / npm / pnpm / make / docker / go build 等任何构建、测试或包管理命令。这些命令在并行环境下会争抢文件锁（如 target/、node_modules/、.git/index.lock），导致死锁或超时。你只负责改文件，验证由主 Agent 在所有子任务完成后统一执行。如果认为改动有风险，在结论里说明即可。
-6. **隔离** — 你的文件修改在独立 git worktree 中进行，正常保存即可；任务成功后变更会自动合并回主仓
+${
+  isolationId
+    ? '6. **隔离** — 你的文件修改在独立 git worktree 中进行，正常保存即可；任务成功后变更会自动合并回主仓'
+    : '6. **⚠️ 无隔离** — worktree 隔离创建失败，你的修改将直接写入主仓工作区。只改任务必需的文件，绝不碰无关文件；你的改动会由主 Agent 直接核验'
+}
 
 ## 父Agent近期上下文（⚠️ 快照 — 可能已过期。操作前自行验证文件当前状态）
 ${recentContext}`;
@@ -2523,13 +2544,25 @@ ${subTools
             lastAssistant = expanded;
             summary = expanded.content;
           }
-        } catch {
-          /* 摘要提纯失败 — 返回原始摘要 */
+        } catch (e: any) {
+          // 提纯失败必须留痕 — 空报告 + 静默提纯失败 = 无法区分「没干活」与「干了被丢」
+          log.warn('agent', `子 Agent 摘要提纯失败: ${e?.message || String(e)}`);
         }
       }
 
       subAgent.saveState('done').catch(() => {});
-      result = { text: summary || '(子 Agent 没有生成回复)' };
+      if (summary.trim().length < 50) {
+        // 无实质报告的「完成」必须显式标记（A2 事故）——父 Agent 不得
+        // 把空报告当正常完成处理，核验产物前不得采信合并状态。
+        result = {
+          text:
+            '⚠️ [报告缺失] 子 Agent 未产出有效报告（可能提前终止或上下文异常），其工作成果无法确认。\n' +
+            '请直接核验产物（git log 有无新 commit / 预期文件是否落地），不要用合并状态推断任务完成。\n\n' +
+            (summary || '(子 Agent 没有生成回复)'),
+        };
+      } else {
+        result = { text: summary };
+      }
     } catch (e: any) {
       subAgent.saveState('failed').catch(() => {});
       let errReason: string;
@@ -2612,6 +2645,11 @@ ${subTools
     if (this._bus) {
       this._bus.unregister(subAgent.id);
     }
+    // 隔离降级告警置顶 — 父 Agent 必须最先看到它（sync 直接读 text，
+    // async 经 bus result payload 的 summary 上达）。
+    if (degradeNote) {
+      result = { text: degradeNote + (result.text ? '\n\n' + result.text : ''), err: result.err };
+    }
     return result;
   }
 
@@ -2624,26 +2662,36 @@ ${subTools
     try {
       if (success && mergeT) {
         try {
-          await mergeT.execute({ agent_id: agentId });
+          const mergeText = await mergeT.execute({ agent_id: agentId });
           await discardT?.execute({ agent_id: agentId }).catch(() => {});
-          return '[隔离合并] ✅ 变更已自动合并回主仓。可用 git_status / git_diff 审阅。';
+          // 据实报告（A1 事故）：merge 返回「没有变更需要合并」时若报 ✅，
+          // 会把「子 Agent 零产出」掩盖成「合并成功」。
+          if (mergeText.includes('没有变更需要合并')) {
+            return (
+              '[隔离合并] ℹ️ 子 Agent 无产出：worktree 中没有任何变更，未向主仓合并任何内容。\n' +
+              '请核实该子 Agent 是否真的完成了任务（可能提前终止或未实际写文件），必要时重派。'
+            );
+          }
+          // mergeText 含 commit hash；清理失败时含警告后缀（变更已在主仓，如实转述）
+          return `[隔离合并] ✅ ${mergeText}。可用 git_status / git_diff 审阅。`;
         } catch (mergeErr: any) {
           const errMsg = mergeErr?.message || String(mergeErr);
           log.warn('agent', `merge conflict for ${agentId}: ${errMsg}`);
-          // 在丢弃 worktree 前捕获 diff — 否则
-          // 子 Agent 的工作会静默丢失。
+          // 抓 diff 供审阅；worktree 保留不丢 — 冲突现场是子 Agent 工作的
+          // 唯一完整载体（diff 有 32KB 截断，worktree 是全量）。
           let diffText = '';
           try {
             if (diffT) diffText = await diffT.execute({ agent_id: agentId });
           } catch {
             /* diff 不可用 */
           }
-          await discardT?.execute({ agent_id: agentId }).catch(() => {});
           const clipped = diffText.length > 8000 ? diffText.slice(0, 8000) + '\n…[diff 过长已截断]' : diffText;
           return (
             `[隔离合并] ⚠️ 自动合并失败: ${errMsg}\n` +
-            'worktree 已清理，但变更 diff 已保全在下方。请审阅后用 edit_file 把需要的部分手动应用到主仓:\n\n' +
-            (clipped || '(diff 获取失败)')
+            `worktree 已保留（隔离 id: ${agentId}），子 Agent 的完整改动仍在其中：\n` +
+            '- 用 agent_isolation_diff 查看完整 diff 后用 edit_file 手动应用需要的部分\n' +
+            '- 或解决冲突后调 agent_isolation_merge 重试；确认放弃则 agent_isolation_discard\n\n' +
+            (clipped || '(diff 预览获取失败 — worktree 仍保留，可用 agent_isolation_diff 重试)')
           );
         }
       }

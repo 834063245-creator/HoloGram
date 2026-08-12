@@ -5,6 +5,33 @@
 use hologram_engine::engine as engine_api;
 use hologram_engine::pipeline::discovery::is_ignored_path;
 
+/// 进程级编辑写锁 — 序列化「重读校验 → 原子写入」临界区。
+/// 否则两个并发 edit_file 可双双通过乐观检查后互相覆盖（TOCTOU），
+/// 双双报成功，后写者静默吞掉先写者的改动。
+static EDIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 乐观并发检查 + 原子写入，在同一临界区内完成（fail-closed）。
+/// - 重读文件与 expected_base 不一致 → 拒绝写入（并发修改）；
+/// - 重读失败 → Err：无法校验并发安全时不得静默写入；
+/// - 锁仅覆盖检查+写入，timeline 记录等后续动作由调用方在锁外完成。
+pub(crate) fn checked_write_atomic(
+    file_path: &str,
+    expected_base: &str,
+    new_content: &str,
+) -> Result<(), String> {
+    let _guard = EDIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let current = std::fs::read_to_string(file_path).map_err(|e| {
+        format!("无法重读文件以校验并发安全，已取消写入: {file_path}: {e}")
+    })?;
+    if current != expected_base {
+        return Err(format!(
+            "文件在编辑过程中被并发修改，请重试（old_string 基于旧内容）: {}",
+            file_path
+        ));
+    }
+    crate::utils::write_atomic(file_path, new_content)
+}
+
 #[tauri::command]
 pub(crate) async fn edit_file(
     file_path: String,
@@ -66,18 +93,9 @@ pub(crate) async fn edit_file(
                         if !content.ends_with('\n') && out.ends_with('\n') {
                             out.pop();
                         }
-                        // 写前乐观并发检查 — 读取后被并发修改则拒绝写入
-                        // （read-modify-write 竞态：两个并发 edit 基于同一旧内容
-                        //  各自替换，后写者会覆盖先写者的改动）。
-                        if let Ok(current) = std::fs::read_to_string(&file_path) {
-                            if current != content {
-                                return Err(format!(
-                                    "文件在编辑过程中被并发修改，请重试（old_string 基于旧内容）: {}",
-                                    file_path
-                                ));
-                            }
-                        }
-                        crate::utils::write_atomic(&file_path, &out)?;
+                        // 乐观并发检查 + 原子写入在同一临界区（锁内重读校验，
+                        // fail-closed）；timeline 记录等后续动作在锁外。
+                        checked_write_atomic(&file_path, &content, &out)?;
                         if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
                             if !is_ignored_path(&file_path) {
                                 let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
@@ -122,17 +140,8 @@ pub(crate) async fn edit_file(
         content.replacen(&old_string, &new_string, 1)
     };
 
-    // 写前乐观并发检查 — 读取后被并发修改则拒绝写入
-    if let Ok(current) = std::fs::read_to_string(&file_path) {
-        if current != content {
-            return Err(format!(
-                "文件在编辑过程中被并发修改，请重试（old_string 基于旧内容）: {}",
-                file_path
-            ));
-        }
-    }
-
-    crate::utils::write_atomic(&file_path, &new_content)?;
+    // 乐观并发检查 + 原子写入在同一临界区（锁内重读校验，fail-closed）
+    checked_write_atomic(&file_path, &content, &new_content)?;
 
     if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
         if !is_ignored_path(&file_path) {
@@ -456,5 +465,121 @@ mod tests {
         let after = (0..500).map(|i| format!("new line {i}")).collect::<Vec<_>>().join("\n");
         let d = diff_of(&before, &after);
         assert!(d.contains("已截断"), "expected truncation note: {d:?}");
+    }
+
+    // ── checked_write_atomic：乐观并发检查 + 原子写入（TOCTOU/fail-open 修复）──
+
+    /// 独立临时子目录（测试后由用例自行清理）。
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "hologram_test_checked_write_{}_{}_{}",
+            std::process::id(),
+            tag,
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// (a) base 正确 → Ok 且内容落盘。
+    #[test]
+    fn checked_write_ok_when_base_matches() {
+        let dir = tmp_dir("ok");
+        let f = dir.join("a.txt");
+        let fs = f.to_string_lossy().to_string();
+        std::fs::write(&f, "v1\n").unwrap();
+        checked_write_atomic(&fs, "v1\n", "v2\n").expect("base 一致必须写入成功");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "v2\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (b) base 过期（先有人来改过）→ Err 含「并发修改」且文件不被覆盖。
+    #[test]
+    fn checked_write_rejects_stale_base() {
+        let dir = tmp_dir("stale");
+        let f = dir.join("a.txt");
+        let fs = f.to_string_lossy().to_string();
+        std::fs::write(&f, "concurrent-edit\n").unwrap();
+        let err = checked_write_atomic(&fs, "old-base\n", "mine\n").unwrap_err();
+        assert!(err.contains("并发修改"), "报错必须指明并发修改: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "concurrent-edit\n",
+            "过期 base 不得覆盖文件"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (c) 8 线程 × 50 轮「读当前 → 追加唯一标记 → checked_write_atomic，Err 重试」，
+    /// 最终文件必须恰好包含全部成功写入的标记（无静默丢失 = TOCTOU 回归）。
+    #[test]
+    fn checked_write_concurrent_no_lost_updates() {
+        let dir = tmp_dir("race");
+        let f = dir.join("shared.txt");
+        let fs = f.to_string_lossy().to_string();
+        std::fs::write(&f, "").unwrap();
+
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 50;
+        let mut handles = Vec::new();
+        for t in 0..THREADS {
+            let fs = fs.clone();
+            handles.push(std::thread::spawn(move || {
+                for r in 0..ROUNDS {
+                    let marker = format!("marker-{t}-{r}");
+                    loop {
+                        // 锁外读取可能撞上另一线程 write_atomic 的 rename 窗口
+                        // （目标文件瞬态不存在/占用）— 瞬态错误，重试即可；
+                        // 本测试验证的不变量是「无静默丢失」，不是「锁外读永不失败」。
+                        let cur = match std::fs::read_to_string(&fs) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+                        let next = format!("{cur}{marker}\n");
+                        match checked_write_atomic(&fs, &cur, &next) {
+                            Ok(()) => break,
+                            Err(e) => assert!(
+                                e.contains("并发修改") || e.contains("无法重读"),
+                                "只允许并发冲突类失败: {e}"
+                            ),
+                        }
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let final_content = std::fs::read_to_string(&f).unwrap();
+        for t in 0..THREADS {
+            for r in 0..ROUNDS {
+                // 带换行统计，避免 marker-1-1 误中 marker-1-11
+                let line = format!("marker-{t}-{r}\n");
+                assert_eq!(
+                    final_content.matches(&line).count(),
+                    1,
+                    "标记 {line:?} 必须恰好出现一次"
+                );
+            }
+        }
+        assert_eq!(final_content.lines().count(), THREADS * ROUNDS);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (d) 重读必失败的路径（文件不存在）→ Err，不得静默写入。
+    #[test]
+    fn checked_write_fails_closed_when_unreadable() {
+        let dir = tmp_dir("missing");
+        let fs = dir.join("nope.txt").to_string_lossy().to_string();
+        let err = checked_write_atomic(&fs, "", "x\n").unwrap_err();
+        assert!(err.contains("无法重读"), "重读失败必须 fail-closed: {err}");
+        assert!(
+            !std::path::Path::new(&fs).exists(),
+            "校验失败的文件不得被创建"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -309,6 +309,26 @@ pub(crate) async fn require_git_dispatch(
     }
 }
 
+/// git 命令的执行路径换算 — 权限检查（require_git_dispatch / resolve_read_dispatch）
+/// 保持现状不动；本函数只解决「权限检查按 _agent_id 映射进 worktree 做规则匹配，
+/// 执行却在主仓」的错位：agent 有活跃 worktree 隔离时返回 worktree 内对应路径，
+/// 否则原样返回（无隔离 / 非 agent 的用户 UI 操作均幂等，不触碰工作区状态）。
+pub(crate) fn git_exec_path(
+    repo_path: &str,
+    is_agent: bool,
+    agent_id: Option<&str>,
+    state: &tauri::State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    if !is_agent {
+        return Ok(repo_path.to_string());
+    }
+    let ctx = get_ctx(state)?;
+    Ok(ctx
+        .forward_map_path(std::path::Path::new(repo_path), agent_id)
+        .to_string_lossy()
+        .to_string())
+}
+
 pub(crate) async fn require_command(command: &str, state: &tauri::State<'_, WorkspaceState>, app: &tauri::AppHandle) -> Result<(), String> {
     let ctx = get_ctx(state)?;
     let tool = tools::BashTool { command: command.to_string() };

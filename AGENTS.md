@@ -81,6 +81,15 @@ flowchart LR
 - 池内部 ID：`subagent-{timestamp}-{random}` — 不暴露给模型
 - 隔离 worktree ID：`agent-{timestamp}-{random}` — 用于 worktree 路径映射
 
+### 多 Agent 并发纪律（2026-08-13 加固，事故报告 docs/agents/platform-bugs-2026-08-13.md）
+
+- **`_agent_id` 是 fork 子 Agent 的 worktree 路由命根子**：executor 注入后，工具 execute 必须全量透传 args（`edit_file`/`rename_file` 曾因重建参数对象丢掉它 → fork 的 edit 直写主仓）。新增写类工具禁止重建参数对象。
+- **子 Agent 注册表必须 `convergeRegistry(subTools)` 重建领域工具**：克隆来的 `fs`/`shell` 闭包绑父注册表，不重建则所有权包装、构建禁令、plan 只读全部被领域工具路径绕过。
+- **文件所有权**（file-ownership.ts）覆盖 fresh 与隔离降级的 fork；claim 键做斜杠归一。fork 正常有 worktree 时不启用（不同 worktree 改同路径文件是合法并行）。
+- **merge 据实三原则**：无产出（「没有变更需要合并」）不报 ✅；清理失败 ≠ 合并失败（commit 已落主仓时返回 Ok+告警）；冲突保留 worktree（diff 有 32KB 截断，worktree 是全量现场）。`agent_merge` 进程内串行。
+- **edit_file 并发安全在 Rust 临界区**（`editor.rs checked_write_atomic`，进程级锁 + fail-closed 重读校验）——TS 侧不得假设「工具返回成功 = 落盘」之外的时序语义。
+- **TTL 清理不得销毁无记录的工作**：discard 前抓 diff 回 board，抓不到则保留现场并通知父 Agent 模型上下文（bus notification），不只发 UI Notice。
+
 ## 目标模式（/goal）
 
 - **用法：** `/goal 描述` 新建 · `/goal resume` 恢复 · `/goal status` 查看 · `/goal cancel` 取消

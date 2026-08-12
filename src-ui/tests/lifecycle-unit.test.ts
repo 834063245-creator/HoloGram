@@ -333,12 +333,14 @@ describe("agent_merge — 串行合并 + 冲突保全", () => {
     ])
   })
 
-  it("merge 冲突时保全 diff + 清理 worktree", async () => {
+  it("merge 冲突时保全 diff + 保留 worktree（2026-08-13 规格变更：不再清理现场）", async () => {
     const board = new TaskBoard()
     board.register({ agentId: "sub-x", parentAgentId: "main", description: "conflict task", isolationId: "iso-x" })
     board.complete("sub-x", "summary X", "diff X content")
 
+    const calls: string[] = []
     const exec: ToolExecutor = async (name) => {
+      calls.push(name)
       if (name === "agent_isolation_merge") throw new Error("CONFLICT: both modified same line")
       return "discarded"
     }
@@ -350,15 +352,17 @@ describe("agent_merge — 串行合并 + 冲突保全", () => {
     // wait — 0 merged + 1 conflict
     expect(result).toContain("1 个冲突")
     expect(result).toContain("CONFLICT")
-    expect(result).toContain("diff 已保存在 TaskBoard")
+    // 新规格：冲突 worktree 保留不删（diff 有 32KB 截断，worktree 是全量现场）
+    expect(result).toContain("worktree 已保留")
+    expect(calls).not.toContain("agent_isolation_discard")
 
-    // diff 仍然在 board 上（未被 markMerged）
+    // diff 仍然在 board 上（未被 markMerged；重抓的 "discarded" 比现有 diff 短，不覆盖）
     const entry = board.getEntry("sub-x")!
     expect(entry.diff).toBe("diff X content")
     expect(entry.status).toBe("completed") // 未变为 merged
   })
 
-  it("无 isolationId 的条目直接标记 merged（fresh 模式）", async () => {
+  it("无 isolationId 的条目（fresh/降级）不计入已合并 — 2026-08-13 口径修正", async () => {
     const board = new TaskBoard()
     board.register({ agentId: "sub-fresh", parentAgentId: "main", description: "fresh task", isolationId: null })
     board.complete("sub-fresh", "summary", "diff")
@@ -367,7 +371,9 @@ describe("agent_merge — 串行合并 + 冲突保全", () => {
     const tool = createMergeTool(board, () => "main", exec, { projectPath: "TEST_PROJECT" })
     const result = await tool.execute({})
 
-    expect(result).toContain("已合并 1 个子Agent")
+    // fresh 改动本就直写主仓，无产物可合并 — 不得计入「已合并 N 个」（假口径）
+    expect(result).toContain("已合并 0 个子Agent")
+    expect(result).toContain("无合并产物")
     expect(board.getEntry("sub-fresh")!.status).toBe("merged")
   })
 

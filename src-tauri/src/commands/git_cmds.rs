@@ -10,8 +10,10 @@ pub(crate) async fn git_status(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    let branch_porcelain = crate::utils::run_git(path.clone(), vec![
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::resolve_read_dispatch(&path, is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    let branch_porcelain = crate::utils::run_git(exec_path, vec![
         "status".to_string(), "--branch".to_string(), "--porcelain".to_string(),
     ]).await.unwrap_or_default();
 
@@ -61,8 +63,10 @@ pub(crate) async fn git_diff_unstaged(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["diff".to_string(), "--".to_string(), file.clone()])
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::resolve_read_dispatch(&path, is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["diff".to_string(), "--".to_string(), file.clone()])
         .await
         .map(|s| crate::utils::truncate_output(&s))
 }
@@ -76,8 +80,10 @@ pub(crate) async fn git_diff_staged(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["diff".to_string(), "--cached".to_string(), "--".to_string(), file.clone()])
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::resolve_read_dispatch(&path, is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["diff".to_string(), "--cached".to_string(), "--".to_string(), file.clone()])
         .await
         .map(|s| crate::utils::truncate_output(&s))
 }
@@ -91,10 +97,12 @@ pub(crate) async fn git_stage(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "stage", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "stage", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
     let mut args: Vec<String> = vec!["add".to_string()];
     args.extend(files.iter().map(|s| s.to_string()));
-    crate::utils::run_git(path, args).await
+    crate::utils::run_git(exec_path, args).await
 }
 
 #[tauri::command]
@@ -105,8 +113,10 @@ pub(crate) async fn git_stage_all(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "stage", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["add".to_string(), "-A".to_string()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "stage", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["add".to_string(), "-A".to_string()]).await
 }
 
 #[tauri::command]
@@ -118,8 +128,10 @@ pub(crate) async fn git_commit(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "commit", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["commit".to_string(), "-m".to_string(), message.clone()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "commit", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["commit".to_string(), "-m".to_string(), message.clone()]).await
 }
 
 #[tauri::command]
@@ -130,8 +142,10 @@ pub(crate) async fn git_push(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "push", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["push".to_string()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "push", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["push".to_string()]).await
 }
 
 #[tauri::command]
@@ -142,8 +156,10 @@ pub(crate) async fn git_pull(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "pull", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["pull".to_string()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "pull", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["pull".to_string()]).await
 }
 
 #[tauri::command]
@@ -155,10 +171,12 @@ pub(crate) async fn git_log(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::resolve_read_dispatch(&path, is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::resolve_read_dispatch(&path, is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
     let n = limit.unwrap_or(20);
     let raw = crate::utils::run_git(
-        path.clone(),
+        exec_path,
         vec!["log".to_string(), format!("-{}", n), "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ai".to_string()],
     ).await?;
     let commits: Vec<serde_json::Value> = raw
@@ -190,8 +208,10 @@ pub(crate) async fn git_init(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "init", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["init".to_string()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "init", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["init".to_string()]).await
 }
 
 #[tauri::command]
@@ -203,8 +223,10 @@ pub(crate) async fn git_checkout(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "checkout", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["checkout".to_string(), branch.clone()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "checkout", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["checkout".to_string(), branch.clone()]).await
 }
 
 #[tauri::command]
@@ -216,8 +238,10 @@ pub(crate) async fn git_create_branch(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "create_branch", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["checkout".to_string(), "-b".to_string(), name.clone()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "create_branch", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["checkout".to_string(), "-b".to_string(), name.clone()]).await
 }
 
 #[tauri::command]
@@ -228,8 +252,10 @@ pub(crate) async fn git_stash_push(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "stash_push", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["stash".to_string(), "push".to_string()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "stash_push", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["stash".to_string(), "push".to_string()]).await
 }
 
 #[tauri::command]
@@ -240,8 +266,10 @@ pub(crate) async fn git_stash_pop(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "stash_pop", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["stash".to_string(), "pop".to_string()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "stash_pop", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["stash".to_string(), "pop".to_string()]).await
 }
 
 #[tauri::command]
@@ -253,8 +281,10 @@ pub(crate) async fn git_discard(
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    crate::utils::require_git_dispatch(&path, "discard", is_agent.unwrap_or(false), _agent_id.as_deref(), &state, &app).await?;
-    crate::utils::run_git(path.clone(), vec!["checkout".to_string(), "--".to_string(), file.clone()]).await
+    let is_agent = is_agent.unwrap_or(false);
+    crate::utils::require_git_dispatch(&path, "discard", is_agent, _agent_id.as_deref(), &state, &app).await?;
+    let exec_path = crate::utils::git_exec_path(&path, is_agent, _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["checkout".to_string(), "--".to_string(), file.clone()]).await
 }
 
 #[tauri::command]
@@ -267,7 +297,8 @@ pub(crate) async fn git_blame(
 ) -> Result<String, String> {
     crate::utils::require_read(&path, _agent_id.as_deref(), &state, &app).await?;
     // blame --line-porcelain 每行源码约 10 行输出，中等文件即可达 MB 级，必须截断
-    crate::utils::run_git(path.clone(), vec!["blame".to_string(), "--line-porcelain".to_string(), file.clone()])
+    let exec_path = crate::utils::git_exec_path(&path, _agent_id.is_some(), _agent_id.as_deref(), &state)?;
+    crate::utils::run_git(exec_path, vec!["blame".to_string(), "--line-porcelain".to_string(), file.clone()])
         .await
         .map(|s| crate::utils::truncate_output(&s))
 }
