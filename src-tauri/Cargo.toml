@@ -30,7 +30,7 @@ libloading = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
-base64 = "0.22"
+base64 = "0.23"
 hologram-engine = { path = "../engine" }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-window-state = "2"
