@@ -979,6 +979,20 @@ const INSPECT_PROBE: &str = include_str!("cdp/probes/inspect.js");
 const REPORT_PROBE: &str = include_str!("cdp/probes/report.js");
 const SNAPSHOT_PROBE: &str = include_str!("cdp/probes/snapshot.js");
 
+/// 解析探针 evaluate 返回值，统一兑现「probe 返回 stringify 字符串」的契约
+/// （ADR 0003 D7：probe 用 JSON.stringify 包裹 + returnByValue 取字符串）。
+/// 违反契约（如误返回对象 / 被二次序列化）时返回明确错误，而非静默落到空结果
+/// ——空快照会掩盖"探针根本没跑出东西"这条线索（曾因 JSON.stringify 形态错乱
+/// 在 world_snapshot 静默失效，e1679a0f 修复；这里把同类契约显式锁死）。
+fn probe_result_str(val: &Value, label: &str) -> Result<String, String> {
+    val.as_str().map(|s| s.to_string()).ok_or_else(|| {
+        format!(
+            "{label}: 探针返回形态异常（期望 stringify 字符串，实际 {:?}）——             页面上下文可能被销毁，或返回契约被破坏",
+            if val.is_object() { "对象" } else { "非字符串" }
+        )
+    })
+}
+
 pub(crate) async fn cdp_inspect(
     selector: &str,
     props: Option<Vec<String>>,
@@ -996,7 +1010,7 @@ pub(crate) async fn cdp_inspect(
         max_results.unwrap_or(20)
     );
     let val = runtime_evaluate(&expr, agent_id).await?;
-    let s = val.as_str().unwrap_or("[]").to_string();
+    let s = probe_result_str(&val, "inspect")?;
     const MAX: usize = 8000;
     if s.len() > MAX {
         Ok(format!("{}...[已截断，共 {} 字符]", &s[..MAX], s.len()))
@@ -1012,7 +1026,7 @@ pub(crate) async fn cdp_report(scope: Option<String>, agent_id: Option<&str>) ->
         serde_json::to_string(&scope.unwrap_or_default()).map_err(|e| e.to_string())?
     );
     let val = runtime_evaluate(&expr, agent_id).await?;
-    Ok(val.as_str().unwrap_or("{\"issues\":[],\"ok\":true}").to_string())
+    probe_result_str(&val, "report")
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1032,7 +1046,7 @@ pub(crate) async fn cdp_snapshot(
         max_results.unwrap_or(80)
     );
     let val = runtime_evaluate(&expr, agent_id).await?;
-    let s = val.as_str().unwrap_or("{\"refs\":[],\"count\":0}").to_string();
+    let s = probe_result_str(&val, "snapshot")?;
     const MAX: usize = 8000;
     if s.len() > MAX {
         Ok(format!("{}...[已截断，共 {} 字符]", &s[..MAX], s.len()))
@@ -1579,6 +1593,29 @@ mod tests {
         // 字符串形态（旧 bug）：索引不到 u/d，全部落空
         let str_form = serde_json::json!(r#"{"u":"https://a/","d":12345}"#);
         assert_eq!(super::parse_world_value(&str_form), (String::new(), 0));
+    }
+
+    /// 契约锁定：probe 返回值必须是 stringify 字符串。字符串形态（契约正确）
+    /// 原样放行；对象/其他形态（e1679a0f 修复的"形态错乱"同类病）必须报错，
+    /// 而非先前静默落到空快照/空结果。
+    #[test]
+    fn probe_result_str_requires_string_contract() {
+        // 正确形态：returnByValue 返回 stringify 后的 JSON 字符串
+        let ok = serde_json::json!("{\"refs\":[{\"ref\":0,\"tag\":\"button\"}],\"count\":1}");
+        assert_eq!(
+            super::probe_result_str(&ok, "snapshot").unwrap(),
+            "{\"refs\":[{\"ref\":0,\"tag\":\"button\"}],\"count\":1}"
+        );
+        // 错误形态 1：返回了对象（探针未 stringify / 被二次序列化的镜像 bug）
+        let obj = serde_json::json!({ "refs": [], "count": 0 });
+        let e = super::probe_result_str(&obj, "snapshot").unwrap_err();
+        assert!(e.contains("snapshot"), "错误应带上调用点标签: {e}");
+        assert!(e.contains("形态异常"), "错误应明确提示形态异常: {e}");
+        assert!(e.contains("对象"), "对象形态应被指出: {e}");
+        // 错误形态 2：Null / 数字 / 非字符串
+        for bad in [serde_json::Value::Null, serde_json::json!(42), serde_json::json!(true)] {
+            assert!(super::probe_result_str(&bad, "inspect").is_err(), "非字符串形态应报错: {bad}");
+        }
     }
 
     /// 租约回收 + profile 清理（遗留项实测的代码侧）：空闲超时 → kill 子进程、
