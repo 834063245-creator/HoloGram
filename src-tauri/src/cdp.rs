@@ -1103,12 +1103,22 @@ fn error_count(agent_id: Option<&str>) -> usize {
 // 操作 — actionability + 世界变化反馈
 // ═══════════════════════════════════════════════════════════
 
-/// 世界状态采样：URL / DOM 大小 / 错误数。
-async fn world_snapshot(agent_id: Option<&str>) -> Result<(String, usize, usize), String> {
-    let expr = "JSON.stringify({ u: location.href, d: document.body ? document.body.innerHTML.length : 0 })";
-    let val = runtime_evaluate(expr, agent_id).await?;
+/// 从 CDP returnByValue 结果解析世界状态。契约：evaluate 表达式必须
+/// 直接返回 {u, d} 对象（非 JSON.stringify 字符串）——见 world_snapshot。
+fn parse_world_value(val: &Value) -> (String, usize) {
     let u = val["u"].as_str().unwrap_or("").to_string();
     let d = val["d"].as_u64().unwrap_or(0) as usize;
+    (u, d)
+}
+
+/// 世界状态采样：URL / DOM 大小 / 错误数。
+async fn world_snapshot(agent_id: Option<&str>) -> Result<(String, usize, usize), String> {
+    // 直接返回对象（returnByValue 原样传回 JS 对象），不能再 JSON.stringify：
+    // stringify 后 val 是字符串，val["u"] 永远取到 Null —— URL/DOM 检测
+    // 从 b4dd1f5 起就静默失效，世界反馈一直报"无显著变化"（端到端实测暴露）。
+    let expr = "({ u: location.href, d: document.body ? document.body.innerHTML.length : 0 })";
+    let val = runtime_evaluate(expr, agent_id).await?;
+    let (u, d) = parse_world_value(&val);
     let e = error_count(agent_id);
     Ok((u, d, e))
 }
@@ -1557,6 +1567,18 @@ mod tests {
         assert!(d.contains("URL 变化"), "应报 URL 变化: {d}");
         assert!(d.contains("DOM 大小变化"), "应报 DOM 变化: {d}");
         assert!(d.contains("3 条错误"), "应报新增错误: {d}");
+    }
+
+    /// 契约锁定：world_snapshot 的 evaluate 表达式必须直接返回对象。
+    /// 对象形式（当前）能解析出 URL/DOM；JSON.stringify 字符串形式
+    /// （b4dd1f5 起的静默失效形态）解析结果为空——防止回归。
+    #[test]
+    fn parse_world_value_requires_object_form() {
+        let obj = serde_json::json!({ "u": "https://a/", "d": 12345 });
+        assert_eq!(super::parse_world_value(&obj), ("https://a/".to_string(), 12345));
+        // 字符串形态（旧 bug）：索引不到 u/d，全部落空
+        let str_form = serde_json::json!(r#"{"u":"https://a/","d":12345}"#);
+        assert_eq!(super::parse_world_value(&str_form), (String::new(), 0));
     }
 
     /// 租约回收 + profile 清理（遗留项实测的代码侧）：空闲超时 → kill 子进程、
