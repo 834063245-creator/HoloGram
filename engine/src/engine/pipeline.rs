@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rayon::prelude::*;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::analysis::coupling::compute_coupling;
 use crate::analysis::coupling::compute_coupling_incremental;
@@ -426,12 +426,17 @@ impl Engine {
                 .lock()
                 .map_err(|e| format!("Store lock poisoned: {}", e))?;
             if let Some(store) = store_guard.as_ref() {
+                // 先落盘、后换入内存 —— 保证内存与磁盘永远一致。
+                // 落盘失败直接终止分析并向上传播 Err：内存保留旧的（仍有效的）
+                // 索引，磁盘也仍是旧的，绝不出现「界面是新图、冷启动读旧图」的
+                // 分裂（旧实现在 swap_index 之后 save 失败仅 warn，会把不一致
+                // 状态静默落下，重分析"成功"却在下次冷启动读回旧缓存）。
+                store.save_index(&idx)?;
                 store.swap_index(idx);
-                if let Err(e) = store.save() {
-                    warn!("[engine] SQLite save failed: {}", e);
-                }
+            } else {
+                return Err("图存储未初始化，无法持久化分析结果".into());
             }
-            eprintln!("[engine]   db-save: swap+sqlite {:.1}s",
+            eprintln!("[engine]   db-save: persist+swap {:.1}s",
                 save_start.elapsed().as_secs_f64());
         }
         eprintln!("[engine] stage: db-save done in {:.1}s",

@@ -225,6 +225,33 @@ impl GraphStore {
         }
     }
 
+    /// 将给定的新索引持久化到磁盘（SQLite 或快照），**成功后才由调用方交换进内存**。
+    /// 与 save() 的区别：save() 持久化当前内存索引，供「已交换」场景使用；
+    /// 本方法持久化一个尚未进入内存的待换入索引，供「先落盘、后换入」的全量
+    /// 重分析路径使用，从而保证内存与磁盘永远一致 —— 落盘失败时调用方直接
+    /// 终止分析，旧的（仍有效的）内存索引保留，绝不让「内存是新图、磁盘是旧图」
+    /// 的分裂状态存在。
+    ///
+    /// 保存漏斗与 save() 一致：edge_count ≥ snapshot_min_edges() → bincode 快照；
+    /// 否则走 SQLite 全量重写。快照路径的代际 token 写入失败视为落盘失败并向上
+    /// 传播（上一版吞错会让下次启动因 token 不匹配回退读旧 SQLite）。
+    pub fn save_index(&self, idx: &MemoryIndex) -> Result<(), String> {
+        if idx.edge_count() >= crate::storage::snapshot::snapshot_min_edges() {
+            let token = format!(
+                "{}:{}:{}",
+                idx.node_count(),
+                idx.edge_count(),
+                chrono::Utc::now().timestamp_millis()
+            );
+            idx.save_snapshot(&self.project_root, &token)?;
+            self.db.set_meta("snapshot_token", &token)
+                .map_err(|e| format!("snapshot_token 写入失败，快照可能不被冷启动认可: {e}"))?;
+            Ok(())
+        } else {
+            idx.to_sqlite(&self.db)
+        }
+    }
+
     /// 返回此存储对应的项目根目录。
     pub fn project_root(&self) -> &Path {
         &self.project_root
@@ -349,6 +376,51 @@ mod tests {
         let mut edges = HashMap::new();
         edges.insert("e1".into(), Edge::new("e1", "a", "b", EdgeKind::Calls));
         MemoryIndex::from_existing_graph(nodes, edges)
+    }
+
+    /// 一个「重分析后的新图」：节点集/边集与 small_index 不同，模拟旧内存图被换入为更新的图。
+    fn second_index() -> MemoryIndex {
+        let mut nodes = HashMap::new();
+        nodes.insert("x".into(), Node::new("x", "fn_x", NodeKind::Function));
+        nodes.insert("y".into(), Node::new("y", "fn_y", NodeKind::Function));
+        nodes.insert("z".into(), Node::new("z", "fn_z", NodeKind::Function));
+        let mut edges = HashMap::new();
+        edges.insert("e2".into(), Edge::new("e2", "x", "y", EdgeKind::Calls));
+        edges.insert("e3".into(), Edge::new("e3", "y", "z", EdgeKind::Calls));
+        MemoryIndex::from_existing_graph(nodes, edges)
+    }
+
+    /// 回归：先落盘、后换入的契约 —— save_index 持久化一个尚未进入内存的
+    /// 待换入索引后，一个全新进程重开 store 必须读到该新图（而非旧内存图）。
+    /// 旧实现是「先 swap 内存、后 save」，save 失败被吞，产生
+    /// 内存新 / 磁盘旧的分裂 → 冷启动读回旧图（本 bug 的直接根因）。
+    #[test]
+    fn test_store_save_index_persists_before_swap_reload() {
+        let _guard = SNAPSHOT_ENV_LOCK.lock().unwrap();
+        std::env::set_var("HOLOGRAM_SNAPSHOT_MIN_EDGES", "0");
+        let tmp = tmp_project("save_index_regression");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        {
+            let store1 = GraphStore::open(&tmp).unwrap();
+            // 落盘旧图（等价上一次分析留下的缓存）
+            store1.save_index(&small_index()).unwrap();
+            // 重分析产生新图 —— 先落盘、后换入的顺序（save_index 先于 swap_index）。
+            // save_index 只写磁盘、不动内存：此时内存仍是刚落库时读回的旧图，磁盘已是新图 ——
+            // 这正是不一致被消除的关键：落盘成功才随后 swap，失败则内存/磁盘都是旧图。
+            store1.save_index(&second_index()).unwrap();
+        } // drop → 连接关闭 → WAL checkpoint
+
+        // 全新进程重开：必须读到新图（save_index 已落盘新图）
+        let store2 = GraphStore::open(&tmp).unwrap();
+        store2.read(|idx| {
+            assert_eq!(idx.node_count(), 3, "重开须读到新图（3 节点）而非旧图（2 节点）");
+            assert!(idx.get_node("z").is_some(), "新图节点 z 必须存在");
+        });
+
+        std::env::remove_var("HOLOGRAM_SNAPSHOT_MIN_EDGES");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// 小阈值集成 + 核心回归：HOLOGRAM_SNAPSHOT_MIN_EDGES=0 时 save 走快照路径。
