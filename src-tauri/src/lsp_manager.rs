@@ -10,8 +10,6 @@
 // 找到等待中的 sender。通知（textDocument/did*）跳过此步骤 — 它们
 // 通过 lsp-message 事件流向前端，用于诊断信息。
 
-#[cfg(windows)] use std::os::windows::process::CommandExt;
-
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -83,7 +81,14 @@ pub async fn lsp_start(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
-    { c.creation_flags(crate::utils::NO_WINDOW); }
+    {
+        use std::os::windows::process::CommandExt;
+        // LSP 用 CREATE_NO_WINDOW（隐藏控制台），不用 DETACHED 的 NO_WINDOW：
+        // npm 语言服务器是 .cmd 批处理 shim，DETACHED 下 cmd.exe 无控制台时再拉起
+        // node 孙进程会给它们分配可见的新控制台窗口（引擎侧同因，2026-08-13 回归）；
+        // CREATE_NO_WINDOW 的隐藏控制台会被孙进程继承，整棵进程树都不可见。
+        c.creation_flags(0x08000000);
+    }
     let mut child = c.spawn()
         .map_err(|e| format!("无法启动 LSP ({cmd}): {e}"))?;
 

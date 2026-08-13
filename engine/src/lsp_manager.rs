@@ -902,10 +902,12 @@ impl LspManager {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            // CREATE_NO_WINDOW | DETACHED_PROCESS —— DETACHED 使 LSP 进程完全
-            // 无控制台、不派生 conhost（2026-08-13：纯 NO_WINDOW 的隐藏控制台
-            // conhost 在客户端被强杀后可能空转/孤儿化，详见 src-tauri pty_manager.rs）
-            c.creation_flags(0x08000008);
+            // CREATE_NO_WINDOW —— 给 LSP 进程分配一个【隐藏】控制台。
+            // 不能用 DETACHED_PROCESS（0x08000008）：npm 全局工具是 .cmd 批处理
+            // shim，cmd.exe 无控制台时再拉起 node 等孙进程会分配一个【可见】的新
+            // 控制台窗口（启动时三个语言服务器窗口就是这里漏的，2026-08-13 回归）。
+            // CREATE_NO_WINDOW 的隐藏控制台会被孙进程继承，整棵进程树都不可见。
+            c.creation_flags(0x08000000);
         }
         let mut child = c.spawn()
             .map_err(|e| format!("spawn {}: {}", cfg.command, e))?;
