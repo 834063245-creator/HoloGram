@@ -16,3 +16,4 @@ pub mod isolation;
 pub mod dataflow;
 pub mod hologram;
 pub mod workspace;
+pub mod protocol_bridge;

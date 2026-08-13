@@ -38,6 +38,7 @@ import { createTaskTools } from '../task';
 import { execStreamedShell } from './queued-shell';
 import { createWaitTool } from '../tools/wait';
 import { convergeRegistry } from '../tools/domains';
+import { registerMcpTools, type McpClient } from '../mcp';
 
 // ── Types ──
 
@@ -289,6 +290,8 @@ export interface ToolRegistryOptions {
   subAgentPool: SubAgentPool;
   /** 子 Agent spawn 函数 — 由 Runtime 注入 */
   subAgentSpawner?: SubAgentSpawner;
+  /** 外部 MCP server client 列表 — 其工具以 mcp__<server>__<name> 注册进 registry */
+  mcpClients?: McpClient[];
 }
 
 import type { MemoryManager } from '../memory';
@@ -298,7 +301,7 @@ import type { TaskManager } from '../task';
 import type { SubAgentSpawner } from '../tools/subagent';
 
 export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<ToolRegistry> {
-  const { graphData, deps, memoryManager: mm, skillRegistry, taskManager, subAgentPool, subAgentSpawner } = opts;
+  const { graphData, deps, memoryManager: mm, skillRegistry, taskManager, subAgentPool, subAgentSpawner, mcpClients } = opts;
   const registry = new ToolRegistry();
 
   // ── Hologram tools ──
@@ -437,6 +440,17 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
   // ── wait 工具 — 替代轮询循环（agent_status/bash_output 反复刷屏）。
   // 事件驱动：传 agentId 阻塞到子 Agent 完成；无 pool 时退化为兜底 sleep ──
   registry.register(createWaitTool(subAgentPool));
+
+  // ── 外部 MCP server 工具（mcp__<server>__<name>）──
+  // 由调用方（Runtime/UI）在构建时传入已连接好的 McpClient 列表；
+  // 这里把其远端工具注册进 registry，Agent 就能像本地工具一样调用。
+  if (mcpClients && mcpClients.length > 0) {
+    for (const client of mcpClients) {
+      if (client.isConnected) {
+        registerMcpTools(client, registry);
+      }
+    }
+  }
 
   // ── 工具层收敛：领域工具 + 隐藏旧名（旧工具保留在 registry 供 executor/测试解析）──
   convergeRegistry(registry);

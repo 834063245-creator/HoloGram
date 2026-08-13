@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2026 Wenbing Jing. MIT License.
+// Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 //
 // RPC 契约 — 前后端 IPC 的单一类型事实源（前端侧投影）。
@@ -284,6 +284,20 @@ export interface RpcContract {
     params: { agent?: string; limit?: number };
     result: string; // JSON — { count, entries: string[] }（entries 为审计 JSON 字符串）
   };
+
+  // ── MCP / ACP stdio 桥 ────────────────────────────────────
+  protocol_bridge_spawn: {
+    params: { id: string; command: string; args?: string[] };
+    result: string;
+  };
+  protocol_bridge_write: {
+    params: { id: string; line: string };
+    result: string;
+  };
+  protocol_bridge_kill: {
+    params: { id: string };
+    result: string;
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -319,6 +333,10 @@ export interface EventContract {
   'graph-updated': string;
   /** PTY 输出（src-tauri 发射；旧前端未监听，新前端用 PTY 时需要） */
   'pty-output': { session_id: number; data: string };
+  /** MCP/ACP stdio 桥 stdout 行 */
+  'protocol-bridge:output': { id: string; line: string };
+  /** MCP/ACP stdio 桥子进程退出 */
+  'protocol-bridge:exit': { id: string };
 }
 
 // ─────────────────────────────────────────────────────────────

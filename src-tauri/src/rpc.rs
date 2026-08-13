@@ -574,6 +574,21 @@ pub(crate) async fn rpc(
         "drain_bg_notifications" => {
             commands::shell::drain_bg_notifications().await
         }
+        "protocol_bridge_spawn" => {
+            let id = req_str(&params, "id", "protocol_bridge_spawn")?;
+            let command = req_str(&params, "command", "protocol_bridge_spawn")?;
+            let args = req_strs(&params, "args", "protocol_bridge_spawn")?;
+            commands::protocol_bridge::protocol_bridge_spawn(id, command, args, app)
+        }
+        "protocol_bridge_write" => {
+            let id = req_str(&params, "id", "protocol_bridge_write")?;
+            let line = req_str(&params, "line", "protocol_bridge_write")?;
+            commands::protocol_bridge::protocol_bridge_write(id, line)
+        }
+        "protocol_bridge_kill" => {
+            let id = req_str(&params, "id", "protocol_bridge_kill")?;
+            commands::protocol_bridge::protocol_bridge_kill(id)
+        }
 
         // ═══════════════════════════════════════════════════════
         // 编辑器（1 个命令）
