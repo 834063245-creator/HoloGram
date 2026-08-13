@@ -5,7 +5,13 @@
 use std::process::Command;
 use tracing_appender::non_blocking::WorkerGuard;
 #[cfg(windows)] use std::os::windows::process::CommandExt;
-#[cfg(windows)] pub(crate) const NO_WINDOW: u32 = 0x08000000;
+// CREATE_NO_WINDOW | DETACHED_PROCESS。
+// DETACHED 使子进程完全没有控制台——不派生 conhost.exe。
+// 2026-08-13 修复：纯 CREATE_NO_WINDOW 仍会创建隐藏控制台 + conhost；
+// 客户端被强杀时 conhost 可能空转/孤儿化（PTY 场景详见 pty_manager.rs
+// conhost_guard 注释），所有 NO_WINDOW 调用点均为 stdio 重定向程序
+// （git/LSP/MCP/Chrome），DETACHED 无副作用。
+#[cfg(windows)] pub(crate) const NO_WINDOW: u32 = 0x08000008;
 
 // ══════════════════════════════════════════════════════════════════════
 // 模块拆分（第三批任务 11a）— 按关注点拆出的子模块，

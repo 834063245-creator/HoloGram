@@ -22,6 +22,9 @@ struct PtySession {
     // 注意：reader 不住在这里——它由读取线程独有（P0-11）。
     // 若 reader 留在会话里，读取线程就必须持全局 SESSIONS 锁阻塞 read，
     // 终端无输出期间 pty_write/resize/kill 全部拿不到锁 → PTY 子系统假死。
+    /// Windows：本会话的 ConPTY conhost PID 列表（reap 死锁兜底用）。
+    /// 非 Windows 平台恒为空。见 conhost_guard 模块注释。
+    conhost_pids: Vec<u32>,
 }
 
 type PtyMap = Arc<Mutex<HashMap<u32, PtySession>>>;
@@ -30,6 +33,109 @@ static SESSIONS: std::sync::LazyLock<PtyMap> =
 
 fn pty_sessions() -> PtyMap {
     SESSIONS.clone()
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Windows：ConPTY conhost 生命周期兜底
+// ═══════════════════════════════════════════════════════════════
+// 每个 ConPTY 会话由一个 conhost.exe 进程承载。MS 官方文档明确：
+// ClosePseudoConsole 会先向输出通道写入最后帧更新，若通道未被排空
+// 则可能死锁——通道应由独立线程持续排空，直到客户端退出或关闭流程
+// 完成。客户端被 TerminateProcess 强杀后 ConPTY 管道不必然 EOF
+// （本文件 start_session 注释亦实测），读取线程可永久阻塞 →
+// ClosePseudoConsole 无限等待 → conhost 永不退出，成为无父进程的
+// 空转进程（CPU 持续空烧，日积月累打满整机）。
+// 修复：会话启动时快照捕获所属 conhost PID，关闭后 8 秒宽限仍存活
+// 则直接 TerminateProcess —— 打破死锁，阻塞中的关闭调用随之解除。
+#[cfg(windows)]
+mod conhost_guard {
+    use std::collections::HashSet;
+
+    extern "system" {
+        fn CreateToolhelp32Snapshot(dw_flags: u32, th32_process_id: u32) -> isize;
+        fn Process32FirstW(snapshot: isize, entry: *mut PROCESSENTRY32W) -> i32;
+        fn Process32NextW(snapshot: isize, entry: *mut PROCESSENTRY32W) -> i32;
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> isize;
+        fn TerminateProcess(process: isize, exit_code: u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+
+    #[repr(C)]
+    struct PROCESSENTRY32W {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_process_id: u32,
+        th32_default_heap_id: usize,
+        th32_module_id: u32,
+        cnt_threads: u32,
+        th32_parent_process_id: u32,
+        pc_pri_class_base: i32,
+        dw_flags: u32,
+        sz_exe_file: [u16; 260],
+    }
+
+    const TH32CS_SNAPPROCESS: u32 = 0x00000002;
+    const PROCESS_TERMINATE: u32 = 0x0001;
+
+    /// 枚举全部 conhost.exe，返回 (pid, parent_pid) 列表。
+    fn conhost_pids() -> Vec<(u32, u32)> {
+        let mut out = Vec::new();
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == 0 || snap == -1 {
+                return out;
+            }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dw_size = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut ok = Process32FirstW(snap, &mut entry);
+            while ok != 0 {
+                let name_end = entry.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260);
+                let name = String::from_utf16_lossy(&entry.sz_exe_file[..name_end]);
+                if name.eq_ignore_ascii_case("conhost.exe") {
+                    out.push((entry.th32_process_id, entry.th32_parent_process_id));
+                }
+                ok = Process32NextW(snap, &mut entry);
+            }
+            CloseHandle(snap);
+        }
+        out
+    }
+
+    /// 当前全部 conhost PID（启动前快照用）。
+    pub fn snapshot() -> HashSet<u32> {
+        conhost_pids().into_iter().map(|(pid, _)| pid).collect()
+    }
+
+    /// 启动前后快照差值 → 本会话的 conhost。
+    /// 按父进程归属过滤（本应用 / 会话客户端 / 已孤儿化），
+    /// 避免误杀其他程序同一瞬间派生的 conhost。
+    pub fn capture(before: &HashSet<u32>, client_pid: u32) -> Vec<u32> {
+        let ours = std::process::id();
+        conhost_pids()
+            .into_iter()
+            .filter(|(pid, _)| !before.contains(pid))
+            .filter(|(_, parent)| *parent == ours || *parent == client_pid || *parent == 0)
+            .map(|(pid, _)| pid)
+            .collect()
+    }
+
+    /// 当前仍存活的 conhost PID 集合。
+    pub fn alive() -> HashSet<u32> {
+        conhost_pids().into_iter().map(|(pid, _)| pid).collect()
+    }
+
+    /// 强杀进程（TerminateProcess）。对已退出进程是安全空操作。
+    pub fn force_kill(pid: u32) -> bool {
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if h == 0 {
+                return false;
+            }
+            let ok = TerminateProcess(h, 1) != 0;
+            CloseHandle(h);
+            ok
+        }
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -65,6 +171,9 @@ fn start_session(
     let pty_system = NativePtySystem::default();
     let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
+    #[cfg(windows)]
+    let conhost_before = conhost_guard::snapshot();
+
     let pair = pty_system.openpty(size)
         .map_err(|e| format!("无法打开 PTY: {}", e))?;
 
@@ -81,6 +190,12 @@ fn start_session(
         .map_err(|e| format!("无法启动 shell: {}", e))?;
     let pid = child.process_id().unwrap_or(0);
 
+    // ConPTY 的 conhost 在 CreatePseudoConsole 时派生——差值捕获需覆盖 openpty。
+    #[cfg(windows)]
+    let conhost_pids = conhost_guard::capture(&conhost_before, pid);
+    #[cfg(not(windows))]
+    let conhost_pids: Vec<u32> = Vec::new();
+
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let reader = pair.master.try_clone_reader()
         .map_err(|e| format!("无法获取 PTY reader: {}", e))?;
@@ -91,6 +206,7 @@ fn start_session(
         writer,
         master: pair.master,
         child_killer: child.clone_killer(),
+        conhost_pids,
     };
 
     {
@@ -155,7 +271,23 @@ pub async fn pty_resize(session_id: u32, cols: u16, rows: u16) -> Result<(), Str
 ///   代价是异常情况下滞留一个回收线程，进程退出时由 OS 兜底清理。
 fn reap(mut session: PtySession) {
     let _ = session.child_killer.kill();
+    let conhost_pids = std::mem::take(&mut session.conhost_pids);
     std::thread::spawn(move || drop(session));
+    #[cfg(windows)]
+    {
+        // 兜底：ClosePseudoConsole 卡死时（客户端死后管道不 EOF + 最后帧
+        // 无法排空，MS 文档记载的死锁），conhost 不会自己退出。8 秒宽限后
+        // 仍存活 → 直接 TerminateProcess，打破死锁并终结空转进程。
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(8));
+            let alive = conhost_guard::alive();
+            for pid in conhost_pids {
+                if alive.contains(&pid) {
+                    let _ = conhost_guard::force_kill(pid);
+                }
+            }
+        });
+    }
 }
 
 /// 终止 PTY 会话。
@@ -249,5 +381,44 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200));
         }
         assert!(!alive, "pty_kill 后子进程 PID {pid} 仍然存活——显式 kill 缺失");
+    }
+
+    /// 回归 2026-08-13：PTY 会话关闭后，其 ConPTY conhost 必须退出。
+    /// 修复前 ClosePseudoConsole 可无限阻塞 → conhost 变孤儿进程空转烧 CPU，
+    /// 每次终端开/关泄漏一个，日积月累打满整机（本机实测 21 个）。
+    #[test]
+    #[cfg(windows)]
+    fn pty_close_reaps_conhost() {
+        let before = conhost_guard::snapshot();
+        let (id, _pid) = start_session(
+            std::env::temp_dir().to_string_lossy().to_string(),
+            None,
+            80,
+            24,
+            |_id, _data| {},
+        )
+        .expect("spawn pty");
+        std::thread::sleep(Duration::from_millis(500));
+
+        let after = conhost_guard::snapshot();
+        let ours: Vec<u32> = after.difference(&before).copied().collect();
+        assert!(!ours.is_empty(), "PTY 会话应创建 conhost（快照差值非空）");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(pty_kill(id)).expect("pty_kill");
+
+        // 轮询等待 conhost 退出（正常关闭应 <2s；修复前永久存活）。
+        let deadline = std::time::Instant::now() + Duration::from_secs(12);
+        loop {
+            let alive_now = conhost_guard::alive();
+            if !ours.iter().any(|p| alive_now.contains(p)) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "conhost 未随会话关闭退出（ConPTY 泄漏回归）"
+            );
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
 }

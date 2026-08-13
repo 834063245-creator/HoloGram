@@ -902,7 +902,10 @@ impl LspManager {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            c.creation_flags(0x08000000); // CREATE_NO_WINDOW —— 不弹出控制台窗口
+            // CREATE_NO_WINDOW | DETACHED_PROCESS —— DETACHED 使 LSP 进程完全
+            // 无控制台、不派生 conhost（2026-08-13：纯 NO_WINDOW 的隐藏控制台
+            // conhost 在客户端被强杀后可能空转/孤儿化，详见 src-tauri pty_manager.rs）
+            c.creation_flags(0x08000008);
         }
         let mut child = c.spawn()
             .map_err(|e| format!("spawn {}: {}", cfg.command, e))?;
