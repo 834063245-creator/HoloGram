@@ -81,6 +81,7 @@
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
 | `browser_launch` | — | _agent_id | 字符串 |
+| `browser_connect` | port | _agent_id | 字符串 |
 | `browser_kill` | — | _agent_id | 字符串 |
 | `browser_targets` | — | _agent_id | 字符串 |
 | `browser_attach` | — | _agent_id | 字符串 |
