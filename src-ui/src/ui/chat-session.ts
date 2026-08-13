@@ -137,6 +137,8 @@ export function resetSessionState(storeId: string, ag: OwnedAgentHandle): void {
     sessionTokens: {},
     nextSessionId: id + 1,
   });
+  // 全新会话树 —— 清空一切旧草稿槽与 live 输入，会话 id 已变化
+  getChatStore(storeId).input.getState().clearSessionDrafts();
   // ponytail: 创建会话级消息 store — 唯一数据源
   msgStoreFor(storeId, id).getState().setMessages([]);
   setTurnPairs(storeId, []);
@@ -231,19 +233,23 @@ export function stripLineNumbers(text: string): string {
 // ── 会话 CRUD ──
 
 export function switchSession(ctx: SessionContext, idx: number): void {
-  const st = getChatStore(ctx.storeId).sess.getState();
+  const storeId = ctx.storeId;
+  const st = getChatStore(storeId).sess.getState();
   const { sessions, activeIdx } = st;
   if (idx === activeIdx || idx < 0 || idx >= sessions.length) return;
 
-  // ponytail: 消息存放在会话级 store 中 — 无需保存/恢复。
-  // 只需保存 token 计数，切换 activeIdx，React 从新 store 重新渲染。
+  // 先把当前活跃会话的输入草稿存回其会话槽，再把目标会话的草稿恢复到输入框。
+  // 输入框 live 状态始终只属于活跃会话 —— 这样切 tab 时未发送的文字留在原会话，
+  // 不会"漂移"到另一个会话的输入框。
   if (activeIdx >= 0) {
-    getChatStore(ctx.storeId).sess.getState().setSessionTokens(sessions[activeIdx].id, ctx.getTotalTokensUsed());
+    getChatStore(storeId).sess.getState().setSessionTokens(sessions[activeIdx].id, ctx.getTotalTokensUsed());
+    getChatStore(storeId).input.getState().saveSessionDraft(sessions[activeIdx].id);
   }
   ctx.flushReasoning();
   ctx.flushText();
   ctx.clearPendingToolCards();
-  getChatStore(ctx.storeId).sess.setState({ activeIdx: idx });
+  getChatStore(storeId).sess.setState({ activeIdx: idx });
+  getChatStore(storeId).input.getState().restoreSessionDraft(sessions[idx].id);
 
   // 切换会话级 board 到新会话
   const newSessionId = String(sessions[idx].id);
@@ -268,6 +274,13 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   const s = st.sessions[idx];
   removeSessionExecState(ctx.storeId, s.id);
   agentSessionState.removeAgent(ctx.storeId, s.id);
+  // 若关闭的是活跃会话，先把它未发送的文字存入其槽再清空，稍后换入新活跃会话的草稿
+  const closingActive = idx === st.activeIdx;
+  if (closingActive) {
+    getChatStore(ctx.storeId).input.getState().saveSessionDraft(s.id);
+  }
+  // 丢弃被关闭会话的输入草稿槽 —— 关闭后不应再残留其未发送文字
+  getChatStore(ctx.storeId).input.getState().clearSessionDraft(s.id);
 
   const newSessions = [...st.sessions];
   newSessions.splice(idx, 1);
@@ -289,6 +302,10 @@ export function closeSession(ctx: SessionContext, idx: number): void {
   }
 
   getChatStore(ctx.storeId).sess.setState({ sessions: newSessions, activeIdx: newIdx });
+  // 关闭的是原活跃会话 → 新的活跃会话换其草稿到输入框（s.id 槽已被清空，不会留下旧文字）
+  if (closingActive) {
+    getChatStore(ctx.storeId).input.getState().restoreSessionDraft(newSessions[newIdx].id);
+  }
   // ponytail: 无需 restoreMessages — React 自动从会话级 store 读取
   ctx.updateFooter();
 
@@ -321,6 +338,8 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   if (st.activeIdx >= 0) {
     const oldSid = st.sessions[st.activeIdx].id;
     getChatStore(ctx.storeId).sess.getState().setSessionTokens(oldSid, ctx.getTotalTokensUsed());
+    // 把旧会话的输入草稿存回其会话槽 —— 新建会话后切回旧 tab 时文字仍在
+    getChatStore(ctx.storeId).input.getState().saveSessionDraft(oldSid);
   }
   ctx.flushReasoning();
   ctx.flushText();
@@ -340,6 +359,8 @@ export async function createNewSession(ctx: SessionContext): Promise<void> {
   msgStoreFor(ctx.storeId, id).getState().setMessages([]);
   resetMsgIdCounter();
   ctx.clearInputHistory();
+  // 新会话无草稿槽 → 清空 live 输入，避免沿用上一会话未发送的文字
+  getChatStore(ctx.storeId).input.getState().restoreSessionDraft(id);
   setTurnPairs(ctx.storeId, []);
   ctx.setTotalTokensUsed(0);
   getChatStore(ctx.storeId).sess.getState().setSessionTokens(id, 0);
@@ -690,6 +711,8 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     activeIdx: 0,
     nextSessionId: Math.max(curNextId, curSt.nextSessionId),
   });
+  // 恢复会话是全新会话树 —— 清空残留草稿与 live 输入（未发送文字不跨重启保留）
+  getChatStore(ctx.storeId).input.getState().clearSessionDrafts();
   // ponytail: 创建会话级消息 store + 从恢复数据填充
   msgStoreFor(ctx.storeId, data.id).getState().setMessages([]);
 
