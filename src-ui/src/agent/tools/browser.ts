@@ -58,6 +58,7 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     scroll: 'browser_scroll',
     eval: 'browser_eval',
     status: 'browser_status',
+    probe: 'desktop_probe',
   };
   const cmd = nameMap[action];
   if (!cmd) return `[browser] unsupported action "${action}"`;
@@ -307,6 +308,31 @@ export function createBrowserTools(): Tool[] {
       schema: z.object({}),
       readOnly: true,
       execute: () => run('status', {}),
+    }),
+  ];
+}
+
+// ═══════════════════════════════════════════════════════════
+// Desktop 领域（只读进程/窗口/控制台可见性快照）
+// ═══════════════════════════════════════════════════════════
+// 与 CDP 刻意不同：不连浏览器、不做持续 observer、不订阅事件。
+// 按需取一帧快照，用于定位「某进程带了可见控制台窗口」这类问题
+// （如语言服务器启动弹 cmd 窗口）。只读放行，纯查询。
+
+export function createDesktopTools(): Tool[] {
+  const run = (action: string, args: Record<string, unknown>) => runBrowserAction(action, args);
+  return [
+    defineTool({
+      name: 'desktop_probe',
+      description:
+        'Snapshot current machine process tree + top-level windows + visible console windows (read-only, one-shot). ' +
+        'Returns {processes:[{pid,ppid,name,is_chromium}], windows:[{pid,name,title,visible}], visible_console_windows, process_count, window_count}. ' +
+        'Use to detect whether a process has a visible console window (e.g. a language server spawning a cmd window), ' +
+        'or to see what desktop windows are currently open. No persistent monitoring; purely a point-in-time query. ' +
+        'Privacy: only process names are returned (not full command lines); no cross-session/RDP probing.',
+      schema: z.object({}),
+      readOnly: true,
+      execute: () => run('probe', {}),
     }),
   ];
 }

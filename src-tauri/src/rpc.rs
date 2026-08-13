@@ -395,6 +395,10 @@ pub(crate) async fn rpc(
             // 只读放行（工具级 Deny 仍生效）：只是列清单，不连接任何实例
             crate::cdp::cdp_discover()
         }
+        "desktop_probe" => {
+            // 只读放行（工具级 Deny 仍生效）：进程/窗口/控制台可见性快照，纯查询
+            crate::desktop::desktop_probe()
+        }
         "browser_attach" => {
             let agent_id = opt_str(&params, "_agent_id");
             {

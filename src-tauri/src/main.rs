@@ -30,6 +30,7 @@ mod confined_fs;
 mod rpc;
 mod lifecycle;
 mod cdp;
+mod desktop;
 
 use std::sync::Arc;
 use std::sync::Mutex;

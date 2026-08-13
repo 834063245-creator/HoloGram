@@ -429,8 +429,9 @@ export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<Tool
   // 统一处理（DOMAIN_SPECS 已含 browser）。self 通道已统一走 Rust CDP
   // （webview 调试端口惰性 attach，ADR 0003 D4），agent 层零浏览器 API。
   {
-    const { createBrowserTools } = await import('../tools/browser');
+    const { createBrowserTools, createDesktopTools } = await import('../tools/browser');
     for (const t of createBrowserTools()) registry.register(t);
+    for (const t of createDesktopTools()) registry.register(t);
   }
 
   // ── wait 工具 — 替代轮询循环（agent_status/bash_output 反复刷屏）。
