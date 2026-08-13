@@ -166,8 +166,13 @@ fn truncate_str(s: &str, max: usize) -> String {
 
 /// 启动事件观察 task：持久 WS + 订阅 Runtime/Log/Network。
 /// 短阻塞的 /json 查询放 spawn_blocking 里，避免卡 runtime。
-fn start_observer(port: u16, target_id: &str) -> Observer {
-    let buffers = Arc::new(Mutex::new(EventBuffers::default()));
+///
+/// A4：reuse_buffers 复用旧观察任务的缓冲。事件缓冲是会话级资产，
+/// 观察任务因 target 抖动 / WS 断连短暂死亡后重启若重建新缓冲（旧实现默认），
+/// 会把已累积的 console/network/error 历史清空——agent 点完按钮查错误时
+/// 可能丢掉正是触发它排查的那条错误。传入旧 buffers 使历史跨重启保留。
+fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<Arc<Mutex<EventBuffers>>>) -> Observer {
+    let buffers = reuse_buffers.unwrap_or_else(|| Arc::new(Mutex::new(EventBuffers::default())));
     let alive = Arc::new(AtomicBool::new(false));
     let (b2, a2, tid) = (buffers.clone(), alive.clone(), target_id.to_string());
     tokio::spawn(async move {
@@ -272,6 +277,20 @@ fn start_observer(port: u16, target_id: &str) -> Observer {
     Observer { buffers, alive }
 }
 
+/// 启动/重启会话观察任务（统一入口，A4 修复）。
+/// - 复用旧观察任务的 buffers：事件历史跨短暂断连/重启保留，不因重建丢失。
+/// - observer_starting 在途闸：持会话锁期间仍防并发重复 spawn 同一 target 的观察任务
+///   （旧实现无闸，attach / self 惰性 attach / 惰性重启 三条路径竞态会 spawn 出
+///   多个观察任务，只有最后一个被挂到 sess.observer，其余成为孤儿任务空转）。
+fn ensure_observer_started(sess: &mut CdpSession, port: u16, tid: &str) {
+    if sess.observer_starting.swap(true, Ordering::SeqCst) {
+        return; // 已有观察任务在途启动，跳过本次
+    }
+    let reuse = sess.observer.as_ref().map(|o| Arc::clone(&o.buffers));
+    sess.observer = Some(start_observer(port, tid, reuse));
+    sess.observer_starting.store(false, Ordering::SeqCst);
+}
+
 // ═══════════════════════════════════════════════════════════
 // 会话状态 — 按 agent 键控
 // ═══════════════════════════════════════════════════════════
@@ -287,6 +306,8 @@ pub(crate) struct CdpSession {
     profile_dir: Option<std::path::PathBuf>,
     /// 事件观察（attach 时启动；self 会话在首次 attach 时启动）
     observer: Option<Observer>,
+    /// 观察任务在途启动闸——防并发重复启动同一 target 的观察任务（A4 竞态）。
+    observer_starting: Arc<AtomicBool>,
     /// 最近一次活动时间（租约依据）
     last_active: Instant,
 }
@@ -299,6 +320,7 @@ impl Default for CdpSession {
             chrome_child: None,
             profile_dir: None,
             observer: None,
+            observer_starting: Arc::new(AtomicBool::new(false)),
             last_active: Instant::now(),
         }
     }
@@ -767,7 +789,7 @@ pub(crate) fn cdp_attach(target_id: &str, agent_id: Option<&str>) -> Result<Stri
         Some(t) => {
             let id = t["id"].as_str().unwrap_or("").to_string();
             sess.target_id = Some(id.clone());
-            sess.observer = Some(start_observer(sess.port, &id));
+            ensure_observer_started(sess, sess.port, &id);
             audit_log(agent_id, "attach", &id, "ok");
             Ok(json!({
                 "attached": true,
@@ -832,7 +854,7 @@ fn ensure_self_attached() -> Result<(u16, String), String> {
         None => true,
     };
     if need_start {
-        sess.observer = Some(start_observer(WEBVIEW_DEBUG_PORT, &tid));
+        ensure_observer_started(sess, WEBVIEW_DEBUG_PORT, &tid);
     }
     Ok((WEBVIEW_DEBUG_PORT, tid))
 }
@@ -859,7 +881,7 @@ fn ensure_observer(agent_id: Option<&str>) -> Option<Observer> {
         None => true,
     };
     if need_start && sess.port != 0 {
-        sess.observer = Some(start_observer(sess.port, &tid));
+        ensure_observer_started(sess, sess.port, &tid);
     }
     sess.observer.clone()
 }
@@ -1618,6 +1640,43 @@ mod tests {
         }
     }
 
+    /// A4：ensure_observer_started 在重启时复用旧缓冲（Arc 同一）——
+    /// 观察任务短暂断连/重启不丢已累积事件历史。无需真实 CDP：
+    /// start_observer 的 tokio 任务连不上端口会自动静默退出，buffers Arc 不受影响。
+    #[tokio::test]
+    async fn observer_restart_reuses_buffers_arc() {
+        use std::sync::Arc;
+        let mut sess = CdpSession::default();
+        // 首次启动：产生一个全新 buffers Arc
+        super::ensure_observer_started(&mut sess, 39998, "t1");
+        let first = sess.observer.as_ref().expect("首次启动应生成 observer").buffers.clone();
+        // 模拟观察任务已死（alive=false），触发惰性重启
+        sess.observer.as_ref().unwrap().alive.store(false, Ordering::SeqCst);
+        super::ensure_observer_started(&mut sess, 39998, "t1");
+        let second = sess.observer.as_ref().expect("重启后 observer 应存在").buffers.clone();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "重启必须复用同一个 buffers Arc——否则历史被清空"
+        );
+    }
+
+    /// A4：在途启动闸——第二个 ensure_observer_started 在闸生效时被跳过，
+    /// observer 不被替换（防并发重复 spawn 出孤儿观察任务）。
+    #[tokio::test]
+    async fn observer_inflight_guard_blocks_duplicate_start() {
+        let mut sess = CdpSession::default();
+        super::ensure_observer_started(&mut sess, 39998, "t1");
+        let before = sess.observer.as_ref().map(|o| Arc::clone(&o.buffers));
+        // 模拟并发：另一条路径已置起在途闸
+        sess.observer_starting.store(true, Ordering::SeqCst);
+        super::ensure_observer_started(&mut sess, 39998, "t1");
+        let after = sess.observer.as_ref().map(|o| Arc::clone(&o.buffers));
+        assert!(
+            Arc::ptr_eq(&before.unwrap(), &after.unwrap()),
+            "在途闸生效时不得替换 observer（防孤儿任务）"
+        );
+    }
+
     /// 租约回收 + profile 清理（遗留项实测的代码侧）：空闲超时 → kill 子进程、
     /// 移除会话、删除 profile 目录。用真实哑进程验证 kill 链路，不依赖 Chrome。
     #[test]
@@ -1651,6 +1710,7 @@ mod tests {
                     chrome_child: Some(child),
                     profile_dir: Some(dir.clone()),
                     observer: None,
+                    observer_starting: Arc::new(AtomicBool::new(false)),
                     // 活跃时间放到租约之外，强制命中回收分支
                     last_active: Instant::now() - session_lease() - Duration::from_secs(5),
                 },
