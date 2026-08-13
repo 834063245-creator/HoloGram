@@ -1051,6 +1051,45 @@ fn world_diff(
     }
 }
 
+/// 导航轮询上限——链接点击的导航通常 <1s，2s 兜底。
+const NAV_POLL_TIMEOUT: Duration = Duration::from_secs(2);
+/// 导航轮询间隔。
+const NAV_POLL_INTERVAL: Duration = Duration::from_millis(150);
+
+/// 操作后等待潜在导航完成。端到端实测发现：固定 300ms 等待对导航类点击
+/// 不够——采样仍落在旧文档上下文，世界反馈漏报"无显著变化"（点击实际跳了页）。
+/// 策略（每种情况都尽早返回，不为无导航点击付满超时）：
+///   - URL 已变 → 新文档已提交，再 settle 一次让 DOM 初始化，返回；
+///   - URL 未变但 DOM 已显著变化 → SPA 原地更新，无导航，返回；
+///   - 采样出错（导航中旧上下文销毁）→ 继续轮询；
+///   - 超时（两样都没有）→ 返回，交 world_diff 如实报"无显著变化"。
+async fn wait_nav_settle(before: &(String, usize, usize), agent_id: Option<&str>) {
+    let deadline = Instant::now() + NAV_POLL_TIMEOUT;
+    loop {
+        let cur = match world_snapshot(agent_id).await {
+            Ok(s) => s,
+            Err(_) => {
+                if Instant::now() >= deadline {
+                    return;
+                }
+                tokio::time::sleep(NAV_POLL_INTERVAL).await;
+                continue;
+            }
+        };
+        if cur.0 != before.0 {
+            tokio::time::sleep(POST_ACTION_SETTLE).await;
+            return;
+        }
+        if (cur.1 as i64 - before.1 as i64).abs() > 100 {
+            return;
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(NAV_POLL_INTERVAL).await;
+    }
+}
+
 /// actionability 等待：元素存在、可见、中心点未被遮挡、位置稳定（两次采样差 <1px）。
 /// 返回元素中心点（viewport 相对）。超时返回带恢复指引的错误。
 async fn wait_actionable(target: &str, label: &str, agent_id: Option<&str>) -> Result<(f64, f64), String> {
@@ -1104,6 +1143,7 @@ pub(crate) async fn cdp_click(target: &str, agent_id: Option<&str>) -> Result<St
     ws_command(port, &tid, "Input.dispatchMouseEvent", pressed).await?;
     ws_command(port, &tid, "Input.dispatchMouseEvent", released).await?;
     tokio::time::sleep(POST_ACTION_SETTLE).await;
+    wait_nav_settle(&before, agent_id).await;
     let after = world_snapshot(agent_id).await?;
     let change = world_diff(&before, &after).unwrap_or_else(|| "无显著变化".into());
     audit_log(agent_id, "click", target, &change);
@@ -1137,6 +1177,7 @@ pub(crate) async fn cdp_type(
     )
     .await?;
     tokio::time::sleep(POST_ACTION_SETTLE).await;
+    wait_nav_settle(&before, agent_id).await;
     let after = world_snapshot(agent_id).await?;
     let change = world_diff(&before, &after).unwrap_or_else(|| "无显著变化".into());
     audit_log(agent_id, "type", target, &change);

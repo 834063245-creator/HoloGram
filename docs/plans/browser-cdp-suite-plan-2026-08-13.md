@@ -106,4 +106,11 @@
 | profile 目录定期清理 | ✅ 已补：按端口隔离 + 随会话回收删除 + launch 清扫遗留目录 |
 | 租约/审计实测 | 代码侧已覆盖（单测：租约 kill/清理链路、审计写入回读）；真实运行时租约触发待实测（设 `HOLOGRAM_BROWSER_LEASE_SECS` 短租约即可验证，不必干等 10 分钟） |
 | UI 侧审计展示 | 数据已有（`browser(audit)` / jsonl），UI 集成属交互形态工作 |
-| 端到端冒烟 | launch→attach→snapshot→click 闭环 + 权限弹窗，需真实 app 人工批准 |
+| 端到端冒烟 | ✅ 已实测（2026-08-13，connect 链路）：自启调试端口 Chrome（9333）→ connect → targets → attach → snapshot → click(ref) → kill 全链路通过，审计 4 条完整。**发现并修复一个真 bug**：click 后固定 300ms 采样落在旧文档上下文，导航类点击世界反馈漏报"无显著变化"——补 `wait_nav_settle` 轮询（URL 变/DOM 变/2s 兜底，SPA 无导航点击不付超时）。kill 语义验证：外部连接 kill 后 Chrome 进程全部存活、端口照常应答 |
+
+## 7. connect 增量（2026-08-13 增补，`b988f87d` + `af075af`）
+
+原方案没有"连接用户已启动实例"的路径——外部页面能力名存实亡（见 ADR D8）。
+落地为 `browser(connect, port)` 动作：端口由用户提供（不做扫描发现），
+会话无 chrome_child——kill 只断开、租约只断连、9222 硬拒；
+rpc 层 Ask 文案明示真实登录态风险。端到端验证见 §6。
