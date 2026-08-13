@@ -277,6 +277,13 @@ export interface RpcContract {
     result: string; // JSON
   };
   lsp_stop: { params: { session_id: number }; result: string }; // "null"
+
+  // ── 浏览器审计（UI 展示层）──────────────────────────────
+  // Agent 工具走 agentInvoke 动态分发；UI 组件只读查询用本条目。
+  browser_audit: {
+    params: { agent?: string; limit?: number };
+    result: string; // JSON — { count, entries: string[] }（entries 为审计 JSON 字符串）
+  };
 }
 
 // ─────────────────────────────────────────────────────────────

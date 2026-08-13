@@ -418,12 +418,29 @@ fn audit_log(agent_id: Option<&str>, action: &str, target: &str, summary: &str) 
     }
 }
 
-/// 查询审计日志（最新 N 条）。
-pub(crate) fn cdp_audit(limit: Option<usize>) -> String {
+/// 查询审计日志（最新 N 条，可按 agent 过滤）。
+/// entries 是 JSON 字符串（audit_log 原样入环形缓冲），前端自行 parse。
+pub(crate) fn cdp_audit(agent: Option<&str>, limit: Option<usize>) -> String {
     let n = limit.unwrap_or(50).min(AUDIT_MAX);
     let buf = crate::utils::lock_or_recover(&AUDIT);
-    let entries: Vec<&String> = buf.iter().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect();
-    json!({ "count": buf.len(), "entries": entries }).to_string()
+    let mut entries: Vec<&String> = Vec::new();
+    for e in buf.iter().rev() {
+        // agent 过滤：解析每条 JSON 的 agent 字段比对（缓冲最多 500 条，成本可忽略）
+        let matches = match agent {
+            None => true,
+            Some(a) => serde_json::from_str::<Value>(e)
+                .map(|v| v["agent"].as_str() == Some(a))
+                .unwrap_or(true), // 解析失败的脏条目不过滤（宁可显示不可藏）
+        };
+        if matches {
+            entries.push(e);
+            if entries.len() >= n {
+                break;
+            }
+        }
+    }
+    entries.reverse();
+    json!({ "count": entries.len(), "entries": entries }).to_string()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -794,13 +811,16 @@ pub(crate) fn cdp_attach(target_id: &str, agent_id: Option<&str>) -> Result<Stri
     match found {
         Some(t) => {
             let id = t["id"].as_str().unwrap_or("").to_string();
+            let title = t["title"].as_str().unwrap_or("").to_string();
             sess.target_id = Some(id.clone());
             ensure_observer_started(sess, sess.port, &id);
-            audit_log(agent_id, "attach", &id, "ok");
+            // 审计对象存人话：页面标题（UI 展示用），summary 存 URL
+            let tgt = if title.is_empty() { id.clone() } else { title.clone() };
+            audit_log(agent_id, "attach", &tgt, t["url"].as_str().unwrap_or(""));
             Ok(json!({
                 "attached": true,
                 "targetId": id,
-                "title": t["title"].as_str().unwrap_or(""),
+                "title": title,
                 "url": t["url"].as_str().unwrap_or(""),
             })
             .to_string())
@@ -1286,8 +1306,22 @@ pub(crate) async fn cdp_click(target: &str, agent_id: Option<&str>) -> Result<St
     wait_nav_settle(&before, agent_id).await;
     let after = world_snapshot(agent_id).await?;
     let change = world_diff(&before, &after).unwrap_or_else(|| "无显著变化".into());
-    audit_log(agent_id, "click", target, &change);
+    // 审计对象存人话：元素文本（UI 展示）。点击前查询；导航已跳走时
+    // 元素可能消失——查询失败兜底回 ref 号，审计不因展示需求报错。
+    let label = element_label(&sel, agent_id).await.unwrap_or_else(|| target.to_string());
+    audit_log(agent_id, "click", &label, &change);
     Ok(json!({ "clicked": target, "x": x.round(), "y": y.round(), "change": change }).to_string())
+}
+
+/// 查元素的可见文本（截断 40 字符），审计展示用。查不到返回 None。
+async fn element_label(sel: &str, agent_id: Option<&str>) -> Option<String> {
+    let expr = format!(
+        r#"(() => {{ const el = document.querySelector({sel}); if (!el) return null; const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' '); return t.slice(0, 40); }})()"#,
+        sel = serde_json::to_string(sel).ok()?
+    );
+    let val = runtime_evaluate(&expr, agent_id).await.ok()?;
+    let s = val.as_str()?.trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// 输入文本（聚焦元素 + insertText）。中文/IME 友好。
@@ -1320,7 +1354,9 @@ pub(crate) async fn cdp_type(
     wait_nav_settle(&before, agent_id).await;
     let after = world_snapshot(agent_id).await?;
     let change = world_diff(&before, &after).unwrap_or_else(|| "无显著变化".into());
-    audit_log(agent_id, "type", target, &change);
+    // 审计对象存人话：输入内容摘要（UI 展示）；ref 号对用户无意义
+    let tgt = format!("输入「{}」", text.chars().take(30).collect::<String>());
+    audit_log(agent_id, "type", &tgt, &change);
     Ok(json!({ "typed": text.chars().take(50).collect::<String>(), "change": change }).to_string())
 }
 
@@ -1793,11 +1829,14 @@ mod tests {
     }
 
     /// 审计回放（遗留项实测的代码侧）：写入 → 查询可见，内存环形路径闭环。
+    /// 同时覆盖 agent 过滤：过滤匹配命中、过滤不匹配落空。
     #[test]
     fn audit_roundtrip() {
         let marker = format!("audit-test-{}", std::process::id());
         audit_log(Some("tester"), "eval", "1+1", &marker);
-        let out = cdp_audit(Some(50));
+        let out = cdp_audit(Some("tester"), Some(50));
         assert!(out.contains(&marker), "审计查询应包含刚写入的条目: {out}");
+        let out2 = cdp_audit(Some("no-such-agent"), Some(50));
+        assert!(!out2.contains(&marker), "agent 过滤应排除他人条目: {out2}");
     }
 }

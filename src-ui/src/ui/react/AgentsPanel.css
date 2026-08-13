@@ -313,6 +313,88 @@
   padding-left: 8px;
 }
 
+/* ── 浏览器活动折叠区（UI 审计展示 v1）── */
+
+.ap-browser-activity {
+  margin-top: 4px;
+  padding-left: 6px;
+}
+
+.ap-browser-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  cursor: pointer;
+  color: var(--obs-text-2);
+  font-size: calc(10px * var(--font-scale));
+}
+
+.ap-browser-activity-row:hover {
+  color: var(--obs-text);
+}
+
+.ap-browser-activity-title {
+  flex-shrink: 0;
+}
+
+.ap-browser-activity-count {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  color: var(--obs-blue);
+  background: rgba(160, 180, 220, 0.08);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+
+.ap-browser-activity-list {
+  margin-top: 2px;
+  padding-left: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.ap-browser-activity-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 7px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(148, 166, 205, 0.05);
+  font-size: calc(10px * var(--font-scale));
+  line-height: 1.45;
+}
+
+.ap-browser-activity-item:last-child {
+  border-bottom: none;
+}
+
+.ap-browser-activity-time {
+  font-family: var(--obs-font-mono);
+  font-size: calc(9px * var(--font-scale));
+  color: var(--obs-text-3);
+  flex-shrink: 0;
+}
+
+.ap-browser-activity-action {
+  color: var(--obs-blue);
+  flex-shrink: 0;
+}
+
+.ap-browser-activity-target {
+  color: var(--obs-text);
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ap-browser-activity-summary {
+  width: 100%;
+  color: var(--obs-text-2);
+  padding-left: 2px;
+}
+
 /* ── 任务卡片 ── */
 
 .ap-task-card {

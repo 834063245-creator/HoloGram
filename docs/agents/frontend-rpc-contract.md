@@ -92,7 +92,7 @@
 | `browser_console` | — | limit | 字符串 |
 | `browser_network` | — | limit | 字符串 |
 | `browser_screenshot` | — | — | 字符串 |
-| `browser_audit` | — | limit | 字符串 |
+| `browser_audit` | — | agent, limit | 字符串 |
 | `browser_click` | — | — | 字符串 |
 | `browser_type` | — | — | 字符串 |
 | `browser_press` | — | — | 字符串 |

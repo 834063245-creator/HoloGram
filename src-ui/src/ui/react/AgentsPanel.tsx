@@ -18,6 +18,7 @@ import {
 import { useDockStore } from '../dock-store';
 import { bus } from '../events';
 import { iconHtml } from '../icons';
+import { BrowserActivityPanel } from './BrowserActivityPanel';
 import './AgentsPanel.css';
 
 // ── Helpers ──
@@ -111,6 +112,7 @@ const AgentNode: React.FC<{ node: AgentPanelEntry }> = ({ node }) => {
           ))}
         </div>
       )}
+      <BrowserActivityPanel agentId={node.id} />
     </div>
   );
 };

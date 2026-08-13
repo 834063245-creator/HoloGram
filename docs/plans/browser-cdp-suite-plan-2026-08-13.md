@@ -105,7 +105,7 @@
 |---|---|
 | profile 目录定期清理 | ✅ 已补：按端口隔离 + 随会话回收删除 + launch 清扫遗留目录 |
 | 租约/审计实测 | 代码侧已覆盖（单测：租约 kill/清理链路、审计写入回读）；真实运行时租约触发待实测（设 `HOLOGRAM_BROWSER_LEASE_SECS` 短租约即可验证，不必干等 10 分钟） |
-| UI 侧审计展示 | 数据已有（`browser(audit)` / jsonl），UI 集成属交互形态工作 |
+| UI 侧审计展示 | ✅ 已做（v1 最小形态）：Agent 卡片下「浏览器活动」折叠区，按 agent 过滤查询、只拉一次、动作中文化、相对时间。数据层同步增强——审计对象从 ref 号/target id 改为人话（attach 存页面标题、click 存元素文本、type 存输入摘要）。组件独立成文件（BrowserActivityPanel.tsx），前端重构时整体替换即可 |
 | 端到端冒烟 | ✅ 已实测（2026-08-13，connect 链路）：自启调试端口 Chrome（9333）→ connect → targets → attach → snapshot → click(ref) → kill 全链路通过，审计 4 条完整。**发现并修复两个真 bug**：①click 后固定 300ms 采样落在旧文档上下文，导航类点击世界反馈漏报"无显著变化"——补 `wait_nav_settle` 轮询（URL 变/DOM 变/2s 兜底，SPA 无导航点击不付超时）；②（更深层）world_snapshot 的 evaluate 表达式 `JSON.stringify(...)` 遇 `returnByValue` 返回字符串，`val["u"]` 永远取 Null——URL/DOM 检测自 b4dd1f5 落地起就从未工作过，每次操作都报"无显著变化"。改直接返回对象 + `parse_world_value` 契约单测锁定（`e1679a0`）。修复后实测 click 正确报"URL 变化: example.com → iana.org；DOM 大小变化: +5730 字符"。kill 语义验证：外部连接 kill 后 Chrome 进程全部存活、端口照常应答 |
 
 ## 7. connect 增量（2026-08-13 增补，`b988f87d` + `af075af`）

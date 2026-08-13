@@ -464,8 +464,9 @@ pub(crate) async fn rpc(
             crate::cdp::cdp_screenshot(agent_id.as_deref()).await
         }
         "browser_audit" => {
+            let agent = opt_str(&params, "agent");
             let limit = opt_usize(&params, "limit");
-            Ok(crate::cdp::cdp_audit(limit))
+            Ok(crate::cdp::cdp_audit(agent.as_deref(), limit))
         }
         "browser_click" => {
             let agent_id = self_or_agent(&params);
