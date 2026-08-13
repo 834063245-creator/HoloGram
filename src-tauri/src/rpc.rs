@@ -37,6 +37,15 @@ fn opt_u64(params: &Value, name: &str) -> Option<u64> {
 fn opt_usize(params: &Value, name: &str) -> Option<usize> {
     params.get(name).and_then(|v| v.as_u64()).map(|n| n as usize)
 }
+/// browser 命令的 agent 路由：target=self 走自家 webview 只读会话，
+/// 否则走各 Agent 自己的 CDP 会话（无 _agent_id 共用 default）。
+fn self_or_agent(params: &Value) -> Option<String> {
+    if opt_bool(params, "self").unwrap_or(false) {
+        Some(crate::cdp::SELF_AGENT_ID.to_string())
+    } else {
+        opt_str(params, "_agent_id")
+    }
+}
 fn req_strs(params: &Value, name: &str, method: &str) -> Result<Vec<String>, String> {
     params.get(name)
         .and_then(|v| v.as_array())
@@ -335,12 +344,14 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（12 个命令）
+        // CDP 浏览器控制（17 个命令）
         // 权限：launch/kill/attach/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
-        //       inspect/report/targets/status 只读放行；click/type/press/scroll
-        //       依赖 attach 时已获批准的 target，不再重复弹窗。
-        // 会话：所有命令按 _agent_id 键控路由到各 Agent 自己的 CDP 会话
-        //       （端口/attach/Chrome 进程互不干扰；无 _agent_id 共用 default）。
+        //       inspect/report/targets/snapshot/console/network/screenshot/audit/status
+        //       只读放行；click/type/press/scroll 依赖 attach 时已获批准的 target，
+        //       不再重复弹窗——但敏感目标（已填值输入框/提交按钮/下载/高危文本）
+        //       每次单独 Ask（ADR 0003 D6 L3）。
+        // 会话：所有命令按 _agent_id 键控路由到各 Agent 自己的 CDP 会话；
+        //       self=true 时路由到自家 webview 只读会话（操作类动作被拒）。
         // ═══════════════════════════════════════════════════════
         "browser_launch" => {
             let agent_id = opt_str(&params, "_agent_id");
@@ -380,7 +391,7 @@ pub(crate) async fn rpc(
             crate::cdp::cdp_attach(&target, agent_id.as_deref())
         }
         "browser_inspect" => {
-            let agent_id = opt_str(&params, "_agent_id");
+            let agent_id = self_or_agent(&params);
             let selector = req_str(&params, "selector", "browser_inspect")?;
             let props = params.get("props")
                 .and_then(|v| v.as_array())
@@ -389,28 +400,76 @@ pub(crate) async fn rpc(
             crate::cdp::cdp_inspect(&selector, props, max_results, agent_id.as_deref()).await
         }
         "browser_report" => {
-            let agent_id = opt_str(&params, "_agent_id");
+            let agent_id = self_or_agent(&params);
             let scope = opt_str(&params, "scope");
             crate::cdp::cdp_report(scope, agent_id.as_deref()).await
         }
+        "browser_snapshot" => {
+            let agent_id = self_or_agent(&params);
+            let scope = opt_str(&params, "scope");
+            let max_results = opt_usize(&params, "max_results");
+            crate::cdp::cdp_snapshot(scope, max_results, agent_id.as_deref()).await
+        }
+        "browser_console" => {
+            let agent_id = self_or_agent(&params);
+            let limit = opt_usize(&params, "limit");
+            Ok(crate::cdp::cdp_console(agent_id.as_deref(), limit))
+        }
+        "browser_network" => {
+            let agent_id = self_or_agent(&params);
+            let limit = opt_usize(&params, "limit");
+            Ok(crate::cdp::cdp_network(agent_id.as_deref(), limit))
+        }
+        "browser_screenshot" => {
+            let agent_id = self_or_agent(&params);
+            crate::cdp::cdp_screenshot(agent_id.as_deref()).await
+        }
+        "browser_audit" => {
+            let limit = opt_usize(&params, "limit");
+            Ok(crate::cdp::cdp_audit(limit))
+        }
         "browser_click" => {
-            let agent_id = opt_str(&params, "_agent_id");
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_click: self 会话只读，不能操作自家 webview".into());
+            }
             let selector = req_str(&params, "selector", "browser_click")?;
+            // 敏感目标（提交按钮/下载/高危文本）→ 每次单独 Ask（ADR 0003 D6 L3）
+            if crate::cdp::check_sensitive(&selector, "click", agent_id.as_deref()).await {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::BrowserTool { action: "click_sensitive".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
             crate::cdp::cdp_click(&selector, agent_id.as_deref()).await
         }
         "browser_type" => {
-            let agent_id = opt_str(&params, "_agent_id");
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_type: self 会话只读，不能操作自家 webview".into());
+            }
             let selector = req_str(&params, "selector", "browser_type")?;
             let text = req_str(&params, "text", "browser_type")?;
+            // 敏感目标（已填值输入框/密码框）→ 每次单独 Ask（ADR 0003 D6 L3）
+            if crate::cdp::check_sensitive(&selector, "type", agent_id.as_deref()).await {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::BrowserTool { action: "type_sensitive".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
             crate::cdp::cdp_type(&selector, &text, agent_id.as_deref()).await
         }
         "browser_press" => {
-            let agent_id = opt_str(&params, "_agent_id");
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_press: self 会话只读，不能操作自家 webview".into());
+            }
             let key = req_str(&params, "key", "browser_press")?;
             crate::cdp::cdp_press(&key, agent_id.as_deref()).await
         }
         "browser_scroll" => {
-            let agent_id = opt_str(&params, "_agent_id");
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_scroll: self 会话只读，不能操作自家 webview".into());
+            }
             let selector = opt_str(&params, "selector");
             let direction = opt_str(&params, "direction");
             crate::cdp::cdp_scroll(selector, direction, agent_id.as_deref()).await
@@ -426,7 +485,7 @@ pub(crate) async fn rpc(
             crate::cdp::cdp_eval(&expr, agent_id.as_deref()).await
         }
         "browser_status" => {
-            let agent_id = opt_str(&params, "_agent_id");
+            let agent_id = self_or_agent(&params);
             Ok(crate::cdp::cdp_status(agent_id.as_deref()))
         }
 

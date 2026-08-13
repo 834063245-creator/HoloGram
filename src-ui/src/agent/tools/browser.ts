@@ -1,17 +1,22 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 // Browser 工具 — Agent「观察/操作前端页面」能力
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 // 目标：不止自家 webview，更主要是用户日常使用的其他软件前端
 // （Chrome / Edge / Electron / 其他 WebView2 应用）。
 //
-// 双通道：
-//   - target=self   → webview 内直读探针（Agent 与 DOM 同上下文，零 RPC）
-//   - target=外部   → rpc → Rust cdp 模块 → WebSocket → CDP
+// 双通道（ADR 0003 D4 统一后端后，全部走 Rust CDP）：
+//   - target=self → Rust cdp 模块惰性 attach 自家 webview 调试端口（只读）
+//   - target 省略  → 各 Agent 自己的 CDP 会话（已 attach 的外部页面）
 //
-// 语义化操作：模型只给 CSS selector，坐标/聚焦由探针内部处理。
+// 交互范式（ADR 0003 D2/D5）：
+//   - snapshot 拿可交互元素清单（含 ref 编号），click/type/scroll 按 ref 引用；
+//     不要手写 CSS selector（ref 失效会报错并提示重新 snapshot）。
+//   - 操作自带 actionability 等待与反馈（URL 变化 / DOM 变化 / 新增错误）。
+//   - console/network 查询页面事件（改 UI 后自查报错和请求状态）。
+//
 // 借鉴 HanaAgent computer-use 设计：能力声明（描述里写清能做什么）、
 // 结果截断（防上下文爆炸）、语义化（不给裸坐标）。
 
@@ -20,41 +25,9 @@ import type { Tool } from '../tool';
 import { agentInvoke } from '../tool';
 import { defineTool } from './define-tool';
 
-// ═══════════════════════════════════════════════════════════════
-// self 探针 — webview 内直读（Agent 与页面同上下文）
-// 默认实现 defaultDomProbe 在 UI 层（src/ui/dom-probe.ts）—
-// agent 层禁止浏览器 API（agent-boundary 测试强制），
-// 由 runtime-adapter 的 createBuilderDeps 注入。
-// ═══════════════════════════════════════════════════════════════
-
-/** 元素快照（几何/样式/文本/对比度） */
-export interface DomElementSnapshot {
-  tag: string;
-  selector: string;
-  id?: string;
-  rect?: { x: number; y: number; width: number; height: number };
-  visible?: boolean;
-  scrollable?: boolean;
-  style?: Record<string, string>;
-  text?: string;
-  contrast?: number;
-}
-
-export interface DomProbe {
-  /** 读取元素（CSS selector） */
-  inspect: (selector: string, props?: string[], maxResults?: number) => Promise<DomElementSnapshot[]>;
-  /** 视觉 lint 检查 */
-  report: (scope?: string) => Promise<{ issues: unknown[]; ok: boolean }>;
-}
-
-// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 // 工具定义
-// ═══════════════════════════════════════════════════════════════
-
-export interface BrowserToolsOptions {
-  /** self 探针 — webview 内直读（Agent 装配层注入；mock/测试可注入假探针） */
-  domProbe?: DomProbe;
-}
+// ═══════════════════════════════════════════════════════════
 
 const MAX_RESULT_CHARS = 8000;
 
@@ -63,44 +36,8 @@ function truncate(s: string): string {
   return `${s.slice(0, MAX_RESULT_CHARS)}...[已截断，共 ${s.length} 字符]`;
 }
 
-/** 执行 browser 动作。self 走探针，外部走 Rust CDP。 */
-async function runBrowserAction(
-  action: string,
-  args: Record<string, unknown>,
-  domProbe?: DomProbe,
-): Promise<string> {
-  const target = (args.target as string) || 'external';
-
-  // self → webview 内直读（零 RPC）
-  if (target === 'self') {
-    if (!domProbe) return '[browser] self 模式需要注入 domProbe（当前环境未提供）';
-    try {
-      switch (action) {
-        case 'inspect': {
-          const selector = String(args.selector ?? '');
-          if (!selector) return '[browser] inspect: selector 不能为空';
-          const snaps = await domProbe.inspect(
-            selector,
-            Array.isArray(args.props) ? (args.props as string[]) : undefined,
-            typeof args.maxResults === 'number' ? args.maxResults : undefined,
-          );
-          return truncate(JSON.stringify(snaps));
-        }
-        case 'report': {
-          const scope = typeof args.scope === 'string' ? args.scope : undefined;
-          return truncate(JSON.stringify(await domProbe.report(scope)));
-        }
-        case 'status':
-          return JSON.stringify({ target: 'self', supported: true });
-        default:
-          return `[browser] self 模式暂不支持动作 ${action}（self 仅支持 inspect/report/status）`;
-      }
-    } catch (e: any) {
-      return `[browser] self 探针错误: ${e?.message || String(e)}`;
-    }
-  }
-
-  // external → Rust CDP
+/** 执行 browser 动作。self → webview 只读通道；外部 → 各 Agent CDP 会话。 */
+async function runBrowserAction(action: string, args: Record<string, unknown>): Promise<string> {
   const nameMap: Record<string, string> = {
     launch: 'browser_launch',
     kill: 'browser_kill',
@@ -108,6 +45,11 @@ async function runBrowserAction(
     attach: 'browser_attach',
     inspect: 'browser_inspect',
     report: 'browser_report',
+    snapshot: 'browser_snapshot',
+    console: 'browser_console',
+    network: 'browser_network',
+    screenshot: 'browser_screenshot',
+    audit: 'browser_audit',
     click: 'browser_click',
     type: 'browser_type',
     press: 'browser_press',
@@ -125,9 +67,8 @@ async function runBrowserAction(
   }
 }
 
-export function createBrowserTools(opts: BrowserToolsOptions = {}): Tool[] {
-  const { domProbe } = opts;
-  const run = (action: string, args: Record<string, unknown>) => runBrowserAction(action, args, domProbe);
+export function createBrowserTools(): Tool[] {
+  const run = (action: string, args: Record<string, unknown>) => runBrowserAction(action, args);
 
   return [
     defineTool({
@@ -138,7 +79,7 @@ export function createBrowserTools(opts: BrowserToolsOptions = {}): Tool[] {
         'If already running, reuses it. Pass url to open a specific page.',
       schema: z.object({
         url: z.string().optional().describe('Optional URL to open in the controlled browser'),
-        port: z.number().int().optional().describe('Debug port (default 9222)'),
+        port: z.number().int().optional().describe('Debug port (default: auto-probe from 9223; 9222 is reserved for HoloGram webview)'),
       }),
       execute: (args) => run('launch', args),
     }),
@@ -152,6 +93,14 @@ export function createBrowserTools(opts: BrowserToolsOptions = {}): Tool[] {
       execute: () => run('targets', {}),
     }),
     defineTool({
+      name: 'browser_kill',
+      description:
+        'Terminate the controlled Chrome instance launched by this agent (isolated profile). ' +
+        'Only kills the Chrome this agent launched.',
+      schema: z.object({}),
+      execute: () => run('kill', {}),
+    }),
+    defineTool({
       name: 'browser_attach',
       description:
         'Attach to a specific page target (by id from browser_targets) so subsequent inspect/click/type/press/scroll/eval act on it. ' +
@@ -163,20 +112,38 @@ export function createBrowserTools(opts: BrowserToolsOptions = {}): Tool[] {
       execute: (args) => run('attach', args),
     }),
     defineTool({
+      name: 'browser_snapshot',
+      description:
+        'Snapshot interactive elements on the attached page — returns {refs:[{ref,tag,type,text,id}], count, truncated}. ' +
+        'Marks elements with ref numbers; use these ref numbers in click/type/scroll (e.g. selector: "37"). ' +
+        'Refs are valid until the DOM changes — if an operation fails with "target gone", re-snapshot. ' +
+        'PREFERRED over hand-written CSS selectors.',
+      schema: z.object({
+        scope: z.string().optional().describe('Optional CSS selector to limit the snapshot (default: whole page)'),
+        maxResults: z.number().int().optional().describe('Max elements (default 80)'),
+        target: z
+          .string()
+          .optional()
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+      }),
+      readOnly: true,
+      execute: (args) => run('snapshot', args),
+    }),
+    defineTool({
       name: 'browser_inspect',
       description:
-        'Read element geometry/style/text/contrast from the attached page using a CSS selector. ' +
+        'Read element geometry/style/text/contrast from the attached page using a CSS selector (or snapshot ref number). ' +
         'Returns JSON array: {tag, id, rect{x,y,width,height}, visible, scrollable, style{color,background,fontSize,...}, text, contrast}. ' +
         'props: optional subset of ["geometry","style","text","contrast"]. maxResults caps elements (default 20). ' +
         'Use to verify visual details after UI changes.',
       schema: z.object({
-        selector: z.string().describe('CSS selector of element(s) to inspect'),
+        selector: z.string().describe('CSS selector (or ref number from snapshot) of element(s) to inspect'),
         props: z.array(z.string()).optional().describe('Optional subset: geometry/style/text/contrast'),
         maxResults: z.number().int().optional().describe('Max elements (default 20)'),
         target: z
           .string()
           .optional()
-          .describe('"self" = HoloGram webview 内直读（零 RPC）；省略 = 已 attach 的外部页面'),
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('inspect', args),
@@ -192,28 +159,61 @@ export function createBrowserTools(opts: BrowserToolsOptions = {}): Tool[] {
         target: z
           .string()
           .optional()
-          .describe('"self" = HoloGram webview 内直读（零 RPC）；省略 = 已 attach 的外部页面'),
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('report', args),
     }),
     defineTool({
+      name: 'browser_console',
+      description:
+        'Read recent page console events (console.log/error, exceptions, Log.entryAdded) from the attached page. ' +
+        'Use after UI changes or operations to check for new errors. Returns {entries:[{type,text}]}.',
+      schema: z.object({
+        limit: z.number().int().optional().describe('Max entries (default 30)'),
+        target: z
+          .string()
+          .optional()
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+      }),
+      readOnly: true,
+      execute: (args) => run('console', args),
+    }),
+    defineTool({
+      name: 'browser_network',
+      description:
+        'Read recent network events (requests/responses/failures) from the attached page. ' +
+        'Use to check whether a request failed or which endpoint returned an error. Returns {entries:[{method,url,status}]}.',
+      schema: z.object({
+        limit: z.number().int().optional().describe('Max entries (default 30)'),
+        target: z
+          .string()
+          .optional()
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+      }),
+      readOnly: true,
+      execute: (args) => run('network', args),
+    }),
+    defineTool({
       name: 'browser_click',
       description:
-        'Click an element in the attached page by CSS selector (clicks center of element via CDP Input). ' +
-        'Coordinates are computed internally — never pass raw coordinates.',
+        'Click an element in the attached page by snapshot ref number (e.g. selector: "37") or CSS selector. ' +
+        'Waits for the element to be actionable (visible/unobscured/stable) before clicking. ' +
+        'Returns world-change feedback (URL/DOM changes, new errors). ' +
+        'Sensitive targets (submit buttons, download links, confirm/pay/delete text) trigger a separate approval.',
       schema: z.object({
-        selector: z.string().describe('CSS selector of element to click'),
+        selector: z.string().describe('Ref number from snapshot or CSS selector of element to click'),
       }),
       execute: (args) => run('click', args),
     }),
     defineTool({
       name: 'browser_type',
       description:
-        'Type text into a focused element in the attached page (focuses selector, then Input.insertText). ' +
-        'Chinese/IME friendly.',
+        'Type text into an input in the attached page by snapshot ref number (e.g. selector: "37") or CSS selector. ' +
+        'Focuses the element then inserts text (Chinese/IME friendly). ' +
+        'Typing into a pre-filled input or password field triggers a separate approval.',
       schema: z.object({
-        selector: z.string().describe('CSS selector of input/textarea/contenteditable to focus'),
+        selector: z.string().describe('Ref number from snapshot or CSS selector of input/textarea/contenteditable to focus'),
         text: z.string().describe('Text to type'),
       }),
       execute: (args) => run('type', args),
@@ -225,14 +225,14 @@ export function createBrowserTools(opts: BrowserToolsOptions = {}): Tool[] {
       schema: z.object({
         key: z.string().describe('Key name (Enter/Tab/Escape/ArrowUp/ArrowDown/... or single char)'),
       }),
-      execute: (args) => runBrowserAction('press', args),
+      execute: (args) => run('press', args),
     }),
     defineTool({
       name: 'browser_scroll',
       description:
-        'Scroll the attached page: pass selector to scroll element into view, or direction (down/up/top) for page scroll.',
+        'Scroll the attached page: pass selector (ref number or CSS selector) to scroll element into view, or direction (down/up/top) for page scroll.',
       schema: z.object({
-        selector: z.string().optional().describe('Scroll this element into view'),
+        selector: z.string().optional().describe('Ref number or CSS selector to scroll into view'),
         direction: z.string().optional().describe('Page scroll direction: down/up/top'),
       }),
       execute: (args) => run('scroll', args),
@@ -245,11 +245,36 @@ export function createBrowserTools(opts: BrowserToolsOptions = {}): Tool[] {
       schema: z.object({
         expr: z.string().describe('JS expression to evaluate'),
       }),
-      execute: (args) => runBrowserAction('eval', args),
+      execute: (args) => run('eval', args),
+    }),
+    defineTool({
+      name: 'browser_screenshot',
+      description:
+        'Capture a screenshot of the attached page — saved to a temp file, returns {path, bytes}. ' +
+        'With a text-only model the image content is not visible; hand the path to the user for confirmation.',
+      schema: z.object({
+        target: z
+          .string()
+          .optional()
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+      }),
+      readOnly: true,
+      execute: (args) => run('screenshot', args),
+    }),
+    defineTool({
+      name: 'browser_audit',
+      description:
+        'Read the browser operation audit log — which agent did what (click/type/launch/attach), when, and the outcome. ' +
+        'Use to review what the Agent has done in the browser.',
+      schema: z.object({
+        limit: z.number().int().optional().describe('Max entries (default 50)'),
+      }),
+      readOnly: true,
+      execute: (args) => run('audit', args),
     }),
     defineTool({
       name: 'browser_status',
-      description: 'Current browser session status — port, attached target, whether controlled Chrome is running.',
+      description: 'Current browser session status — port, attached target, whether controlled Chrome is running, observer alive.',
       schema: z.object({}),
       readOnly: true,
       execute: () => run('status', {}),

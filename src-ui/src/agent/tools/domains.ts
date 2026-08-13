@@ -215,16 +215,23 @@ export const DOMAIN_SPECS: DomainSpec[] = [
   {
     name: 'browser',
     description:
-      'Browser control: launch a controlled Chrome/Edge (isolated profile), list/attach pages, inspect/report visual state, and operate (click/type/press/scroll/eval). ' +
-      'target="self" = HoloGram webview 内直读（仅 inspect/report/status 支持）；省略 target = 已 attach 的外部页面。' +
+      'Browser control: launch a controlled Chrome/Edge (isolated profile), list/attach pages, snapshot interactive elements (ref-based ops), ' +
+      'inspect/report visual state, read console/network events, screenshot, audit log, and operate (click/type/press/scroll/eval). ' +
+      'target="self" = HoloGram webview 只读会话（inspect/report/snapshot/console/network/screenshot/status 支持）；省略 target = 已 attach 的外部页面。' +
+      '交互范式：先 snapshot 拿 ref 编号，操作按 ref 引用（不要手写 CSS selector）；操作自带等待与反馈；敏感目标每次单独确认。' +
       'attach 用 targetId（来自 browser(targets) 的 CDP target id）。',
     actions: {
       launch: 'browser_launch',
       kill: 'browser_kill',
       targets: 'browser_targets',
       attach: 'browser_attach',
+      snapshot: 'browser_snapshot',
       inspect: 'browser_inspect',
       report: 'browser_report',
+      console: 'browser_console',
+      network: 'browser_network',
+      screenshot: 'browser_screenshot',
+      audit: 'browser_audit',
       click: 'browser_click',
       type: 'browser_type',
       press: 'browser_press',
@@ -288,8 +295,13 @@ export function collectHiddenToolNames(): string[] {
     'browser_kill',
     'browser_targets',
     'browser_attach',
+    'browser_snapshot',
     'browser_inspect',
     'browser_report',
+    'browser_console',
+    'browser_network',
+    'browser_screenshot',
+    'browser_audit',
     'browser_click',
     'browser_type',
     'browser_press',

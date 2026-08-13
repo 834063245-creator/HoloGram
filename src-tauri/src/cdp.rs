@@ -1,36 +1,228 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 //
-// CDP (Chrome DevTools Protocol) 客户端 — 让 Agent 观察/操作外部 Chromium 页面。
+// CDP (Chrome DevTools Protocol) 客户端 — 让 Agent 观察/操作 Chromium 页面。
 //
-// 设计原则（借鉴 HanaAgent computer-use 的设计思路，实现完全不同）：
-//   - 短连接：每次调用建立 WS 连接，用完即关。本地回环开销可忽略，
-//     避免长连接状态机（重连/心跳/事件流）的复杂度。
-//   - 全链路超时兜底：connect/发送/等待全部包在 tokio timeout 里，
-//     Runtime.evaluate 另带 CDP 层 5s 超时——页面死循环或主线程卡死
-//     不会挂死 Agent 流。
-//   - 语义化操作：模型只给 CSS selector，坐标由本模块从 getBoundingClientRect
-//     计算，模型不接触裸坐标。
-//   - 会话按 agent 键控：每个 Agent 自己的端口/attach/Chrome 进程，
-//     多 Agent 互不干扰；无 agent_id 的调用共用 "default" 键。
-//   - 结果截断：大结果防上下文爆炸。
+// 架构（ADR 0003 落地，P1/P2）：
+//   - 命令通道：短连接（每次调用建立 WS，用完即关）——本地回环开销可忽略，
+//     避免长连接命令状态机；connect/发送/等待全部包在 tokio timeout 里，
+//     Runtime.evaluate 另带 CDP 层 5s 超时——页面死循环不会挂死 Agent 流。
+//   - 事件通道：attach 后起一条持久 WS 后台 task，订阅 Runtime/Log/Network
+//     事件进环形缓冲，browser(console)/browser(network) 随时查询；
+//     事件 task 随 target 消失自然退出，惰性重启。
+//   - 快照 + ref：snapshot 给可交互元素打 data-hg-ref 标记，操作按 ref 引用；
+//     ref 失效返回可恢复错误。selector 保留为高级参数。
+//   - 操作反馈：操作前做 actionability 等待（可见/无遮挡/位置稳定），
+//     操作后返回世界变化（URL / DOM 大小 / 新增错误数）。
+//   - 会话按 agent 键控 + 空闲租约 10 分钟自动回收 + Chrome 崩溃检测。
+//   - self 会话：HoloGram 自家 webview 调试端口（9222）上的只读会话，
+//     Agent 自查渲染结果走这里；操作类动作在 rpc 层被拒。
+//   - 审计：全部写操作落盘（临时目录 jsonl），browser(audit) 可查。
 //   - 只连 127.0.0.1；launch 用独立 profile，不碰用户日常 Chrome。
-//
-// 目标形态（快照 ref/持久连接/统一后端）见 docs/adr/0003-agent-browser-cdp-suite.md。
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 
 // ═══════════════════════════════════════════════════════════
+// 常量
+// ═══════════════════════════════════════════════════════════
+
+/// HoloGram 自家 webview 的调试端口（tauri.conf.json additionalBrowserArgs）。
+/// 受控 Chrome 永远不许用这个端口；self 会话专用。
+const WEBVIEW_DEBUG_PORT: u16 = 9222;
+
+/// 受控 Chrome 默认端口起点，占用则向后探测（避开 9222）。
+const DEFAULT_PORT_BASE: u16 = 9223;
+const PORT_PROBE_LIMIT: u16 = 16;
+
+/// WS 命令全链路超时——connect/发送/等待响应任一步卡住都在此上限内返回错误。
+const WS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Runtime.evaluate 的 CDP 层超时（毫秒）——表达式死循环在此上限内被打断。
+const EVAL_TIMEOUT_MS: u64 = 5000;
+
+/// actionability 等待上限——元素可见/无遮挡/位置稳定。
+const ACTIONABILITY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 操作后等待世界稳定再采样的时间。
+const POST_ACTION_SETTLE: Duration = Duration::from_millis(300);
+
+/// 会话空闲租约——超时自动 kill 受控 Chrome 并回收会话。
+const SESSION_LEASE: Duration = Duration::from_secs(600);
+
+/// 事件缓冲上限（条）。
+const CONSOLE_BUF_MAX: usize = 200;
+const NETWORK_BUF_MAX: usize = 200;
+const ERROR_BUF_MAX: usize = 100;
+
+/// 审计内存环形上限（条）。
+const AUDIT_MAX: usize = 500;
+
+/// self 会话的 session key / agent_id（与 Agent 会话隔离，见 SELF_AGENT_ID）。
+const DEFAULT_SESSION_KEY: &str = "default";
+
+/// self 模式的读动作路由键：rpc 层 self=true 时以它作为 agent_id 传入，
+/// cdp 内部函数按 agent_id 路由到 self 会话（自家 webview 调试端口上的只读会话）。
+pub(crate) const SELF_AGENT_ID: &str = "__self__";
+
+pub(crate) fn is_self(agent_id: Option<&str>) -> bool {
+    agent_id == Some(SELF_AGENT_ID)
+}
+
+// ═══════════════════════════════════════════════════════════
+// 事件缓冲 + 观察任务
+// ═══════════════════════════════════════════════════════════
+
+/// 页面事件环形缓冲——事件 task 写入，查询动作读取。
+#[derive(Default)]
+struct EventBuffers {
+    console: VecDeque<String>,
+    network: VecDeque<String>,
+    errors: VecDeque<String>,
+}
+
+/// 事件观察句柄。alive 标志由后台 task 维护：
+/// 连接建立成功 → true；WS 断开/task 退出 → false。
+/// 命令执行前检查 alive，false 且 target 还在则惰性重启。
+#[derive(Clone)]
+struct Observer {
+    buffers: Arc<Mutex<EventBuffers>>,
+    alive: Arc<AtomicBool>,
+}
+
+fn push_capped(buf: &mut VecDeque<String>, entry: String, cap: usize) {
+    if buf.len() >= cap {
+        buf.pop_front();
+    }
+    buf.push_back(entry);
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
+}
+
+/// 启动事件观察 task：持久 WS + 订阅 Runtime/Log/Network。
+/// 短阻塞的 /json 查询放 spawn_blocking 里，避免卡 runtime。
+fn start_observer(port: u16, target_id: &str) -> Observer {
+    let buffers = Arc::new(Mutex::new(EventBuffers::default()));
+    let alive = Arc::new(AtomicBool::new(false));
+    let (b2, a2, tid) = (buffers.clone(), alive.clone(), target_id.to_string());
+    tokio::spawn(async move {
+        let ws_url = tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let raw = list_targets_raw(port)?;
+            let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
+            arr.iter()
+                .find(|t| t["id"].as_str() == Some(tid.as_str()))
+                .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
+                .ok_or_else(|| format!("target {tid} 已消失"))
+        })
+        .await;
+        // spawn_blocking 的 await 返回 Result<Result<String,String>, JoinError> — 两层解包
+        let Ok(Ok(ws_url)) = ws_url else { return };
+        let Ok((mut ws, _)) = tokio_tungstenite::connect_async(&ws_url).await else {
+            return;
+        };
+        // 订阅三类事件（命令 id 用 ≥1000 与命令通道区分，响应直接跳过）
+        for (id, method) in [(1000u64, "Runtime.enable"), (1001, "Log.enable"), (1002, "Network.enable")] {
+            let msg = json!({ "id": id, "method": method }).to_string();
+            if ws.send(Message::text(msg)).await.is_err() {
+                return;
+            }
+        }
+        a2.store(true, Ordering::SeqCst);
+        while let Some(Ok(msg)) = ws.next().await {
+            let Message::Text(t) = msg else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(&t) else { continue };
+            if v["id"].as_u64().is_some() {
+                continue; // 命令响应，不属于事件流
+            }
+            let method = v["method"].as_str().unwrap_or("");
+            let params = &v["params"];
+            let mut bufs = crate::utils::lock_or_recover(&b2);
+            match method {
+                "Runtime.consoleAPICalled" => {
+                    let ctype = params["type"].as_str().unwrap_or("log");
+                    let text = params["args"]
+                        .as_array()
+                        .map(|args| {
+                            args.iter()
+                                .filter_map(|a| a["value"].as_str().or_else(|| a["description"].as_str()))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default();
+                    let entry = json!({ "type": ctype, "text": truncate_str(&text, 300) }).to_string();
+                    push_capped(&mut bufs.console, entry.clone(), CONSOLE_BUF_MAX);
+                    if ctype == "error" {
+                        push_capped(&mut bufs.errors, entry, ERROR_BUF_MAX);
+                    }
+                }
+                "Runtime.exceptionThrown" => {
+                    let text = params["exceptionDetails"]["exception"]["description"]
+                        .as_str()
+                        .unwrap_or("exception");
+                    let entry = json!({ "type": "exception", "text": truncate_str(text, 300) }).to_string();
+                    push_capped(&mut bufs.errors, entry.clone(), ERROR_BUF_MAX);
+                    push_capped(&mut bufs.console, entry, CONSOLE_BUF_MAX);
+                }
+                "Log.entryAdded" => {
+                    let entry_obj = &params["entry"];
+                    let level = entry_obj["level"].as_str().unwrap_or("info");
+                    let text = entry_obj["text"].as_str().unwrap_or("");
+                    let entry = json!({ "type": level, "text": truncate_str(text, 300) }).to_string();
+                    push_capped(&mut bufs.console, entry.clone(), CONSOLE_BUF_MAX);
+                    if level == "error" {
+                        push_capped(&mut bufs.errors, entry, ERROR_BUF_MAX);
+                    }
+                }
+                "Network.requestWillBeSent" => {
+                    let url = params["request"]["url"].as_str().unwrap_or("");
+                    let entry = json!({
+                        "method": params["request"]["method"].as_str().unwrap_or(""),
+                        "url": truncate_str(url, 200),
+                        "status": null
+                    })
+                    .to_string();
+                    push_capped(&mut bufs.network, entry, NETWORK_BUF_MAX);
+                }
+                "Network.responseReceived" => {
+                    let url = params["response"]["url"].as_str().unwrap_or("");
+                    let status = params["response"]["status"].as_u64().unwrap_or(0);
+                    // 与上一个同 URL 的请求配对更新 status；简化：直接追加一条响应记录
+                    let entry = json!({ "method": "resp", "url": truncate_str(url, 200), "status": status }).to_string();
+                    push_capped(&mut bufs.network, entry, NETWORK_BUF_MAX);
+                }
+                "Network.loadingFailed" => {
+                    let entry = json!({
+                        "method": "failed",
+                        "url": truncate_str(params["requestId"].as_str().unwrap_or(""), 200),
+                        "status": params["errorText"].as_str().unwrap_or("failed")
+                    })
+                    .to_string();
+                    push_capped(&mut bufs.network, entry, NETWORK_BUF_MAX);
+                }
+                _ => {}
+            }
+        }
+        a2.store(false, Ordering::SeqCst);
+    });
+    Observer { buffers, alive }
+}
+
+// ═══════════════════════════════════════════════════════════
 // 会话状态 — 按 agent 键控
 // ═══════════════════════════════════════════════════════════
 
-#[derive(Default)]
 pub(crate) struct CdpSession {
     /// 当前连接的调试端口（launch 时确定）
     pub port: u16,
@@ -38,13 +230,26 @@ pub(crate) struct CdpSession {
     pub target_id: Option<String>,
     /// launch 启动的受控 Chrome 子进程（用于 kill）
     pub chrome_child: Option<std::process::Child>,
+    /// 事件观察（attach 时启动；self 会话在首次 attach 时启动）
+    observer: Option<Observer>,
+    /// 最近一次活动时间（租约依据）
+    last_active: Instant,
 }
 
-/// 所有 Agent 的会话表。key = agent_id；无 agent_id 的调用共用 DEFAULT_SESSION_KEY。
+impl Default for CdpSession {
+    fn default() -> Self {
+        Self {
+            port: 0,
+            target_id: None,
+            chrome_child: None,
+            observer: None,
+            last_active: Instant::now(),
+        }
+    }
+}
+
 static SESSIONS: LazyLock<Mutex<HashMap<String, CdpSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-const DEFAULT_SESSION_KEY: &str = "default";
 
 fn session_key(agent_id: Option<&str>) -> String {
     agent_id
@@ -57,33 +262,75 @@ fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>
     crate::utils::lock_or_recover(&SESSIONS)
 }
 
-/// HoloGram 自家 webview 的调试端口（tauri.conf.json additionalBrowserArgs）。
-/// 受控 Chrome 永远不许用这个端口——连上它等于把自家页面当外部页面操作。
-const WEBVIEW_DEBUG_PORT: u16 = 9222;
-
-/// 受控 Chrome 默认端口起点。必须避开 9222 —— 那是 HoloGram 自家 webview
-/// 的调试端口（tauri.conf.json additionalBrowserArgs），占用会吞掉整个会话
-/// （wait_for_port 误判就绪、targets 列出的全是自家页面）。占用则向后探测。
-const DEFAULT_PORT_BASE: u16 = 9223;
-const PORT_PROBE_LIMIT: u16 = 16;
-
-/// 探测一个空闲端口（默认范围）。同进程其他 Agent 已占用的端口也算占用，
-/// 堵住"两个 Agent 同时探测到同一端口"的竞态窗口。
-fn probe_free_port() -> Result<u16, String> {
-    for offset in 0..PORT_PROBE_LIMIT {
-        let p = DEFAULT_PORT_BASE + offset;
-        let occupied = {
-            let sessions = lock_sessions();
-            sessions.values().any(|s| s.port == p && s.chrome_child.is_some())
-        };
-        if !occupied && list_targets_raw(p).is_err() {
-            return Ok(p);
+/// 租约回收 + 崩溃检测：空闲超时的会话 kill 掉 Chrome 并移除；
+/// Chrome 已退出的会话清掉进程句柄（target/observer 保留，attach 可重来）。
+fn enforce_lease() {
+    let mut sessions = lock_sessions();
+    let mut expired: Vec<String> = Vec::new();
+    for (key, sess) in sessions.iter_mut() {
+        if let Some(child) = &mut sess.chrome_child {
+            if let Ok(Some(_)) = child.try_wait() {
+                sess.chrome_child = None; // Chrome 已自行退出
+            }
+        }
+        if sess.chrome_child.is_some() && sess.last_active.elapsed() > SESSION_LEASE {
+            if let Some(mut child) = sess.chrome_child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            expired.push(key.clone());
         }
     }
-    Err(format!(
-        "默认端口 {DEFAULT_PORT_BASE}~{} 全部被占用，请显式指定 port 参数",
-        DEFAULT_PORT_BASE + PORT_PROBE_LIMIT - 1
-    ))
+    for key in expired {
+        sessions.remove(&key);
+    }
+}
+
+/// 取会话并刷新活跃时间。
+fn session_mut(agent_id: Option<&str>) -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>> {
+    enforce_lease();
+    let mut sessions = lock_sessions();
+    sessions.entry(session_key(agent_id)).or_default().last_active = Instant::now();
+    sessions
+}
+
+/// 审计日志 — 内存环形 + 落盘（临时目录 jsonl）。
+static AUDIT: LazyLock<Mutex<VecDeque<String>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
+
+fn audit_log(agent_id: Option<&str>, action: &str, target: &str, summary: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = json!({
+        "ts": ts,
+        "agent": agent_id.filter(|s| !s.trim().is_empty()).unwrap_or("default"),
+        "action": action,
+        "target": truncate_str(target, 120),
+        "summary": truncate_str(summary, 200),
+    })
+    .to_string();
+    {
+        let mut buf = crate::utils::lock_or_recover(&AUDIT);
+        if buf.len() >= AUDIT_MAX {
+            buf.pop_front();
+        }
+        buf.push_back(entry.clone());
+    }
+    // 落盘：临时目录 jsonl，跨会话可查。失败静默（审计是尽力而为）。
+    use std::io::Write;
+    let path = std::env::temp_dir().join("hologram-browser-audit.jsonl");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{entry}");
+    }
+}
+
+/// 查询审计日志（最新 N 条）。
+pub(crate) fn cdp_audit(limit: Option<usize>) -> String {
+    let n = limit.unwrap_or(50).min(AUDIT_MAX);
+    let buf = crate::utils::lock_or_recover(&AUDIT);
+    let entries: Vec<&String> = buf.iter().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect();
+    json!({ "count": buf.len(), "entries": entries }).to_string()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -115,16 +362,35 @@ fn find_chrome() -> Option<std::path::PathBuf> {
 
 /// 等待调试端口就绪（launch 后 Chrome 需要几百 ms 启动）。
 async fn wait_for_port(port: u16, timeout: Duration) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         if list_targets_raw(port).is_ok() {
             return Ok(());
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             return Err(format!("CDP 端口 {port} 在 {timeout:?} 内未就绪"));
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+/// 探测一个空闲端口（默认范围）。同进程其他 Agent 已占用的端口也算占用，
+/// 堵住"两个 Agent 同时探测到同一端口"的竞态窗口。
+fn probe_free_port() -> Result<u16, String> {
+    for offset in 0..PORT_PROBE_LIMIT {
+        let p = DEFAULT_PORT_BASE + offset;
+        let occupied = {
+            let sessions = lock_sessions();
+            sessions.values().any(|s| s.port == p && s.chrome_child.is_some())
+        };
+        if !occupied && list_targets_raw(p).is_err() {
+            return Ok(p);
+        }
+    }
+    Err(format!(
+        "默认端口 {DEFAULT_PORT_BASE}~{} 全部被占用，请显式指定 port 参数",
+        DEFAULT_PORT_BASE + PORT_PROBE_LIMIT - 1
+    ))
 }
 
 /// 启动受控 Chrome（独立 profile）。已在运行则复用。返回端口。
@@ -137,7 +403,7 @@ pub(crate) async fn cdp_launch(
     //   - 未显式指定端口：直接复用本 agent 的现有端口；
     //   - 显式指定端口：与本 agent 现有端口一致且活着才复用。
     {
-        let mut sessions = lock_sessions();
+        let mut sessions = session_mut(agent_id);
         let sess = sessions.entry(session_key(agent_id)).or_default();
         if sess.chrome_child.is_some() && sess.port != 0 && list_targets_raw(sess.port).is_ok() {
             let reuse = match port {
@@ -186,7 +452,7 @@ pub(crate) async fn cdp_launch(
     let child = cmd.spawn().map_err(|e| format!("启动 Chrome 失败: {e}"))?;
 
     {
-        let mut sessions = lock_sessions();
+        let mut sessions = session_mut(agent_id);
         let sess = sessions.entry(session_key(agent_id)).or_default();
         // 走到这里说明旧 Chrome 已退出或显式指定了不同端口——
         // 无论哪种，回收旧句柄并 kill 残留进程，避免双开。
@@ -202,17 +468,20 @@ pub(crate) async fn cdp_launch(
     }
 
     wait_for_port(port, Duration::from_secs(10)).await?;
+    audit_log(agent_id, "launch", &port.to_string(), "ok");
     Ok(json!({ "status": "launched", "port": port, "chrome": chrome.to_string_lossy() }).to_string())
 }
 
 /// 终止本 agent 的受控 Chrome。
 pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
-    let mut sessions = lock_sessions();
+    let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(session_key(agent_id)).or_default();
     if let Some(mut child) = sess.chrome_child.take() {
         let _ = child.kill();
         let _ = child.wait();
         sess.target_id = None;
+        sess.observer = None;
+        audit_log(agent_id, "kill", "", "ok");
         Ok("受控 Chrome 已终止".into())
     } else {
         Err("没有正在运行的受控 Chrome".into())
@@ -245,7 +514,7 @@ fn list_targets_raw(port: u16) -> Result<Value, String> {
 /// 列出所有页面 target（type=page），返回 [{id, title, url}]。
 pub(crate) fn cdp_targets(agent_id: Option<&str>) -> Result<String, String> {
     let port = {
-        let mut sessions = lock_sessions();
+        let mut sessions = session_mut(agent_id);
         sessions.entry(session_key(agent_id)).or_default().port
     };
     let raw = list_targets_raw(port)?;
@@ -265,8 +534,9 @@ pub(crate) fn cdp_targets(agent_id: Option<&str>) -> Result<String, String> {
 }
 
 /// attach 到指定 target id。后续 inspect/click/type 都作用于它。
+/// attach 时启动事件观察（持久 WS 后台 task）。
 pub(crate) fn cdp_attach(target_id: &str, agent_id: Option<&str>) -> Result<String, String> {
-    let mut sessions = lock_sessions();
+    let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(session_key(agent_id)).or_default();
     if sess.port == 0 {
         return Err("尚未 launch 浏览器。先调用 browser(launch) 或 browser(targets) 确认端口".into());
@@ -279,6 +549,8 @@ pub(crate) fn cdp_attach(target_id: &str, agent_id: Option<&str>) -> Result<Stri
         Some(t) => {
             let id = t["id"].as_str().unwrap_or("").to_string();
             sess.target_id = Some(id.clone());
+            sess.observer = Some(start_observer(sess.port, &id));
+            audit_log(agent_id, "attach", &id, "ok");
             Ok(json!({
                 "attached": true,
                 "targetId": id,
@@ -294,14 +566,92 @@ pub(crate) fn cdp_attach(target_id: &str, agent_id: Option<&str>) -> Result<Stri
 }
 
 // ═══════════════════════════════════════════════════════════
-// WS 命令
+// self 会话 — 自家 webview 的只读通道
 // ═══════════════════════════════════════════════════════════
 
-/// WS 命令全链路超时——connect/发送/等待响应任一步卡住都在此上限内返回错误。
-const WS_TIMEOUT: Duration = Duration::from_secs(10);
+/// 在 webview 调试端口上找 HoloGram 自家页面 target。
+/// WebView2 的 URL 前缀：tauri://localhost / http(s)://tauri.localhost。
+fn find_webview_target() -> Result<String, String> {
+    let raw = list_targets_raw(WEBVIEW_DEBUG_PORT)?;
+    let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
+    let page = arr
+        .iter()
+        .find(|t| {
+            t["type"] == "page"
+                && t["url"]
+                    .as_str()
+                    .map(|u| u.starts_with("tauri://localhost") || u.contains("tauri.localhost"))
+                    .unwrap_or(false)
+        })
+        .or_else(|| arr.iter().find(|t| t["type"] == "page"));
+    page.and_then(|t| t["id"].as_str().map(String::from))
+        .ok_or_else(|| "找不到自家 webview 的调试 target（tauri 调试端口未开启？）".to_string())
+}
+
+/// 惰性确保 self 会话已 attach 到自家 webview。返回 (port, target_id)。
+/// 只在读动作里被调用；操作动作在 rpc 层被拒。
+fn ensure_self_attached() -> Result<(u16, String), String> {
+    let mut sessions = lock_sessions();
+    let sess = sessions.entry(SELF_AGENT_ID.to_string()).or_default();
+    let tid = match &sess.target_id {
+        Some(t) => {
+            // 确认 target 还活着，死了重找
+            match list_targets_raw(WEBVIEW_DEBUG_PORT) {
+                Ok(raw) => match raw.as_array().and_then(|a| a.iter().find(|tt| tt["id"].as_str() == Some(t.as_str()))) {
+                    Some(_) => t.clone(),
+                    None => find_webview_target()?,
+                },
+                Err(_) => find_webview_target()?,
+            }
+        }
+        None => find_webview_target()?,
+    };
+    sess.port = WEBVIEW_DEBUG_PORT;
+    sess.target_id = Some(tid.clone());
+    // 观察任务惰性重启
+    let need_start = match &sess.observer {
+        Some(o) => !o.alive.load(Ordering::SeqCst),
+        None => true,
+    };
+    if need_start {
+        sess.observer = Some(start_observer(WEBVIEW_DEBUG_PORT, &tid));
+    }
+    Ok((WEBVIEW_DEBUG_PORT, tid))
+}
+
+/// 事件观察句柄（查询用）——self 会话先惰性 attach。
+fn observer_of(agent_id: Option<&str>) -> Option<Observer> {
+    if is_self(agent_id) && ensure_self_attached().is_err() {
+        return None;
+    }
+    let mut sessions = lock_sessions();
+    sessions.entry(session_key(agent_id)).or_default().observer.clone()
+}
+
+/// 惰性重启事件观察（命令路径）——target 还在但观察任务死了就重开。
+fn ensure_observer(agent_id: Option<&str>) -> Option<Observer> {
+    if is_self(agent_id) && ensure_self_attached().is_err() {
+        return None;
+    }
+    let mut sessions = lock_sessions();
+    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let tid = sess.target_id.clone()?;
+    let need_start = match &sess.observer {
+        Some(o) => !o.alive.load(Ordering::SeqCst),
+        None => true,
+    };
+    if need_start && sess.port != 0 {
+        sess.observer = Some(start_observer(sess.port, &tid));
+    }
+    sess.observer.clone()
+}
+
+// ═══════════════════════════════════════════════════════════
+// WS 命令通道（短连接）
+// ═══════════════════════════════════════════════════════════
 
 fn require_target(agent_id: Option<&str>) -> Result<(u16, String), String> {
-    let mut sessions = lock_sessions();
+    let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(session_key(agent_id)).or_default();
     if sess.port == 0 {
         return Err("尚未 launch 浏览器".into());
@@ -316,7 +666,6 @@ fn require_target(agent_id: Option<&str>) -> Result<(u16, String), String> {
 /// 通过 CDP WebSocket 发送一条命令，返回响应 JSON（含 result）。
 async fn ws_command(port: u16, target_id: &str, method: &str, params: Value) -> Result<Value, String> {
     let fut = async {
-        // 1. 从 /json 拿该 target 的 webSocketDebuggerUrl
         let raw = list_targets_raw(port)?;
         let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
         let ws_url = arr
@@ -325,7 +674,6 @@ async fn ws_command(port: u16, target_id: &str, method: &str, params: Value) -> 
             .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
             .ok_or_else(|| format!("target {target_id} 已消失（页面可能被关闭）"))?;
 
-        // 2. 短连接：connect → send → 等匹配 id 的响应 → close
         let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
             .await
             .map_err(|e| format!("CDP WS 连接失败: {e}"))?;
@@ -356,7 +704,6 @@ async fn ws_command(port: u16, target_id: &str, method: &str, params: Value) -> 
                         }
                         return Ok(v);
                     }
-                    // 非匹配 id 的消息（事件）忽略
                 }
                 _ => {}
             }
@@ -367,11 +714,11 @@ async fn ws_command(port: u16, target_id: &str, method: &str, params: Value) -> 
         .map_err(|_| format!("CDP {method} 超时（{WS_TIMEOUT:?} 无响应）——页面主线程可能卡死"))?
 }
 
-/// Runtime.evaluate 的 CDP 层超时（毫秒）——表达式死循环在此上限内被打断。
-const EVAL_TIMEOUT_MS: u64 = 5000;
-
 /// 在 target 内执行 JS 表达式，返回 result.value（JSON 字符串或值）。
 async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Result<Value, String> {
+    if is_self(agent_id) {
+        ensure_self_attached()?;
+    }
     let (port, tid) = require_target(agent_id)?;
     let resp = ws_command(
         port,
@@ -385,7 +732,6 @@ async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Result<Value, S
         }),
     )
     .await?;
-    // 检查 exceptionDetails — 表达式抛错时 result 里只有 exception
     if let Some(exc) = resp["result"]["exceptionDetails"].as_object() {
         let text = exc
             .get("text")
@@ -396,7 +742,6 @@ async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Result<Value, S
             .and_then(|e| e.get("description"))
             .and_then(|d| d.as_str())
             .unwrap_or("");
-        // CDP 超时表现为 text=Timeout 的 exception——给出可行动的提示
         if text.to_lowercase().contains("timeout") {
             return Err(format!(
                 "页面内 JS 执行超时（{EVAL_TIMEOUT_MS}ms）——表达式可能死循环或页面主线程卡死"
@@ -408,12 +753,13 @@ async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Result<Value, S
 }
 
 // ═══════════════════════════════════════════════════════════
-// 探针 JS — 独立文件，include_str! 嵌入（单一来源，见 ADR 0003 D4/D7）
+// 探针 JS — 独立文件，include_str! 嵌入（单一来源，ADR 0003 D4/D7）
+// 语法由底部 #[cfg(test)] probes_are_valid_javascript 用 node --check 强制验证。
 // ═══════════════════════════════════════════════════════════
 
-/// 元素检查探针。返回 JSON 数组字符串。
-/// 语法由本文件底部的 #[cfg(test)] probes_are_valid_javascript 用 node --check 强制验证。
 const INSPECT_PROBE: &str = include_str!("cdp/probes/inspect.js");
+const REPORT_PROBE: &str = include_str!("cdp/probes/report.js");
+const SNAPSHOT_PROBE: &str = include_str!("cdp/probes/snapshot.js");
 
 pub(crate) async fn cdp_inspect(
     selector: &str,
@@ -433,7 +779,6 @@ pub(crate) async fn cdp_inspect(
     );
     let val = runtime_evaluate(&expr, agent_id).await?;
     let s = val.as_str().unwrap_or("[]").to_string();
-    // 截断保护：超 8k 字符截断并提示
     const MAX: usize = 8000;
     if s.len() > MAX {
         Ok(format!("{}...[已截断，共 {} 字符]", &s[..MAX], s.len()))
@@ -441,13 +786,6 @@ pub(crate) async fn cdp_inspect(
         Ok(s)
     }
 }
-
-// ═══════════════════════════════════════════════════════════
-// 视觉 lint 探针 — report（对比度/间距/对齐/层级/溢出）
-// ═══════════════════════════════════════════════════════════
-
-/// 视觉检查探针。返回 {issues: [...], ok: bool} JSON。
-const REPORT_PROBE: &str = include_str!("cdp/probes/report.js");
 
 pub(crate) async fn cdp_report(scope: Option<String>, agent_id: Option<&str>) -> Result<String, String> {
     let expr = format!(
@@ -460,31 +798,170 @@ pub(crate) async fn cdp_report(scope: Option<String>, agent_id: Option<&str>) ->
 }
 
 // ═══════════════════════════════════════════════════════════
-// 操作 — click / type / press / scroll
+// snapshot + ref — 可交互元素清单（ADR 0003 D2）
 // ═══════════════════════════════════════════════════════════
 
-/// 取元素中心点坐标（viewport 相对）。返回 {x, y, found, visible}。
-async fn element_center(selector: &str, agent_id: Option<&str>) -> Result<(f64, f64), String> {
+/// 页面快照：给可交互元素打 data-hg-ref 标记，返回 {refs:[{ref,tag,type,text,id}], count, truncated}。
+pub(crate) async fn cdp_snapshot(
+    scope: Option<String>,
+    max_results: Option<usize>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
     let expr = format!(
-        r#"(() => {{ const el = document.querySelector({sel}); if (!el) return null; const r = el.getBoundingClientRect(); return {{ x: r.x + r.width / 2, y: r.y + r.height / 2, visible: r.width > 0 && r.height > 0 }}; }})()"#,
-        sel = serde_json::to_string(selector).map_err(|e| e.to_string())?
+        "JSON.stringify(({})({}, {}))",
+        SNAPSHOT_PROBE,
+        serde_json::to_string(&scope.unwrap_or_default()).map_err(|e| e.to_string())?,
+        max_results.unwrap_or(80)
     );
     let val = runtime_evaluate(&expr, agent_id).await?;
-    if val.is_null() {
-        return Err(format!("click: selector 无匹配元素: {selector}"));
+    let s = val.as_str().unwrap_or("{\"refs\":[],\"count\":0}").to_string();
+    const MAX: usize = 8000;
+    if s.len() > MAX {
+        Ok(format!("{}...[已截断，共 {} 字符]", &s[..MAX], s.len()))
+    } else {
+        Ok(s)
     }
-    let x = val["x"].as_f64().ok_or("click: 无法读取 x")?;
-    let y = val["y"].as_f64().ok_or("click: 无法读取 y")?;
-    let visible = val["visible"].as_bool().unwrap_or(false);
-    if !visible {
-        return Err(format!("click: 元素不可见（可能被遮挡或隐藏）: {selector}。先 scroll 或换 selector"));
+}
+
+/// 把 ref（纯数字）转成 selector；非 ref 原样返回（CSS selector 高级用法）。
+fn ref_to_selector(target: &str) -> String {
+    let t = target.trim();
+    if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
+        format!("[data-hg-ref=\"{t}\"]")
+    } else if let Some(rest) = t.strip_prefix("ref:") {
+        format!("[data-hg-ref=\"{}\"]", rest.trim())
+    } else {
+        t.to_string()
     }
-    Ok((x, y))
+}
+
+// ═══════════════════════════════════════════════════════════
+// 事件查询 — console / network
+// ═══════════════════════════════════════════════════════════
+
+/// 读取事件缓冲的尾部 N 条，返回 JSON 数组字符串。
+fn read_buffer(buf: &VecDeque<String>, limit: usize) -> String {
+    let n = limit.min(buf.len());
+    let tail: Vec<&str> = buf
+        .iter()
+        .rev()
+        .take(n)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|s| s.as_str())
+        .collect();
+    format!("[{}]", tail.join(","))
+}
+
+/// 查询 console 事件（最新 N 条）。
+pub(crate) fn cdp_console(agent_id: Option<&str>, limit: Option<usize>) -> String {
+    let Some(obs) = ensure_observer(agent_id) else {
+        return json!({ "entries": [], "note": "未 attach target" }).to_string();
+    };
+    let bufs = crate::utils::lock_or_recover(&obs.buffers);
+    let s = read_buffer(&bufs.console, limit.unwrap_or(30));
+    format!("{{\"entries\":{s}}}")
+}
+
+/// 查询网络事件（最新 N 条）。
+pub(crate) fn cdp_network(agent_id: Option<&str>, limit: Option<usize>) -> String {
+    let Some(obs) = ensure_observer(agent_id) else {
+        return json!({ "entries": [], "note": "未 attach target" }).to_string();
+    };
+    let bufs = crate::utils::lock_or_recover(&obs.buffers);
+    let s = read_buffer(&bufs.network, limit.unwrap_or(30));
+    format!("{{\"entries\":{s}}}")
+}
+
+/// 当前错误缓冲条数（世界变化对比用）。
+fn error_count(agent_id: Option<&str>) -> usize {
+    let Some(obs) = observer_of(agent_id) else { return 0 };
+    let bufs = crate::utils::lock_or_recover(&obs.buffers);
+    bufs.errors.len()
+}
+
+// ═══════════════════════════════════════════════════════════
+// 操作 — actionability + 世界变化反馈
+// ═══════════════════════════════════════════════════════════
+
+/// 世界状态采样：URL / DOM 大小 / 错误数。
+async fn world_snapshot(agent_id: Option<&str>) -> Result<(String, usize, usize), String> {
+    let expr = "JSON.stringify({ u: location.href, d: document.body ? document.body.innerHTML.length : 0 })";
+    let val = runtime_evaluate(expr, agent_id).await?;
+    let u = val["u"].as_str().unwrap_or("").to_string();
+    let d = val["d"].as_u64().unwrap_or(0) as usize;
+    let e = error_count(agent_id);
+    Ok((u, d, e))
+}
+
+/// 操作后的世界变化摘要。无显著变化时返回 None。
+fn world_diff(
+    before: &(String, usize, usize),
+    after: &(String, usize, usize),
+) -> Option<String> {
+    let mut changes: Vec<String> = Vec::new();
+    if after.0 != before.0 {
+        changes.push(format!("URL 变化: {} → {}", before.0, after.0));
+    }
+    let dom_delta = (after.1 as i64) - (before.1 as i64);
+    if dom_delta.abs() > 100 {
+        changes.push(format!("DOM 大小变化: {dom_delta:+} 字符（{} → {}）", before.1, after.1));
+    }
+    if after.2 > before.2 {
+        changes.push(format!("新增 {} 条错误（用 browser(console) 查看）", after.2 - before.2));
+    }
+    if changes.is_empty() {
+        None
+    } else {
+        Some(changes.join("；"))
+    }
+}
+
+/// actionability 等待：元素存在、可见、中心点未被遮挡、位置稳定（两次采样差 <1px）。
+/// 返回元素中心点（viewport 相对）。超时返回带恢复指引的错误。
+async fn wait_actionable(target: &str, label: &str, agent_id: Option<&str>) -> Result<(f64, f64), String> {
+    let deadline = Instant::now() + ACTIONABILITY_TIMEOUT;
+    let mut last_center: Option<(f64, f64)> = None;
+    loop {
+        let expr = format!(
+            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return null; const r = el.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return {{ reason: 'invisible' }}; const x = r.x + r.width / 2, y = r.y + r.height / 2; const top = document.elementFromPoint(x, y); const hit = !top || el === top || el.contains(top); return {{ x, y, hit }}; }})()"#,
+            sel = serde_json::to_string(target).map_err(|e| e.to_string())?
+        );
+        let val = runtime_evaluate(&expr, agent_id).await?;
+        if val.is_null() {
+            return Err(format!(
+                "{label}: 目标不存在或已失效（{target}）——页面可能已变化，请重新 browser(snapshot)"
+            ));
+        }
+        if val["reason"].as_str().is_some() {
+            return Err(format!("{label}: 元素不可见（{target}）"));
+        }
+        let x = val["x"].as_f64().ok_or(format!("{label}: 无法读取坐标"))?;
+        let y = val["y"].as_f64().ok_or(format!("{label}: 无法读取坐标"))?;
+        if val["hit"].as_bool().unwrap_or(false) {
+            if let Some((px, py)) = last_center {
+                if (px - x).abs() < 1.0 && (py - y).abs() < 1.0 {
+                    return Ok((x, y));
+                }
+            }
+            last_center = Some((x, y));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "{label}: 等待可交互超时（{ACTIONABILITY_TIMEOUT:?}）——元素被遮挡或位置持续变化"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 /// 点击元素（中心点）。CDP Input.dispatchMouseEvent — 页面内派发，非 OS 级。
-pub(crate) async fn cdp_click(selector: &str, agent_id: Option<&str>) -> Result<String, String> {
-    let (x, y) = element_center(selector, agent_id).await?;
+/// 点击前等待可交互；点击后返回世界变化摘要。
+pub(crate) async fn cdp_click(target: &str, agent_id: Option<&str>) -> Result<String, String> {
+    let sel = ref_to_selector(target);
+    let before = world_snapshot(agent_id).await?;
+    let (x, y) = wait_actionable(&sel, "click", agent_id).await?;
     let (port, tid) = require_target(agent_id)?;
     let base = json!({ "x": x, "y": y, "button": "left", "clickCount": 1 });
     let mut pressed = base.clone();
@@ -493,22 +970,30 @@ pub(crate) async fn cdp_click(selector: &str, agent_id: Option<&str>) -> Result<
     released["type"] = json!("mouseReleased");
     ws_command(port, &tid, "Input.dispatchMouseEvent", pressed).await?;
     ws_command(port, &tid, "Input.dispatchMouseEvent", released).await?;
-    Ok(json!({ "clicked": selector, "x": x.round(), "y": y.round() }).to_string())
+    tokio::time::sleep(POST_ACTION_SETTLE).await;
+    let after = world_snapshot(agent_id).await?;
+    let change = world_diff(&before, &after).unwrap_or_else(|| "无显著变化".into());
+    audit_log(agent_id, "click", target, &change);
+    Ok(json!({ "clicked": target, "x": x.round(), "y": y.round(), "change": change }).to_string())
 }
 
 /// 输入文本（聚焦元素 + insertText）。中文/IME 友好。
 pub(crate) async fn cdp_type(
-    selector: &str,
+    target: &str,
     text: &str,
     agent_id: Option<&str>,
 ) -> Result<String, String> {
+    let sel = ref_to_selector(target);
+    let before = world_snapshot(agent_id).await?;
     let focus_expr = format!(
         r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; el.focus(); return true; }})()"#,
-        sel = serde_json::to_string(selector).map_err(|e| e.to_string())?
+        sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?
     );
     let ok = runtime_evaluate(&focus_expr, agent_id).await?;
     if !ok.as_bool().unwrap_or(false) {
-        return Err(format!("type: selector 无匹配元素: {selector}"));
+        return Err(format!(
+            "type: 目标不存在或已失效（{target}）——页面可能已变化，请重新 browser(snapshot)"
+        ));
     }
     let (port, tid) = require_target(agent_id)?;
     ws_command(
@@ -518,7 +1003,11 @@ pub(crate) async fn cdp_type(
         json!({ "text": text }),
     )
     .await?;
-    Ok(json!({ "typed": text.chars().take(50).collect::<String>() }).to_string())
+    tokio::time::sleep(POST_ACTION_SETTLE).await;
+    let after = world_snapshot(agent_id).await?;
+    let change = world_diff(&before, &after).unwrap_or_else(|| "无显著变化".into());
+    audit_log(agent_id, "type", target, &change);
+    Ok(json!({ "typed": text.chars().take(50).collect::<String>(), "change": change }).to_string())
 }
 
 /// 按键（Enter/Tab/Escape/Backspace/方向键/单字符）。
@@ -526,7 +1015,6 @@ pub(crate) async fn cdp_type(
 /// 不会产生字符（P0-6）。
 pub(crate) async fn cdp_press(key: &str, agent_id: Option<&str>) -> Result<String, String> {
     let (port, tid) = require_target(agent_id)?;
-    // CDP key 参数 — 常见键的映射（key_name, code, vk, text）
     let (key_name, code, vk, text): (&str, String, u32, Option<String>) = match key.to_lowercase().as_str() {
         "enter" => ("Enter", "Enter".into(), 13, None),
         "tab" => ("Tab", "Tab".into(), 9, None),
@@ -566,6 +1054,7 @@ pub(crate) async fn cdp_press(key: &str, agent_id: Option<&str>) -> Result<Strin
     }
     ws_command(port, &tid, "Input.dispatchKeyEvent", down).await?;
     ws_command(port, &tid, "Input.dispatchKeyEvent", up).await?;
+    audit_log(agent_id, "press", key, "ok");
     Ok(json!({ "pressed": key_name }).to_string())
 }
 
@@ -578,14 +1067,16 @@ pub(crate) async fn cdp_scroll(
     let (port, tid) = require_target(agent_id)?;
     if let Some(sel) = selector {
         if !sel.trim().is_empty() {
+            let sel = ref_to_selector(&sel);
             let expr = format!(
                 r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; el.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); return true; }})()"#,
                 sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?
             );
             let ok = runtime_evaluate(&expr, agent_id).await?;
             if !ok.as_bool().unwrap_or(false) {
-                return Err(format!("scroll: selector 无匹配元素: {sel}"));
+                return Err(format!("scroll: 目标不存在或已失效: {sel}（请重新 browser(snapshot)）"));
             }
+            audit_log(agent_id, "scroll", &sel, "element");
             return Ok(json!({ "scrolled": "element", "selector": sel }).to_string());
         }
     }
@@ -602,7 +1093,69 @@ pub(crate) async fn cdp_scroll(
         json!({ "type": "mouseWheel", "x": 400, "y": 400, "deltaX": 0, "deltaY": delta_y }),
     )
     .await?;
+    audit_log(agent_id, "scroll", &dir, "page");
     Ok(json!({ "scrolled": "page", "direction": dir }).to_string())
+}
+
+// ═══════════════════════════════════════════════════════════
+// 敏感操作判定（ADR 0003 D6 L3）— rpc 层据此触发单独 Ask
+// ═══════════════════════════════════════════════════════════
+
+/// 判定目标是否为敏感操作：type 到已填值输入框/password 框；click 提交按钮、
+/// 下载链接、或文本含高危动词的元素。判定失败（未 attach 等）静默放行——
+/// 后续操作本身会给出明确错误。
+pub(crate) async fn check_sensitive(target: &str, action: &str, agent_id: Option<&str>) -> bool {
+    let sel = ref_to_selector(target);
+    let sel_json = match serde_json::to_string(&sel) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let expr = match action {
+        "type" => format!(
+            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const t = (el.tagName || '').toLowerCase(); if (t === 'input' && el.type === 'password') return true; return (t === 'input' || t === 'textarea') && !!el.value; }})()"#,
+            sel = sel_json
+        ),
+        "click" => format!(
+            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const t = (el.tagName || '').toLowerCase(); const ty = (t === 'input' || t === 'button') ? (el.type || '').toLowerCase() : ''; if (ty === 'submit') return true; if (el.hasAttribute && el.hasAttribute('download')) return true; const text = (el.innerText || el.value || '').slice(0, 40); return /确认|提交|支付|转账|购买|删除|注销|退订|清空/.test(text); }})()"#,
+            sel = sel_json
+        ),
+        _ => return false,
+    };
+    runtime_evaluate(&expr, agent_id)
+        .await
+        .map(|v| v.as_bool().unwrap_or(false))
+        .unwrap_or(false)
+}
+
+// ═══════════════════════════════════════════════════════════
+// 截图（P2）— Page.captureScreenshot 落盘
+// ═══════════════════════════════════════════════════════════
+
+pub(crate) async fn cdp_screenshot(agent_id: Option<&str>) -> Result<String, String> {
+    let (port, tid) = require_target(agent_id)?;
+    let resp = ws_command(port, &tid, "Page.captureScreenshot", json!({ "format": "png" })).await?;
+    let data = resp["result"]["data"]
+        .as_str()
+        .ok_or("截图失败: 响应无 data（Page.captureScreenshot 未返回图片）")?;
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|e| format!("截图 base64 解码失败: {e}"))?;
+    let dir = std::env::temp_dir().join("hologram-browser-shots");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建截图目录失败: {e}"))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = dir.join(format!("shot-{ts}.png"));
+    std::fs::write(&path, bytes).map_err(|e| format!("写截图文件失败: {e}"))?;
+    audit_log(agent_id, "screenshot", &tid, "ok");
+    Ok(json!({
+        "path": path.to_string_lossy(),
+        "bytes": std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+        "note": "截图已落盘（纯文本模型看不到内容，可交给用户确认；vision 模型可读路径）",
+    })
+    .to_string())
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -611,7 +1164,7 @@ pub(crate) async fn cdp_scroll(
 
 /// eval 静态白名单：禁止网络外联、存储写入、弹窗等。
 /// 注：静态字符串匹配是纵深防御而非安全边界（eval 本身走权限 Ask），
-/// 动态方法名等写法可绕过——P2 前措辞保持"基础拦截"。
+/// 动态方法名等写法可绕过。
 fn check_eval_expr(expr: &str) -> Result<(), String> {
     let lower = expr.to_lowercase();
     let banned: &[(&str, &str)] = &[
@@ -657,17 +1210,29 @@ pub(crate) async fn cdp_eval(expr: &str, agent_id: Option<&str>) -> Result<Strin
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// 状态
+// ═══════════════════════════════════════════════════════════
+
 /// 当前会话状态（供 UI 显示）。
 pub(crate) fn cdp_status(agent_id: Option<&str>) -> String {
-    let mut sessions = lock_sessions();
+    let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(session_key(agent_id)).or_default();
     json!({
         "port": sess.port,
         "attached": sess.target_id.is_some(),
         "chromeRunning": sess.chrome_child.is_some(),
+        "observerAlive": sess.observer.as_ref().map(|o| o.alive.load(Ordering::SeqCst)).unwrap_or(false),
     })
     .to_string()
 }
+
+// ═══════════════════════════════════════════════════════════
+// self 只读动作 — 惰性 attach 自家 webview（首次读操作触发）
+// ═══════════════════════════════════════════════════════════
+// rpc 层 self=true 时以 SELF_AGENT_ID 路由进来；runtime_evaluate /
+// observer_of / ensure_observer 在需要时惰性 attach，无需显式 attach 命令。
+
 
 // ═══════════════════════════════════════════════════════════
 // 测试
@@ -675,13 +1240,12 @@ pub(crate) fn cdp_status(agent_id: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{INSPECT_PROBE, REPORT_PROBE};
+    use super::{INSPECT_PROBE, REPORT_PROBE, SNAPSHOT_PROBE};
 
     /// 探针语法验证（P0-4）：探针是注入页面的 JS，语法错误要运行时才发现。
     /// 此处用 node --check 强制验证——改坏探针 cargo test 必红。
     /// node 不可用（纯 Rust 环境）时跳过，不视为失败。
     fn assert_valid_js(probe: &str, name: &str) {
-        // 探针是箭头函数表达式，包成表达式语句后 node --check 可验证
         let js = format!("({probe});\n");
         let dir = std::env::temp_dir().join("hologram-probe-syntax");
         let _ = std::fs::create_dir_all(&dir);
@@ -701,6 +1265,7 @@ mod tests {
     fn probes_are_valid_javascript() {
         assert_valid_js(INSPECT_PROBE, "inspect");
         assert_valid_js(REPORT_PROBE, "report");
+        assert_valid_js(SNAPSHOT_PROBE, "snapshot");
     }
 
     #[test]
@@ -709,5 +1274,26 @@ mod tests {
         assert_eq!(super::session_key(Some("")), "default");
         assert_eq!(super::session_key(Some("  ")), "default");
         assert_eq!(super::session_key(Some("agent-7")), "agent-7");
+    }
+
+    #[test]
+    fn ref_to_selector_handles_ref_and_selector() {
+        assert_eq!(super::ref_to_selector("37"), "[data-hg-ref=\"37\"]");
+        assert_eq!(super::ref_to_selector("ref:5"), "[data-hg-ref=\"5\"]");
+        assert_eq!(super::ref_to_selector(".btn-primary"), ".btn-primary");
+        assert_eq!(super::ref_to_selector("#submit"), "#submit");
+        assert_eq!(super::ref_to_selector(""), "");
+    }
+
+    #[test]
+    fn world_diff_reports_changes() {
+        let before = ("http://a/".to_string(), 1000, 0);
+        let same = ("http://a/".to_string(), 1050, 0);
+        let moved = ("http://b/".to_string(), 2000, 3);
+        assert_eq!(super::world_diff(&before, &same), None);
+        let d = super::world_diff(&before, &moved).unwrap();
+        assert!(d.contains("URL 变化"), "应报 URL 变化: {d}");
+        assert!(d.contains("DOM 大小变化"), "应报 DOM 变化: {d}");
+        assert!(d.contains("3 条错误"), "应报新增错误: {d}");
     }
 }

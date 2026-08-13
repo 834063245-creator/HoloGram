@@ -17,7 +17,6 @@ import { useAgentPanelStore } from './agent-panel-store';
 import { rebuildMessagesFromMessages } from './chat-session';
 import { getChatStore, msgStoreFor } from './chat-store';
 import { bus } from './events';
-import { defaultDomProbe } from './dom-probe';
 import type { AssistantMessage, SubAgentPart } from './message-model';
 import { createSubAgentSink } from './subagent-sink';
 
@@ -184,8 +183,6 @@ export function createBuilderDeps(storeId: string): import('../agent/runtime/age
     onDataflowSaved: () => {
       bus.emit('dataflow:saved');
     },
-    // browser 工具的 self 探针 — 浏览器 API 只能在 UI 层，注入给 agent 层
-    domProbe: defaultDomProbe,
     // diagnosticsSource 和 shellStream 单独接线
     // （它们需要属于 UI 层的 Tauri 特定 import）
   };
