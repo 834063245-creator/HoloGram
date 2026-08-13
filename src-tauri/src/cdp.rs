@@ -14,7 +14,10 @@
 //     ref 失效返回可恢复错误。selector 保留为高级参数。
 //   - 操作反馈：操作前做 actionability 等待（可见/无遮挡/位置稳定），
 //     操作后返回世界变化（URL / DOM 大小 / 新增错误数）。
-//   - 会话按 agent 键控 + 空闲租约 10 分钟自动回收 + Chrome 崩溃检测。
+//   - 会话按 agent 键控 + 空闲租约自动回收（默认 10 分钟，
+//     HOLOGRAM_BROWSER_LEASE_SECS 可调，便于实测）+ Chrome 崩溃检测。
+//   - profile 按端口隔离（hologram-browser-profile-<port>），随会话回收
+//     一并删除；launch 时清扫上次进程强杀遗留的目录。
 //   - self 会话：HoloGram 自家 webview 调试端口（9222）上的只读会话，
 //     Agent 自查渲染结果走这里；操作类动作在 rpc 层被拒。
 //   - 审计：全部写操作落盘（临时目录 jsonl），browser(audit) 可查。
@@ -53,8 +56,58 @@ const ACTIONABILITY_TIMEOUT: Duration = Duration::from_secs(5);
 /// 操作后等待世界稳定再采样的时间。
 const POST_ACTION_SETTLE: Duration = Duration::from_millis(300);
 
-/// 会话空闲租约——超时自动 kill 受控 Chrome 并回收会话。
-const SESSION_LEASE: Duration = Duration::from_secs(600);
+/// 会话空闲租约（默认值）——超时自动 kill 受控 Chrome 并回收会话。
+const DEFAULT_SESSION_LEASE: Duration = Duration::from_secs(600);
+
+/// 会话空闲租约。默认 10 分钟；HOLOGRAM_BROWSER_LEASE_SECS（秒，≥1）可覆盖，
+/// 让租约回收实测不必干等。
+fn session_lease() -> Duration {
+    std::env::var("HOLOGRAM_BROWSER_LEASE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&s| s >= 1)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_SESSION_LEASE)
+}
+
+/// 受控 Chrome profile 目录名前缀（临时目录下）。按端口分目录，
+/// 杜绝多 Agent 共用同一 user-data-dir 导致 Chrome 实例委托、端口失效。
+const PROFILE_DIR_PREFIX: &str = "hologram-browser-profile";
+
+/// 指定端口的 profile 目录。
+fn profile_dir_for(port: u16) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("{PROFILE_DIR_PREFIX}-{port}"))
+}
+
+/// 尽力删除 profile 目录（Chrome 残留句柄可能致失败——静默，清理是尽力而为）。
+fn remove_profile_dir(dir: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// 清扫遗留 profile 目录：只动本套件前缀的目录，跳过仍被存活会话引用的。
+/// 在 sessions 锁内调用（调用方已持锁），登记新目录必须先于 spawn（见 cdp_launch），
+/// 否则并发 launch 可能互删对方正在使用的目录。
+fn sweep_stale_profiles(sessions: &HashMap<String, CdpSession>) {
+    let live: Vec<&std::path::PathBuf> = sessions
+        .values()
+        .filter_map(|s| s.profile_dir.as_ref())
+        .collect();
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let is_ours = name == PROFILE_DIR_PREFIX
+            || name.starts_with(&format!("{PROFILE_DIR_PREFIX}-"));
+        if !is_ours || !path.is_dir() || live.iter().any(|l| **l == path) {
+            continue;
+        }
+        remove_profile_dir(&path);
+    }
+}
 
 /// 事件缓冲上限（条）。
 const CONSOLE_BUF_MAX: usize = 200;
@@ -230,6 +283,8 @@ pub(crate) struct CdpSession {
     pub target_id: Option<String>,
     /// launch 启动的受控 Chrome 子进程（用于 kill）
     pub chrome_child: Option<std::process::Child>,
+    /// 该 Chrome 的 profile 目录（随 Chrome 终止一并删除）
+    profile_dir: Option<std::path::PathBuf>,
     /// 事件观察（attach 时启动；self 会话在首次 attach 时启动）
     observer: Option<Observer>,
     /// 最近一次活动时间（租约依据）
@@ -242,6 +297,7 @@ impl Default for CdpSession {
             port: 0,
             target_id: None,
             chrome_child: None,
+            profile_dir: None,
             observer: None,
             last_active: Instant::now(),
         }
@@ -264,19 +320,27 @@ fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>
 
 /// 租约回收 + 崩溃检测：空闲超时的会话 kill 掉 Chrome 并移除；
 /// Chrome 已退出的会话清掉进程句柄（target/observer 保留，attach 可重来）。
+/// profile 目录随 Chrome 终止一并删除。
 fn enforce_lease() {
     let mut sessions = lock_sessions();
     let mut expired: Vec<String> = Vec::new();
     for (key, sess) in sessions.iter_mut() {
         if let Some(child) = &mut sess.chrome_child {
             if let Ok(Some(_)) = child.try_wait() {
-                sess.chrome_child = None; // Chrome 已自行退出
+                // Chrome 已自行退出
+                sess.chrome_child = None;
+                if let Some(dir) = sess.profile_dir.take() {
+                    remove_profile_dir(&dir);
+                }
             }
         }
-        if sess.chrome_child.is_some() && sess.last_active.elapsed() > SESSION_LEASE {
+        if sess.chrome_child.is_some() && sess.last_active.elapsed() > session_lease() {
             if let Some(mut child) = sess.chrome_child.take() {
                 let _ = child.kill();
                 let _ = child.wait();
+            }
+            if let Some(dir) = sess.profile_dir.take() {
+                remove_profile_dir(&dir);
             }
             expired.push(key.clone());
         }
@@ -430,29 +494,14 @@ pub(crate) async fn cdp_launch(
     };
 
     let chrome = find_chrome().ok_or("未找到 Chrome/Edge。可设置环境变量 HOLOGRAM_CHROME 指定路径")?;
-    // 独立 profile — 绝不污染用户日常 Chrome 的 cookie/登录态
-    let profile_dir = std::env::temp_dir().join("hologram-browser-profile");
-
-    let mut cmd = std::process::Command::new(&chrome);
-    cmd.arg(format!("--remote-debugging-port={port}"))
-        .arg(format!("--user-data-dir={}", profile_dir.to_string_lossy()))
-        .arg("--no-first-run")
-        .arg("--no-default-browser-check")
-        .arg("--disable-features=TranslateUI");
-    if let Some(u) = url {
-        if !u.is_empty() {
-            cmd.arg(&u);
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(crate::utils::NO_WINDOW);
-    }
-    let child = cmd.spawn().map_err(|e| format!("启动 Chrome 失败: {e}"))?;
+    // 独立 profile（按端口隔离）— 绝不污染用户日常 Chrome 的 cookie/登录态
+    let profile_dir = profile_dir_for(port);
 
     {
         let mut sessions = session_mut(agent_id);
+        // 先清扫遗留 profile 再登记本会话目录：目录登记先于 spawn，
+        // 并发 launch 的清扫会跳过它，不会互删正在使用的目录。
+        sweep_stale_profiles(&sessions);
         let sess = sessions.entry(session_key(agent_id)).or_default();
         // 走到这里说明旧 Chrome 已退出或显式指定了不同端口——
         // 无论哪种，回收旧句柄并 kill 残留进程，避免双开。
@@ -463,7 +512,29 @@ pub(crate) async fn cdp_launch(
                 let _ = old.wait();
             }
         }
+        if let Some(old_dir) = sess.profile_dir.take() {
+            remove_profile_dir(&old_dir);
+        }
         sess.port = port;
+        sess.profile_dir = Some(profile_dir.clone());
+
+        let mut cmd = std::process::Command::new(&chrome);
+        cmd.arg(format!("--remote-debugging-port={port}"))
+            .arg(format!("--user-data-dir={}", profile_dir.to_string_lossy()))
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .arg("--disable-features=TranslateUI");
+        if let Some(u) = url {
+            if !u.is_empty() {
+                cmd.arg(&u);
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(crate::utils::NO_WINDOW);
+        }
+        let child = cmd.spawn().map_err(|e| format!("启动 Chrome 失败: {e}"))?;
         sess.chrome_child = Some(child);
     }
 
@@ -481,6 +552,9 @@ pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
         let _ = child.wait();
         sess.target_id = None;
         sess.observer = None;
+        if let Some(dir) = sess.profile_dir.take() {
+            remove_profile_dir(&dir);
+        }
         audit_log(agent_id, "kill", "", "ok");
         Ok("受控 Chrome 已终止".into())
     } else {
@@ -1240,7 +1314,7 @@ pub(crate) fn cdp_status(agent_id: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{INSPECT_PROBE, REPORT_PROBE, SNAPSHOT_PROBE};
+    use super::*;
 
     /// 探针语法验证（P0-4）：探针是注入页面的 JS，语法错误要运行时才发现。
     /// 此处用 node --check 强制验证——改坏探针 cargo test 必红。
@@ -1295,5 +1369,62 @@ mod tests {
         assert!(d.contains("URL 变化"), "应报 URL 变化: {d}");
         assert!(d.contains("DOM 大小变化"), "应报 DOM 变化: {d}");
         assert!(d.contains("3 条错误"), "应报新增错误: {d}");
+    }
+
+    /// 租约回收 + profile 清理（遗留项实测的代码侧）：空闲超时 → kill 子进程、
+    /// 移除会话、删除 profile 目录。用真实哑进程验证 kill 链路，不依赖 Chrome。
+    #[test]
+    fn lease_expiry_kills_child_and_cleans_profile() {
+        // 哑进程：长时间存活（Windows 用 ping 循环，其他平台 sleep）
+        let mut cmd = std::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" });
+        if cfg!(windows) {
+            cmd.args(["/C", "ping", "-n", "1000", "127.0.0.1"]);
+        } else {
+            cmd.args(["-c", "sleep 1000"]);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(crate::utils::NO_WINDOW);
+        }
+        let child = cmd.spawn().expect("spawn 哑进程");
+
+        let key = "lease-test-agent";
+        let dir = std::env::temp_dir().join("hologram-browser-profile-99997");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("stale.txt"), "stale").ok();
+
+        {
+            let mut sessions = lock_sessions();
+            sessions.insert(
+                key.to_string(),
+                CdpSession {
+                    port: 9999,
+                    target_id: None,
+                    chrome_child: Some(child),
+                    profile_dir: Some(dir.clone()),
+                    observer: None,
+                    // 活跃时间放到租约之外，强制命中回收分支
+                    last_active: Instant::now() - session_lease() - Duration::from_secs(5),
+                },
+            );
+        }
+
+        enforce_lease();
+
+        {
+            let sessions = lock_sessions();
+            assert!(!sessions.contains_key(key), "租约到期会话应被移除");
+        }
+        assert!(!dir.exists(), "profile 目录应随会话回收一并删除");
+    }
+
+    /// 审计回放（遗留项实测的代码侧）：写入 → 查询可见，内存环形路径闭环。
+    #[test]
+    fn audit_roundtrip() {
+        let marker = format!("audit-test-{}", std::process::id());
+        audit_log(Some("tester"), "eval", "1+1", &marker);
+        let out = cdp_audit(Some(50));
+        assert!(out.contains(&marker), "审计查询应包含刚写入的条目: {out}");
     }
 }
