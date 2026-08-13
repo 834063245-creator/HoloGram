@@ -657,9 +657,15 @@ Get-CimInstance Win32_Process | ForEach-Object {
     "{0}|{1}|{2}" -f $_.Name, $Matches[1], $_.ProcessId
   }
 }"#;
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", script])
-        .output()
+    let mut ps = std::process::Command::new("powershell");
+    ps.args(["-NoProfile", "-Command", script]);
+    // 静默后台运行：不弹 PowerShell 窗口（discover 每次调用都会闪控制台）
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        ps.creation_flags(crate::utils::NO_WINDOW);
+    }
+    let out = ps.output()
         .map_err(|e| format!("discover: 查询进程表失败: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
 

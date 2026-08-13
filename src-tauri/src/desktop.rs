@@ -177,9 +177,15 @@ try {
 fn run_ps(script_body: &str) -> Result<String, String> {
     let script = format!("$ErrorActionPreference='SilentlyContinue'
 {script_body}");
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script])
-        .output()
+    let mut ps = std::process::Command::new("powershell");
+    ps.args(["-NoProfile", "-Command", &script]);
+    // 静默后台运行：不弹 PowerShell 窗口（windows 上隐含控制台会闪烁）
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        ps.creation_flags(crate::utils::NO_WINDOW);
+    }
+    let out = ps.output()
         .map_err(|e| format!("desktop probe: 执行 PowerShell 失败: {e}"))?;
     if !out.status.success() {
         return Err(format!("desktop probe: PowerShell 退出码 {}", out.status));
