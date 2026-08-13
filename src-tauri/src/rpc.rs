@@ -37,10 +37,14 @@ fn opt_u64(params: &Value, name: &str) -> Option<u64> {
 fn opt_usize(params: &Value, name: &str) -> Option<usize> {
     params.get(name).and_then(|v| v.as_u64()).map(|n| n as usize)
 }
-/// browser 命令的 agent 路由：target=self 走自家 webview 只读会话，
+/// browser 命令的 agent 路由：target="self"（或 self=true）走自家 webview 只读会话，
 /// 否则走各 Agent 自己的 CDP 会话（无 _agent_id 共用 default）。
+/// 修复：前端领域工具传的是 target="self" 字符串，旧实现只认 self 布尔参数——
+/// self 路由自 D4 落地起从未生效（静默失效，所有 self 读操作报"尚未 launch 浏览器"）。
 fn self_or_agent(params: &Value) -> Option<String> {
-    if opt_bool(params, "self").unwrap_or(false) {
+    let is_self = opt_bool(params, "self").unwrap_or(false)
+        || params.get("target").and_then(|v| v.as_str()) == Some("self");
+    if is_self {
         Some(crate::cdp::SELF_AGENT_ID.to_string())
     } else {
         opt_str(params, "_agent_id")
@@ -937,5 +941,33 @@ pub(crate) async fn rpc(
         }
 
         _ => Err(format!("rpc: unknown method '{}'", method)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::self_or_agent;
+    use serde_json::json;
+
+    /// self 路由契约锁定：前端领域工具传 target="self" 字符串，
+    /// 旧实现只认 self 布尔参数曾导致 self 通道全程静默失效。
+    #[test]
+    fn self_routing_accepts_target_string() {
+        // 前端实际传参形态（browser.ts runBrowserAction 直通 args）
+        let p = json!({ "target": "self", "scope": "body" });
+        assert_eq!(
+            self_or_agent(&p).as_deref(),
+            Some(crate::cdp::SELF_AGENT_ID),
+            "target=\"self\" 必须路由到 self 会话"
+        );
+        // 布尔 self 兼容旧调用方
+        let p2 = json!({ "self": true });
+        assert_eq!(self_or_agent(&p2).as_deref(), Some(crate::cdp::SELF_AGENT_ID));
+        // 普通参数不受 target 影响
+        let p3 = json!({ "target": "9223" });
+        assert_eq!(self_or_agent(&p3), None);
+        // _agent_id 直通
+        let p4 = json!({ "_agent_id": "agent-7" });
+        assert_eq!(self_or_agent(&p4).as_deref(), Some("agent-7"));
     }
 }
