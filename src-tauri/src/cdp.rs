@@ -88,6 +88,12 @@ fn remove_profile_dir(dir: &std::path::Path) {
 /// 在 sessions 锁内调用（调用方已持锁），登记新目录必须先于 spawn（见 cdp_launch），
 /// 否则并发 launch 可能互删对方正在使用的目录。
 fn sweep_stale_profiles(sessions: &HashMap<String, CdpSession>) {
+    // 测试进程与正在运行的 app 共享同一临时目录：app 的 SESSIONS 在它自己的
+    // 进程里，这里看不到——若照常清扫会把 app 仍在使用的受控 Chrome profile
+    // 误删（活体损坏）。e2e 只测 kill 路径的定向删除，不做全量清扫。
+    if cfg!(test) {
+        return;
+    }
     let live: Vec<&std::path::PathBuf> = sessions
         .values()
         .filter_map(|s| s.profile_dir.as_ref())
@@ -1295,6 +1301,10 @@ pub(crate) async fn cdp_click(target: &str, agent_id: Option<&str>) -> Result<St
     let before = world_snapshot(agent_id).await?;
     let (x, y) = wait_actionable(&sel, "click", agent_id).await?;
     let (port, tid) = require_target(agent_id)?;
+    // 激活窗口再派发：Chrome 冷启动期渲染进程未激活，CDP 合成输入事件
+    // 会被吞（e2e 实测：启动后 ~18s 内点击不触发导航，bringToFront 后立即生效）。
+    // 对用户自己的浏览器也符合预期——Agent 操作时页面到前台。
+    let _ = ws_command(port, &tid, "Page.bringToFront", json!({})).await;
     let base = json!({ "x": x, "y": y, "button": "left", "clickCount": 1 });
     let mut pressed = base.clone();
     pressed["type"] = json!("mousePressed");
@@ -1840,3 +1850,7 @@ mod tests {
         assert!(!out2.contains(&marker), "agent 过滤应排除他人条目: {out2}");
     }
 }
+
+// 真实 Chrome 端到端测试（无 Chrome 自动跳过，覆盖 connect/launch 全链路）。
+#[cfg(test)]
+mod e2e;
