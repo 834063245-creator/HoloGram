@@ -106,7 +106,7 @@
 | profile 目录定期清理 | ✅ 已补：按端口隔离 + 随会话回收删除 + launch 清扫遗留目录 |
 | 租约/审计实测 | 代码侧已覆盖（单测：租约 kill/清理链路、审计写入回读）；真实运行时租约触发待实测（设 `HOLOGRAM_BROWSER_LEASE_SECS` 短租约即可验证，不必干等 10 分钟） |
 | UI 侧审计展示 | 数据已有（`browser(audit)` / jsonl），UI 集成属交互形态工作 |
-| 端到端冒烟 | ✅ 已实测（2026-08-13，connect 链路）：自启调试端口 Chrome（9333）→ connect → targets → attach → snapshot → click(ref) → kill 全链路通过，审计 4 条完整。**发现并修复一个真 bug**：click 后固定 300ms 采样落在旧文档上下文，导航类点击世界反馈漏报"无显著变化"——补 `wait_nav_settle` 轮询（URL 变/DOM 变/2s 兜底，SPA 无导航点击不付超时）。kill 语义验证：外部连接 kill 后 Chrome 进程全部存活、端口照常应答 |
+| 端到端冒烟 | ✅ 已实测（2026-08-13，connect 链路）：自启调试端口 Chrome（9333）→ connect → targets → attach → snapshot → click(ref) → kill 全链路通过，审计 4 条完整。**发现并修复两个真 bug**：①click 后固定 300ms 采样落在旧文档上下文，导航类点击世界反馈漏报"无显著变化"——补 `wait_nav_settle` 轮询（URL 变/DOM 变/2s 兜底，SPA 无导航点击不付超时）；②（更深层）world_snapshot 的 evaluate 表达式 `JSON.stringify(...)` 遇 `returnByValue` 返回字符串，`val["u"]` 永远取 Null——URL/DOM 检测自 b4dd1f5 落地起就从未工作过，每次操作都报"无显著变化"。改直接返回对象 + `parse_world_value` 契约单测锁定（`e1679a0`）。修复后实测 click 正确报"URL 变化: example.com → iana.org；DOM 大小变化: +5730 字符"。kill 语义验证：外部连接 kill 后 Chrome 进程全部存活、端口照常应答 |
 
 ## 7. connect 增量（2026-08-13 增补，`b988f87d` + `af075af`）
 
@@ -114,3 +114,22 @@
 落地为 `browser(connect, port)` 动作：端口由用户提供（不做扫描发现），
 会话无 chrome_child——kill 只断开、租约只断连、9222 硬拒；
 rpc 层 Ask 文案明示真实登录态风险。端到端验证见 §6。
+
+## 8. 第二验证批次（2026-08-14，`e581ae7c`…`14aea446`）
+
+7 个 commit，全部经端到端实测（2026-08-14 同日验证）：
+
+| Commit | 内容 | 实测结论 |
+|---|---|---|
+| `98411bb0` | LSP 启动改用 CREATE_NO_WINDOW（修启动时三个 cmd 窗口弹出） | 代码审查通过 |
+| `e1679a0f` | 世界快照静默失效根因修复 + 契约单测 | ✅ click 世界反馈实测正确（见 §6） |
+| `e581ae7c` | probe 返回值契约显式锁死 | 单测覆盖 |
+| `b7dd2d08` | A4 观察任务竞态：事件缓冲跨重启保留 + 在途启动闸防孤儿任务 | 单测覆盖 |
+| `6b2bf906` | B1 desktop_probe 只读桌面快照（进程/窗口/可见控制台窗口） | ✅ 实测：260 进程全列、pid/ppid 齐全、is_chromium 标记生效、命令行不回显（隐私保护按设计）、长输出自动截断 |
+| `fffd554f` | B2 desktop_screenshot 全屏截图（高隐私面强制 Ask） | ✅ 实测：落盘 `D:\tmp\hologram-browser-shots\`，bytes 与磁盘大小一致，用户人工确认画面正常 |
+| `14aea446` | B3 browser_wait 显式等待 + B4 snapshot 分页 | ✅ 实测：wait(800) 正常返回；snapshot 的 offset/total/truncated 字段齐全，maxResults=3 生效 |
+
+**验证过程中额外发现**：desktop_probe 显示的 7 个 conhost 均属 Razer 外设服务
+（RzAppManager 等）派生，非 HoloGram 泄漏——此前 CPU 排查时的 conhost 疑团归因到第三方服务。
+
+**遗留**：UI 侧审计展示（唯一未做的交互设计题，见 §6）。
