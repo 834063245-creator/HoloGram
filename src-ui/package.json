@@ -22,7 +22,7 @@
     "@fontsource/noto-serif-sc": "^5.2.9",
     "@tanstack/react-virtual": "^3.14.8",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@types/three": "^0.185.1",
     "gpt-tokenizer": "^3.4.0",
