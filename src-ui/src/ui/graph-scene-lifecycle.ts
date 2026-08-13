@@ -158,6 +158,8 @@ export class GraphSceneLifecycle {
   private _idleCounter = 0;
   private _lastCamPos = new THREE.Vector3();
   private _lastCamTarget = new THREE.Vector3();
+  private _lastMouseX = -999;
+  private _lastMouseY = -999;
 
   constructor(private host: LifecycleHost) {}
 
@@ -946,10 +948,15 @@ export class GraphSceneLifecycle {
     const camMoved =
       this.host.camera.position.distanceToSquared(this._lastCamPos) > 0.0001 ||
       this.host.controls.target.distanceToSquared(this._lastCamTarget) > 0.0001;
-    const mouseOnCanvas = this.host.mouse.x > -999;
+    // ponytail: 鼠标"悬停在画布上"不算活动，坐标有变化才算。
+    // 旧逻辑 mouse.x > -999 只在 pointerleave 时重置——指针静置画布
+    // 会永远满帧渲染，GPU 空转烧核（CPU 100% 根因之一）。
+    const mouseMoved =
+      Math.abs(this.host.mouse.x - this._lastMouseX) > 1e-4 ||
+      Math.abs(this.host.mouse.y - this._lastMouseY) > 1e-4;
     const isActive =
       camMoved ||
-      mouseOnCanvas ||
+      mouseMoved ||
       this.host.hoveredIdx >= 0 ||
       this.host.focusActive ||
       this.host.focusProgress > 0 ||
@@ -961,7 +968,20 @@ export class GraphSceneLifecycle {
     }
     this._lastCamPos.copy(this.host.camera.position);
     this._lastCamTarget.copy(this.host.controls.target);
-    const IDLE = this._idleCounter > 60; // 约 1 秒无活动
+    this._lastMouseX = this.host.mouse.x;
+    this._lastMouseY = this.host.mouse.y;
+    const IDLE = this._idleCounter > 60; // 约 2 秒无活动（30fps tick）
+
+    // ── 按需渲染（CPU 根治）：完全静止时降频到 ~5fps ──
+    // 空闲场景每 6 tick 渲染一次。shader 闪烁/呼吸按真实时间驱动（uTime），
+    // 低频采样肉眼无感；GPU 全屏合成负载降约 6x，不再空转。
+    // 任何交互（相机/鼠标移动/悬停/聚焦/爆炸模式）→ _idleCounter 归零 →
+    // 立即恢复 30fps。页面隐藏已由浏览器节流 rAF，document.hidden 兜底。
+    if (document.hidden) return;
+    if (IDLE && this._idleCounter % 6 !== 0) return;
+
+    // 动画时钟按真实 tick 推进——渲染降频不影响相位（呼吸/脉冲速度恒定）
+    this.host.pulseTime += 0.03 * (isFull ? 1.5 : 1);
 
     if (!IDLE || this._idleCounter % 4 === 0) {
       try {
@@ -1030,8 +1050,6 @@ export class GraphSceneLifecycle {
         }
       }
     }
-
-    this.host.pulseTime += 0.03 * (isFull ? 1.5 : 1);
 
     if (!IDLE || this._idleCounter % 3 === 0) {
       // ponytail: 无数据时跳过，animation loop 早于 render 执行
