@@ -162,13 +162,34 @@ impl Engine {
         }
     }
 
-    /// 停止文件 watcher。等待 watcher 线程退出后再返回
-    /// （非盲目休眠 — 线程通过 JoinHandle 信号通知完成）。
+    /// 停止文件 watcher。轮询最多 2s 等待线程退出，超时则分离
+    /// （丢弃 JoinHandle — 线程会在下次检查 `running` 时自行退出）。
+    ///
+    /// 不得裸 `join()`：调用方可能正持有全局 `ENGINE` 写锁
+    /// （`engine_init` 的工作区切换路径），而 watcher 线程退出前需要
+    /// `ENGINE.read()`（`handle_watcher_changes`）——裸 join 在此构成
+    /// 「写锁等 join → join 等线程 → 线程等读锁 → 读锁等写锁」的
+    /// 永久死锁，并把全局引擎锁一起拖死（所有 `ENGINE.read()` 调用方
+    /// 永久阻塞，如 edit_file 写盘后的 timeline 记录）。
+    /// 2s 轮询先例见 src-tauri `WorkspaceHandle::deactivate`。
     pub fn stop_watcher(&self) {
         self.watcher_running.store(false, Ordering::SeqCst);
         if let Ok(mut guard) = self.watcher_handle.lock() {
             if let Some(handle) = guard.take() {
-                let _ = handle.join();
+                // watcher 每 500ms 轮询一次 running 标志，2s 足够正常退出。
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                loop {
+                    if handle.is_finished() {
+                        let _ = handle.join();
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        // 分离：ENGINE 写锁释放后线程的 read 会解除阻塞，
+                        // 完成当前一轮后在循环顶部看到 running == false 退出。
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
         }
     }

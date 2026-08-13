@@ -178,6 +178,7 @@ HEAD 一直携带旧 `.ts` 文件（其中 import 已删除的 marked/dompurify�
 - **并发 merge 假冲突**：`agent_merge` 串行化。
 - **所有权键未归一**：`D:\p\a.ts` vs `D:/p/a.ts` 双双 claim 成功 → 斜杠归一。
 - **merge.ts 冲突后 diff 重抓返回值被丢弃** → 写回 board。
+- **edit_file 偶发挂死**（2026-08-13 深夜定位，症状：文件已写、卡片已渲染、工具永远「执行中」、全会话挂起）→ 根因为引擎全局锁死锁环：`engine_init` 持 `ENGINE.write()` 经工作区切换调 `stop_watcher()` 裸 `join()`，而 watcher 线程需 `ENGINE.read()` 才能退出（watcher.rs handle_watcher_changes）——写锁等 join、join 等线程、线程等读锁，三方互等永久死锁；此后 edit_file 写盘后的 timeline 记录（ENGINE.read()）永久阻塞。修复：`stop_watcher()` 改 2s 轮询 + 超时分离（先例 `WorkspaceHandle::deactivate`）；`editor.rs` 写后副作用（timeline + changed_files）提取为 `record_edit_side_effects`，先克隆 Arc 释放 WorkspaceState 锁再调引擎（消除「单工具挂起 → 全会话死亡」放大器）。回归测试 `test_workspace_switch_no_deadlock_when_watcher_blocked_on_read`（engine/src/engine/mod.rs）。
 
 已知残留（未修，记录在案）：
 - 会话重启/恢复后父子失配：board 条目 parentAgentId 是旧父 id + Rust isolation 注册表在内存 → 重启后 worktree 变孤儿，merge 永远「没有活跃的隔离环境」。需要注册表持久化/按目录重建，另立项。

@@ -766,6 +766,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// 回归：engine_init 的工作区切换路径在持有 ENGINE.write() 时调用
+    /// stop_watcher()；若 watcher 线程正阻塞在 ENGINE.read()
+    /// （handle_watcher_changes），旧的裸 join() 会构成
+    /// 「写锁等 join → join 等线程退出 → 线程等读锁」永久死锁，
+    /// 进而拖死全局引擎锁的所有读者（edit_file 写盘后的
+    /// timeline 记录即经 ENGINE.read()，曾表现为 edit 工具偶发挂死）。
+    /// 修复后 stop_watcher 2s 超时分离，切换必须正常完成。
+    #[test]
+    fn test_workspace_switch_no_deadlock_when_watcher_blocked_on_read() {
+        let tmp = std::env::temp_dir().join("hologram_test_ws_switch_deadlock");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let dir_a = tmp.join("project_a");
+        let dir_b = tmp.join("project_b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+
+        engine_init(&dir_a).unwrap();
+
+        // 模拟 engine_init 的持写锁窗口：手动拿写锁，制造一次源文件变更，
+        // 等防抖窗口（2s）+ 轮询周期（0.5s）过去 — watcher 线程进入
+        // handle_watcher_changes 并阻塞在 ENGINE.read()（写锁被我们持有）。
+        let mut guard = ENGINE.write();
+        std::fs::write(dir_a.join("deadlock_probe.rs"), "fn probe() {}\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(3500));
+
+        // 通过写锁 guard 直接调 init（与 engine_init 同路径）——旧实现
+        // 在此裸 join 永久挂死；修复后超时分离，切换正常完成。
+        let engine = guard.as_mut().expect("engine must be initialized");
+        let start = std::time::Instant::now();
+        engine
+            .init(&dir_b)
+            .expect("workspace switch must succeed even with watcher blocked on read");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "workspace switch took {:?} — possible watcher join deadlock",
+            start.elapsed()
+        );
+        assert_eq!(engine.project_root(), dir_b);
+        drop(guard);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn test_engine_state_transitions() {
         let mut engine = Engine::new();

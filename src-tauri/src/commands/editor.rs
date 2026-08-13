@@ -32,6 +32,38 @@ pub(crate) fn checked_write_atomic(
     crate::utils::write_atomic(file_path, new_content)
 }
 
+/// 写盘成功后的副作用：timeline 记录 + changed_files 登记。
+///
+/// 引擎调用（`engine_record_timeline` → 全局 `ENGINE.read()`）可能阻塞
+/// ——引擎初始化/工作区切换期间写锁被持有。因此先把 `changed_files`
+/// 的 Arc 克隆出来并**释放 WorkspaceState 锁**，再调引擎：否则一旦
+/// 引擎侧阻塞，WorkspaceState 会被一并长期持有，所有需要 state 的
+/// 命令（读写/git/shell/权限回包）全部排队，单工具挂起放大为全会话死亡。
+fn record_edit_side_effects(state: &crate::WorkspaceState, file_path: &str) {
+    let changed_files = {
+        let guard = crate::utils::lock_or_recover(state);
+        guard.as_ref().map(|h| h.changed_files.clone())
+    };
+    let Some(changed_files) = changed_files else {
+        return;
+    };
+    if is_ignored_path(file_path) {
+        return;
+    }
+    let short = file_path.rsplit(['/', '\\']).next().unwrap_or(file_path);
+    let _ = engine_api::engine_record_timeline(
+        "agent_edit",
+        Some(file_path),
+        &format!("Agent 编辑: {}", short),
+    );
+    if let Ok(mut changed) = changed_files.lock() {
+        let owned = file_path.to_string();
+        if !changed.contains(&owned) {
+            changed.push(owned);
+        }
+    };
+}
+
 #[tauri::command]
 pub(crate) async fn edit_file(
     file_path: String,
@@ -96,15 +128,7 @@ pub(crate) async fn edit_file(
                         // 乐观并发检查 + 原子写入在同一临界区（锁内重读校验，
                         // fail-closed）；timeline 记录等后续动作在锁外。
                         checked_write_atomic(&file_path, &content, &out)?;
-                        if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
-                            if !is_ignored_path(&file_path) {
-                                let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
-                                let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
-                                if let Ok(mut changed) = handle.changed_files.lock() {
-                                    if !changed.contains(&file_path) { changed.push(file_path.clone()); }
-                                }
-                            }
-                        }
+                        record_edit_side_effects(&state, &file_path);
                         let match_line = start + 1;
                         let ds = build_line_diff(&content, &out);
                         return Ok(format!(
@@ -143,15 +167,7 @@ pub(crate) async fn edit_file(
     // 乐观并发检查 + 原子写入在同一临界区（锁内重读校验，fail-closed）
     checked_write_atomic(&file_path, &content, &new_content)?;
 
-    if let Some(ref handle) = *crate::utils::lock_or_recover(&state) {
-        if !is_ignored_path(&file_path) {
-            let short = file_path.rsplit(['/', '\\']).next().unwrap_or(&file_path);
-            let _ = engine_api::engine_record_timeline("agent_edit", Some(file_path.as_str()), &format!("Agent 编辑: {}", short));
-            if let Ok(mut changed) = handle.changed_files.lock() {
-                if !changed.contains(&file_path) { changed.push(file_path.clone()); }
-            }
-        }
-    }
+    record_edit_side_effects(&state, &file_path);
 
     let first_match_line = content.lines()
         .enumerate()
