@@ -18,6 +18,7 @@ import './app/panels/dock-panels/dataflow-panel.css';
 import './app/panels/dock-panels/shared.css';
 import './app/panels/dock-panels/model-selector.css';
 import './app/panels/dock-panels/provider-settings.css';
+import './ui/react/TasksPanel.css';
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { log } from './agent/logger';

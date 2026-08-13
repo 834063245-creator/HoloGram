@@ -1,18 +1,27 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Task Manager — in-memory task tracking for agent self-management.
+// Task Manager — 主 Agent 的任务清单，按 Agent 实例隔离。
 // Five tools: task_create, task_update, task_list, task_get, task_stop.
-// Pure TypeScript, no Tauri invoke needed. Tasks are session-scoped.
+// Pure TypeScript, no Tauri invoke needed. 数据在内存，按 Agent 实例隔离。
+//
+// 隔离：每个会话的主 Agent 一个实例（runtime.createAgent 里 new 一个专属 TaskManager，
+// 并把该 Agent 的 task_* 工具绑定到它），实例之间互不可见 → 每会话独立托盘。
+//
+// UI 落点：TasksPanel 经 runtime.getAgentTaskManager(agentId) 拿到该 Agent 的实例，
+// 通过 subscribe() 订阅变更 + 用 create/update/stop 操作 —— 与 Agent 工具读写同一份。
+// 本文件不 import 任何 ui/ 模块（agent 层依赖边界：agent → ui 单向，反之不许）。
 
 import { z } from 'zod';
 import type { Tool } from './tool';
 import { defineTool } from './tools/define-tool';
 
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+
 export interface Task {
   id: number;
   title: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  status: TaskStatus;
   detail: string;
   ts: number; // created timestamp
 }
@@ -20,26 +29,43 @@ export interface Task {
 export class TaskManager {
   private tasks = new Map<number, Task>();
   private nextId = 1;
+  private listeners = new Set<() => void>();
+
+  /** 订阅变更（UI 面板响应式）。返回退订函数。 */
+  subscribe(cb: () => void): () => void {
+    this.listeners.add(cb);
+    return () => { this.listeners.delete(cb); };
+  }
+
+  /** 供 useSyncExternalStore 的 getSnapshot —— 返回最新任务列表副本。 */
+  getSnapshot(): Task[] {
+    return this.list();
+  }
+
+  private emit() {
+    for (const cb of this.listeners) cb();
+  }
 
   create(title: string, detail: string): Task {
     const t: Task = { id: this.nextId++, title, status: 'pending', detail, ts: Date.now() };
     this.tasks.set(t.id, t);
+    this.emit();
     return t;
   }
 
-  update(id: number, updates: { title?: string; status?: Task['status']; detail?: string }): Task | null {
+  update(id: number, updates: { title?: string; status?: TaskStatus; detail?: string }): Task | null {
     const t = this.tasks.get(id);
     if (!t) return null;
     if (updates.title !== undefined) t.title = updates.title;
     if (updates.status !== undefined) t.status = updates.status;
     if (updates.detail !== undefined) t.detail = updates.detail;
+    this.emit();
     return t;
   }
 
-  list(filter?: Task['status']): Task[] {
+  list(filter?: TaskStatus): Task[] {
     const all = Array.from(this.tasks.values()).sort((a, b) => b.ts - a.ts);
-    if (filter) return all.filter((t) => t.status === filter);
-    return all;
+    return filter ? all.filter((t) => t.status === filter) : all;
   }
 
   get(id: number): Task | undefined {
@@ -51,6 +77,7 @@ export class TaskManager {
     const t = this.tasks.get(id);
     if (!t) return null;
     t.status = 'cancelled';
+    this.emit();
     return t;
   }
 }
@@ -89,7 +116,7 @@ export function createTaskTools(mgr: TaskManager): Tool[] {
           status: args.status,
           detail: args.detail,
         });
-        if (!t) return JSON.stringify({ error: `Task ${args.id} not found` });
+        if (!t) return JSON.stringify({ error: 'Task ' + args.id + ' not found' });
         return JSON.stringify({ id: t.id, title: t.title, status: t.status, detail: t.detail });
       },
     }),
@@ -117,7 +144,7 @@ export function createTaskTools(mgr: TaskManager): Tool[] {
       readOnly: true,
       execute: async (args) => {
         const t = mgr.get(args.id);
-        if (!t) return JSON.stringify({ error: `Task ${args.id} not found` });
+        if (!t) return JSON.stringify({ error: 'Task ' + args.id + ' not found' });
         return JSON.stringify(t);
       },
     }),
@@ -130,7 +157,7 @@ export function createTaskTools(mgr: TaskManager): Tool[] {
       }),
       execute: async (args) => {
         const t = mgr.stop(args.id);
-        if (!t) return JSON.stringify({ error: `Task ${args.id} not found` });
+        if (!t) return JSON.stringify({ error: 'Task ' + args.id + ' not found' });
         return JSON.stringify({ id: t.id, status: t.status });
       },
     }),

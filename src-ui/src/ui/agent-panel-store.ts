@@ -44,6 +44,8 @@ interface AgentPanelState {
     getTaskBoard: (sessionId?: string) => { getAllEntries: () => BoardEntry[] };
     getDiscoveryBoard: (sessionId?: string) => { getAll: () => DiscoveryEntry[] };
     setCurrentSession?: (sessionId: string) => void;
+    /** 返回某 Agent 实例专属的待办 TaskManager（TasksPanel 订阅/读写当前会话主 Agent）。 */
+    getAgentTaskManager?: (agentId: string) => import('../agent/task').TaskManager | null;
   } | null;
 
   /** 当前活跃会话 ID — 用于 session-scoped board 查询 */

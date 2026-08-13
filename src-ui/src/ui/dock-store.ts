@@ -9,7 +9,7 @@ import { create } from 'zustand';
 import { cacheCheckResult } from '../agent/state-inject';
 import type { CheckResult } from './react/CheckPanel';
 
-export type DockPanelId = 'check' | 'constraints' | 'dataflow' | 'settings' | 'agents';
+export type DockPanelId = 'check' | 'constraints' | 'dataflow' | 'settings' | 'agents' | 'tasks';
 
 interface DockState {
   /** 面板开合（dataflow/settings 由 DockPanel 条件挂载；其余常驻 + class 切换保过渡动画） */
@@ -28,7 +28,7 @@ interface DockState {
 }
 
 export const useDockStore = create<DockState>((set, get) => ({
-  open: { check: false, constraints: false, dataflow: false, settings: false, agents: false },
+  open: { check: false, constraints: false, dataflow: false, settings: false, agents: false, tasks: false },
   checkResult: null,
 
   openPanel: (id) => set((st) => ({ open: { ...st.open, [id]: true } })),

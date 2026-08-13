@@ -45,7 +45,7 @@ import { createDiscoveryTools } from '../tools/discovery';
 import type { SkillRegistry } from '../skills';
 import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
 import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from '../state-inject';
-import type { TaskManager } from '../task';
+import { createTaskTools, TaskManager } from '../task';
 import { ToolRegistry, agentInvoke } from '../tool';
 import { createCommunicationTools } from '../tools/communication';
 import { createMergeTool } from '../tools/merge';
@@ -183,6 +183,8 @@ export class AgentRuntime implements RuntimePort {
   private _readyPromise: Promise<void>;
   /** agentId → sessionId 映射 — _disposeAgent 时知道清理哪个会话的 board */
   private _agentSessions = new Map<string, string>();
+  /** agentId → 该 Agent 实例专属的待办 TaskManager（每会话主 Agent 一个实例） */
+  private _agentTaskManagers = new Map<string, TaskManager>();
 
   constructor(projectPath?: string) {
     this._projectPath = projectPath ?? '';
@@ -553,6 +555,20 @@ export class AgentRuntime implements RuntimePort {
       );
     }
 
+    // ── 替换 task_* 为绑定本 Agent（实例）的任务工具 ──
+    // 背景：task_create/get/list/update/stop 在 buildToolRegistry 用 workspace 级
+    // TaskManager 注册一次，所有 Agent 共享 → 多会话下建的是同一份待办清单。
+    // 这里为每个 Agent（每会话主 Agent 一个实例）换成专属 TaskManager 的版本，
+    // 实现"每 Agent 实例一份待办"的隔离；UI 的 TasksPanel 按 agentId 读同一份。
+    {
+      const perAgentTaskManager = new TaskManager();
+      for (const taskTool of createTaskTools(perAgentTaskManager)) {
+        effR.unregister(taskTool.name());
+        effR.register(taskTool);
+      }
+      this._agentTaskManagers.set(agentId, perAgentTaskManager);
+    }
+
     // 7c. 接线 LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理
     if (config.subAgentPool) {
       // 停止此 agentId 的前一个 LifecycleManager — 否则其 60s setInterval
@@ -649,6 +665,12 @@ export class AgentRuntime implements RuntimePort {
     return this.agents.get(id) ?? null;
   }
 
+  /** 返回某 Agent 实例专属的待办 TaskManager（每会话主 Agent 一个实例）。
+   *  UI 的 TasksPanel 用它订阅 / 读写当前会话主 Agent 的待办清单。 */
+  getAgentTaskManager(agentId: string): TaskManager | null {
+    return this._agentTaskManagers.get(agentId) ?? null;
+  }
+
   /** 销毁单个 Agent — 仅供内部使用（AgentHandle.dispose / disposeAll）。
    *  外部代码必须经句柄销毁，不提供按 id 的公开入口。幂等。 */
   _disposeAgent(id: string): void {
@@ -676,6 +698,7 @@ export class AgentRuntime implements RuntimePort {
     taskBoard?.unregister(id);
     this._agentProxies.delete(id);
     this._agentSessions.delete(id);
+    this._agentTaskManagers.delete(id);
     this.agents.delete(id);
     log.info('runtime', `agent destroyed: ${id}`);
   }

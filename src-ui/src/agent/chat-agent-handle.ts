@@ -13,6 +13,9 @@ import type { Pricing } from './agent-types';
 export type GoalRunResult = { status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string };
 
 export interface ChatAgentHandle {
+  /** 该 Agent 实例的唯一标识 — 会话层按会话登记，UI 据此定位其专属待办等。 */
+  readonly id: string;
+
   /** 发起一轮对话：附加用户消息，驱动工具循环 */
   run(signal: AbortSignal, input: string): Promise<void>;
 

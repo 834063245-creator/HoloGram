@@ -197,6 +197,10 @@ const icons: Record<string, IconDef> = {
     label: 'AI Agent',
     path: '<circle cx="12" cy="8" r="5"/><line x1="12" y1="13" x2="12" y2="19"/><line x1="8" y1="19" x2="16" y2="19"/><circle cx="10" cy="8" r="0.8" fill="currentColor"/><circle cx="14" cy="8" r="0.8" fill="currentColor"/>',
   },
+  task: {
+    label: '待办',
+    path: '<rect x="4" y="4" width="16" height="16" rx="2"/><polyline points="8,12 10.5,14.5 16,9"/><line x1="8" y1="17" x2="14" y2="17"/>',
+  },
   translate: {
     label: '代码翻译',
     path: '<circle cx="7" cy="8" r="3"/><circle cx="17" cy="16" r="3"/><path d="M9 10 A8 8 0 0 0 15 14"/>',
