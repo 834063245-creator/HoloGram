@@ -30,6 +30,8 @@ export class TaskManager {
   private tasks = new Map<number, Task>();
   private nextId = 1;
   private listeners = new Set<() => void>();
+  /** 供 useSyncExternalStore 的稳定快照 — 变更时才重建，引用恒定，否则触发无限循环。 */
+  private snapshot: Task[] = [];
 
   /** 订阅变更（UI 面板响应式）。返回退订函数。 */
   subscribe(cb: () => void): () => void {
@@ -37,12 +39,13 @@ export class TaskManager {
     return () => { this.listeners.delete(cb); };
   }
 
-  /** 供 useSyncExternalStore 的 getSnapshot —— 返回最新任务列表副本。 */
+  /** 供 useSyncExternalStore 的 getSnapshot —— 返回稳定引用（变更时重建）。 */
   getSnapshot(): Task[] {
-    return this.list();
+    return this.snapshot;
   }
 
   private emit() {
+    this.snapshot = this.list();
     for (const cb of this.listeners) cb();
   }
 

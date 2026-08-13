@@ -26,6 +26,10 @@ const STATUS_META: Record<TaskStatus, { label: string; cls: string }> = {
 
 const CYCLE: TaskStatus[] = ['pending', 'in_progress', 'completed', 'cancelled'];
 
+// 稳定引用，避免 selector/getSnapshot 每次返回新数组 →
+// useSyncExternalStore 无限循环覆盖面板（见 ChatHint 同款 ponytail 注记）。
+const EMPTY_TASKS: Task[] = [];
+
 export function TasksPanel() {
   const open = useDockStore((s) => s.open.tasks);
   const closePanel = useDockStore((s) => s.closePanel);
@@ -55,10 +59,14 @@ export function TasksPanel() {
     return rt?.getAgentTaskManager?.(agentId) ?? null;
   }, [agentId]);
 
-  // 订阅 TaskManager 变更 —— 无经理时用稳定的空快照
+  // 订阅 TaskManager 变更 —— 无经理时用稳定的空快照。
+  // getSnapshot 必须返回引用稳定的值（TaskManager 变更时才重建），否则
+  // useSyncExternalStore 触发无限循环 → 整棵 UI 树崩溃（本 commit 曾因此
+  // 意外让所有面板消失 + 星图不加载）；getServerSnapshot 客户端渲染下恒为空。
   const tasks = useSyncExternalStore(
     useCallback((cb: () => void) => (manager ? manager.subscribe(cb) : () => {}), [manager]),
-    useCallback(() => (manager ? manager.getSnapshot() : ([] as Task[])), [manager]),
+    useCallback(() => (manager ? manager.getSnapshot() : EMPTY_TASKS), [manager]),
+    useCallback(() => EMPTY_TASKS, []),
   );
 
   const [newTitle, setNewTitle] = useState('');

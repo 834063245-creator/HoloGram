@@ -30,6 +30,24 @@ describe('TaskManager per-agent isolation', () => {
     expect(b.get(1)?.title).toBe('T2');
   });
 
+  it('getSnapshot 返回引用稳定的快照 —— 无变更时恒等，变更时才换引用（防 useSyncExternalStore 无限循环）', () => {
+    const mgr = new TaskManager();
+    const s0 = mgr.getSnapshot();
+    // 多次读取同一实例：恒等，确保 useSyncExternalStore 不会误判变更 → 无限循环
+    expect(mgr.getSnapshot()).toBe(s0);
+    expect(mgr.getSnapshot()).toBe(s0);
+
+    mgr.create('A', '');
+    const s1 = mgr.getSnapshot();
+    expect(s1).not.toBe(s0); // 数据变更 → 新引用
+    expect(mgr.getSnapshot()).toBe(s1); // 变更后读取稳定
+
+    mgr.update(1, { status: 'completed' });
+    const s2 = mgr.getSnapshot();
+    expect(s2).not.toBe(s1); // 变更 → 新引用
+    expect(mgr.getSnapshot()).toBe(s2);
+  });
+
   it('subscribe / getSnapshot 让 UI 感知变更', () => {
     const mgr = new TaskManager();
     let snapshots = 0;
