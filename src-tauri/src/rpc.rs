@@ -344,8 +344,8 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（17 个命令）
-        // 权限：launch/kill/attach/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
+        // CDP 浏览器控制（18 个命令）
+        // 权限：launch/kill/attach/connect/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
         //       inspect/report/targets/snapshot/console/network/screenshot/audit/status
         //       只读放行；click/type/press/scroll 依赖 attach 时已获批准的 target，
         //       不再重复弹窗——但敏感目标（已填值输入框/提交按钮/下载/高危文本）
@@ -363,6 +363,20 @@ pub(crate) async fn rpc(
             let url = opt_str(&params, "url");
             let port = opt_u64(&params, "port").map(|n| n as u16);
             crate::cdp::cdp_launch(url, port, agent_id.as_deref()).await
+        }
+        "browser_connect" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::BrowserTool { action: "connect".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            let port = opt_u64(&params, "port")
+                .ok_or_else(|| "browser_connect: missing 'port'".to_string())?;
+            if port == 0 || port > 65535 {
+                return Err("browser_connect: 端口必须在 1-65535".into());
+            }
+            crate::cdp::cdp_connect(port as u16, agent_id.as_deref())
         }
         "browser_kill" => {
             let agent_id = opt_str(&params, "_agent_id");

@@ -227,8 +227,12 @@ impl Tool for BrowserTool {
             "attach" => "Agent 请求接管一个浏览器页面。批准后 Agent 可在该页面上执行点击、输入等操作，\
                  普通操作不会再次确认（敏感目标如提交按钮/已填值输入框仍会单独询问）——建议只对无敏感信息的页面批准。"
                 .into(),
+            "connect" => "Agent 请求连接你自己启动的浏览器实例（调试端口）。批准后 Agent 可操作\
+                 该浏览器的全部页面——包括你的登录态、Cookie 和真实数据。\
+                 kill 只会断开连接、不会终止该浏览器。建议只连接无敏感登录态的实例。"
+                .into(),
             "eval" => "Agent 请求在该页面执行任意 JS（受基础白名单限制）".into(),
-            "kill" => "Agent 请求终止其启动的受控浏览器".into(),
+            "kill" => "Agent 请求终止其启动的受控浏览器（若为外部连接则仅断开）".into(),
             "click_sensitive" => "Agent 请求点击一个敏感目标（提交按钮 / 下载 / 含确认、支付、删除等文本的元素）".into(),
             "type_sensitive" => "Agent 请求向已填值的输入框（或密码框）输入文字".into(),
             _ => format!("Agent 请求控制浏览器（动作: {}）", self.action),

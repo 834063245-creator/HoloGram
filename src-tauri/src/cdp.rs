@@ -319,7 +319,8 @@ fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>
 }
 
 /// 租约回收 + 崩溃检测：空闲超时的会话 kill 掉 Chrome 并移除；
-/// Chrome 已退出的会话清掉进程句柄（target/observer 保留，attach 可重来）。
+/// Chrome 已退出的会话清掉进程句柄（target/observer 保留，attach 可重来）；
+/// 外部连接（connect，无 chrome_child）空闲超时只断开不杀进程。
 /// profile 目录随 Chrome 终止一并删除。
 fn enforce_lease() {
     let mut sessions = lock_sessions();
@@ -342,6 +343,12 @@ fn enforce_lease() {
             if let Some(dir) = sess.profile_dir.take() {
                 remove_profile_dir(&dir);
             }
+            expired.push(key.clone());
+        } else if sess.chrome_child.is_none()
+            && sess.port != 0
+            && sess.last_active.elapsed() > session_lease()
+        {
+            // 外部连接空闲超时：只移除会话（断开），不动用户进程
             expired.push(key.clone());
         }
     }
@@ -543,23 +550,75 @@ pub(crate) async fn cdp_launch(
     Ok(json!({ "status": "launched", "port": port, "chrome": chrome.to_string_lossy() }).to_string())
 }
 
-/// 终止本 agent 的受控 Chrome。
+/// 终止本 agent 的受控 Chrome；若当前是外部连接（connect 来的、非本 agent
+/// 启动的进程），只断开连接，不杀进程。
 pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
     let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(session_key(agent_id)).or_default();
+    let had_child = sess.chrome_child.is_some();
+    let had_conn = sess.port != 0;
     if let Some(mut child) = sess.chrome_child.take() {
         let _ = child.kill();
         let _ = child.wait();
+    }
+    if let Some(dir) = sess.profile_dir.take() {
+        remove_profile_dir(&dir);
+    }
+    if had_child || had_conn {
         sess.target_id = None;
         sess.observer = None;
-        if let Some(dir) = sess.profile_dir.take() {
-            remove_profile_dir(&dir);
-        }
-        audit_log(agent_id, "kill", "", "ok");
-        Ok("受控 Chrome 已终止".into())
+        sess.port = 0;
+        audit_log(agent_id, "kill", "", if had_child { "ok" } else { "disconnected" });
+        Ok(if had_child {
+            "受控 Chrome 已终止".into()
+        } else {
+            "已断开外部浏览器连接（进程未终止——它不是本 agent 启动的）".into()
+        })
     } else {
-        Err("没有正在运行的受控 Chrome".into())
+        Err("没有正在运行的受控 Chrome 或外部连接".into())
     }
+}
+
+/// 连接到用户已启动的、开了调试端口的浏览器实例（Chrome/Edge/Electron 等）。
+/// 与 launch 不同：进程不是本 agent 起的——kill 只断开、租约到期只断连，
+/// 绝不杀用户自己的进程；操作的是用户真实登录态（批准在 rpc 层 Ask）。
+pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, String> {
+    if port == 0 {
+        return Err("端口必须在 1-65535".into());
+    }
+    if port == WEBVIEW_DEBUG_PORT {
+        return Err(format!(
+            "端口 {WEBVIEW_DEBUG_PORT} 是 HoloGram 自家 webview 的调试端口，不能作为外部实例连接。\
+             webview 只读通道用 target=\"self\""
+        ));
+    }
+    // 端口必须真的有调试服务——connect 不猜端口，由用户告诉 Agent
+    let raw = list_targets_raw(port)
+        .map_err(|e| format!("端口 {port} 没有可用的调试服务: {e}"))?;
+    let pages = raw
+        .as_array()
+        .map(|arr| arr.iter().filter(|t| t["type"] == "page").count())
+        .unwrap_or(0);
+
+    let mut sessions = session_mut(agent_id);
+    let sess = sessions.entry(session_key(agent_id)).or_default();
+    // 替换前回收旧状态：受控 Chrome kill 掉（换目标不再需要），外部连接直接覆盖
+    if let Some(mut old) = sess.chrome_child.take() {
+        let exited = old.try_wait().map(|s| s.is_some()).unwrap_or(false);
+        if !exited {
+            let _ = old.kill();
+            let _ = old.wait();
+        }
+    }
+    if let Some(dir) = sess.profile_dir.take() {
+        remove_profile_dir(&dir);
+    }
+    sess.port = port;
+    sess.target_id = None;
+    sess.observer = None;
+
+    audit_log(agent_id, "connect", &port.to_string(), &format!("{pages} 个页面 target"));
+    Ok(json!({ "status": "connected", "port": port, "pages": pages }).to_string())
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1288,14 +1347,17 @@ pub(crate) async fn cdp_eval(expr: &str, agent_id: Option<&str>) -> Result<Strin
 // 状态
 // ═══════════════════════════════════════════════════════════
 
-/// 当前会话状态（供 UI 显示）。
+/// 当前会话状态（供 UI 显示）。external=true 表示连接的是用户自己的实例
+/// （connect 来的），kill 只断开、租约只断连，不会杀进程。
 pub(crate) fn cdp_status(agent_id: Option<&str>) -> String {
     let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(session_key(agent_id)).or_default();
+    let external = sess.chrome_child.is_none() && sess.port != 0;
     json!({
         "port": sess.port,
         "attached": sess.target_id.is_some(),
         "chromeRunning": sess.chrome_child.is_some(),
+        "external": external,
         "observerAlive": sess.observer.as_ref().map(|o| o.alive.load(Ordering::SeqCst)).unwrap_or(false),
     })
     .to_string()

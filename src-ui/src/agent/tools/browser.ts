@@ -40,6 +40,7 @@ function truncate(s: string): string {
 async function runBrowserAction(action: string, args: Record<string, unknown>): Promise<string> {
   const nameMap: Record<string, string> = {
     launch: 'browser_launch',
+    connect: 'browser_connect',
     kill: 'browser_kill',
     targets: 'browser_targets',
     attach: 'browser_attach',
@@ -82,6 +83,20 @@ export function createBrowserTools(): Tool[] {
         port: z.number().int().optional().describe('Debug port (default: auto-probe from 9223; 9222 is reserved for HoloGram webview)'),
       }),
       execute: (args) => run('launch', args),
+    }),
+    defineTool({
+      name: 'browser_connect',
+      description:
+        'Connect to a browser instance the USER has already started with a remote debugging port ' +
+        '(Chrome/Edge launched with --remote-debugging-port=NNNN, or a Chromium-based app exposing one). ' +
+        'The port must be provided by the user — there is no port discovery. ' +
+        'Takes over that live instance with its real logins and data — requires user approval. ' +
+        'After connect: targets → attach → snapshot/click as usual. ' +
+        'kill only disconnects (never kills a browser this agent did not launch). 9222 is refused (HoloGram webview, read-only self channel).',
+      schema: z.object({
+        port: z.number().int().describe('Debug port of the running browser instance (e.g. 9223)'),
+      }),
+      execute: (args) => run('connect', args),
     }),
     defineTool({
       name: 'browser_targets',
