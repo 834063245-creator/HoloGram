@@ -242,6 +242,7 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       scroll: 'browser_scroll',
       eval: 'browser_eval',
       status: 'browser_status',
+      wait: 'browser_wait',
     },
   },
   {
@@ -326,6 +327,7 @@ export function collectHiddenToolNames(): string[] {
     'browser_scroll',
     'browser_eval',
     'browser_status',
+    'browser_wait',
     'desktop_probe',
     'desktop_screenshot',
   ]) {

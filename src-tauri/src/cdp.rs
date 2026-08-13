@@ -1055,17 +1055,20 @@ pub(crate) async fn cdp_report(scope: Option<String>, agent_id: Option<&str>) ->
 // snapshot + ref — 可交互元素清单（ADR 0003 D2）
 // ═══════════════════════════════════════════════════════════
 
-/// 页面快照：给可交互元素打 data-hg-ref 标记，返回 {refs:[{ref,tag,type,text,id}], count, truncated}。
+/// 页面快照：给可交互元素打 data-hg-ref 标记，返回 {refs,count,total,offset,truncated}。
+/// B4 分页：offset 取第 N 页（每页 max_results），truncated 表明是否还有下一页。
 pub(crate) async fn cdp_snapshot(
     scope: Option<String>,
     max_results: Option<usize>,
+    offset: Option<usize>,
     agent_id: Option<&str>,
 ) -> Result<String, String> {
     let expr = format!(
-        "JSON.stringify(({})({}, {}))",
+        "JSON.stringify(({})({}, {}, {}))",
         SNAPSHOT_PROBE,
         serde_json::to_string(&scope.unwrap_or_default()).map_err(|e| e.to_string())?,
-        max_results.unwrap_or(80)
+        max_results.unwrap_or(80),
+        offset.unwrap_or(0)
     );
     let val = runtime_evaluate(&expr, agent_id).await?;
     let s = probe_result_str(&val, "snapshot")?;
@@ -1402,6 +1405,44 @@ pub(crate) async fn cdp_scroll(
     Ok(json!({ "scrolled": "page", "direction": dir }).to_string())
 }
 
+/// 显式等待（B3）：selector 出现且可见，或固定 ms 休眠。
+/// 覆盖"点了异步按钮弹 loading 3 秒再出结果"这类场景——已有的 POST_ACTION_SETTLE
+/// (300ms) + wait_nav_settle(2s) 对长加载不够，模型需要显式等到条件满足。
+/// 二选一：传 ms 则休眠相应时长；传 selector 则轮询到元素存在+可见(默认 10s 超时)。
+pub(crate) async fn cdp_wait(
+    selector: Option<String>,
+    ms: Option<u64>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    // 固定休眠
+    if let Some(dur) = ms {
+        let dur = dur.min(30_000); // 上限 30s，防模型传超大值卡死
+        tokio::time::sleep(Duration::from_millis(dur)).await;
+        return Ok(json!({ "waited_ms": dur, "note": "固定休眠完成" }).to_string());
+    }
+    // 等待 selector 出现+可见
+    let Some(sel) = selector.filter(|s| !s.trim().is_empty()) else {
+        return Err("wait: 需要提供 selector 或 ms 参数".into());
+    };
+    require_target(agent_id)?; // 提前校验已 attach
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let expr = format!(
+            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }})()"#,
+            sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?
+        );
+        let ok = runtime_evaluate(&expr, agent_id).await.unwrap_or(Value::Bool(false));
+        if ok.as_bool().unwrap_or(false) {
+            let waited = deadline.elapsed().as_millis() as u64;
+            return Ok(json!({ "found": true, "selector": &sel, "waited_ms": waited, "note": "元素已出现且可见" }).to_string());
+        }
+        if Instant::now() >= deadline {
+            return Ok(json!({ "found": false, "selector": &sel, "waited_ms": 10000, "note": "等待超时(10s)，未观察到元素出现" }).to_string());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // 敏感操作判定（ADR 0003 D6 L3）— rpc 层据此触发单独 Ask
 // ═══════════════════════════════════════════════════════════
@@ -1675,6 +1716,25 @@ mod tests {
             Arc::ptr_eq(&before.unwrap(), &after.unwrap()),
             "在途闸生效时不得替换 observer（防孤儿任务）"
         );
+    }
+
+    /// B3：cdp_wait 的固定 ms 路径——确定性休眠，不需要真实浏览器。
+    #[tokio::test]
+    async fn wait_fixed_ms_sleeps_and_returns() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        // 阈值上限 30s；这里用 200ms 验证至少等待了该时长
+        let out = super::cdp_wait(None, Some(200), None).await.unwrap();
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(200), "应至少等待 200ms, 实际 {elapsed:?}");
+        assert!(out.contains("200"), "返回值应含 waited_ms: {out}");
+    }
+
+    /// B3：无 selector 也无 ms → 明确错误。
+    #[tokio::test]
+    async fn wait_requires_selector_or_ms() {
+        let err = super::cdp_wait(None, None, None).await.unwrap_err();
+        assert!(err.contains("selector 或 ms"), "应提示需要参数: {err}");
     }
 
     /// 租约回收 + profile 清理（遗留项实测的代码侧）：空闲超时 → kill 子进程、

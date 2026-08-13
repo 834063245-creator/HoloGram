@@ -446,7 +446,8 @@ pub(crate) async fn rpc(
             let agent_id = self_or_agent(&params);
             let scope = opt_str(&params, "scope");
             let max_results = opt_usize(&params, "max_results");
-            crate::cdp::cdp_snapshot(scope, max_results, agent_id.as_deref()).await
+            let offset = opt_usize(&params, "offset");
+            crate::cdp::cdp_snapshot(scope, max_results, offset, agent_id.as_deref()).await
         }
         "browser_console" => {
             let agent_id = self_or_agent(&params);
@@ -511,6 +512,13 @@ pub(crate) async fn rpc(
             let selector = opt_str(&params, "selector");
             let direction = opt_str(&params, "direction");
             crate::cdp::cdp_scroll(selector, direction, agent_id.as_deref()).await
+        }
+        "browser_wait" => {
+            // 只读等待(selector 出现或固定 ms)，不改变状态
+            let agent_id = self_or_agent(&params);
+            let selector = opt_str(&params, "selector");
+            let ms = opt_u64(&params, "ms");
+            crate::cdp::cdp_wait(selector, ms, agent_id.as_deref()).await
         }
         "browser_eval" => {
             let agent_id = opt_str(&params, "_agent_id");

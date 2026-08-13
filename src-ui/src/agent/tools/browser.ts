@@ -58,6 +58,7 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     scroll: 'browser_scroll',
     eval: 'browser_eval',
     status: 'browser_status',
+    wait: 'browser_wait',
   };
   const cmd = nameMap[action];
   if (!cmd) return `[browser] unsupported action "${action}"`;
@@ -143,13 +144,15 @@ export function createBrowserTools(): Tool[] {
     defineTool({
       name: 'browser_snapshot',
       description:
-        'Snapshot interactive elements on the attached page — returns {refs:[{ref,tag,type,text,id}], count, truncated}. ' +
+        'Snapshot interactive elements on the attached page — returns {refs:[{ref,tag,type,text,id}], count, total, offset, truncated}. ' +
         'Marks elements with ref numbers; use these ref numbers in click/type/scroll (e.g. selector: "37"). ' +
         'Refs are valid until the DOM changes — if an operation fails with "target gone", re-snapshot. ' +
+        'If truncated is true there are more elements below — call again with offset to page (e.g. offset: 80 for page 2, 160 for page 3). ' +
         'PREFERRED over hand-written CSS selectors.',
       schema: z.object({
         scope: z.string().optional().describe('Optional CSS selector to limit the snapshot (default: whole page)'),
-        maxResults: z.number().int().optional().describe('Max elements (default 80)'),
+        maxResults: z.number().int().optional().describe('Max elements per page (default 80)'),
+        offset: z.number().int().optional().describe('Skip this many interactive elements (for paging; default 0)'),
         target: z
           .string()
           .optional()
@@ -265,6 +268,20 @@ export function createBrowserTools(): Tool[] {
         direction: z.string().optional().describe('Page scroll direction: down/up/top'),
       }),
       execute: (args) => run('scroll', args),
+    }),
+    defineTool({
+      name: 'browser_wait',
+      description:
+        'Wait — either wait a fixed number of ms, or wait until a CSS selector appears and is visible (default 10s timeout). ' +
+        'Use after clicking an async-triggering button when the result takes a moment to load. ' +
+        'Pass ms for a fixed sleep; pass selector to poll for it to become visible. ' +
+        'Returns {found, selector?, waited_ms}. Does not change state.',
+      schema: z.object({
+        selector: z.string().optional().describe('CSS selector to wait for (appears + visible)'),
+        ms: z.number().int().optional().describe('Fixed sleep in milliseconds (capped at 30000)'),
+      }),
+      readOnly: true,
+      execute: (args) => run('wait', args),
     }),
     defineTool({
       name: 'browser_eval',

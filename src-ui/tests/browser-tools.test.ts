@@ -38,10 +38,20 @@ describe('browser 领域工具注册', () => {
     for (const a of [
       'launch', 'kill', 'targets', 'attach',
       'snapshot', 'inspect', 'report', 'console', 'network', 'screenshot', 'audit',
-      'click', 'type', 'press', 'scroll', 'eval', 'status',
+      'click', 'type', 'press', 'scroll', 'eval', 'status', 'wait',
     ]) {
       expect(actions).toContain(a);
     }
+  });
+
+  it('wait 路由到 browser_wait 并透传 selector/ms', async () => {
+    const registry = buildBrowserRegistry();
+    const t = registry.get('browser')!;
+    await t.execute({ action: 'wait', selector: '#done', ms: 5000 });
+    expect(invokeMock).toHaveBeenCalledWith(
+      'browser_wait',
+      expect.objectContaining({ selector: '#done', ms: 5000 }),
+    );
   });
 
   it('未知 action 返回错误提示', async () => {
