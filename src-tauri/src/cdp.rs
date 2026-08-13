@@ -621,6 +621,91 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
     Ok(json!({ "status": "connected", "port": port, "pages": pages }).to_string())
 }
 
+/// 发现本机所有开了调试端口的 Chromium 系实例（用户自己启动的 Chrome/Edge/
+/// Electron 等）。查进程表命令行拿端口，再逐个确认 CDP 应答并列出页面——
+/// 用户无需知道端口号，从清单里选即可。
+/// 自家 webview（9222）被过滤——那是 self 只读通道，不是可连接实例。
+pub(crate) fn cdp_discover() -> Result<String, String> {
+    // PowerShell 查所有进程命令行里的 --remote-debugging-port=<port>。
+    // 不限定进程名：Electron 应用进程名各异，端口参数是唯一可靠特征。
+    let script = r#"
+$ErrorActionPreference='SilentlyContinue'
+Get-CimInstance Win32_Process | ForEach-Object {
+  if ($_.CommandLine -match '--remote-debugging-port=(\d+)') {
+    "{0}|{1}|{2}" -f $_.Name, $Matches[1], $_.ProcessId
+  }
+}"#;
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .output()
+        .map_err(|e| format!("discover: 查询进程表失败: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    // 同端口多进程（Chrome 主进程 + 各渲染进程共享一个调试端口）去重。
+    // 启动器进程（bash/cmd/powershell）命令行也含端口参数——若已有条目
+    // 名字是启动器而新名字更可信，替换显示名。
+    fn is_launcher(name: &str) -> bool {
+        let n = name.to_lowercase();
+        n.contains("bash") || n.contains("cmd") || n.contains("powershell") || n.ends_with(".sh")
+    }
+
+    let mut seen: Vec<u16> = Vec::new();
+    let mut instances: Vec<Value> = Vec::new();
+    for line in text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+        let parts: Vec<&str> = line.split('|').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let port: u16 = match parts[1].trim().parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if port == 0 || port == WEBVIEW_DEBUG_PORT {
+            continue;
+        }
+        if let Some(idx) = seen.iter().position(|&p| p == port) {
+            let old = instances[idx]["browser"].as_str().unwrap_or("");
+            if is_launcher(old) && !is_launcher(parts[0]) {
+                instances[idx]["browser"] = json!(parts[0]);
+            }
+            continue;
+        }
+        seen.push(port);
+        let Ok(raw) = list_targets_raw(port) else {
+            continue;
+        };
+        let pages: Vec<Value> = raw
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter(|t| t["type"] == "page")
+                    .map(|t| {
+                        json!({
+                            "id": t["id"].as_str().unwrap_or(""),
+                            "title": t["title"].as_str().unwrap_or(""),
+                            "url": t["url"].as_str().unwrap_or(""),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        instances.push(json!({
+            "browser": parts[0],
+            "port": port,
+            "pages": pages,
+        }));
+    }
+
+    if instances.is_empty() {
+        Ok(json!({
+            "instances": [],
+            "note": "没有发现开了调试端口的浏览器实例。Chrome/Edge 需以 --remote-debugging-port=<端口> 参数启动后才会出现在这里"
+        }).to_string())
+    } else {
+        Ok(json!({ "instances": instances }).to_string())
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // target 发现与 attach
 // ═══════════════════════════════════════════════════════════

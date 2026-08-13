@@ -41,6 +41,7 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
   const nameMap: Record<string, string> = {
     launch: 'browser_launch',
     connect: 'browser_connect',
+    discover: 'browser_discover',
     kill: 'browser_kill',
     targets: 'browser_targets',
     attach: 'browser_attach',
@@ -97,6 +98,19 @@ export function createBrowserTools(): Tool[] {
         port: z.number().int().describe('Debug port of the running browser instance (e.g. 9223)'),
       }),
       execute: (args) => run('connect', args),
+    }),
+    defineTool({
+      name: 'browser_discover',
+      description:
+        'Discover Chromium-based instances on this machine that have a debug port open — ' +
+        'queries the process table, so the USER does not need to know or report any port. ' +
+        'Returns {instances:[{browser, port, pages:[{id,title,url}]}]}. ' +
+        'Use BEFORE browser_connect when the user says "operate my browser" without a port: ' +
+        'list the instances to the user, let them pick, then connect(port). ' +
+        'HoloGram webview (9222) is filtered out.',
+      schema: z.object({}),
+      readOnly: true,
+      execute: () => run('discover', {}),
     }),
     defineTool({
       name: 'browser_targets',

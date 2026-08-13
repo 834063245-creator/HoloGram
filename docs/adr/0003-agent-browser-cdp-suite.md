@@ -107,6 +107,12 @@ TS 侧只留工具定义（`browser.ts`），DomProbe 接口与 `dom-probe.ts` �
 （扫到的无法确认归属，还可能碰到用户日常浏览器，安全边界不清）。
 会话无 `chrome_child`：kill 只断开不杀进程、租约到期只断连、profile 不涉及。
 
+**增补（同日）**：端口"由用户提供"对普通用户不成立——用户不会知道调试端口。
+补 `discover` 动作：查系统进程表（命令行中的 `--remote-debugging-port` 参数），
+列出本机所有开了调试口的实例及页面清单，用户从清单里选，`connect(port)` 跟进。
+进程表查询是唯一可靠特征（Electron 应用进程名各异，不限定进程名）；
+只读放行（工具级 Deny 仍生效），自家 webview（9222）过滤。
+
 **代价**：连接的是用户真实登录态——rpc 层 Ask 文案比 attach 更重
 （明示 Cookie/登录态风险）；9222 硬拒（自家 webview 走 self 只读通道）。
 

@@ -220,10 +220,12 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       'target="self" = HoloGram webview 只读会话（inspect/report/snapshot/console/network/screenshot/status 支持）；省略 target = 已 attach 的外部页面。' +
       '交互范式：先 snapshot 拿 ref 编号，操作按 ref 引用（不要手写 CSS selector）；操作自带等待与反馈；敏感目标每次单独确认。' +
       'attach 用 targetId（来自 browser(targets) 的 CDP target id）。' +
-      'connect 连接用户已启动的浏览器实例（端口由用户提供），操作其真实数据；kill 只断开不杀该进程。',
+      'connect 连接用户已启动的浏览器实例（端口由用户提供），操作其真实数据；kill 只断开不杀该进程。' +
+      '用户没给端口时先 discover 列实例让用户选（进程表查询，用户无需知道端口号）。',
     actions: {
       launch: 'browser_launch',
       connect: 'browser_connect',
+      discover: 'browser_discover',
       kill: 'browser_kill',
       targets: 'browser_targets',
       attach: 'browser_attach',
@@ -295,6 +297,7 @@ export function collectHiddenToolNames(): string[] {
   for (const n of [
     'browser_launch',
     'browser_connect',
+    'browser_discover',
     'browser_kill',
     'browser_targets',
     'browser_attach',

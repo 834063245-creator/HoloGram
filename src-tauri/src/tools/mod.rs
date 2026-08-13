@@ -190,7 +190,7 @@ impl Tool for BrowserTool {
     fn is_read_only(&self) -> bool {
         matches!(
             self.action.as_str(),
-            "targets" | "inspect" | "report" | "status" | "snapshot" | "console" | "network" | "screenshot" | "audit"
+            "targets" | "discover" | "inspect" | "report" | "status" | "snapshot" | "console" | "network" | "screenshot" | "audit"
         )
     }
 

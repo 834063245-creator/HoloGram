@@ -391,6 +391,10 @@ pub(crate) async fn rpc(
             let agent_id = opt_str(&params, "_agent_id");
             crate::cdp::cdp_targets(agent_id.as_deref())
         }
+        "browser_discover" => {
+            // 只读放行（工具级 Deny 仍生效）：只是列清单，不连接任何实例
+            crate::cdp::cdp_discover()
+        }
         "browser_attach" => {
             let agent_id = opt_str(&params, "_agent_id");
             {
