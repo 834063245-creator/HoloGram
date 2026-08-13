@@ -247,11 +247,13 @@ export const DOMAIN_SPECS: DomainSpec[] = [
   {
     name: 'desktop',
     description:
-      'Read-only desktop snapshot: probe current machine process tree + visible windows + visible console windows. ' +
-      'Use desktop(probe) to detect whether a process has a visible console window (e.g. a language server spawning a cmd window) ' +
-      'or to see open desktop windows. Does not connect to a browser and does not do persistent monitoring.',
+      'Read-only desktop snapshot: probe current machine process tree + visible windows + visible console windows, ' +
+      'or capture a full-screen screenshot. Use desktop(probe) to detect whether a process has a visible console window ' +
+      '(e.g. a language server spawning a cmd window) or to see open desktop windows. desktop(screenshot) needs approval ' +
+      '(high privacy). Does not connect to a browser and does not do persistent monitoring.',
     actions: {
       probe: 'desktop_probe',
+      screenshot: 'desktop_screenshot',
     },
   },
 ];
@@ -325,6 +327,7 @@ export function collectHiddenToolNames(): string[] {
     'browser_eval',
     'browser_status',
     'desktop_probe',
+    'desktop_screenshot',
   ]) {
     names.add(n);
   }

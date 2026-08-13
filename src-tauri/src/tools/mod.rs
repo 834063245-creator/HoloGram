@@ -248,6 +248,62 @@ impl Tool for BrowserTool {
     }
 }
 
+// DesktopTool — desktop_probe / desktop_screenshot
+// ═══════════════════════════════════════════════════════════════
+
+pub struct DesktopTool {
+    pub action: String,
+    pub agent_id: Option<String>,
+}
+
+impl Tool for DesktopTool {
+    fn name(&self) -> &'static str {
+        "Desktop"
+    }
+
+    fn get_path(&self) -> Option<PathBuf> {
+        None // 桌面快照不针对单个文件
+    }
+
+    fn is_read_only(&self) -> bool {
+        true // probe / screenshot 均为观察, 不改变状态
+    }
+
+    fn is_destructive(&self) -> bool {
+        false
+    }
+
+    fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+
+    fn check_permissions(&self, ctx: &PermissionContext) -> PermissionResult {
+        use crate::permissions::PermissionUpdate;
+        let rules = ctx.read_rules();
+        // 1. 工具级 Deny — 最高优先级
+        if let Some(rule) = rules.find_deny("Desktop", None) {
+            return PermissionResult::Deny { reason: rule.explain() };
+        }
+        // 2. 工具级 Allow
+        if rules.find_allow("Desktop", None).is_some() {
+            return PermissionResult::Allow;
+        }
+        // 3. probe = 进程表/窗口/控制台可见性快照(只读) → 放行
+        if self.action == "probe" {
+            return PermissionResult::Passthrough;
+        }
+        // 4. screenshot = 截进整个桌面(高隐私面) → Ask
+        PermissionResult::Ask {
+            reason: "Agent 请求截取整个屏幕(全屏截图)。截图中可能包含任意窗口的敏感内容                 (邮件/聊天/密码/其他应用界面)。请确认当前屏幕没有敏感信息后再批准。".into(),
+            suggestions: vec![PermissionUpdate {
+                rule: "Desktop".into(),
+                behavior: "allow".into(),
+            }],
+            danger: Some("桌面截图".into()),
+        }
+    }
+}
+
 // WebFetchTool — web_fetch
 // ═══════════════════════════════════════════════════════════════
 

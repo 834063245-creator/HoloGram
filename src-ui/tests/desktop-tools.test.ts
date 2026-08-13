@@ -64,4 +64,19 @@ describe('desktop 动作路由（走 Rust desktop_probe）', () => {
     const t = registry.get('desktop_probe')!;
     expect(t.readOnly()).toBe(true);
   });
+
+  it('screenshot 路由到 desktop_screenshot（而非 browser_screenshot）', async () => {
+    const registry = buildRegistry();
+    const t = registry.get('desktop')!;
+    await t.execute({ action: 'screenshot' });
+    expect(invokeMock).toHaveBeenCalledWith('desktop_screenshot', expect.objectContaining({}));
+    // 不误路由到 browser_screenshot
+    expect(invokeMock).not.toHaveBeenCalledWith('browser_screenshot', expect.anything());
+  });
+
+  it('desktop_screenshot 细粒度工具存在且只读', () => {
+    const registry = buildRegistry();
+    const t = registry.get('desktop_screenshot')!;
+    expect(t.readOnly()).toBe(true);
+  });
 });

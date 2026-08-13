@@ -58,7 +58,6 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     scroll: 'browser_scroll',
     eval: 'browser_eval',
     status: 'browser_status',
-    probe: 'desktop_probe',
   };
   const cmd = nameMap[action];
   if (!cmd) return `[browser] unsupported action "${action}"`;
@@ -317,10 +316,27 @@ export function createBrowserTools(): Tool[] {
 // ═══════════════════════════════════════════════════════════
 // 与 CDP 刻意不同：不连浏览器、不做持续 observer、不订阅事件。
 // 按需取一帧快照，用于定位「某进程带了可见控制台窗口」这类问题
-// （如语言服务器启动弹 cmd 窗口）。只读放行，纯查询。
+// （如语言服务器启动弹 cmd 窗口）。probe 只读放行；screenshot 高隐私面，
+// 需单独权限确认（Rust rpc 层 DesktopTool 强制 Ask）。
+
+const DESKTOP_ACTION_MAP: Record<string, string> = {
+  probe: 'desktop_probe',
+  screenshot: 'desktop_screenshot',
+};
+
+async function runDesktopAction(action: string, args: Record<string, unknown>): Promise<string> {
+  const cmd = DESKTOP_ACTION_MAP[action];
+  if (!cmd) return '[desktop] unsupported action "' + action + '"';
+  try {
+    const result = await agentInvoke<string>(cmd, { ...args, isAgent: true });
+    return truncate(result ?? '');
+  } catch (e: any) {
+    return '[desktop] ' + action + ' 失败: ' + (e?.message || String(e));
+  }
+}
 
 export function createDesktopTools(): Tool[] {
-  const run = (action: string, args: Record<string, unknown>) => runBrowserAction(action, args);
+  const run = (action: string, args: Record<string, unknown>) => runDesktopAction(action, args);
   return [
     defineTool({
       name: 'desktop_probe',
@@ -333,6 +349,16 @@ export function createDesktopTools(): Tool[] {
       schema: z.object({}),
       readOnly: true,
       execute: () => run('probe', {}),
+    }),
+    defineTool({
+      name: 'desktop_screenshot',
+      description:
+        'Capture a full-screen screenshot of the current desktop (requires an interactive desktop session). ' +
+        'Saved to a temp file; returns {path, bytes, note}. High-privacy: may contain arbitrary on-screen content, ' +
+        'so this requires a separate approval. With a text-only model the image is not visible; hand the path to the user for confirmation.',
+      schema: z.object({}),
+      readOnly: true,
+      execute: () => run('screenshot', {}),
     }),
   ];
 }

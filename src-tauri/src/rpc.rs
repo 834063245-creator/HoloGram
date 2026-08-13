@@ -396,8 +396,24 @@ pub(crate) async fn rpc(
             crate::cdp::cdp_discover()
         }
         "desktop_probe" => {
-            // 只读放行（工具级 Deny 仍生效）：进程/窗口/控制台可见性快照，纯查询
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "probe".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 只读快照:进程/窗口/控制台可见性,纯查询
             crate::desktop::desktop_probe()
+        }
+        "desktop_screenshot" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "screenshot".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 全屏截图(高隐私面, 已 Ask);需交互桌面会话
+            crate::desktop::desktop_screenshot()
         }
         "browser_attach" => {
             let agent_id = opt_str(&params, "_agent_id");

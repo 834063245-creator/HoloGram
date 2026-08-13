@@ -117,6 +117,62 @@ pub(crate) fn desktop_probe() -> Result<String, String> {
     }
 }
 
+/// 全屏截图(只读, 隐私高)。用 System.Drawing CopyFromScreen 捕获主屏,
+/// 落盘到 hologram-browser-shots 临时目录, 返回 {path, bytes, note}。
+/// 调用方(rpc 层)需先经权限 Ask —— 截进整个桌面属高隐私面。
+/// 需交互桌面会话;无桌面(RDP headless / service)时返回明确错误。
+pub(crate) fn desktop_screenshot() -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        // 捕获主屏到临时 PNG, 输出文件路径(stdout)。Add-Type 需 FullLanguage
+        // (真实应用内 powershell.exe 具全权限;无桌面会话时 CopyFromScreen 抛错)。
+        let script = r#"
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+try {
+    $s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $b = New-Object System.Drawing.Bitmap($s.Width, $s.Height)
+    $g = [System.Drawing.Graphics]::FromImage($b)
+    $g.CopyFromScreen($s.Location, [System.Drawing.Point]::Empty, $b.Size)
+    $out = Join-Path $env:TEMP ("hologram-desk-" + [guid]::NewGuid().ToString("N") + ".png")
+    $b.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
+    $g.Dispose(); $b.Dispose()
+    Write-Output $out
+} catch {
+    Write-Error ("capture-failed: " + $_.Exception.Message)
+    exit 1
+}
+"#;
+        let out_path = run_ps(script)?;
+        let src = out_path.lines().next().unwrap_or("").trim().to_string();
+        if src.is_empty() {
+            return Err("desktop_screenshot: PowerShell 未返回截图路径".into());
+        }
+        let bytes = std::fs::read(&src)
+            .map_err(|e| format!("desktop_screenshot: 读截图失败: {e}"))?;
+        // 转存到会话截图目录(与 cdp_screenshot 同目录), 再清理临时源文件
+        let dir = std::env::temp_dir().join("hologram-browser-shots");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("desktop_screenshot: 创建截图目录失败: {e}"))?;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = dir.join(format!("desk-{ts}.png"));
+        std::fs::write(&path, &bytes).map_err(|e| format!("desktop_screenshot: 写截图文件失败: {e}"))?;
+        let _ = std::fs::remove_file(&src); // 清理临时源
+        Ok(json!({
+            "path": path.to_string_lossy(),
+            "bytes": bytes.len(),
+            "note": "全屏截图已落盘(纯文本模型看不到内容,可交给用户确认; vision 模型可读路径)。需交互桌面会话。",
+        })
+        .to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("desktop_screenshot 目前仅支持 Windows".into())
+    }
+}
+
 /// 运行一段 PowerShell 命令并返回 stdout。
 fn run_ps(script_body: &str) -> Result<String, String> {
     let script = format!("$ErrorActionPreference='SilentlyContinue'
