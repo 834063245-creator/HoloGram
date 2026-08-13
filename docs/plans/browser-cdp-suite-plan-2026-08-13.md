@@ -1,26 +1,31 @@
 # Agent 浏览器控制套件 —— 设计路线图（2026-08-13）
 
 > 目标形态与决策理由见 `docs/adr/0003-agent-browser-cdp-suite.md`（ADR 0003）。
-> 本文档给出落地分期。前身：`docs/plans/tool-convergence-browser-plan-2026-08-08.md`
+> 前身：`docs/plans/tool-convergence-browser-plan-2026-08-08.md`
 > §3.5 把「交互式浏览器」标为 v2 决策点（Rust 原生 CDP，不建 Node 桥）；
 > v2 初版已于 `e6fa9d2` 落地，本文档是其评审续篇。
+>
+> **状态：✅ 全部落地（同日）**。P0 = `3027a7c`，P1+P2 = `b4dd1f5`。
+> 与计划的差异及未实测项见各节「落地注记」。
 
 ## 0. 现状盘点（对照 ADR 决策）
 
-| ADR 决策 | 现状 | 差距 |
-|---|---|---|
-| D1 会话键控 | 全局单例（cdp.rs `SESSION`） | 重构为 `HashMap<agent_id, …>` |
-| D2 快照 + ref | 无 snapshot，全靠手写 selector | 新增 snapshot 动作 + 探针打标 |
-| D3 持久连接 | 短连接（`ws_command`） | 重写客户端 + 事件缓冲 |
-| D4 统一后端 | 双探针（cdp.rs 内嵌 + dom-probe.ts） | 探针抽 .js 文件；self 改走 CDP |
-| D5 等待反馈 | 裸派发 + 返回 `"clicked"` | actionability 等待 + 世界变化反馈 |
-| D6 安全三级 | attach 一次批准全权 | 敏感目标判定 + 分级 Ask |
-| D7 探针验证 | 无（8709738 教训） | 独立文件 + 测试跑 node --check |
+> ✅ 七项差距全部消除（`3027a7c` + `b4dd1f5`）：
 
-## 1. P0 —— 不炸（评审 bug 修复清单）
+| ADR 决策 | 实现 |
+|---|---|
+| D1 会话键控 | `HashMap<agent_id, CdpSession>`（P0）+ 租约回收 + 崩溃检测（P2） |
+| D2 快照 + ref | `browser(snapshot)` 打 `data-hg-ref` 标记，click/type/scroll 按 ref 引用，ref 失效返回「请重新 snapshot」 |
+| D3 持久连接 | 命令通道保持短连接（有超时兜底）；事件通道为持久 WS + 环形缓冲，`browser(console)`/`browser(network)` 查询 |
+| D4 统一后端 | 探针抽 `cdp/probes/*.js`（`include_str!`）；self 走 webview 调试端口惰性 attach 的只读会话；`dom-probe.ts` 已删除 |
+| D5 等待反馈 | actionability 等待（可见/无遮挡/位置稳定，5s）+ 世界变化摘要（URL/DOM 大小/新增错误数） |
+| D6 安全三级 | 只读直放行；操作靠 attach 授权；敏感目标（提交/下载/已填值输入框/密码框/高危文本）每次单独 Ask |
+| D7 探针验证 | `cargo test` 内置用例对全部探针跑 `node --check` |
+
+## 1. P0 —— 不炸（评审 bug 修复清单）✅ `3027a7c`
 
 只碰 `src-tauri/src/cdp.rs`、`rpc.rs`、`tools/mod.rs`、新增 `cdp/probes/`。
-不碰 TS 工具面（P0-6 选方案 B 时除外，见下）。
+不碰 TS 工具面（P0-6 选方案 A 在 Rust 侧）。
 
 | # | 问题 | 修法 | 验收 |
 |---|---|---|---|
@@ -37,7 +42,11 @@
 `cd src-ui && npx tsc --noEmit` 干净、browser-tools vitest 不回归；
 真实启动一次 launch → targets → attach → inspect 冒烟。
 
-## 2. P1 —— 好用
+**落地注记**：8 项全做（cargo test 254 过）。另顺手修两处：launch 复用逻辑重写
+（活 Chrome 未复用会双开）、spawn 前回收旧 Chrome 句柄（显式换端口时 kill 旧进程）。
+端到端冒烟未跑（需真实 app + 权限弹窗人工批准）。
+
+## 2. P1 —— 好用 ✅ `b4dd1f5`
 
 1. **snapshot + ref（D2）**：探针收集可交互元素 → 紧凑清单（tag / role / 文本 / ref）→
    打 `data-hg-ref` 标记；click / type / scroll 收 ref 参数；ref 失效错误带恢复指引
@@ -49,7 +58,14 @@
 4. **验收**：Agent 在真实任务里用 snapshot → click(ref) → console 完成一次
    「改 UI → 自查渲染 → 看报错」闭环，全程不手写 selector。
 
-## 3. P2 —— 完整
+**落地注记**：三项全做，另含 self 通道统一（D4，原计划与本批合并）。
+与计划的差异：①D3 落地为「命令通道保持短连接 + 事件通道持久 WS」双轨——
+短连接的命令通道有全链路超时兜底，不必为事件流重写；②self 会话是 webview
+调试端口上的只读会话（操作类动作在 rpc 层被拒），探针单一来源
+（`cdp/probes/*.js`，`node --check` 测试），`dom-probe.ts` 双探针已删除；
+③验收闭环未实测（需真实 app）。
+
+## 3. P2 —— 完整 ✅ `b4dd1f5`
 
 1. **截图**：`Page.captureScreenshot` 落盘 + 回传 base64。vision 模型可看直接闭环；
    纯文本模型下截图给用户人工确认。
@@ -61,16 +77,31 @@
    `browser(audit)` 查询；UI 侧可选展示「Agent 刚才在浏览器干了什么」。
 5. **验收**：审计日志可回放一次完整会话；租约触发实测。
 
+**落地注记**：主体四项全做。与计划的差异：①截图只落盘返回 `{path, bytes}`，
+未回传 base64（纯文本模型也看不到内容，路径交给用户确认）；②崩溃检测落地为
+「检测到退出 → 清句柄」，自动重启改为惰性（下次 launch 复用逻辑自动起新的）；
+③profile 目录定期清理未做（P2 遗留，低成本可后补）；④UI 侧审计展示未做
+（browser(audit) 可查，UI 集成是后续交互形态的事）。租约触发与审计回放未实测。
+
 ## 4. 范围纪律
 
 - 每期只动自己声称的位置；P0 不碰 TS 工具面（P0-6 方案 A 在 Rust 侧，无例外）。
 - 不恢复 Node 桥方案（`tool-convergence-browser-plan` §3.4 已否决，理由不变）。
 - 不改 CI；文档数字以实测为准；工具集清单变化时同步 AGENTS.md 与对应 docs。
 
-## 5. 开放决策
+## 5. 开放决策 —— 最终选择
 
-| 决策 | 推荐 | 备选 |
+| 决策 | 最终选择 | 备选（未采用） |
 |---|---|---|
-| snapshot 打标方式 | 持久标记 `data-hg-ref`（快照时重打） | 数组索引（每步重算，DOM 一变就漂） |
-| 截图通道 | base64 回传工具结果 | 只落盘给路径（模型看不到内容） |
-| self 迁移节奏 | P1 与 snapshot 同批（D4 一次到位） | P2 再做（期间继续维护双探针） |
+| snapshot 打标方式 | ✅ 持久标记 `data-hg-ref`（快照时重打） | 数组索引（每步重算，DOM 一变就漂） |
+| 截图通道 | 只落盘返回路径（纯文本模型下交给用户确认） | base64 回传工具结果 |
+| self 迁移节奏 | ✅ P1 同批完成（D4 一次到位，双探针已删） | P2 再做（期间继续维护双探针） |
+
+## 6. 遗留（P2 之后）
+
+| 项 | 说明 |
+|---|---|
+| profile 目录定期清理 | 临时目录 `hologram-browser-profile` 目前不清理，低成本可后补 |
+| UI 侧审计展示 | 数据已有（`browser(audit)` / jsonl），UI 集成属交互形态工作 |
+| 端到端冒烟 | launch→attach→snapshot→click 闭环 + 权限弹窗，需真实 app 人工批准 |
+| 租约/审计实测 | 10 分钟空闲回收、审计回放，需真实运行 |
