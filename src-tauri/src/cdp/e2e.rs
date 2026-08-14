@@ -662,6 +662,27 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
         "launch 应回显 windowSize: {out}"
     );
 
+    // 第四批跨平台 discover：真实进程表必须能看到刚 launch 的 9447。
+    // Windows 走 PowerShell，macOS/Linux 走 ps；任一路径失败都会在这里暴露。
+    {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let disc = cdp_discover().expect("discover 应成功");
+            let vd: Value = serde_json::from_str(&disc).expect("discover 返回应可解析");
+            let seen = vd["instances"]
+                .as_array()
+                .map(|arr| arr.iter().any(|i| i["port"].as_u64() == Some(E2E_HEADLESS_PORT as u64)))
+                .unwrap_or(false);
+            if seen {
+                break;
+            }
+            if Instant::now() > deadline {
+                panic!("discover 应发现受控 Chrome 端口 {E2E_HEADLESS_PORT}: {disc}");
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }
+
     let target_id = wait_target_with_url(agent, "127.0.0.1", Duration::from_secs(10)).await;
     let a = cdp_attach(&target_id, Some(agent)).expect("attach 应成功");
     assert!(a.contains("\"attached\":true"), "attach 返回异常: {a}");
@@ -716,6 +737,23 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
         "detail 应返回完整请求 URL: {detail}"
     );
     assert_eq!(vd["entry"]["status"].as_u64(), Some(200), "detail 状态应为 200: {detail}");
+
+    // 第四批 HAR 导出：写入临时目录的 HAR 文件必须可读且含已观察请求。
+    let har_out = cdp_network_har(Some(agent), Some(50)).expect("network_har 应成功");
+    let vh: Value = serde_json::from_str(&har_out).expect("network_har 返回应可解析");
+    let har_path = vh["path"].as_str().expect("network_har 应返回 path").to_string();
+    let har_bytes = vh["bytes"].as_u64().expect("network_har 应返回 bytes");
+    assert!(har_bytes > 0, "HAR 文件不应为空: {har_out}");
+    let har_text = std::fs::read_to_string(&har_path).expect("HAR 文件应可读");
+    let har_json: Value = serde_json::from_str(&har_text).expect("HAR 文件应为合法 JSON");
+    assert_eq!(har_json["log"]["version"], "1.2");
+    assert!(
+        har_json["log"]["entries"]
+            .as_array()
+            .map(|arr| arr.iter().any(|e| e["request"]["url"].as_str().unwrap_or("").contains("/api.json")))
+            .unwrap_or(false),
+        "HAR 应包含 /api.json 请求: {har_text}"
+    );
 
     // AX snapshot：真实 Chrome 应走 Accessibility.getFullAXTree 并带 role/name。
     let snap = cdp_snapshot(None, Some(50), Some(0), Some(agent))

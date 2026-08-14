@@ -154,7 +154,7 @@
 - 新增 `browser_network_detail(requestId)`：完整 URL/method/status/请求响应头/postData(2000 字符上限)/error；仅可查仍在 200 条窗口内的请求，HAR 导出仍为后续项。
 - AX snapshot：`cdp_snapshot` 无 scope 时优先 `Accessibility.getFullAXTree`，批量 `DOM.resolveNode` + `Runtime.callFunctionOn` 把 AX 节点回写 `data-hg-ref`，ref 语义与 DOM 探针一致；任一步失败回退增强 `snapshot.js`（accessible name / aria-labelledby / label[for] / same-origin iframe + shadow DOM 遍历）。selector 定位收口到 `find_el_expr`（iframe/shadow 内的 ref 现在可 click/type/select/hover/scroll）。
 - `browser_launch` 新增 `headless` / `windowSize`（width/height 1-16384）；复用会话时校验启动形态一致性，不一致则回收重启。self/connect/kill 路径同步清理这两个字段。
-- 测试：`cargo test cdp::` 22/22（新增 network 配对单测、launch windowSize 参数单测；4 个真实 Chrome e2e 本机无 Chrome 自动跳过，新增 E2E-4 覆盖 headless/windowSize + 本地 HTTP network 配对/详情 + AX snapshot）；全量 `cargo test` 265 passed / 8 failed（8 个为历史环境失败）。随后补的 AX 解析单测与 `find_el_expr` 路径已通过 `cargo check --tests`（本机内存不足未能再次完成链接）。
+- 测试：`cargo test cdp::` 22/22（新增 network 配对单测、launch windowSize 参数单测；4 个真实 Chrome e2e 本机无 Chrome 自动跳过，新增 E2E-4 覆盖 headless/windowSize + 本地 HTTP network 配对/详情 + HAR 导出 + AX snapshot）；全量 `cargo test` 265 passed / 8 failed（8 个为历史环境失败）。随后补的 AX 解析单测与 `find_el_expr` 路径已通过 `cargo check --tests`（本机内存不足未能再次完成链接）。
 - 无 Chrome 环境的行为保障：新增 `src-ui/tests/browser-snapshot-probe.test.ts`（jsdom）实测回退探针的可访问名称、label[for]/aria-labelledby、iframe + shadow DOM 遍历、ref 回写与 scope 错误；`npx tsc --noEmit` 通过；vitest（browser-tools/domains-convergence/define-tool/browser-snapshot-probe）53/53。
 - 未做（按计划留到第四批/后续）：HAR 导出、`Emulation.setDeviceMetricsOverride`、跨平台 find_chrome/discover、cdp.rs 拆分、审计/截图轮转清理。
 
@@ -220,7 +220,7 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 
 1. `git fetch` / `git pull` 到 `fec19fe`（或让用户 push 后拉取）。
 2. 当前条件：无 Windows 真机。可跑保障 = `cargo check --tests`、`npx tsc --noEmit`、vitest（browser-tools/domains-convergence/define-tool/browser-snapshot-probe）；内存充足时补 `cargo test cdp::` 与全量 `cargo test`（确认仍是 8 个历史失败）。E2E-1/2/3/4 自动跳过是已知未验证项，不是失败。
-3. 将来有 Windows 环境时：`cd src-tauri && cargo test cdp:: -- --nocapture` 实跑 E2E-1/2/3/4；重点看 E2E-4 的 headless/windowSize、network 配对/详情、AX snapshot，失败输出贴回。
+3. 将来有 Windows 环境时：`cd src-tauri && cargo test cdp:: -- --nocapture` 实跑 E2E-1/2/3/4；重点看 E2E-4 的 headless/windowSize、discover、network 配对/详情、HAR 导出、AX snapshot、viewport，失败输出贴回。
 4. 第四批基本完成；若继续做 eval 隔离 world（可选），先跑第 2 条。
 
 ### 8.3 第三批任务（✅ 已落地，`2c8376a`）
