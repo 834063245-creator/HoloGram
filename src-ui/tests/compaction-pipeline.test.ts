@@ -114,6 +114,7 @@ const USAGE_HIGH = {
   cache_hit_tokens: 0,
   cache_miss_tokens: 0,
   reasoning_tokens: 0,
+  cache_creation_tokens: 0,
   finish_reason: 'stop',
 };
 

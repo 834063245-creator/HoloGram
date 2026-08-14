@@ -1284,7 +1284,12 @@ ${resumeNote}
           model: this.prov.name(),
           finish_reason: usage.finish_reason,
           total_tokens: usage.total_tokens,
+          prompt_tokens: usage.prompt_tokens,
           cache_hit_tokens: usage.cache_hit_tokens,
+          cache_miss_tokens: usage.cache_miss_tokens,
+          cache_creation_tokens: usage.cache_creation_tokens,
+          completion_tokens: usage.completion_tokens,
+          reasoning_tokens: usage.reasoning_tokens,
           elapsed_ms: Math.round(performance.now() - turnStart),
         });
         this._diagTokenBreakdown(usage);

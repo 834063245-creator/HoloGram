@@ -444,6 +444,8 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
         total_tokens: inTok + outTok,
         cache_hit_tokens: cacheRead,
         cache_miss_tokens: inTok - cacheRead,
+        // Anthropic 单独报告缓存创建(写缓存)token —— 单价高于普通输入,是重要成本项。
+        cache_creation_tokens: _cacheCreate,
         // Anthropic Messages API 的 usage 不提供 reasoning_tokens 字段——
         // 0 是事实正确，不是缺实现（openai 协议才有该拆解）。
         reasoning_tokens: 0,

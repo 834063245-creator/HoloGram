@@ -64,6 +64,10 @@ export interface Usage {
   total_tokens: number;
   cache_hit_tokens: number;
   cache_miss_tokens: number;
+  /** 写缓存(缓存创建)的输入 token 数。
+   *  Anthropic 通过 cache_creation_input_tokens 单独报告(单价较高);
+   *  OpenAI 兼容(DeepSeek 等)通常没有该拆解,置 0。 */
+  cache_creation_tokens: number;
   reasoning_tokens: number;
   finish_reason: string; // "stop", "tool_calls", "length", "content_filter"
 }

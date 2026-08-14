@@ -38,6 +38,9 @@ interface OpenAiSseEvent extends SseEvent {
     total_tokens: number;
     prompt_tokens_details?: { cached_tokens?: number };
     completion_tokens_details?: { reasoning_tokens?: number };
+    // DeepSeek 在 usage 顶层单独报告精确缓存拆解(OpenAI 原生无)。
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
   };
   choices?: Array<{
     delta: {
@@ -275,12 +278,18 @@ async function* readSSE(body: ReadableStream<Uint8Array>, name: string, signal?:
     // 处理它但不要 continue — 同一个 chunk 可能还携带带 finish_reason 的 choices，
     // 我们需要它来检测工具调用是否完成。
     if (ev.usage) {
+      const cached =
+        ev.usage.prompt_cache_hit_tokens ??
+        ev.usage.prompt_tokens_details?.cached_tokens ??
+        0;
       usage = {
         prompt_tokens: ev.usage.prompt_tokens,
         completion_tokens: ev.usage.completion_tokens,
         total_tokens: ev.usage.total_tokens,
-        cache_hit_tokens: ev.usage.prompt_tokens_details?.cached_tokens || 0,
-        cache_miss_tokens: ev.usage.prompt_tokens - (ev.usage.prompt_tokens_details?.cached_tokens || 0),
+        cache_hit_tokens: cached,
+        cache_miss_tokens: ev.usage.prompt_cache_miss_tokens ?? (ev.usage.prompt_tokens - cached),
+        // OpenAI 兼容协议不提供缓存创建(写缓存)拆解;DeepSeek 同样只给 read 侧的 hit/miss。
+        cache_creation_tokens: 0,
         reasoning_tokens: ev.usage.completion_tokens_details?.reasoning_tokens || 0,
         finish_reason: 'stop',
       };

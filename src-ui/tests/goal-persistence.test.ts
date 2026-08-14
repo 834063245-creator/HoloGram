@@ -32,6 +32,7 @@ const USAGE = {
   cache_hit_tokens: 0,
   cache_miss_tokens: 100,
   reasoning_tokens: 0,
+  cache_creation_tokens: 0,
   finish_reason: 'stop',
 } as const;
 
