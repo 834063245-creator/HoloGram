@@ -60,6 +60,11 @@ pub fn parse_serve_args() -> Option<Option<String>> {
     if is_serve { Some(project_root) } else { None }
 }
 
+/// 是否同时开启 TCP 9777 监听（serve --tcp）—— 与 MCP stdio 共享同一内存图。
+pub fn parse_tcp_flag() -> bool {
+    std::env::args().any(|a| a == "--tcp")
+}
+
 /// 检查引擎是否已有已加载的图索引（节点数 > 0）。
 fn has_active_index() -> bool {
     engine::engine_read(|idx| idx.node_count() > 0).unwrap_or(false)

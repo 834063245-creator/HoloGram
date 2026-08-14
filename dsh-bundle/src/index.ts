@@ -112,45 +112,37 @@ function contentType(ext: string): string {
 }
 
 /**
- * 给 viewer 提供 GraphJSON —— 尊重引擎的「数据生命周期」。
+ * 给 viewer 提供 GraphJSON —— 读「共享引擎」的数据（单一数据生命周期）。
  *
- * 引擎的设计本意是「一个长驻进程持有图：全量 analyze 一次，之后所有查询读同一份
- * 内存图」。Tauri 端就是常驻 9777 的 TCP 引擎。早期实现每次请求临时 spawn 一个
- * 新引擎全量重分析再杀进程——把引擎的持久化/内存图/watcher 生命周期全绕过了，
- * 每次打开都是 20s 全量扫描。现在改为：
+ * 引擎进程以 serve --tcp 启动：stdio MCP（34 个工具）与 TCP 9777（viewer）跑在
+ * 同一个进程里，共享同一份内存图 + watcher 增量更新。host 插件不再 spawn 自己的
+ * 引擎，而是直连共享引擎的 9777：
  *
- *   - host 插件内保持一个长驻引擎进程（TCP 9777，与 Tauri 用法一致）；
- *   - analyze 只在「首次 / 换了项目 / ?refresh=1 显式刷新」时发生；
- *   - 其余请求直接 get_graph（读引擎内存，毫秒级）；
- *   - 请求串行化（同一时刻一个未完成请求），引擎崩溃自动重启。
+ *   - get_graph：读引擎内存（含 watcher 实时增量后的最新图），毫秒级；
+ *   - analyze:<project>：只在「首次 / 图不属于该项目 / ?refresh=1」时发送——
+ *     会切换共享引擎的工作区（与 Tauri 行为一致），MCP 工具随之查同一份图；
+ *   - 请求串行化，连接断开自动重连。
  */
-let engineProc: ReturnType<typeof spawn> | null = null
 let engineSocket: ReturnType<typeof connect> | null = null
 let engineConnecting: Promise<ReturnType<typeof connect>> | null = null
-let engineEpoch = 0
 let analyzedProject: string | null = null
 let engineQueue: Promise<unknown> = Promise.resolve()
 
-function killEngine(): void {
-  engineEpoch++
-  try { engineProc?.kill() } catch { /* 尽力 */ }
+function dropEngineSocket(): void {
   try { engineSocket?.destroy() } catch { /* 尽力 */ }
-  engineProc = null
   engineSocket = null
   engineConnecting = null
   analyzedProject = null
 }
 
-/** 确保长驻引擎在跑并已绑定 9777；返回可用 socket。 */
-function ensureEngine(bin: string): Promise<ReturnType<typeof connect>> {
+/** 连接共享引擎（MCP 引擎的 TCP 9777）。只连接不 spawn——引擎归 dsh-mcp-client 管。 */
+function ensureEngine(): Promise<ReturnType<typeof connect>> {
   if (engineConnecting) return engineConnecting
   if (engineSocket) return Promise.resolve(engineSocket)
-  const epoch = engineEpoch
   engineConnecting = (async () => {
-    engineProc = spawn(bin, [], { stdio: ['ignore', 'ignore', 'ignore'] })
-    let lastErr: unknown = new Error('engine did not bind 9777')
-    for (let attempt = 0; attempt < 120; attempt++) {
-      if (engineEpoch !== epoch) throw new Error('engine restarted')
+    let lastErr: unknown = new Error('hologram engine not reachable on 127.0.0.1:9777 — 共享引擎未运行（dsh-mcp-client 的 hologram 引擎应常驻）')
+    // 引擎可能正在启动（MCP 连接建立 + 首次连接 9777 需要一点时间）：重试 ~10s
+    for (let attempt = 0; attempt < 20; attempt++) {
       try {
         const sock = connect(9777, '127.0.0.1')
         await new Promise<void>((res, rej) => {
@@ -158,8 +150,8 @@ function ensureEngine(bin: string): Promise<ReturnType<typeof connect>> {
           sock.once('error', (e) => rej(e))
         })
         engineSocket = sock
-        sock.on('error', () => { if (engineSocket === sock) killEngine() })
-        sock.on('close', () => { if (engineSocket === sock) killEngine() })
+        sock.on('error', () => { if (engineSocket === sock) dropEngineSocket() })
+        sock.on('close', () => { if (engineSocket === sock) dropEngineSocket() })
         return sock
       } catch (e) {
         lastErr = e
@@ -174,9 +166,9 @@ function ensureEngine(bin: string): Promise<ReturnType<typeof connect>> {
 }
 
 /** 帧协议请求（4 字节 LE 长度前缀 + JSON），串行化，带超时。 */
-function engineRequest(bin: string, cmd: string): Promise<string> {
+function engineRequest(cmd: string): Promise<string> {
   const run = engineQueue.then(async () => {
-    const sock = await ensureEngine(bin)
+    const sock = await ensureEngine()
     return new Promise<string>((resolve, reject) => {
       let buf = Buffer.alloc(0)
       let settled = false
@@ -201,22 +193,43 @@ function engineRequest(bin: string, cmd: string): Promise<string> {
   return run
 }
 
+/** 图是否属于该项目：取样本节点 location，多数落在 project 前缀下即视为匹配。 */
+function graphMatchesProject(graph: { nodes?: unknown[] }, project: string): boolean {
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const target = norm(project)
+  if (!Array.isArray(graph.nodes) || graph.nodes.length === 0) return false
+  const sample = graph.nodes.slice(0, 60)
+  let hits = 0
+  for (const n of sample) {
+    const loc = norm(String((n as { location?: unknown }).location ?? (n as { name?: unknown }).name ?? ''))
+    if (loc.startsWith(target)) hits++
+  }
+  return hits >= Math.ceil(sample.length * 0.5)
+}
+
 /**
- * 取图：analyze 只发生在首次 / 换项目 / refresh；否则直接读引擎内存。
- * 引擎 analyze 成功返回 GraphJSON；失败返回 {"error": ...}。
+ * 取图：analyze 只在「首次 / 图不属于该项目 / refresh」时发生；
+ * 否则直接读共享引擎内存（含 watcher 增量）。
  */
 async function fetchGraphFromEngine(
-  bin: string,
+  _bin: string,
   project: string,
   refresh: boolean,
 ): Promise<{ nodes: unknown[]; edges: unknown[]; meta: { project: string } }> {
-  if (refresh || analyzedProject !== project) {
-    const raw = await engineRequest(bin, 'analyze:' + project)
-    const parsed = JSON.parse(raw)
-    if (parsed && typeof parsed === 'object' && parsed.error) throw new Error(String(parsed.error))
+  // 先读一次：若共享引擎已持有该项目的图（比如 MCP analyze_project 刚分析过），
+  // 直接秒回，不重复分析。
+  let g = JSON.parse(await engineRequest('get_graph'))
+  if (g && typeof g === 'object' && g.error) throw new Error(String(g.error))
+  if (!refresh && graphMatchesProject(g, project)) {
     analyzedProject = project
+    return { nodes: g.nodes ?? [], edges: g.edges ?? [], meta: { project } }
   }
-  const g = JSON.parse(await engineRequest(bin, 'get_graph'))
+  // 需要分析：切换共享引擎到该项目（与 Tauri 工作区切换一致）
+  const raw = await engineRequest('analyze:' + project)
+  const parsed = JSON.parse(raw)
+  if (parsed && typeof parsed === 'object' && parsed.error) throw new Error(String(parsed.error))
+  analyzedProject = project
+  g = JSON.parse(await engineRequest('get_graph'))
   if (g && typeof g === 'object' && g.error) throw new Error(String(g.error))
   return { nodes: g.nodes ?? [], edges: g.edges ?? [], meta: { project } }
 }
@@ -304,7 +317,7 @@ export function apply(ctx: Context, config: Config): void {
   const service: HologramEngineService = {
     bin,
     projectRoot,
-    serveArgs: ['serve', '--project-root', projectRoot],
+    serveArgs: ['serve', '--project-root', projectRoot, '--tcp'],
     env: config.env,
   }
   ctx.provide(SERVICE, service)

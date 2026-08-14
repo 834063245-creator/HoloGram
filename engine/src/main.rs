@@ -211,6 +211,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 缺少此信号会导致 read_ready() 超时
                 println!(r#"{{"jsonrpc":"2.0","method":"ready"}}"#);
 
+                // serve --tcp：后台再起 TCP 9777（与 stdio MCP 共享同一进程级 ENGINE
+                // 内存图与 watcher）——viewer 的 /hologram/api/graph 走这条通道。
+                if mcp::parse_tcp_flag() {
+                    tokio::spawn(async move {
+                        if let Err(e) = run_tcp_server().await {
+                            eprintln!("[engine] TCP server failed: {}", e);
+                        }
+                    });
+                    info!("engine TCP 9777 also serving (serve --tcp)");
+                }
+
                 let server = McpServer::new(&root);
                 server.run_stdio();
             }
@@ -218,6 +229,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // ── 不带 --project-root 的 MCP 服务：惰性启动 ──
                 // 首次 analyze_project 调用时才加载图数据
                 info!("engine starting in MCP serve mode (lazy — no project)");
+                if mcp::parse_tcp_flag() {
+                    tokio::spawn(async move {
+                        if let Err(e) = run_tcp_server().await {
+                            eprintln!("[engine] TCP server failed: {}", e);
+                        }
+                    });
+                    info!("engine TCP 9777 also serving (serve --tcp)");
+                }
                 let server = McpServer::new(std::path::Path::new("."));
                 server.run_stdio();
             }
@@ -259,6 +278,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╚══════════════════════════════════════════════════╝");
     println!();
 
+    run_tcp_server().await?;
+    Ok(())
+}
+
+/// TCP RPC 服务器（默认模式；serve --tcp 模式下也在后台运行）。
+/// 供 Tauri 前端 / viewer（/hologram/api/graph）等客户端调用；
+/// 与 MCP stdio 共享同一进程级 ENGINE 内存图与 watcher。
+async fn run_tcp_server() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:9777").await?;
     info!("TCP server listening on 127.0.0.1:9777");
 
@@ -422,6 +449,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 }
+
 
 /// 处理全量分析请求。
 ///
@@ -729,7 +757,29 @@ fn handle_get_graph() -> Vec<u8> {
                 "temporal_delay_sec": e.temporal_delay_sec,
             })
         }).collect();
-        serde_json::json!({"nodes": nodes, "edges": edges})
+        // viewer 渲染分组需要社区数据（与 handle_analyze 同源序列化）
+        let communities = detect_communities(g, 42);
+        let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
+            .map(|(i, c)| serde_json::json!({
+                "id": format!("comm_{}", i), "label": format!("社区 {}", i + 1),
+                "size": c.len(), "node_ids": c
+            }))
+            .collect();
+        let hcommunities = detect_hierarchical_communities(g, 42);
+        let hcommunities_json: Vec<serde_json::Value> = hcommunities.iter()
+            .map(|hc| serde_json::json!({
+                "id": hc.id,
+                "label": hc.label,
+                "node_ids": hc.node_ids,
+                "level": hc.level,
+                "parent_id": hc.parent_id,
+            }))
+            .collect();
+        serde_json::json!({
+            "nodes": nodes, "edges": edges,
+            "communities": communities_json,
+            "hierarchical_communities": hcommunities_json,
+        })
     }) {
         Ok(v) => serde_json::to_vec(&v).unwrap_or_default(),
         Err(_) => b"{\"nodes\":[],\"edges\":[]}".to_vec(),
