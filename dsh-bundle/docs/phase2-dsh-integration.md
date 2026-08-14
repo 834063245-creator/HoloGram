@@ -103,8 +103,21 @@ dsh web  # 重启
 快照里「当前会话的 cwd」作为 `?project=`（跟随正在工作的项目），取不到时回退到 `FALLBACK_PROJECT`
 （默认 `D:/HoloGramHG`）。`viewer/main.ts` 同源调 `/hologram/api/graph?project=`。
 
-## host 侧图缓存（2026-08-14 已并入 src/index.ts）
+## host 侧数据生命周期：单一长驻引擎（2026-08-14 重写）
 
-`createGraphHandler` 带每项目内存缓存：首次 analyze 后 5 分钟内复用（TTL），`?refresh=1` 强制重新 analyze。
-该实现已在源码，**需重启 GUI 让新 host 模块（lib/index.mjs）落位后才生效**。
-（本 agent 已在运行中 GUI 的 web profile 执行 remove+add 落位新文件；下一步只需用户重启 GUI 激活。）
+早期实现每次 /hologram/api/graph 请求都临时 spawn 一个新引擎全量 analyze 再杀进程——
+把引擎「分析一次、反复查询」的数据生命周期整个绕过了，每次打开都是 20s 全量扫描。
+现改为与 Tauri 一致的长驻引擎模型：
+
+- host 插件保持**一个长驻引擎进程**（TCP 9777）
+- `analyze` 只在**首次 / 换项目 / `?refresh=1`** 时发生
+- 其余请求直接 `get_graph`（读引擎内存，毫秒级）
+- 请求串行化（同一时刻一个未完成请求），引擎崩溃自动重启
+
+**需重启 GUI 让新 host 模块（lib/index.mjs）落位后才生效。**
+
+### 与 MCP 引擎的关系（重要）
+
+MCP 工具（34 个 mcp__hologram__*）走 `hologram-mcp` 的 stdio 长驻引擎；viewer 走 host
+插件的 TCP 长驻引擎。两者是**独立进程、独立分析**——各自的 re-analyze 不互通。
+但它们现在都遵守同一生命周期：分析一次、反复查询，不再每次请求全量重扫。

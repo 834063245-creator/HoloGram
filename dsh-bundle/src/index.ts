@@ -112,14 +112,114 @@ function contentType(ext: string): string {
 }
 
 /**
- * 给 viewer 提供「实时 analyze 一个项目 → GraphJSON」。
- * 复用引擎二进制（TCP analyze + get_graph），等价于独立的 serve-graph 进程，
- * 但作为 DSH webserver 的一个路由 handler 内联运行——发货后不依赖 5190。
+ * 给 viewer 提供 GraphJSON —— 尊重引擎的「数据生命周期」。
+ *
+ * 引擎的设计本意是「一个长驻进程持有图：全量 analyze 一次，之后所有查询读同一份
+ * 内存图」。Tauri 端就是常驻 9777 的 TCP 引擎。早期实现每次请求临时 spawn 一个
+ * 新引擎全量重分析再杀进程——把引擎的持久化/内存图/watcher 生命周期全绕过了，
+ * 每次打开都是 20s 全量扫描。现在改为：
+ *
+ *   - host 插件内保持一个长驻引擎进程（TCP 9777，与 Tauri 用法一致）；
+ *   - analyze 只在「首次 / 换了项目 / ?refresh=1 显式刷新」时发生；
+ *   - 其余请求直接 get_graph（读引擎内存，毫秒级）；
+ *   - 请求串行化（同一时刻一个未完成请求），引擎崩溃自动重启。
  */
-// 每项目的内存图缓存：首次 analyze 后复用，之后的请求秒回 —— 尊重引擎"图数据生命周期"，
-// 不再每次都全量重分析（大仓单次分析可达 ~20s）。
-const graphCache = new Map<string, { graph: { nodes: unknown[]; edges: unknown[]; meta: { project: string } }; at: number }>()
-const CACHE_TTL_MS = 5 * 60 * 1000 // 5 分钟，之后可手动强制刷新
+let engineProc: ReturnType<typeof spawn> | null = null
+let engineSocket: ReturnType<typeof connect> | null = null
+let engineConnecting: Promise<ReturnType<typeof connect>> | null = null
+let engineEpoch = 0
+let analyzedProject: string | null = null
+let engineQueue: Promise<unknown> = Promise.resolve()
+
+function killEngine(): void {
+  engineEpoch++
+  try { engineProc?.kill() } catch { /* 尽力 */ }
+  try { engineSocket?.destroy() } catch { /* 尽力 */ }
+  engineProc = null
+  engineSocket = null
+  engineConnecting = null
+  analyzedProject = null
+}
+
+/** 确保长驻引擎在跑并已绑定 9777；返回可用 socket。 */
+function ensureEngine(bin: string): Promise<ReturnType<typeof connect>> {
+  if (engineConnecting) return engineConnecting
+  if (engineSocket) return Promise.resolve(engineSocket)
+  const epoch = engineEpoch
+  engineConnecting = (async () => {
+    engineProc = spawn(bin, [], { stdio: ['ignore', 'ignore', 'ignore'] })
+    let lastErr: unknown = new Error('engine did not bind 9777')
+    for (let attempt = 0; attempt < 120; attempt++) {
+      if (engineEpoch !== epoch) throw new Error('engine restarted')
+      try {
+        const sock = connect(9777, '127.0.0.1')
+        await new Promise<void>((res, rej) => {
+          sock.once('connect', () => res())
+          sock.once('error', (e) => rej(e))
+        })
+        engineSocket = sock
+        sock.on('error', () => { if (engineSocket === sock) killEngine() })
+        sock.on('close', () => { if (engineSocket === sock) killEngine() })
+        return sock
+      } catch (e) {
+        lastErr = e
+        await new Promise(r => setTimeout(r, 500))
+      }
+    }
+    throw lastErr
+  })()
+  const p = engineConnecting
+  p.then(() => { if (engineConnecting === p) engineConnecting = null }).catch(() => { if (engineConnecting === p) engineConnecting = null })
+  return p
+}
+
+/** 帧协议请求（4 字节 LE 长度前缀 + JSON），串行化，带超时。 */
+function engineRequest(bin: string, cmd: string): Promise<string> {
+  const run = engineQueue.then(async () => {
+    const sock = await ensureEngine(bin)
+    return new Promise<string>((resolve, reject) => {
+      let buf = Buffer.alloc(0)
+      let settled = false
+      const onData = (d: Buffer) => {
+        buf = Buffer.concat([buf, d])
+        while (buf.length >= 4) {
+          const len = buf.readUInt32LE(0)
+          if (buf.length < 4 + len) break
+          const payload = buf.subarray(4, 4 + len).toString('utf8')
+          buf = buf.subarray(4 + len)
+          if (!settled) { settled = true; sock.off('data', onData); resolve(payload) }
+        }
+      }
+      sock.on('data', onData)
+      sock.write(cmd + '\n')
+      setTimeout(() => {
+        if (!settled) { settled = true; sock.off('data', onData); reject(new Error('engine request timeout: ' + cmd)) }
+      }, 180000)
+    })
+  })
+  engineQueue = run.catch(() => { /* 队列吞错，避免断链 */ })
+  return run
+}
+
+/**
+ * 取图：analyze 只发生在首次 / 换项目 / refresh；否则直接读引擎内存。
+ * 引擎 analyze 成功返回 GraphJSON；失败返回 {"error": ...}。
+ */
+async function fetchGraphFromEngine(
+  bin: string,
+  project: string,
+  refresh: boolean,
+): Promise<{ nodes: unknown[]; edges: unknown[]; meta: { project: string } }> {
+  if (refresh || analyzedProject !== project) {
+    const raw = await engineRequest(bin, 'analyze:' + project)
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && parsed.error) throw new Error(String(parsed.error))
+    analyzedProject = project
+  }
+  const g = JSON.parse(await engineRequest(bin, 'get_graph'))
+  if (g && typeof g === 'object' && g.error) throw new Error(String(g.error))
+  return { nodes: g.nodes ?? [], edges: g.edges ?? [], meta: { project } }
+}
 
 export function createGraphHandler(bin: string) {
   return async function graphHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -129,15 +229,7 @@ export function createGraphHandler(bin: string) {
     if (!project) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: '?project=<path> required' })); return }
     res.setHeader('access-control-allow-origin', '*')
     try {
-      const hit = graphCache.get(project)
-      const fresh = hit !== undefined && !refresh && (Date.now() - hit.at) < CACHE_TTL_MS
-      if (fresh) {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(hit.graph))
-        return
-      }
-      const graph = await fetchGraphFromEngine(bin, project)
-      graphCache.set(project, { graph, at: Date.now() })
+      const graph = await fetchGraphFromEngine(bin, project, refresh)
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify(graph))
     } catch (e) {
@@ -145,48 +237,6 @@ export function createGraphHandler(bin: string) {
       res.end(JSON.stringify({ error: (e as Error).message }))
     }
   }
-}
-
-/** 起引擎 TCP server → analyze + get_graph → 返回 GraphJSON → 杀引擎。 */
-function fetchGraphFromEngine(bin: string, project: string): Promise<{ nodes: unknown[]; edges: unknown[]; meta: { project: string } }> {
-  return new Promise((resolve, reject) => {
-    const engine = spawn(bin, [], { stdio: ['ignore', 'ignore', 'ignore'] })
-    const fail = (e: unknown) => { engine.kill(); reject(e) }
-    // 等引擎绑定 9777（重试）
-    const tryConnect = (attempt: number) => {
-      const sock = connect(9777, '127.0.0.1')
-      const onC = async () => {
-        let buf = Buffer.alloc(0); const pend: ((p: string) => void)[] = []; let done = false
-        const cleanup = () => { engine.kill(); sock.destroy() }
-        const failOnce = (e: unknown) => { if (!done) { done = true; cleanup(); reject(e) } }
-        sock.on('data', (d: Buffer) => {
-          buf = Buffer.concat([buf, d])
-          while (buf.length >= 4) {
-            const len = buf.readUInt32LE(0)
-            if (buf.length < 4 + len) break
-            const payload = buf.subarray(4, 4 + len).toString('utf8')
-            buf = buf.subarray(4 + len)
-            pend.shift()?.(payload)
-          }
-        })
-        sock.on('error', failOnce)
-        const req = (cmd: string) => new Promise<string>(r => { pend.push(r); sock.write(cmd + '\n') })
-        try {
-          await req('analyze:' + project)
-          const g = JSON.parse(await req('get_graph'))
-          if (!done) { done = true; cleanup(); resolve({ nodes: g.nodes ?? [], edges: g.edges ?? [], meta: { project } }) }
-        } catch (e) { failOnce(e) }
-      }
-      const onErr = () => {
-        if (attempt <= 0) fail(new Error('engine did not bind 9777'))
-        else setTimeout(() => tryConnect(attempt - 1), 500)
-      }
-      sock.once('connect', onC)
-      sock.once('error', onErr)
-    }
-    tryConnect(60)
-    setTimeout(() => fail(new Error('engine timeout')), 120000)
-  })
 }
 
 /**
