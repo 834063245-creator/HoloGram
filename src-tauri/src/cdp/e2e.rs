@@ -11,21 +11,26 @@
 //   - kill 语义：外部实例只断开不杀、受控实例终止 + profile 定向回收
 //   - 二轮评审第一批：navigate/back/forward/reload + content 分页 +
 //     type(replace) + select（value/option 文本）
-// 无 Chrome 环境（CI 容器等）自动跳过；两个测试用共享锁串行。
-// 端口：9444（外部实例）/ 9445（受控 launch），避开 app 的 9222 / 9223-9238。
+// 无 Chrome 环境（CI 容器等）自动跳过；全部测试用共享锁串行。
+// 端口：9444（外部实例）/ 9445（受控 launch）/ 9446（round2）/ 9447（round3），
+// 避开 app 的 9222 / 9223-9238。
 
 use super::*;
+use std::io::Read;
+use std::net::TcpListener;
 use std::process::{Child, Command};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// 两个 e2e 测试互斥（共享真实 Chrome/端口/profile），也与触碰
+/// e2e 测试互斥（共享真实 Chrome/端口/profile），也与触碰
 /// SESSIONS 全局的单元测试共存（不同 agent key + 锁内完成）。
 static E2E_LOCK: Mutex<()> = Mutex::new(());
 
 const E2E_EXTERNAL_PORT: u16 = 9444;
 const E2E_LAUNCH_PORT: u16 = 9445;
 const E2E_NAV_PORT: u16 = 9446;
+const E2E_HEADLESS_PORT: u16 = 9447;
 const E2E_EXTERNAL_PROFILE: &str = "hologram-browser-profile-e2e-external";
 
 /// 无 Chrome 时跳过（打日志不判失败——CI 无浏览器环境也应绿）。
@@ -79,6 +84,55 @@ fn wait_port_up(port: u16, timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(200));
     }
     false
+}
+
+/// 本地 HTTP 服务：给 round3 e2e 提供可观察的真实网络事件。
+/// 非阻塞 accept + stop 原子标志；每连接只读第一段请求并立即响应。
+fn spawn_local_http_server() -> (u16, std::thread::JoinHandle<()>, Arc<AtomicBool>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind 本地 e2e HTTP 端口");
+    listener.set_nonblocking(true).expect("set nonblocking");
+    let port = listener.local_addr().expect("读取端口").port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = Arc::clone(&stop);
+    let handle = std::thread::spawn(move || {
+        while !stop2.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buf = [0u8; 4096];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let head = String::from_utf8_lossy(&buf[..n]);
+                    let path = head.split_whitespace().nth(1).unwrap_or("/");
+                    let (status, content_type, body): (&str, &str, &str) = match path {
+                        "/api.json" => ("200 OK", "application/json", r#"{"ok":true}"#),
+                        "/favicon.ico" => ("204 No Content", "text/plain", ""),
+                        _ => (
+                            "200 OK",
+                            "text/html; charset=utf-8",
+                            r#"<!doctype html><html><head><meta charset="utf-8"><title>Round3 E2E</title>
+<script>window.addEventListener('load', () => { fetch('/api.json').then((r) => r.json()).then(() => { window.__fetched = true; }); });</script>
+</head><body><button id="icon-btn" aria-label="AX icon button">⚙</button></body></html>"#,
+                        ),
+                    };
+                    use std::io::Write;
+                    let resp = format!(
+                        "HTTP/1.1 {status}
+Content-Type: {content_type}
+Content-Length: {}
+Connection: close
+
+{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    (port, handle, stop)
 }
 
 /// E2E-1：connect 外部实例全链路。
@@ -210,6 +264,8 @@ async fn e2e_launch_controlled_kill_and_profile_cleanup() {
     let out = cdp_launch(
         Some("https://example.com/".into()),
         Some(E2E_LAUNCH_PORT),
+        None,
+        None,
         Some(agent),
     )
     .await
@@ -326,7 +382,7 @@ window.addEventListener('load', () => { document.getElementById('hover-zone').ad
     let page_b_url = url::Url::from_file_path(&page_b).expect("file URL 转换").to_string();
 
     let agent = "e2e-round2-agent";
-    let out = cdp_launch(Some(page_a_url.clone()), Some(E2E_NAV_PORT), Some(agent))
+    let out = cdp_launch(Some(page_a_url.clone()), Some(E2E_NAV_PORT), None, None, Some(agent))
         .await
         .expect("launch 应成功");
     assert!(out.contains("\"launched\""), "launch 返回异常: {out}");
@@ -569,4 +625,127 @@ window.addEventListener('load', () => { document.getElementById('hover-zone').ad
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+
+/// E2E-4：第三批 round3 —— headless/windowSize 启动 + network 配对/详情 + AX snapshot。
+/// 本地 HTTP 服务提供真实网络事件；file:// 页面不可靠地产生 Network 事件，
+/// 所以这里起 127.0.0.1 服务。Linux 无 Chrome 时整段跳过（与其他 e2e 相同）。
+#[tokio::test]
+async fn e2e_headless_window_network_and_ax_snapshot() {
+    let _g = crate::utils::lock_or_recover(&E2E_LOCK);
+    if skip_if_no_chrome() {
+        return;
+    }
+    if list_targets_raw(E2E_HEADLESS_PORT).is_ok() {
+        eprintln!("[cdp-e2e] 跳过：端口 {E2E_HEADLESS_PORT} 已被占用（上次崩溃残留？）");
+        return;
+    }
+    let (http_port, server, stop) = spawn_local_http_server();
+    let page_url = format!("http://127.0.0.1:{http_port}/");
+
+    let agent = "e2e-round3-agent";
+    let out = cdp_launch(
+        Some(page_url.clone()),
+        Some(E2E_HEADLESS_PORT),
+        Some(true),
+        Some((800, 600)),
+        Some(agent),
+    )
+    .await
+    .expect("headless launch 应成功");
+    let v: Value = serde_json::from_str(&out).expect("launch 返回应可解析");
+    assert_eq!(v["headless"].as_bool(), Some(true), "launch 应回显 headless: {out}");
+    assert_eq!(
+        v["windowSize"]["width"].as_u64(),
+        Some(800),
+        "launch 应回显 windowSize: {out}"
+    );
+
+    let target_id = wait_target_with_url(agent, "127.0.0.1", Duration::from_secs(10)).await;
+    let a = cdp_attach(&target_id, Some(agent)).expect("attach 应成功");
+    assert!(a.contains("\"attached\":true"), "attach 返回异常: {a}");
+
+    // attach 后再导航一次：保证网络事件发生在 observer 已订阅之后。
+    let n = cdp_navigate(&page_url, Some(agent)).await.expect("navigate 应成功");
+    assert!(n.contains("URL"), "navigate 返回异常: {n}");
+    wait_page_ready(agent).await;
+
+    // 等页面 fetch 完成；然后 network 查询必须能按 requestId 拿到配对详情。
+    {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let fetched = runtime_evaluate("window.__fetched === true", Some(agent))
+                .await
+                .map(|v| v.as_bool().unwrap_or(false))
+                .unwrap_or(false);
+            if fetched {
+                break;
+            }
+            if Instant::now() > deadline {
+                panic!("页面 fetch 未在 10s 内完成");
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    let (request_id, request_url) = {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let net = cdp_network(Some(agent), Some(50));
+            let vn: Value = serde_json::from_str(&net).expect("network 返回应可解析");
+            if let Some(entry) = vn["entries"]
+                .as_array()
+                .and_then(|arr| arr.iter().find(|e| e["url"].as_str().unwrap_or("").contains("/api.json")))
+            {
+                break (
+                    entry["requestId"].as_str().expect("network 条目应含 requestId").to_string(),
+                    entry["url"].as_str().unwrap_or("").to_string(),
+                );
+            }
+            if Instant::now() > deadline {
+                panic!("network 缓冲应在 10s 内观察到 /api.json 请求: {net}");
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    };
+    let detail = cdp_network_detail(&request_id, Some(agent)).expect("network_detail 应成功");
+    let vd: Value = serde_json::from_str(&detail).expect("network_detail 返回应可解析");
+    assert_eq!(
+        vd["entry"]["url"].as_str(),
+        Some(request_url.as_str()),
+        "detail 应返回完整请求 URL: {detail}"
+    );
+    assert_eq!(vd["entry"]["status"].as_u64(), Some(200), "detail 状态应为 200: {detail}");
+
+    // AX snapshot：真实 Chrome 应走 Accessibility.getFullAXTree 并带 role/name。
+    let snap = cdp_snapshot(None, Some(50), Some(0), Some(agent))
+        .await
+        .expect("snapshot 应成功");
+    let vs: Value = serde_json::from_str(&snap).expect("snapshot 返回应可解析");
+    assert_eq!(vs["source"].as_str(), Some("ax"), "真实 Chrome 应优先走 AX 树: {snap}");
+    let found = vs["refs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter().any(|r| {
+                r["role"].as_str() == Some("button")
+                    && r["name"].as_str().unwrap_or("").contains("AX icon button")
+            })
+        })
+        .unwrap_or(false);
+    assert!(found, "AX snapshot 应含 button 的可访问名称: {snap}");
+
+    // windowSize 只做存在性验证：不同 Chrome 版本的 headless 视口可能减去
+    // 设备缩放/滚动条，这里锁「窗口确实开了」而不锁精确像素。
+    let viewport = runtime_evaluate("({ w: innerWidth, h: innerHeight })", Some(agent))
+        .await
+        .expect("读视口应成功");
+    assert!(
+        viewport["w"].as_u64().unwrap_or(0) > 0 && viewport["h"].as_u64().unwrap_or(0) > 0,
+        "headless 视口应可用: {viewport}"
+    );
+
+    let k = cdp_kill(Some(agent)).expect("kill 应成功");
+    assert!(k.contains("已终止"), "受控 Chrome kill 应报终止: {k}");
+    stop.store(true, Ordering::SeqCst);
+    let _ = server.join();
 }

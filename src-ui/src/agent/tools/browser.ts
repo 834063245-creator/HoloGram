@@ -57,6 +57,7 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     content: 'browser_content',
     console: 'browser_console',
     network: 'browser_network',
+    network_detail: 'browser_network_detail',
     screenshot: 'browser_screenshot',
     audit: 'browser_audit',
     click: 'browser_click',
@@ -90,10 +91,19 @@ export function createBrowserTools(): Tool[] {
       description:
         'Launch a controlled Chrome/Edge instance (isolated profile, never touches the user\'s daily browser data). ' +
         'Use before inspecting/operating external pages. Returns the debug port. ' +
-        'If already running, reuses it. Pass url to open a specific page.',
+        'If already running, reuses it; changing port/headless/windowSize restarts with the new shape. ' +
+        'Pass url to open a specific page. headless runs without a visible window.',
       schema: z.object({
         url: z.string().optional().describe('Optional URL to open in the controlled browser'),
         port: z.number().int().optional().describe('Debug port (default: auto-probe from 9223; 9222 is reserved for HoloGram webview)'),
+        headless: z.boolean().optional().describe('Run Chrome without a visible window (default false)'),
+        windowSize: z
+          .object({
+            width: z.number().int().min(1).max(16384).describe('Window width in pixels'),
+            height: z.number().int().min(1).max(16384).describe('Window height in pixels'),
+          })
+          .optional()
+          .describe('Launch window size (--window-size=width,height)'),
       }),
       execute: (args) => run('launch', args),
     }),
@@ -204,8 +214,10 @@ export function createBrowserTools(): Tool[] {
     defineTool({
       name: 'browser_snapshot',
       description:
-        'Snapshot interactive elements on the attached page — returns {refs:[{ref,tag,type,text,id}], count, total, offset, truncated}. ' +
-        'Marks elements with ref numbers; use these ref numbers in click/type/scroll (e.g. selector: "37"). ' +
+        'Snapshot interactive elements on the attached page — returns {source, refs:[{ref,tag,role,name,text,type?,id?}], count, total, offset, truncated}. ' +
+        'Prefers Chrome Accessibility.getFullAXTree (source:"ax"); falls back to an enhanced DOM probe that traverses same-origin iframes and shadow DOM ' +
+        'and computes accessible names (aria-label/labelledby/label/alt/title/placeholder). ' +
+        'Marks elements with ref numbers; use these ref numbers in click/type/select/hover/scroll (e.g. selector: "37"). ' +
         'Refs are valid until the DOM changes — if an operation fails with "target gone", re-snapshot. ' +
         'If truncated is true there are more elements below — call again with offset to page (e.g. offset: 80 for page 2, 160 for page 3). ' +
         'PREFERRED over hand-written CSS selectors.',
@@ -296,7 +308,9 @@ export function createBrowserTools(): Tool[] {
       name: 'browser_network',
       description:
         'Read recent network events (requests/responses/failures) from the attached page. ' +
-        'Use to check whether a request failed or which endpoint returned an error. Returns {entries:[{method,url,status}]}.',
+        'Requests and responses are paired by requestId: one entry has method/url/status/mimeType/error, ' +
+        'with status null while pending and error set on load failure. ' +
+        'Returns {entries:[{requestId,method,url,status,mimeType,resourceType,error}], paired:true}.',
       schema: z.object({
         limit: z.number().int().optional().describe('Max entries (default 30)'),
         target: z
@@ -306,6 +320,22 @@ export function createBrowserTools(): Tool[] {
       }),
       readOnly: true,
       execute: (args) => run('network', args),
+    }),
+    defineTool({
+      name: 'browser_network_detail',
+      description:
+        'Read full detail for one observed network request by requestId (from browser_network): ' +
+        'complete URL, method, status/statusText/mimeType, request+response headers, postData (capped), error. ' +
+        'Only requests still inside the 200-entry event buffer are available. HAR export is not implemented yet.',
+      schema: z.object({
+        requestId: z.string().describe('requestId from browser(network) entries'),
+        target: z
+          .string()
+          .optional()
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+      }),
+      readOnly: true,
+      execute: (args) => run('network_detail', args),
     }),
     defineTool({
       name: 'browser_click',

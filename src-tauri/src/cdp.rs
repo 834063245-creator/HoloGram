@@ -140,11 +140,85 @@ pub(crate) fn is_self(agent_id: Option<&str>) -> bool {
 // 事件缓冲 + 观察任务
 // ═══════════════════════════════════════════════════════════
 
+/// 网络事件条目 — 请求与响应按 requestId 配对后落入环形缓冲。
+/// 旧实现把 request / response / failed 当成三条独立流水账追加，
+/// 模型要自己猜「哪条 response 对应哪条 request」；loadingFailed 甚至把
+/// requestId 塞进 url 字段。现在每条 requestId 只有一条记录，响应/失败就地回填。
+#[derive(Clone, Default)]
+struct NetworkEntry {
+    request_id: String,
+    method: String,
+    /// 全量 URL（查询列表时再截断展示；详情保留完整 URL 便于复现请求）。
+    url: Option<String>,
+    status: Option<u64>,
+    status_text: Option<String>,
+    mime_type: Option<String>,
+    resource_type: Option<String>,
+    frame_id: Option<String>,
+    wall_time: Option<f64>,
+    request_headers: Option<Value>,
+    response_headers: Option<Value>,
+    post_data: Option<String>,
+    error: Option<String>,
+}
+
+impl NetworkEntry {
+    fn from_request(params: &Value) -> Self {
+        let req = &params["request"];
+        Self {
+            request_id: params["requestId"].as_str().unwrap_or("").to_string(),
+            method: req["method"].as_str().unwrap_or("").to_string(),
+            url: req["url"].as_str().map(String::from),
+            resource_type: params["type"].as_str().map(String::from),
+            frame_id: params["frameId"].as_str().map(String::from),
+            wall_time: params["wallTime"].as_f64(),
+            request_headers: req.get("headers").filter(|v| v.is_object()).cloned(),
+            post_data: req["postData"].as_str().map(|s| truncate_str(s, 2000)),
+            ..Self::default()
+        }
+    }
+
+    /// browser(network) 列表条目：URL 截断展示，requestId 稳定可见。
+    fn summary_value(&self) -> Value {
+        json!({
+            "requestId": self.request_id,
+            "method": self.method,
+            "url": self.url.as_deref().map(|u| truncate_str(u, 200)),
+            "status": self.status,
+            "mimeType": self.mime_type,
+            "resourceType": self.resource_type,
+            "error": self.error,
+        })
+    }
+
+    /// browser(network_detail) 单请求详情：完整 URL + 请求/响应头 + postData。
+    fn detail_value(&self) -> Value {
+        json!({
+            "requestId": self.request_id,
+            "url": self.url,
+            "method": self.method,
+            "status": self.status,
+            "statusText": self.status_text,
+            "mimeType": self.mime_type,
+            "resourceType": self.resource_type,
+            "frameId": self.frame_id,
+            "wallTime": self.wall_time,
+            "requestHeaders": self.request_headers,
+            "responseHeaders": self.response_headers,
+            "postData": self.post_data,
+            "error": self.error,
+        })
+    }
+}
+
 /// 页面事件环形缓冲——事件 task 写入，查询动作读取。
 #[derive(Default)]
 struct EventBuffers {
     console: VecDeque<String>,
-    network: VecDeque<String>,
+    network: VecDeque<NetworkEntry>,
+    /// requestId -> 配对条目。与 network 环形缓冲同步淘汰，
+    /// 保证 network_detail 只能查到仍在缓冲窗口内的请求。
+    network_index: HashMap<String, NetworkEntry>,
     errors: VecDeque<String>,
     dialogs: VecDeque<String>,
     file_choosers: VecDeque<String>,
@@ -176,6 +250,98 @@ fn truncate_str(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", &s[..max])
+    }
+}
+
+/// 写入/替换一条网络条目，并同步维护 requestId 索引与环形上限。
+fn network_upsert(bufs: &mut EventBuffers, entry: NetworkEntry) {
+    if let Some(pos) = bufs.network.iter().position(|e| e.request_id == entry.request_id) {
+        bufs.network.remove(pos);
+    }
+    bufs.network_index.insert(entry.request_id.clone(), entry.clone());
+    bufs.network.push_back(entry);
+    if bufs.network.len() > NETWORK_BUF_MAX {
+        if let Some(old) = bufs.network.pop_front() {
+            bufs.network_index.remove(&old.request_id);
+        }
+    }
+}
+
+/// Network.requestWillBeSent：新请求建立配对条目。redirect 会复用 requestId，
+/// 因此同 id 再出现时替换旧条目，保留环形缓冲里的唯一记录。
+fn network_on_request(bufs: &mut EventBuffers, params: &Value) {
+    network_upsert(bufs, NetworkEntry::from_request(params));
+}
+
+/// Network.responseReceived：按 requestId 回填 status/headers，不再追加一条
+/// 与请求割裂的 "method":"resp" 流水账。请求早于 observer 启动而缺失时，
+/// 退化为一条只有响应信息的记录（url 未知比伪造 url 更诚实）。
+fn network_on_response(bufs: &mut EventBuffers, params: &Value) {
+    let request_id = params["requestId"].as_str().unwrap_or("").to_string();
+    if request_id.is_empty() {
+        return;
+    }
+    let response = &params["response"];
+    let updated = if let Some(entry) = bufs.network_index.get_mut(&request_id) {
+        entry.url = response["url"].as_str().map(String::from).or_else(|| entry.url.clone());
+        entry.status = response["status"].as_u64();
+        entry.status_text = response["statusText"].as_str().map(String::from);
+        entry.mime_type = response["mimeType"].as_str().map(String::from);
+        entry.response_headers = response.get("headers").filter(|v| v.is_object()).cloned();
+        Some(entry.clone())
+    } else {
+        None
+    };
+    match updated {
+        Some(entry) => {
+            if let Some(pos) = bufs.network.iter().position(|e| e.request_id == request_id) {
+                bufs.network[pos] = entry;
+            }
+        }
+        None => {
+            let entry = NetworkEntry {
+                request_id,
+                url: response["url"].as_str().map(String::from),
+                status: response["status"].as_u64(),
+                status_text: response["statusText"].as_str().map(String::from),
+                mime_type: response["mimeType"].as_str().map(String::from),
+                response_headers: response.get("headers").filter(|v| v.is_object()).cloned(),
+                ..NetworkEntry::default()
+            };
+            network_upsert(bufs, entry);
+        }
+    }
+}
+
+/// Network.loadingFailed：按 requestId 回填 error；不再把 requestId 塞进 url 字段。
+fn network_on_failed(bufs: &mut EventBuffers, params: &Value) {
+    let request_id = params["requestId"].as_str().unwrap_or("").to_string();
+    if request_id.is_empty() {
+        return;
+    }
+    let error = params["errorText"].as_str().unwrap_or("failed").to_string();
+    let updated = if let Some(entry) = bufs.network_index.get_mut(&request_id) {
+        entry.error = Some(error.clone());
+        Some(entry.clone())
+    } else {
+        None
+    };
+    match updated {
+        Some(entry) => {
+            if let Some(pos) = bufs.network.iter().position(|e| e.request_id == request_id) {
+                bufs.network[pos] = entry;
+            }
+        }
+        None => {
+            network_upsert(
+                bufs,
+                NetworkEntry {
+                    request_id,
+                    error: Some(error),
+                    ..NetworkEntry::default()
+                },
+            );
+        }
     }
 }
 
@@ -279,30 +445,13 @@ fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<Arc<Mutex<Ev
                     }
                 }
                 "Network.requestWillBeSent" => {
-                    let url = params["request"]["url"].as_str().unwrap_or("");
-                    let entry = json!({
-                        "method": params["request"]["method"].as_str().unwrap_or(""),
-                        "url": truncate_str(url, 200),
-                        "status": null
-                    })
-                    .to_string();
-                    push_capped(&mut bufs.network, entry, NETWORK_BUF_MAX);
+                    network_on_request(&mut bufs, params);
                 }
                 "Network.responseReceived" => {
-                    let url = params["response"]["url"].as_str().unwrap_or("");
-                    let status = params["response"]["status"].as_u64().unwrap_or(0);
-                    // 与上一个同 URL 的请求配对更新 status；简化：直接追加一条响应记录
-                    let entry = json!({ "method": "resp", "url": truncate_str(url, 200), "status": status }).to_string();
-                    push_capped(&mut bufs.network, entry, NETWORK_BUF_MAX);
+                    network_on_response(&mut bufs, params);
                 }
                 "Network.loadingFailed" => {
-                    let entry = json!({
-                        "method": "failed",
-                        "url": truncate_str(params["requestId"].as_str().unwrap_or(""), 200),
-                        "status": params["errorText"].as_str().unwrap_or("failed")
-                    })
-                    .to_string();
-                    push_capped(&mut bufs.network, entry, NETWORK_BUF_MAX);
+                    network_on_failed(&mut bufs, params);
                 }
                 "Page.javascriptDialogOpening" => {
                     let dialog_type = params["type"].as_str().unwrap_or("alert");
@@ -365,6 +514,10 @@ pub(crate) struct CdpSession {
     pub chrome_child: Option<std::process::Child>,
     /// 该 Chrome 的 profile 目录（随 Chrome 终止一并删除）
     profile_dir: Option<std::path::PathBuf>,
+    /// launch 时的 headless 标记（复用会话时校验参数一致性）
+    headless: Option<bool>,
+    /// launch 时的 window-size（复用会话时校验参数一致性）
+    window_size: Option<(u32, u32)>,
     /// 事件观察（attach 时启动；self 会话在首次 attach 时启动）
     observer: Option<Observer>,
     /// 观察任务在途启动闸——防并发重复启动同一 target 的观察任务（A4 竞态）。
@@ -380,6 +533,8 @@ impl Default for CdpSession {
             target_id: None,
             chrome_child: None,
             profile_dir: None,
+            headless: None,
+            window_size: None,
             observer: None,
             observer_starting: Arc::new(AtomicBool::new(false)),
             last_active: Instant::now(),
@@ -565,24 +720,43 @@ fn probe_free_port() -> Result<u16, String> {
 }
 
 /// 启动受控 Chrome（独立 profile）。已在运行则复用。返回端口。
+/// headless/windowSize 与端口一样是启动期参数：复用时会校验一致性，
+/// 参数不一致则回收旧实例重新启动，避免「要 headless 却复用了一个有头窗口」。
 pub(crate) async fn cdp_launch(
     url: Option<String>,
     port: Option<u16>,
+    headless: Option<bool>,
+    window_size: Option<(u32, u32)>,
     agent_id: Option<&str>,
 ) -> Result<String, String> {
+    if let Some((w, h)) = window_size {
+        if w == 0 || h == 0 || w > 16384 || h > 16384 {
+            return Err("launch: windowSize 宽高必须在 1-16384 之间".into());
+        }
+    }
     // 已启动过且 Chrome 还活着 → 复用：
     //   - 未显式指定端口：直接复用本 agent 的现有端口；
-    //   - 显式指定端口：与本 agent 现有端口一致且活着才复用。
+    //   - 显式指定端口：与本 agent 现有端口一致且活着才复用；
+    //   - headless/windowSize 与启动时不一致：不复用，走重启路径。
     {
         let mut sessions = session_mut(agent_id);
         let sess = sessions.entry(session_key(agent_id)).or_default();
         if sess.chrome_child.is_some() && sess.port != 0 && list_targets_raw(sess.port).is_ok() {
-            let reuse = match port {
+            let port_matches = match port {
                 None => true,
                 Some(p) => p == sess.port,
             };
-            if reuse {
-                return Ok(json!({ "status": "reused", "port": sess.port, "url": url }).to_string());
+            let headless_matches = headless.is_none() || sess.headless == headless;
+            let size_matches = window_size.is_none() || sess.window_size == window_size;
+            if port_matches && headless_matches && size_matches {
+                return Ok(json!({
+                    "status": "reused",
+                    "port": sess.port,
+                    "url": url,
+                    "headless": sess.headless.unwrap_or(false),
+                    "windowSize": sess.window_size.map(|(w, h)| json!({ "width": w, "height": h })),
+                })
+                .to_string());
             }
         }
     }
@@ -610,7 +784,7 @@ pub(crate) async fn cdp_launch(
         // 并发 launch 的清扫会跳过它，不会互删正在使用的目录。
         sweep_stale_profiles(&sessions);
         let sess = sessions.entry(session_key(agent_id)).or_default();
-        // 走到这里说明旧 Chrome 已退出或显式指定了不同端口——
+        // 走到这里说明旧 Chrome 已退出或显式指定了不同端口/启动形态——
         // 无论哪种，回收旧句柄并 kill 残留进程，避免双开。
         if let Some(mut old) = sess.chrome_child.take() {
             let exited = old.try_wait().map(|s| s.is_some()).unwrap_or(false);
@@ -624,6 +798,8 @@ pub(crate) async fn cdp_launch(
         }
         sess.port = port;
         sess.profile_dir = Some(profile_dir.clone());
+        sess.headless = headless;
+        sess.window_size = window_size;
 
         let mut cmd = std::process::Command::new(&chrome);
         cmd.arg(format!("--remote-debugging-port={port}"))
@@ -631,6 +807,12 @@ pub(crate) async fn cdp_launch(
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
             .arg("--disable-features=TranslateUI");
+        if headless.unwrap_or(false) {
+            cmd.arg("--headless");
+        }
+        if let Some((w, h)) = window_size {
+            cmd.arg(format!("--window-size={w},{h}"));
+        }
         if let Some(u) = url {
             if !u.is_empty() {
                 cmd.arg(&u);
@@ -647,7 +829,14 @@ pub(crate) async fn cdp_launch(
 
     wait_for_port(port, Duration::from_secs(10)).await?;
     audit_log(agent_id, "launch", &port.to_string(), "ok");
-    Ok(json!({ "status": "launched", "port": port, "chrome": chrome.to_string_lossy() }).to_string())
+    Ok(json!({
+        "status": "launched",
+        "port": port,
+        "chrome": chrome.to_string_lossy(),
+        "headless": headless.unwrap_or(false),
+        "windowSize": window_size.map(|(w, h)| json!({ "width": w, "height": h })),
+    })
+    .to_string())
 }
 
 /// 终止本 agent 的受控 Chrome；若当前是外部连接（connect 来的、非本 agent
@@ -668,6 +857,8 @@ pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
         sess.target_id = None;
         sess.observer = None;
         sess.port = 0;
+        sess.headless = None;
+        sess.window_size = None;
         audit_log(agent_id, "kill", "", if had_child { "ok" } else { "disconnected" });
         Ok(if had_child {
             "受控 Chrome 已终止".into()
@@ -716,6 +907,8 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
     sess.port = port;
     sess.target_id = None;
     sess.observer = None;
+    sess.headless = None;
+    sess.window_size = None;
 
     audit_log(agent_id, "connect", &port.to_string(), &format!("{pages} 个页面 target"));
     Ok(json!({ "status": "connected", "port": port, "pages": pages }).to_string())
@@ -1140,6 +1333,65 @@ async fn ws_command(port: u16, target_id: &str, method: &str, params: Value) -> 
         .map_err(|_| format!("CDP {method} 超时（{WS_TIMEOUT:?} 无响应）——页面主线程可能卡死"))?
 }
 
+/// 在一条 WS 连接上批量发送命令并收集全部响应。
+/// AX snapshot 需要给每个 backendNodeId 依次 resolveNode + callFunctionOn；
+/// 逐条走 ws_command 会反复建连，80 个节点就是 160 次握手。这里一次建连、
+/// 顺序发完、再按 id 收集，把 AX 路径的固定开销压到单次 WS 往返。
+async fn ws_command_batch(
+    port: u16,
+    target_id: &str,
+    commands: Vec<(u64, String, Value)>,
+) -> Result<HashMap<u64, Value>, String> {
+    let expected = commands.len();
+    if expected == 0 {
+        return Ok(HashMap::new());
+    }
+    let fut = async {
+        let raw = list_targets_raw(port)?;
+        let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
+        let ws_url = arr
+            .iter()
+            .find(|t| t["id"].as_str() == Some(target_id))
+            .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
+            .ok_or_else(|| format!("target {target_id} 已消失（页面可能被关闭）"))?;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .map_err(|e| format!("CDP WS 连接失败: {e}"))?;
+        for (id, method, params) in &commands {
+            let msg = json!({ "id": id, "method": method, "params": params }).to_string();
+            ws.send(Message::text(msg))
+                .await
+                .map_err(|e| format!("CDP WS 批量发送失败: {e}"))?;
+        }
+
+        let mut replies: HashMap<u64, Value> = HashMap::new();
+        while replies.len() < expected {
+            let reply = ws
+                .next()
+                .await
+                .ok_or("CDP WS 连接关闭")?
+                .map_err(|e| format!("CDP WS 接收失败: {e}"))?;
+            match reply {
+                Message::Text(t) => {
+                    let v: Value = serde_json::from_str(&t).map_err(|e| format!("CDP 响应解析失败: {e}"))?;
+                    if let Some(id) = v["id"].as_u64() {
+                        if commands.iter().any(|(cid, _, _)| *cid == id) {
+                            replies.insert(id, v);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let _ = ws.close(None).await;
+        Ok::<HashMap<u64, Value>, String>(replies)
+    };
+    tokio::time::timeout(WS_TIMEOUT, fut)
+        .await
+        .map_err(|_| "CDP 批量命令超时——页面主线程可能卡死".to_string())?
+}
+
 /// 在 target 内执行 JS 表达式，返回 result.value（JSON 字符串或值）。
 async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Result<Value, String> {
     if is_self(agent_id) {
@@ -1269,20 +1521,251 @@ pub(crate) async fn cdp_content(
 // snapshot + ref — 可交互元素清单（ADR 0003 D2）
 // ═══════════════════════════════════════════════════════════
 
-/// 页面快照：给可交互元素打 data-hg-ref 标记，返回 {refs,count,total,offset,truncated}。
-/// B4 分页：offset 取第 N 页（每页 max_results），truncated 表明是否还有下一页。
+/// AX 树节点（仅保留快照需要的字段）。
+struct AxNode {
+    backend_node_id: u64,
+    role: String,
+    name: String,
+    focusable: bool,
+}
+
+fn ax_node_from_value(v: &Value) -> Option<AxNode> {
+    let backend_node_id = v["backendDOMNodeId"].as_u64()?;
+    if backend_node_id == 0 {
+        return None;
+    }
+    if v["ignored"].as_bool().unwrap_or(false) {
+        return None;
+    }
+    let focusable = v["properties"]
+        .as_array()
+        .map(|props| {
+            props.iter().any(|p| {
+                p["name"].as_str() == Some("focusable")
+                    && p["value"]["value"].as_bool().unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    Some(AxNode {
+        backend_node_id,
+        role: v["role"]["value"].as_str().unwrap_or("").to_string(),
+        name: v["name"]["value"].as_str().unwrap_or("").to_string(),
+        focusable,
+    })
+}
+
+fn ax_role_is_interactive(role: &str) -> bool {
+    matches!(
+        role.to_ascii_lowercase().as_str(),
+        "link"
+            | "button"
+            | "textbox"
+            | "searchbox"
+            | "combobox"
+            | "listbox"
+            | "checkbox"
+            | "radio"
+            | "switch"
+            | "slider"
+            | "spinbutton"
+            | "tab"
+            | "menuitem"
+            | "menuitemcheckbox"
+            | "menuitemradio"
+            | "treeitem"
+            | "row"
+            | "gridcell"
+            | "columnheader"
+            | "rowheader"
+    )
+}
+
+/// 清掉页面（含 same-origin iframe / open shadow root）里残留的 data-hg-ref。
+const CLEAR_HG_REFS_EXPR: &str = r#"(() => { const seen = new Set(); const clearRoot = (root) => { if (!root || seen.has(root)) return; seen.add(root); if (root.querySelectorAll) { root.querySelectorAll('[data-hg-ref]').forEach((el) => el.removeAttribute('data-hg-ref')); } if (root.querySelectorAll) { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) clearRoot(el.shadowRoot); } for (const f of root.querySelectorAll('iframe, frame')) { try { if (f.contentDocument) clearRoot(f.contentDocument); } catch (e) {} } } }; clearRoot(document); return true; })()"#;
+
+/// 尝试走 Accessibility.getFullAXTree（Chrome DevTools MCP 同款）生成快照。
+/// 成功时把选中的 backendNodeId resolve 回 DOM 并补 data-hg-ref 标记，
+/// ref 语义与 DOM 探针完全一致（click/type/select 无需感知来源差异）。
+/// 任何一步失败都返回 None，由调用方回退增强 DOM 探针。
+async fn try_ax_snapshot(
+    port: u16,
+    target_id: &str,
+    max_results: usize,
+    offset: usize,
+) -> Result<Option<String>, String> {
+    let resp = match ws_command(port, target_id, "Accessibility.getFullAXTree", json!({})).await {
+        Ok(v) => v,
+        Err(_) => return Ok(None), // 旧版 Chromium / 非浏览器 target 没有 AX domain → 回退探针
+    };
+    let nodes = resp["result"]["nodes"].as_array().cloned().unwrap_or_default();
+    if nodes.is_empty() {
+        return Ok(None);
+    }
+    let candidates: Vec<AxNode> = nodes
+        .iter()
+        .filter_map(ax_node_from_value)
+        .filter(|n| ax_role_is_interactive(&n.role) || n.focusable)
+        .collect();
+    let total = candidates.len();
+    let selected: Vec<&AxNode> = candidates.iter().skip(offset).take(max_results).collect();
+    if selected.is_empty() {
+        // 命令可用但当前窗口没有候选：返回空快照，不要悄悄退回 DOM 口径。
+        return Ok(Some(
+            json!({
+                "source": "ax",
+                "refs": [],
+                "count": 0,
+                "total": total,
+                "offset": offset,
+                "truncated": offset + max_results < total,
+                "note": "AX snapshot（Accessibility.getFullAXTree）：当前窗口无更多可交互节点",
+            })
+            .to_string(),
+        ));
+    }
+
+    // 清残留 ref，再批量 resolve backendNodeId → objectId。
+    if ws_command(
+        port,
+        target_id,
+        "Runtime.evaluate",
+        json!({ "expression": CLEAR_HG_REFS_EXPR, "returnByValue": true }),
+    )
+    .await
+    .is_err()
+    {
+        return Ok(None);
+    }
+
+    let resolve_cmds: Vec<(u64, String, Value)> = selected
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            (
+                i as u64 + 1,
+                "DOM.resolveNode".to_string(),
+                json!({ "backendNodeId": n.backend_node_id }),
+            )
+        })
+        .collect();
+    let resolve_replies = match ws_command_batch(port, target_id, resolve_cmds).await {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+
+    // 只保留 resolve 成功的节点；ref 从 0 连续编号。
+    let mut resolved: Vec<(&AxNode, String)> = Vec::new();
+    for (i, node) in selected.iter().enumerate() {
+        let object_id = resolve_replies
+            .get(&(i as u64 + 1))
+            .and_then(|v| v["result"]["object"]["objectId"].as_str())
+            .map(String::from);
+        if let Some(object_id) = object_id {
+            resolved.push((node, object_id));
+        }
+    }
+    if resolved.is_empty() {
+        return Ok(None);
+    }
+
+    let mark_cmds: Vec<(u64, String, Value)> = resolved
+        .iter()
+        .enumerate()
+        .map(|(i, (_, object_id))| {
+            (
+                i as u64 + 1,
+                "Runtime.callFunctionOn".to_string(),
+                json!({
+                    "objectId": object_id,
+                    "functionDeclaration": "function(ref){ this.setAttribute('data-hg-ref', ref); return { tag: this.tagName ? this.tagName.toLowerCase() : '', id: this.id || '', type: (this.tagName === 'INPUT' || this.tagName === 'BUTTON') ? (this.type || '') : '' }; }",
+                    "arguments": [{ "value": i.to_string() }],
+                    "returnByValue": true,
+                }),
+            )
+        })
+        .collect();
+    let mark_replies = match ws_command_batch(port, target_id, mark_cmds).await {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+
+    // 标记失败会造成 ref 缺口/错位（属性里写的是 resolved 下标，输出若跳过
+    // 失败项就会对不上）。AX 路径只是优先路径——任一条标记失败就整体回退
+    // DOM 探针，由探针清标重打，保证 ref 与 data-hg-ref 永远一致。
+    let mut refs: Vec<Value> = Vec::new();
+    for (i, (node, _)) in resolved.iter().enumerate() {
+        let Some(info) = mark_replies
+            .get(&(i as u64 + 1))
+            .and_then(|v| v["result"]["result"]["value"].as_object())
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let text = node.name.as_str();
+        let mut out = json!({
+            "ref": i,
+            "tag": info.get("tag").and_then(|v| v.as_str()).unwrap_or(""),
+            "role": node.role,
+            "name": truncate_str(node.name.as_str(), 80),
+            "text": truncate_str(text, 80),
+        });
+        if let Some(id) = info.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            out["id"] = json!(id);
+        }
+        if let Some(ty) = info.get("type").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            out["type"] = json!(ty);
+        }
+        refs.push(out);
+    }
+
+    Ok(Some(
+        json!({
+            "source": "ax",
+            "refs": refs,
+            "count": refs.len(),
+            "total": total,
+            "offset": offset,
+            "truncated": offset + max_results < total,
+            "note": "AX snapshot（Accessibility.getFullAXTree）；ref 已回写到 DOM data-hg-ref，可用 ref 数字执行 click/type/select/hover",
+        })
+        .to_string(),
+    ))
+}
+
+/// 页面快照：优先 Accessibility.getFullAXTree（无 scope 时），失败回退增强 DOM 探针。
+/// 两种路径统一给可交互元素打 data-hg-ref 标记，返回
+/// {source, refs, count, total, offset, truncated}，ref 语义不变。
 pub(crate) async fn cdp_snapshot(
     scope: Option<String>,
     max_results: Option<usize>,
     offset: Option<usize>,
     agent_id: Option<&str>,
 ) -> Result<String, String> {
+    let max_results = max_results.unwrap_or(80).clamp(1, 500);
+    let offset = offset.unwrap_or(0);
+    let scoped = scope.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+
+    // AX 树不提供 CSS scope 映射；带 scope 的检查直接走 DOM 探针。
+    if !scoped {
+        if is_self(agent_id) {
+            ensure_self_attached()?;
+        }
+        let (port, tid) = require_target(agent_id)?;
+        if let Some(s) = try_ax_snapshot(port, &tid, max_results, offset).await? {
+            const MAX: usize = 8000;
+            if s.len() > MAX {
+                return Ok(format!("{}...[已截断，共 {} 字符]", &s[..MAX], s.len()));
+            }
+            return Ok(s);
+        }
+    }
+
     let expr = format!(
         "JSON.stringify(({})({}, {}, {}))",
         SNAPSHOT_PROBE,
         serde_json::to_string(&scope.unwrap_or_default()).map_err(|e| e.to_string())?,
-        max_results.unwrap_or(80),
-        offset.unwrap_or(0)
+        max_results,
+        offset
     );
     let val = runtime_evaluate(&expr, agent_id).await?;
     let s = probe_result_str(&val, "snapshot")?;
@@ -1304,6 +1787,16 @@ fn ref_to_selector(target: &str) -> String {
     } else {
         t.to_string()
     }
+}
+
+/// 生成一个「跨 same-origin iframe + open shadow root」的元素定位 JS 表达式。
+/// 快照探针现在会在 iframe / shadow DOM 里打 ref；旧动作只查主 document.querySelector，
+/// 这些 ref 会白给。这里统一收口定位逻辑，所有 selector 动作共用。
+fn find_el_expr(sel: &str) -> Result<String, String> {
+    let sel_json = serde_json::to_string(sel).map_err(|e| e.to_string())?;
+    Ok(format!(
+        r#"(() => {{ const sel = {sel_json}; const seen = new Set(); const findIn = (root) => {{ if (!root || seen.has(root)) return null; seen.add(root); if (root.querySelector) {{ const hit = root.querySelector(sel); if (hit) return hit; }} if (root.querySelectorAll) {{ for (const el of root.querySelectorAll('*')) {{ if (el.shadowRoot) {{ const hit = findIn(el.shadowRoot); if (hit) return hit; }} }} for (const f of root.querySelectorAll('iframe, frame')) {{ try {{ if (f.contentDocument) {{ const hit = findIn(f.contentDocument); if (hit) return hit; }} }} catch (e) {{}} }} }} return null; }}; return findIn(document); }})()"#
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1335,14 +1828,51 @@ pub(crate) fn cdp_console(agent_id: Option<&str>, limit: Option<usize>) -> Strin
     format!("{{\"entries\":{s}}}")
 }
 
-/// 查询网络事件（最新 N 条）。
+/// 查询网络事件（最新 N 条，请求/响应已按 requestId 配对）。
 pub(crate) fn cdp_network(agent_id: Option<&str>, limit: Option<usize>) -> String {
     let Some(obs) = ensure_observer(agent_id) else {
-        return json!({ "entries": [], "note": "未 attach target" }).to_string();
+        return json!({ "entries": [], "paired": true, "note": "未 attach target" }).to_string();
     };
     let bufs = crate::utils::lock_or_recover(&obs.buffers);
-    let s = read_buffer(&bufs.network, limit.unwrap_or(30));
-    format!("{{\"entries\":{s}}}")
+    let n = limit.unwrap_or(30).min(bufs.network.len());
+    let entries: Vec<Value> = bufs
+        .network
+        .iter()
+        .rev()
+        .take(n)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|e| e.summary_value())
+        .collect();
+    json!({
+        "entries": entries,
+        "paired": true,
+        "note": "同一条记录含 requestId/method/url/status/error；status 为 null 表示尚无响应，error 非 null 表示加载失败",
+    })
+    .to_string()
+}
+
+/// 查询单个网络请求详情（仍在 200 条事件窗口内的 requestId）。
+/// HAR 作为后续导出项；本动作先覆盖日常排查「这个请求到底带了什么头/回了什么状态」。
+pub(crate) fn cdp_network_detail(request_id: &str, agent_id: Option<&str>) -> Result<String, String> {
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        return Err("network_detail: requestId 不能为空".into());
+    }
+    let Some(obs) = ensure_observer(agent_id) else {
+        return Err("network_detail: 未 attach target（先 browser(attach) 后事件才会被观察）".into());
+    };
+    let bufs = crate::utils::lock_or_recover(&obs.buffers);
+    let entry = bufs
+        .network_index
+        .get(request_id)
+        .ok_or_else(|| {
+            format!(
+                "network_detail: 未找到请求 {request_id}（缓冲上限 {NETWORK_BUF_MAX} 条，旧请求可能已被挤出；HAR 导出尚未实现）"
+            )
+        })?;
+    Ok(json!({ "entry": entry.detail_value() }).to_string())
 }
 
 /// 查询 javascript dialog 事件（最新 N 条）+ 当前是否有未处理 dialog。
@@ -1615,9 +2145,10 @@ async fn wait_actionable(target: &str, label: &str, agent_id: Option<&str>) -> R
     let deadline = Instant::now() + ACTIONABILITY_TIMEOUT;
     let mut last_center: Option<(f64, f64)> = None;
     loop {
+        let finder = find_el_expr(target)?;
         let expr = format!(
-            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return null; const r = el.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return {{ reason: 'invisible' }}; const x = r.x + r.width / 2, y = r.y + r.height / 2; const top = document.elementFromPoint(x, y); const hit = !top || el === top || el.contains(top); return {{ x, y, hit }}; }})()"#,
-            sel = serde_json::to_string(target).map_err(|e| e.to_string())?
+            r#"(() => {{ const el = {finder}; if (!el) return null; const r0 = el.getBoundingClientRect(); if (r0.width <= 0 || r0.height <= 0) return {{ reason: 'invisible' }}; let x = r0.x + r0.width / 2, y = r0.y + r0.height / 2; try {{ let win = el.ownerDocument.defaultView; let frame = win && win.frameElement; while (frame) {{ const fr = frame.getBoundingClientRect(); x += fr.x; y += fr.y; win = win.parent; frame = win && win.frameElement; }} }} catch (e) {{}} const localDoc = el.ownerDocument; const localTop = localDoc.elementFromPoint ? localDoc.elementFromPoint(r0.x + r0.width / 2, r0.y + r0.height / 2) : null; let hit = !localTop || el === localTop || el.contains(localTop); if (!hit && el.getRootNode && el.getRootNode() instanceof ShadowRoot) {{ const host = el.getRootNode().host; hit = !localTop || localTop === host || host.contains(localTop); }} return {{ x, y, hit }}; }})()"#,
+            finder = finder
         );
         let val = runtime_evaluate(&expr, agent_id).await?;
         if val.is_null() {
@@ -1697,8 +2228,8 @@ pub(crate) async fn cdp_hover(target: &str, agent_id: Option<&str>) -> Result<St
 /// 查元素的可见文本（截断 40 字符），审计展示用。查不到返回 None。
 async fn element_label(sel: &str, agent_id: Option<&str>) -> Option<String> {
     let expr = format!(
-        r#"(() => {{ const el = document.querySelector({sel}); if (!el) return null; const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' '); return t.slice(0, 40); }})()"#,
-        sel = serde_json::to_string(sel).ok()?
+        r#"(() => {{ const el = {finder}; if (!el) return null; const t = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' '); return t.slice(0, 40); }})()"#,
+        finder = find_el_expr(sel).ok()?
     );
     let val = runtime_evaluate(&expr, agent_id).await.ok()?;
     let s = val.as_str()?.trim().to_string();
@@ -1715,8 +2246,8 @@ pub(crate) async fn cdp_type(
     let sel = ref_to_selector(target);
     let before = world_snapshot(agent_id).await?;
     let focus_expr = format!(
-        r#"(() => {{ const el = document.querySelector({sel}); if (!el) return {{ ok: false, reason: 'missing' }}; el.focus(); if ({replace}) {{ if (el.isContentEditable) {{ el.textContent = ''; }} else if (el.value !== undefined) {{ const proto = Object.getPrototypeOf(el); const desc = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value'); if (desc && desc.set) desc.set.call(el, ''); else el.value = ''; if (el.setSelectionRange) el.setSelectionRange(0, 0); el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); }} }} el.focus(); return {{ ok: true }}; }})()"#,
-        sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?,
+        r#"(() => {{ const el = {finder}; if (!el) return {{ ok: false, reason: 'missing' }}; el.focus(); if ({replace}) {{ if (el.isContentEditable) {{ el.textContent = ''; }} else if (el.value !== undefined) {{ const proto = Object.getPrototypeOf(el); const desc = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value'); if (desc && desc.set) desc.set.call(el, ''); else el.value = ''; if (el.setSelectionRange) el.setSelectionRange(0, 0); el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); }} }} el.focus(); return {{ ok: true }}; }})()"#,
+        finder = find_el_expr(&sel)?,
         replace = if replace { "true" } else { "false" }
     );
     let ok = runtime_evaluate(&focus_expr, agent_id).await?;
@@ -1764,8 +2295,8 @@ pub(crate) async fn cdp_select(
     let _ = wait_actionable(&sel, "select", agent_id).await?;
     let target_json = serde_json::to_string(target).map_err(|e| e.to_string())?;
     let expr = format!(
-        r#"(() => {{ const el = document.querySelector({sel}); if (!el) return {{ ok: false, error: '目标不存在或已失效（' + {target_json} + '）——请重新 browser(snapshot)' }}; if ((el.tagName || '').toLowerCase() !== 'select') return {{ ok: false, error: '目标不是 <select> 元素' }}; const wanted = {value}; const options = Array.from(el.options).map((o) => {{ const text = (o.textContent || '').trim().replace(/\s+/g, ' '); return {{ value: o.value, text }}; }}); const match = options.find((o) => o.value === wanted) || options.find((o) => o.text === wanted); if (!match) return {{ ok: false, error: '没有匹配的 option（value 或可见文本）: ' + wanted + '。可用: ' + options.slice(0, 20).map((o) => o.value + ':' + o.text).join(' | ') }}; const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value'); if (desc && desc.set) desc.set.call(el, match.value); else el.value = match.value; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return {{ ok: true, value: match.value, text: match.text }}; }})()"#,
-        sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?,
+        r#"(() => {{ const el = {finder}; if (!el) return {{ ok: false, error: '目标不存在或已失效（' + {target_json} + '）——请重新 browser(snapshot)' }}; if ((el.tagName || '').toLowerCase() !== 'select') return {{ ok: false, error: '目标不是 <select> 元素' }}; const wanted = {value}; const options = Array.from(el.options).map((o) => {{ const text = (o.textContent || '').trim().replace(/\s+/g, ' '); return {{ value: o.value, text }}; }}); const match = options.find((o) => o.value === wanted) || options.find((o) => o.text === wanted); if (!match) return {{ ok: false, error: '没有匹配的 option（value 或可见文本）: ' + wanted + '。可用: ' + options.slice(0, 20).map((o) => o.value + ':' + o.text).join(' | ') }}; const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value'); if (desc && desc.set) desc.set.call(el, match.value); else el.value = match.value; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return {{ ok: true, value: match.value, text: match.text }}; }})()"#,
+        finder = find_el_expr(&sel)?,
         target_json = target_json,
         value = serde_json::to_string(value).map_err(|e| e.to_string())?
     );
@@ -1997,8 +2528,8 @@ pub(crate) async fn cdp_scroll(
         if !sel.trim().is_empty() {
             let sel = ref_to_selector(&sel);
             let expr = format!(
-                r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; el.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); return true; }})()"#,
-                sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?
+                r#"(() => {{ const el = {finder}; if (!el) return false; el.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); return true; }})()"#,
+                finder = find_el_expr(&sel)?
             );
             let ok = runtime_evaluate(&expr, agent_id).await?;
             if !ok.as_bool().unwrap_or(false) {
@@ -2048,8 +2579,8 @@ pub(crate) async fn cdp_wait(
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let expr = format!(
-            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }})()"#,
-            sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?
+            r#"(() => {{ const el = {finder}; if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }})()"#,
+            finder = find_el_expr(&sel)?
         );
         let ok = runtime_evaluate(&expr, agent_id).await.unwrap_or(Value::Bool(false));
         if ok.as_bool().unwrap_or(false) {
@@ -2086,19 +2617,19 @@ fn is_sensitive_click_text(text: &str) -> bool {
 /// 后续操作本身会给出明确错误。
 pub(crate) async fn check_sensitive(target: &str, action: &str, agent_id: Option<&str>) -> bool {
     let sel = ref_to_selector(target);
-    let sel_json = match serde_json::to_string(&sel) {
+    let finder = match find_el_expr(&sel) {
         Ok(s) => s,
         Err(_) => return false,
     };
     let click_re = format!("/{SENSITIVE_CLICK_RE_SOURCE}/i");
     let expr = match action {
         "type" => format!(
-            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const t = (el.tagName || '').toLowerCase(); if (t === 'input' && el.type === 'password') return true; return (t === 'input' || t === 'textarea') && !!el.value; }})()"#,
-            sel = sel_json
+            r#"(() => {{ const el = {finder}; if (!el) return false; const t = (el.tagName || '').toLowerCase(); if (t === 'input' && el.type === 'password') return true; return (t === 'input' || t === 'textarea') && !!el.value; }})()"#,
+            finder = finder
         ),
         "click" => format!(
-            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const t = (el.tagName || '').toLowerCase(); const ty = (t === 'input' || t === 'button') ? (el.type || '').toLowerCase() : ''; if (ty === 'submit') return true; if (el.hasAttribute && el.hasAttribute('download')) return true; const text = (el.innerText || el.value || '').slice(0, 40); return {click_re}.test(text); }})()"#,
-            sel = sel_json,
+            r#"(() => {{ const el = {finder}; if (!el) return false; const t = (el.tagName || '').toLowerCase(); const ty = (t === 'input' || t === 'button') ? (el.type || '').toLowerCase() : ''; if (ty === 'submit') return true; if (el.hasAttribute && el.hasAttribute('download')) return true; const text = (el.innerText || el.value || '').slice(0, 40); return {click_re}.test(text); }})()"#,
+            finder = finder,
             click_re = click_re
         ),
         _ => return false,
@@ -2457,6 +2988,101 @@ mod tests {
         assert!(e.contains("不支持的修饰键"), "{e}");
     }
 
+    /// 第三批 network 配对：requestWillBeSent 建立一条记录，
+    /// responseReceived 按 requestId 回填同一条（不追加 resp 流水账），
+    /// loadingFailed 回填 error 且不把 requestId 塞进 url。
+    #[test]
+    fn network_events_pair_by_request_id() {
+        let mut bufs = EventBuffers::default();
+        network_on_request(
+            &mut bufs,
+            &serde_json::json!({
+                "requestId": "r1",
+                "url": "https://example.com/a",
+                "method": "GET",
+                "type": "Document",
+                "wallTime": 1.5,
+                "request": { "url": "https://example.com/a", "method": "GET", "headers": { "accept": "*/*" } }
+            }),
+        );
+        network_on_response(
+            &mut bufs,
+            &serde_json::json!({
+                "requestId": "r1",
+                "response": { "url": "https://example.com/a", "status": 200, "statusText": "OK", "mimeType": "text/html", "headers": { "content-type": "text/html" } }
+            }),
+        );
+        assert_eq!(bufs.network.len(), 1, "response 必须回填同一条请求，而不是追加第二条");
+        let entry = &bufs.network[0];
+        assert_eq!(entry.request_id, "r1");
+        assert_eq!(entry.status, Some(200));
+        assert_eq!(entry.mime_type.as_deref(), Some("text/html"));
+
+        network_on_failed(
+            &mut bufs,
+            &serde_json::json!({
+                "requestId": "r1",
+                "errorText": "net::ERR_CONNECTION_REFUSED"
+            }),
+        );
+        assert_eq!(bufs.network.len(), 1);
+        let entry = &bufs.network[0];
+        assert_eq!(entry.error.as_deref(), Some("net::ERR_CONNECTION_REFUSED"));
+        assert_eq!(entry.url.as_deref(), Some("https://example.com/a"), "loadingFailed 不得用 requestId 覆盖 url");
+
+        // 缺失 request 的孤立失败：只记 error，url 保持 null（诚实，不伪造 requestId=url）
+        network_on_failed(
+            &mut bufs,
+            &serde_json::json!({ "requestId": "r2", "errorText": "net::ERR_FAILED" }),
+        );
+        let entry = bufs.network_index.get("r2").expect("孤立失败也应有索引条目");
+        assert_eq!(entry.url, None);
+        assert!(entry.summary_value()["error"].as_str().is_some());
+    }
+
+    /// 第三批 AX 解析：锁住 getFullAXTree 节点形态与可交互 role 白名单，
+    /// 避免「命令成功但解析错位」只能在真实 Chrome 上才能暴露。
+    #[test]
+    fn ax_node_parsing_and_interactive_role_filter() {
+        let node = serde_json::json!({
+            "nodeId": "3",
+            "ignored": false,
+            "role": { "type": "role", "value": "button" },
+            "name": { "type": "string", "value": "Save" },
+            "backendDOMNodeId": 17,
+            "properties": [
+                { "name": "focusable", "value": { "type": "boolean", "value": true } }
+            ]
+        });
+        let parsed = ax_node_from_value(&node).expect("标准 AX 节点应可解析");
+        assert_eq!(parsed.backend_node_id, 17);
+        assert_eq!(parsed.role, "button");
+        assert_eq!(parsed.name, "Save");
+        assert!(parsed.focusable);
+        assert!(ax_role_is_interactive("Button"));
+        assert!(ax_role_is_interactive("textbox"));
+        assert!(!ax_role_is_interactive("StaticText"));
+
+        let ignored = serde_json::json!({
+            "role": { "value": "button" },
+            "name": { "value": "x" },
+            "backendDOMNodeId": 18,
+            "ignored": true
+        });
+        assert!(ax_node_from_value(&ignored).is_none(), "ignored 节点不应进入快照");
+        let no_backend = serde_json::json!({ "role": { "value": "button" }, "name": { "value": "x" } });
+        assert!(ax_node_from_value(&no_backend).is_none(), "没有 backendDOMNodeId 无法回写 ref");
+    }
+
+    /// 第三批 launch 参数：windowSize 非法值在找 Chrome 之前就被拒绝。
+    #[tokio::test]
+    async fn launch_rejects_invalid_window_size_before_cdp() {
+        let e = cdp_launch(None, None, Some(false), Some((0, 600)), None)
+            .await
+            .unwrap_err();
+        assert!(e.contains("windowSize"), "{e}");
+    }
+
     /// 组合键参数归一化：别名收口、去重、非法值明确报错。
     #[test]
     fn parse_modifiers_normalizes_aliases_and_dedupes() {
@@ -2564,6 +3190,8 @@ mod tests {
                     target_id: None,
                     chrome_child: Some(child),
                     profile_dir: Some(dir.clone()),
+                    headless: None,
+                    window_size: None,
                     observer: None,
                     observer_starting: Arc::new(AtomicBool::new(false)),
                     // 活跃时间放到租约之外，强制命中回收分支

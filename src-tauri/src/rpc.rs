@@ -377,10 +377,11 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（31 个命令）
+        // CDP 浏览器控制（32 个命令）
         // 权限：所有 browser_* 分支统一经过 check_browser_permission（BrowserTool）。
         //       launch/kill/attach/connect/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
-        //       inspect/report/targets/snapshot/content/console/network/screenshot/audit/status/wait
+        //       inspect/report/targets/snapshot/content/console/network/network_detail/
+//       screenshot/audit/status/wait
         //       只读放行；navigate/back/forward/reload/click/hover/type/select/upload/
         //       dialog/press/scroll/new_tab/close_tab 依赖 attach 时已获批准的 target，
         //       不再重复弹窗——但敏感目标
@@ -394,7 +395,27 @@ pub(crate) async fn rpc(
             check_browser_permission("launch", agent_id.as_deref(), &state, &app).await?;
             let url = opt_str(&params, "url");
             let port = opt_u64(&params, "port").map(|n| n as u16);
-            crate::cdp::cdp_launch(url, port, agent_id.as_deref()).await
+            let headless = opt_bool(&params, "headless");
+            let window_size = params
+                .get("window_size")
+                .and_then(|v| v.as_object())
+                .map(|o| {
+                    let w = o.get("width").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        "browser_launch: windowSize.width 必须是正整数".to_string()
+                    })?;
+                    let h = o.get("height").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        "browser_launch: windowSize.height 必须是正整数".to_string()
+                    })?;
+                    let w = u32::try_from(w).map_err(|_| {
+                        "browser_launch: windowSize.width 必须在 1-16384 之间".to_string()
+                    })?;
+                    let h = u32::try_from(h).map_err(|_| {
+                        "browser_launch: windowSize.height 必须在 1-16384 之间".to_string()
+                    })?;
+                    Ok::<(u32, u32), String>((w, h))
+                })
+                .transpose()?;
+            crate::cdp::cdp_launch(url, port, headless, window_size, agent_id.as_deref()).await
         }
         "browser_connect" => {
             let agent_id = opt_str(&params, "_agent_id");
@@ -494,6 +515,12 @@ pub(crate) async fn rpc(
             check_browser_permission("network", agent_id.as_deref(), &state, &app).await?;
             let limit = opt_usize(&params, "limit");
             Ok(crate::cdp::cdp_network(agent_id.as_deref(), limit))
+        }
+        "browser_network_detail" => {
+            let agent_id = self_or_agent(&params);
+            check_browser_permission("network_detail", agent_id.as_deref(), &state, &app).await?;
+            let request_id = req_str(&params, "request_id", "browser_network_detail")?;
+            crate::cdp::cdp_network_detail(&request_id, agent_id.as_deref())
         }
         "browser_screenshot" => {
             let agent_id = self_or_agent(&params);

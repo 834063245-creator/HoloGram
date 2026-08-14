@@ -38,7 +38,7 @@ describe('browser 领域工具注册', () => {
     for (const a of [
       'launch', 'kill', 'targets', 'attach', 'new_tab', 'close_tab',
       'navigate', 'back', 'forward', 'reload',
-      'snapshot', 'content', 'inspect', 'report', 'console', 'network', 'screenshot', 'audit',
+      'snapshot', 'content', 'inspect', 'report', 'console', 'network', 'network_detail', 'screenshot', 'audit',
       'click', 'hover', 'type', 'select', 'upload', 'dialog', 'press', 'scroll', 'eval', 'status', 'wait',
     ]) {
       expect(actions).toContain(a);
@@ -103,10 +103,12 @@ describe('browser 动作路由（统一走 Rust CDP）', () => {
     const t = registry.get('browser')!;
     await t.execute({ action: 'console', limit: 10 });
     await t.execute({ action: 'network', limit: 5 });
+    await t.execute({ action: 'network_detail', requestId: 'r1' });
     await t.execute({ action: 'screenshot' });
     await t.execute({ action: 'audit', limit: 20 });
     expect(invokeMock).toHaveBeenCalledWith('browser_console', expect.objectContaining({ limit: 10 }));
     expect(invokeMock).toHaveBeenCalledWith('browser_network', expect.objectContaining({ limit: 5 }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_network_detail', expect.objectContaining({ requestId: 'r1' }));
     expect(invokeMock).toHaveBeenCalledWith('browser_screenshot', expect.any(Object));
     expect(invokeMock).toHaveBeenCalledWith('browser_audit', expect.objectContaining({ limit: 20 }));
   });
@@ -129,6 +131,18 @@ describe('browser 动作路由（统一走 Rust CDP）', () => {
     expect(invokeMock).toHaveBeenCalledWith('browser_navigate', expect.objectContaining({ url: 'https://example.com' }));
     expect(invokeMock).toHaveBeenCalledWith('browser_content', expect.objectContaining({ scope: '#main', format: 'markdown', maxChars: 2000 }));
     expect(invokeMock).toHaveBeenCalledWith('browser_select', expect.objectContaining({ selector: '42', value: 'option-a' }));
+  });
+
+  it('launch headless/windowSize 与 network_detail 路由到新增 RPC', async () => {
+    const registry = buildBrowserRegistry();
+    const t = registry.get('browser')!;
+    await t.execute({ action: 'launch', headless: true, windowSize: { width: 800, height: 600 } });
+    await t.execute({ action: 'network_detail', requestId: 'r-1' });
+    expect(invokeMock).toHaveBeenCalledWith(
+      'browser_launch',
+      expect.objectContaining({ headless: true, windowSize: { width: 800, height: 600 } }),
+    );
+    expect(invokeMock).toHaveBeenCalledWith('browser_network_detail', expect.objectContaining({ requestId: 'r-1' }));
   });
 
   it('tab/dialog/upload/hover/组合键/截图参数路由到新增 RPC', async () => {
