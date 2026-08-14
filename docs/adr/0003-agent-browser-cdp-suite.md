@@ -14,6 +14,7 @@
 - 第二批次（2026-08-14）：世界快照静默失效根因修复（`e1679a0`，D5 数据通道自落地起从未工作，端到端实测暴露）；probe 返回值契约锁死（`e581ae7c`）；观察任务竞态修复（`b7dd2d08`）；desktop_probe / desktop_screenshot 桌面快照工具（`6b2bf906`/`fffd554f`）；browser_wait 显式等待 + snapshot 分页（`14aea446`）。全部经端到端实测，详见路线图 §8。
 - 与计划的差异与遗留项见路线图文档各节「落地注记」与 §6。
 - 二轮评审第一批（2026-08-15）：补上 P0 日常任务缺口 —— `navigate` / `back` / `forward` / `reload`（Page.navigate + 导航历史）、`content`（正文提取探针 `cdp/probes/content.js`，text / markdown-lite + 字符分页）、`select`（value/option 文本匹配 + 原生 setter 派发事件）、`type(replace)`（先清空再输入）；`check_sensitive` 高危文本补英文词（Pay now / Delete / Confirm / Unsubscribe 等，Rust 与页面 JS 共用同一正则源并加单测）；rpc 层所有 `browser_*` 分支统一经过 `check_browser_permission`，`Browser=deny` 对只读/self 通道同样生效，L2 普通动作由 `BrowserTool` 统一裁决为 Passthrough。详见 `docs/plans/browser-cdp-suite-review-round2.md` §4.1。
+- 二轮评审第二批（2026-08-15）：日常任务断点补齐 —— `dialog`（观察 `Page.javascriptDialogOpening` + `Page.handleJavaScriptDialog`）、`upload`（拦截 `Page.fileChooserOpened` 或 selector + `DOM.setFileInputFiles`）、`hover`、组合键 modifiers、截图 `fullPage`/`inline`、tab 管理（`/json/new` PUT 新开并自动 attach、`/json/close` 关闭；切换复用 attach）。新增对应单测、真实 Chrome e2e（本机无 Chrome 自动跳过）与 `/json/new`、`/json/close` 协议级测试。剩余批次见计划文档 §4.2。
 
 ## 总纲
 

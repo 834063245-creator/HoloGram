@@ -377,12 +377,13 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（26 个命令）
+        // CDP 浏览器控制（31 个命令）
         // 权限：所有 browser_* 分支统一经过 check_browser_permission（BrowserTool）。
         //       launch/kill/attach/connect/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
         //       inspect/report/targets/snapshot/content/console/network/screenshot/audit/status/wait
-        //       只读放行；navigate/back/forward/reload/click/type/press/scroll/select
-        //       依赖 attach 时已获批准的 target，不再重复弹窗——但敏感目标
+        //       只读放行；navigate/back/forward/reload/click/hover/type/select/upload/
+        //       dialog/press/scroll/new_tab/close_tab 依赖 attach 时已获批准的 target，
+        //       不再重复弹窗——但敏感目标
         //       （已填值输入框/提交按钮/下载/高危文本）每次单独 Ask（ADR 0003 D6 L3）。
         //       工具级 Browser=deny 对所有动作生效（含只读与 self 通道）。
         // 会话：所有命令按 _agent_id 键控路由到各 Agent 自己的 CDP 会话；
@@ -497,7 +498,9 @@ pub(crate) async fn rpc(
         "browser_screenshot" => {
             let agent_id = self_or_agent(&params);
             check_browser_permission("screenshot", agent_id.as_deref(), &state, &app).await?;
-            crate::cdp::cdp_screenshot(agent_id.as_deref()).await
+            let full_page = opt_bool(&params, "full_page").unwrap_or(false);
+            let inline = opt_bool(&params, "inline").unwrap_or(false);
+            crate::cdp::cdp_screenshot(full_page, inline, agent_id.as_deref()).await
         }
         "browser_audit" => {
             check_browser_permission("audit", None, &state, &app).await?;
@@ -539,8 +542,67 @@ pub(crate) async fn rpc(
                 return Err("browser_press: self 会话只读，不能操作自家 webview".into());
             }
             let key = req_str(&params, "key", "browser_press")?;
+            let modifiers = params
+                .get("modifiers")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<String>>());
             check_browser_permission("press", agent_id.as_deref(), &state, &app).await?;
-            crate::cdp::cdp_press(&key, agent_id.as_deref()).await
+            crate::cdp::cdp_press(&key, modifiers, agent_id.as_deref()).await
+        }
+        "browser_hover" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_hover: self 会话只读，不能操作自家 webview".into());
+            }
+            let selector = req_str(&params, "selector", "browser_hover")?;
+            check_browser_permission("hover", agent_id.as_deref(), &state, &app).await?;
+            crate::cdp::cdp_hover(&selector, agent_id.as_deref()).await
+        }
+        "browser_dialog" => {
+            let agent_id = self_or_agent(&params);
+            let accept = opt_bool(&params, "accept");
+            if accept.is_some() {
+                if crate::cdp::is_self(agent_id.as_deref()) {
+                    return Err("browser_dialog: self 会话只读，不能操作自家 webview".into());
+                }
+                check_browser_permission("dialog", agent_id.as_deref(), &state, &app).await?;
+                let prompt_text = opt_str(&params, "prompt_text");
+                crate::cdp::cdp_handle_dialog(accept.unwrap_or(false), prompt_text, agent_id.as_deref()).await
+            } else {
+                // 只查询 pending/最近 dialog；self 通道也可用。
+                check_browser_permission("dialog_query", agent_id.as_deref(), &state, &app).await?;
+                let limit = opt_usize(&params, "limit");
+                Ok(crate::cdp::cdp_dialogs(agent_id.as_deref(), limit))
+            }
+        }
+        "browser_upload" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_upload: self 会话只读，不能操作自家 webview".into());
+            }
+            let selector = opt_str(&params, "selector");
+            let files = req_strs(&params, "files", "browser_upload")?;
+            check_browser_permission("upload", agent_id.as_deref(), &state, &app).await?;
+            crate::cdp::cdp_upload(selector, files, agent_id.as_deref()).await
+        }
+        "browser_new_tab" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_new_tab: self 会话只读，不能操作自家 webview".into());
+            }
+            check_browser_permission("new_tab", agent_id.as_deref(), &state, &app).await?;
+            let url = opt_str(&params, "url");
+            crate::cdp::cdp_new_tab(url, agent_id.as_deref())
+        }
+        "browser_close_tab" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_close_tab: self 会话只读，不能操作自家 webview".into());
+            }
+            let target_id = opt_str(&params, "target_id")
+                .ok_or_else(|| "browser_close_tab: missing 'targetId'".to_string())?;
+            check_browser_permission("close_tab", agent_id.as_deref(), &state, &app).await?;
+            crate::cdp::cdp_close_tab(&target_id, agent_id.as_deref())
         }
         "browser_scroll" => {
             let agent_id = self_or_agent(&params);

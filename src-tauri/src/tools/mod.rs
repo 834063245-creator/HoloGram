@@ -190,7 +190,7 @@ impl Tool for BrowserTool {
     fn is_read_only(&self) -> bool {
         matches!(
             self.action.as_str(),
-            "targets" | "discover" | "inspect" | "report" | "status" | "snapshot" | "console" | "network" | "screenshot" | "audit" | "content" | "wait"
+            "targets" | "discover" | "inspect" | "report" | "status" | "snapshot" | "console" | "network" | "screenshot" | "audit" | "content" | "wait" | "dialog_query"
         )
     }
 
@@ -223,7 +223,7 @@ impl Tool for BrowserTool {
         //    reload/click/type/press/scroll/select 不再重复弹窗；敏感目标与高危动作除外。
         if matches!(
             self.action.as_str(),
-            "navigate" | "back" | "forward" | "reload" | "click" | "type" | "press" | "scroll" | "select"
+            "navigate" | "back" | "forward" | "reload" | "click" | "type" | "press" | "scroll" | "select" | "hover" | "dialog" | "upload" | "new_tab" | "close_tab"
         ) {
             return PermissionResult::Passthrough;
         }

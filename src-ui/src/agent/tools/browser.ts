@@ -45,6 +45,8 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     kill: 'browser_kill',
     targets: 'browser_targets',
     attach: 'browser_attach',
+    new_tab: 'browser_new_tab',
+    close_tab: 'browser_close_tab',
     navigate: 'browser_navigate',
     back: 'browser_back',
     forward: 'browser_forward',
@@ -58,8 +60,11 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     screenshot: 'browser_screenshot',
     audit: 'browser_audit',
     click: 'browser_click',
+    hover: 'browser_hover',
     type: 'browser_type',
     select: 'browser_select',
+    upload: 'browser_upload',
+    dialog: 'browser_dialog',
     press: 'browser_press',
     scroll: 'browser_scroll',
     eval: 'browser_eval',
@@ -140,12 +145,33 @@ export function createBrowserTools(): Tool[] {
       name: 'browser_attach',
       description:
         'Attach to a specific page target (by id from browser_targets) so subsequent inspect/click/type/press/scroll/eval act on it. ' +
+        'This is also how you switch between open tabs: pick another targetId from browser_targets and attach. ' +
         'This takes control of an external page — requires user approval. ' +
         'Note: targetId is the CDP target id; the "target" parameter (self vs external) is separate.',
       schema: z.object({
         targetId: z.string().describe('CDP target id from browser(targets) — not "self"'),
       }),
       execute: (args) => run('attach', args),
+    }),
+    defineTool({
+      name: 'browser_new_tab',
+      description:
+        'Open a new tab in the current browser session and auto-attach to it. ' +
+        'Pass url to open a page (default about:blank). Use browser_targets + browser_attach to switch tabs later.',
+      schema: z.object({
+        url: z.string().optional().describe('URL to open in the new tab (default about:blank)'),
+      }),
+      execute: (args) => run('new_tab', args),
+    }),
+    defineTool({
+      name: 'browser_close_tab',
+      description:
+        'Close a browser tab by targetId (from browser_targets). If it is the currently attached tab, ' +
+        'the session becomes unattached — list targets and attach another.',
+      schema: z.object({
+        targetId: z.string().describe('CDP target id of the tab to close'),
+      }),
+      execute: (args) => run('close_tab', args),
     }),
     defineTool({
       name: 'browser_navigate',
@@ -294,6 +320,16 @@ export function createBrowserTools(): Tool[] {
       execute: (args) => run('click', args),
     }),
     defineTool({
+      name: 'browser_hover',
+      description:
+        'Hover the mouse over an element in the attached page by ref number or CSS selector. ' +
+        'Waits for the element to be actionable, then moves the mouse to its center (for hover menus/tooltips/:hover styles).',
+      schema: z.object({
+        selector: z.string().describe('Ref number from snapshot or CSS selector of element to hover'),
+      }),
+      execute: (args) => run('hover', args),
+    }),
+    defineTool({
       name: 'browser_type',
       description:
         'Type text into an input in the attached page by snapshot ref number (e.g. selector: "37") or CSS selector. ' +
@@ -320,11 +356,37 @@ export function createBrowserTools(): Tool[] {
       execute: (args) => run('select', args),
     }),
     defineTool({
+      name: 'browser_upload',
+      description:
+        'Set files on an <input type=file> in the attached page. ' +
+        'If a file chooser was recently opened, its intercepted backend node is used; otherwise pass a CSS selector (or ref) to the input. ' +
+        'files are local absolute paths.',
+      schema: z.object({
+        files: z.array(z.string()).describe('Absolute local file paths to set'),
+        selector: z.string().optional().describe('CSS selector (or ref) of the file input, required if no recent file chooser event'),
+      }),
+      execute: (args) => run('upload', args),
+    }),
+    defineTool({
+      name: 'browser_dialog',
+      description:
+        'Inspect or handle a JavaScript dialog (alert/confirm/prompt) on the attached page. ' +
+        'Call without accept to query recent dialogs and whether one is pending. ' +
+        'Call with accept:true to accept, accept:false to dismiss; promptText answers a prompt.',
+      schema: z.object({
+        accept: z.boolean().optional().describe('Omit to query pending dialogs; true = accept, false = dismiss'),
+        promptText: z.string().optional().describe('Text to enter for a prompt dialog'),
+        limit: z.number().int().optional().describe('Max dialog entries when querying (default 10)'),
+      }),
+      execute: (args) => run('dialog', args),
+    }),
+    defineTool({
       name: 'browser_press',
       description:
         'Press a key in the attached page: Enter / Tab / Escape / Backspace / Arrow keys / single characters.',
       schema: z.object({
         key: z.string().describe('Key name (Enter/Tab/Escape/ArrowUp/ArrowDown/... or single char)'),
+        modifiers: z.array(z.enum(['ctrl', 'alt', 'shift', 'meta'])).optional().describe('Modifier keys held during the press (e.g. ["ctrl"] + key "a" = Ctrl+A)'),
       }),
       execute: (args) => run('press', args),
     }),
@@ -368,6 +430,8 @@ export function createBrowserTools(): Tool[] {
         'Capture a screenshot of the attached page — saved to a temp file, returns {path, bytes}. ' +
         'With a text-only model the image content is not visible; hand the path to the user for confirmation.',
       schema: z.object({
+        fullPage: z.boolean().optional().describe('Capture beyond the viewport (full scrollable page, default false)'),
+        inline: z.boolean().optional().describe('Return a base64 data URL directly when <= 3MB (default false)'),
         target: z
           .string()
           .optional()
@@ -389,7 +453,7 @@ export function createBrowserTools(): Tool[] {
     }),
     defineTool({
       name: 'browser_status',
-      description: 'Current browser session status — port, attached target, whether controlled Chrome is running, observer alive.',
+      description: 'Current browser session status — port, attached target, controlled Chrome running, observer alive, pending dialog/file chooser.',
       schema: z.object({}),
       readOnly: true,
       execute: () => run('status', {}),

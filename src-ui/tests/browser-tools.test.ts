@@ -36,10 +36,10 @@ describe('browser 领域工具注册', () => {
     const t = registry.get('browser')!;
     const actions = t.actions?.() ?? [];
     for (const a of [
-      'launch', 'kill', 'targets', 'attach',
+      'launch', 'kill', 'targets', 'attach', 'new_tab', 'close_tab',
       'navigate', 'back', 'forward', 'reload',
       'snapshot', 'content', 'inspect', 'report', 'console', 'network', 'screenshot', 'audit',
-      'click', 'type', 'select', 'press', 'scroll', 'eval', 'status', 'wait',
+      'click', 'hover', 'type', 'select', 'upload', 'dialog', 'press', 'scroll', 'eval', 'status', 'wait',
     ]) {
       expect(actions).toContain(a);
     }
@@ -129,5 +129,24 @@ describe('browser 动作路由（统一走 Rust CDP）', () => {
     expect(invokeMock).toHaveBeenCalledWith('browser_navigate', expect.objectContaining({ url: 'https://example.com' }));
     expect(invokeMock).toHaveBeenCalledWith('browser_content', expect.objectContaining({ scope: '#main', format: 'markdown', maxChars: 2000 }));
     expect(invokeMock).toHaveBeenCalledWith('browser_select', expect.objectContaining({ selector: '42', value: 'option-a' }));
+  });
+
+  it('tab/dialog/upload/hover/组合键/截图参数路由到新增 RPC', async () => {
+    const registry = buildBrowserRegistry();
+    const t = registry.get('browser')!;
+    await t.execute({ action: 'new_tab', url: 'https://example.com' });
+    await t.execute({ action: 'close_tab', targetId: 'tab-1' });
+    await t.execute({ action: 'hover', selector: '17' });
+    await t.execute({ action: 'dialog', accept: true, promptText: 'ok' });
+    await t.execute({ action: 'upload', files: ['C:/tmp/a.txt'], selector: '#file' });
+    await t.execute({ action: 'press', key: 'a', modifiers: ['ctrl'] });
+    await t.execute({ action: 'screenshot', fullPage: true, inline: true });
+    expect(invokeMock).toHaveBeenCalledWith('browser_new_tab', expect.objectContaining({ url: 'https://example.com' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_close_tab', expect.objectContaining({ targetId: 'tab-1' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_hover', expect.objectContaining({ selector: '17' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_dialog', expect.objectContaining({ accept: true, promptText: 'ok' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_upload', expect.objectContaining({ files: ['C:/tmp/a.txt'], selector: '#file' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_press', expect.objectContaining({ key: 'a', modifiers: ['ctrl'] }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_screenshot', expect.objectContaining({ fullPage: true, inline: true }));
   });
 });

@@ -308,9 +308,12 @@ async fn e2e_navigation_content_forms_round2() {
     let page_b = dir.join("page-b.html");
     std::fs::write(
         &page_a,
-        r#"<!doctype html><html><head><meta charset="utf-8"><title>Hologram CDP E2E Page A</title></head>
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Hologram CDP E2E Page A</title>
+<script>window.addEventListener('keydown', (e) => { if (e.key === 'a' && e.ctrlKey) window.__combo = 'ctrl+a'; });
+window.addEventListener('load', () => { document.getElementById('hover-zone').addEventListener('mouseenter', () => { window.__hovered = true; }); });</script></head>
 <body><main id="content"><h1>Page A</h1><p id="body-text">Hello content probe</p></main>
-<input id="name" value="old value"><select id="choice"><option value="a">Option A</option><option value="b">Option B</option></select></body></html>"#,
+<input id="name" value="old value"><select id="choice"><option value="a">Option A</option><option value="b">Option B</option></select>
+<input type="file" id="upload"><div id="hover-zone" style="width:120px;height:40px">hover me</div></body></html>"#,
     )
     .expect("写 page-a");
     std::fs::write(
@@ -422,6 +425,85 @@ async fn e2e_navigation_content_forms_round2() {
     assert_eq!(vs2["value"].as_str(), Some("a"));
     assert_eq!(vs2["selected"].as_str(), Some("Option A"));
 
+    // hover：mouseMoved 应触发真实 mouseenter。
+    let hov = cdp_hover("#hover-zone", Some(agent)).await.expect("hover 应成功");
+    assert!(hov.contains(r#""hovered""#), "hover 返回异常: {hov}");
+    let hovered = runtime_evaluate("window.__hovered === true", Some(agent))
+        .await
+        .expect("读 hover 标记");
+    assert_eq!(hovered.as_bool(), Some(true), "hover 后 mouseenter 应触发");
+
+    // 组合键：Ctrl+A 主键事件必须带 ctrlKey。
+    let combo = cdp_press("a", Some(vec!["ctrl".into()]), Some(agent))
+        .await
+        .expect("组合键应成功");
+    assert!(combo.contains("ctrl"), "组合键返回异常: {combo}");
+    let combo_state = runtime_evaluate("window.__combo", Some(agent))
+        .await
+        .expect("读组合键标记");
+    assert_eq!(combo_state.as_str(), Some("ctrl+a"), "页面应收到 ctrlKey=true 的 a 键");
+
+    // upload：selector 回退路径 DOM.setFileInputFiles。
+    let upload_file = dir.join("upload.txt");
+    std::fs::write(&upload_file, "e2e upload").expect("写 upload 文件");
+    let up = cdp_upload(
+        Some("#upload".into()),
+        vec![upload_file.to_string_lossy().to_string()],
+        Some(agent),
+    )
+    .await
+    .expect("upload 应成功");
+    assert!(up.contains(r#""via":"selector""#), "upload 应走 selector 回退: {up}");
+    let uploaded = runtime_evaluate(
+        "document.getElementById('upload').files.length + ':' + document.getElementById('upload').files[0].name",
+        Some(agent),
+    )
+    .await
+    .expect("读 upload files");
+    assert_eq!(uploaded.as_str(), Some("1:upload.txt"), "input.files 应为注入文件");
+
+    // dialog：observer 捕获 javascriptDialogOpening，handle 后页面继续执行。
+    let _ = cdp_eval(
+        "setTimeout(() => { alert('e2e dialog'); window.__dialogDone = true; }, 50)",
+        Some(agent),
+    )
+    .await
+    .expect("调度 alert");
+    {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let d = cdp_dialogs(Some(agent), Some(10));
+            let vd: Value = serde_json::from_str(&d).expect("dialog 查询应可解析");
+            if vd["pending"].as_bool().unwrap_or(false) {
+                break;
+            }
+            if Instant::now() > deadline {
+                panic!("observer 应在 5s 内捕获 dialog 事件: {d}");
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+    let handled = cdp_handle_dialog(true, None, Some(agent))
+        .await
+        .expect("dialog accept 应成功");
+    assert!(handled.contains(r#""handled":true"#), "dialog 返回异常: {handled}");
+    let dialog_done = runtime_evaluate("window.__dialogDone === true", Some(agent))
+        .await
+        .expect("读 dialog 完成标记");
+    assert_eq!(dialog_done.as_bool(), Some(true), "alert 处理完后页面脚本应继续");
+
+    // screenshot：fullPage + inline data URL。
+    let shot = cdp_screenshot(true, true, Some(agent))
+        .await
+        .expect("screenshot 应成功");
+    let vshot: Value = serde_json::from_str(&shot).expect("screenshot 返回应可解析");
+    assert_eq!(vshot["fullPage"].as_bool(), Some(true));
+    assert_eq!(vshot["inline"].as_bool(), Some(true));
+    assert!(
+        vshot["dataUrl"].as_str().unwrap_or("").starts_with("data:image/png;base64,"),
+        "inline 截图应返回 data URL: {shot}"
+    );
+
     // navigate：跨页导航必须带世界变化反馈。
     let n = cdp_navigate(&page_b_url, Some(agent))
         .await
@@ -449,6 +531,34 @@ async fn e2e_navigation_content_forms_round2() {
         .await
         .expect("读 reload 后 marker");
     assert_eq!(marker_after.as_str(), Some("undefined"), "reload 后旧 JS 变量应消失");
+
+    // tab 管理：新开 tab 自动 attach；关闭当前 attach tab 后会话回到未 attach。
+    let nt = cdp_new_tab(Some(page_a_url.clone()), Some(agent)).expect("new_tab 应成功");
+    let vnt: Value = serde_json::from_str(&nt).expect("new_tab 返回应可解析");
+    let new_tab_id = vnt["targetId"].as_str().expect("new_tab 应返回 targetId").to_string();
+    wait_page_ready(agent).await;
+    let new_h1 = runtime_evaluate("document.querySelector('h1').textContent", Some(agent))
+        .await
+        .expect("读新 tab 标题");
+    assert_eq!(new_h1.as_str(), Some("Page A"), "new_tab 后应自动 attach 到新页面");
+    let closed = cdp_close_tab(&new_tab_id, Some(agent)).expect("close_tab 应成功");
+    assert!(closed.contains(r#""closed":true"#), "close_tab 返回异常: {closed}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let targets = cdp_targets(Some(agent)).expect("targets 应成功");
+        let vt: Value = serde_json::from_str(&targets).expect("targets 返回应可解析");
+        let still_there = vt["targets"]
+            .as_array()
+            .map(|arr| arr.iter().any(|t| t["id"].as_str() == Some(new_tab_id.as_str())))
+            .unwrap_or(false);
+        if !still_there {
+            break;
+        }
+        if Instant::now() > deadline {
+            panic!("close_tab 后 target 应消失: {targets}");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 
     // 收尾：受控 Chrome 终止；测试页目录尽力清理。
     let k = cdp_kill(Some(agent)).expect("kill 应成功");

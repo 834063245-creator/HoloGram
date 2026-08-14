@@ -215,9 +215,9 @@ export const DOMAIN_SPECS: DomainSpec[] = [
   {
     name: 'browser',
     description:
-      'Browser control: launch a controlled Chrome/Edge (isolated profile), connect to a user-started debug-port browser instance, list/attach pages, navigate/back/forward/reload, ' +
-      'snapshot interactive elements (ref-based ops), extract page content (text/markdown), inspect/report visual state, read console/network events, screenshot, audit log, ' +
-      'and operate (click/type/select/press/scroll/eval). ' +
+      'Browser control: launch a controlled Chrome/Edge (isolated profile), connect to a user-started debug-port browser instance, list/attach/switch tabs (new_tab/close_tab), navigate/back/forward/reload, ' +
+      'snapshot interactive elements (ref-based ops), extract page content (text/markdown), inspect/report visual state, read console/network events, screenshot (fullPage/inline), audit log, ' +
+      'and operate (click/hover/type/select/upload/dialog/press with modifiers/scroll/eval). ' +
       'target="self" = HoloGram webview 只读会话（inspect/report/snapshot/content/console/network/screenshot/status 支持）；省略 target = 已 attach 的外部页面。' +
       '交互范式：先 snapshot 拿 ref 编号，操作按 ref 引用（不要手写 CSS selector）；操作自带等待与反馈；敏感目标每次单独确认。' +
       'attach 用 targetId（来自 browser(targets) 的 CDP target id）。' +
@@ -230,6 +230,8 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       kill: 'browser_kill',
       targets: 'browser_targets',
       attach: 'browser_attach',
+      new_tab: 'browser_new_tab',
+      close_tab: 'browser_close_tab',
       navigate: 'browser_navigate',
       back: 'browser_back',
       forward: 'browser_forward',
@@ -243,8 +245,11 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       screenshot: 'browser_screenshot',
       audit: 'browser_audit',
       click: 'browser_click',
+      hover: 'browser_hover',
       type: 'browser_type',
       select: 'browser_select',
+      upload: 'browser_upload',
+      dialog: 'browser_dialog',
       press: 'browser_press',
       scroll: 'browser_scroll',
       eval: 'browser_eval',
@@ -321,6 +326,8 @@ export function collectHiddenToolNames(): string[] {
     'browser_kill',
     'browser_targets',
     'browser_attach',
+    'browser_new_tab',
+    'browser_close_tab',
     'browser_navigate',
     'browser_back',
     'browser_forward',
@@ -334,8 +341,11 @@ export function collectHiddenToolNames(): string[] {
     'browser_screenshot',
     'browser_audit',
     'browser_click',
+    'browser_hover',
     'browser_type',
     'browser_select',
+    'browser_upload',
+    'browser_dialog',
     'browser_press',
     'browser_scroll',
     'browser_eval',

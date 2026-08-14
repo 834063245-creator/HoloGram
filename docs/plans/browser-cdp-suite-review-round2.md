@@ -1,6 +1,6 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：评审完成，第一批已落地（导航 + 正文提取 + select + type replace + 权限收口 + 英文敏感词）
+> 状态：第一批 + 第二批已落地（导航/正文/select/type replace/权限收口/英文敏感词 + dialog/upload/hover/组合键/截图 inline/fullPage/tab 管理）
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
 > `src-ui/src/agent/tools/browser.ts`、`src-tauri/src/cdp/probes/*.js`、`src-tauri/src/cdp/e2e.rs`
@@ -133,14 +133,26 @@
 | `src-tauri/src/cdp/e2e.rs` | 新增真实 Chrome e2e：本地 file:// 页面覆盖 navigate/back/forward/reload/content 分页/type replace/select |
 | 文档 | 本文件 + ADR 0003 落地状态追加一节 |
 
-### 4.1 第一批落地注记（2026-08-15）
+### 4.1 落地注记
+
+**第一批（2026-08-15）**
 
 - 已完成上述第一批全部代码与文档改动；`cargo check` 通过，`cargo test cdp::tests` 14/14 通过（含新增 content.js 语法检查与英文敏感词单测）；`cargo test cdp::e2e --no-run` 编译通过。本 Linux 机器无 Chrome，3 个真实 Chrome e2e 自动跳过；Windows 机器有 Chrome 时会实跑新增 E2E-3 全链路。
 - `src-ui`：`npx tsc --noEmit` 与 `npm run build` 通过；`vitest run tests/browser-tools.test.ts tests/domains-convergence.test.ts tests/define-tool.test.ts` 48/48 通过。
 - 全量 `cargo test` 在本 Linux 机器上仍为 260 passed / 8 failed，失败项均为 Windows/bwrap 环境依赖的历史基线失败（agent_isolation worktree 路径、bwrap 沙箱、%USERPROFILE% 展开、tasklist 查找），与本批改动无关。
 
-第二批候选（暂不动）：dialog + upload + hover + 组合键 + 截图 inline/fullPage。
-第三批候选：network 配对 + AX snapshot + 跨平台 + cdp.rs 拆分。
+**第二批（2026-08-15）**
+
+- 新增 `browser_dialog`（查询 pending + accept/dismiss/promptText）、`browser_upload`（file chooser backendNodeId 优先 + selector 回退）、`browser_hover`、`browser_press` modifiers（ctrl/alt/shift/meta）、`browser_screenshot` fullPage + inline data URL（3MB 上限）、`browser_new_tab` / `browser_close_tab`（Chrome HTTP `/json/new` PUT、`/json/close` GET；切换复用 attach）。
+- observer 增订 `Page.enable`、`Page.javascriptDialogOpening/Closed`、`Page.fileChooserOpened`，并 `Page.setInterceptFileChooserDialog`；`browser_status` 增加 `dialogPending` / `fileChooserPending`。
+- 测试：`cargo test cdp::tests` 16/16；`cargo test cdp::` 19/19（含 3 个真实 Chrome e2e，本机无 Chrome 自动跳过）；新增 `/json/new` 与 `/json/close` 的本地 TCP 协议级单测。全量 `cargo test` 262 passed / 8 failed（仍是同批历史环境失败）。`npx tsc --noEmit`、`npm run build` 通过；vitest 49/49。
+
+### 4.2 后续批次（含本轮补入的原“未排批次”项）
+
+- **第二批（日常任务断点）**：✅ 已落地 —— dialog + upload + hover + 组合键 + 截图 inline/fullPage + tab 管理（new/close；切换复用 attach）。
+- **第三批（观察与调试）**：network requestId 配对 + 单请求详情/HAR + AX snapshot + launch headless/windowSize。
+- **第四批（平台与工程债）**：跨平台 + cdp.rs 拆分 + 审计/截图轮转清理 + eval 隔离 world（可选）。
+- **第五批（身份与多账号）**：cookie 管理 + profile 配置 + proxy + 多账号会话隔离/切换。
 
 ## 5. 基线命令（改代码前请先跑，留底）
 

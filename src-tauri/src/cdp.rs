@@ -7,8 +7,8 @@
 //   - 命令通道：短连接（每次调用建立 WS，用完即关）——本地回环开销可忽略，
 //     避免长连接命令状态机；connect/发送/等待全部包在 tokio timeout 里，
 //     Runtime.evaluate 另带 CDP 层 5s 超时——页面死循环不会挂死 Agent 流。
-//   - 事件通道：attach 后起一条持久 WS 后台 task，订阅 Runtime/Log/Network
-//     事件进环形缓冲，browser(console)/browser(network) 随时查询；
+//   - 事件通道：attach 后起一条持久 WS 后台 task，订阅 Runtime/Log/Network/Page
+//     事件进环形缓冲，browser(console)/browser(network)/browser(dialog) 随时查询；
 //     事件 task 随 target 消失自然退出，惰性重启。
 //   - 快照 + ref：snapshot 给可交互元素打 data-hg-ref 标记，操作按 ref 引用；
 //     ref 失效返回可恢复错误。selector 保留为高级参数。
@@ -119,6 +119,8 @@ fn sweep_stale_profiles(sessions: &HashMap<String, CdpSession>) {
 const CONSOLE_BUF_MAX: usize = 200;
 const NETWORK_BUF_MAX: usize = 200;
 const ERROR_BUF_MAX: usize = 100;
+const DIALOG_BUF_MAX: usize = 20;
+const FILE_CHOOSER_BUF_MAX: usize = 20;
 
 /// 审计内存环形上限（条）。
 const AUDIT_MAX: usize = 500;
@@ -144,6 +146,13 @@ struct EventBuffers {
     console: VecDeque<String>,
     network: VecDeque<String>,
     errors: VecDeque<String>,
+    dialogs: VecDeque<String>,
+    file_choosers: VecDeque<String>,
+    /// 当前是否有未处理的 javascript dialog（Page.javascriptDialogOpening 起，
+    /// Closed / 主动 handle 后复位）。
+    dialog_open: bool,
+    /// 最近一次 Page.fileChooserOpened 是否尚未被 upload 消费。
+    file_chooser_open: bool,
 }
 
 /// 事件观察句柄。alive 标志由后台 task 维护：
@@ -196,10 +205,30 @@ fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<Arc<Mutex<Ev
         let Ok((mut ws, _)) = tokio_tungstenite::connect_async(&ws_url).await else {
             return;
         };
-        // 订阅三类事件（命令 id 用 ≥1000 与命令通道区分，响应直接跳过）
-        for (id, method) in [(1000u64, "Runtime.enable"), (1001, "Log.enable"), (1002, "Network.enable")] {
+        // 订阅事件（命令 id 用 ≥1000 与命令通道区分，响应直接跳过）。
+        // Page.enable 让 dialog/file chooser 事件可达；拦截 file chooser 后
+        // 文件选择框不会弹出原生窗口（upload 用 DOM.setFileInputFiles 注入）。
+        for (id, method) in [
+            (1000u64, "Runtime.enable"),
+            (1001, "Log.enable"),
+            (1002, "Network.enable"),
+            (1003, "Page.enable"),
+        ] {
             let msg = json!({ "id": id, "method": method }).to_string();
             if ws.send(Message::text(msg)).await.is_err() {
+                return;
+            }
+        }
+        // 只拦截 Agent 操作的外部/受控页面 file chooser。self 会话是自家 webview
+        // 只读通道——若在这里也开启拦截，会把 HoloGram UI 自己的文件选择框改掉。
+        if port != WEBVIEW_DEBUG_PORT {
+            let intercept = json!({
+                "id": 1004u64,
+                "method": "Page.setInterceptFileChooserDialog",
+                "params": { "enabled": true }
+            })
+            .to_string();
+            if ws.send(Message::text(intercept)).await.is_err() {
                 return;
             }
         }
@@ -274,6 +303,32 @@ fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<Arc<Mutex<Ev
                     })
                     .to_string();
                     push_capped(&mut bufs.network, entry, NETWORK_BUF_MAX);
+                }
+                "Page.javascriptDialogOpening" => {
+                    let dialog_type = params["type"].as_str().unwrap_or("alert");
+                    let entry = json!({
+                        "type": dialog_type,
+                        "message": truncate_str(params["message"].as_str().unwrap_or(""), 300),
+                        "defaultPrompt": params["defaultPrompt"].as_str().unwrap_or(""),
+                        "url": truncate_str(params["url"].as_str().unwrap_or(""), 200),
+                    })
+                    .to_string();
+                    push_capped(&mut bufs.dialogs, entry, DIALOG_BUF_MAX);
+                    bufs.dialog_open = true;
+                }
+                "Page.javascriptDialogClosed" => {
+                    bufs.dialog_open = false;
+                }
+                "Page.fileChooserOpened" => {
+                    let backend_node_id = params["backendNodeId"].as_u64();
+                    let entry = json!({
+                        "frameId": params["frameId"].as_str().unwrap_or(""),
+                        "mode": params["mode"].as_str().unwrap_or(""),
+                        "backendNodeId": backend_node_id,
+                    })
+                    .to_string();
+                    push_capped(&mut bufs.file_choosers, entry, FILE_CHOOSER_BUF_MAX);
+                    bufs.file_chooser_open = true;
                 }
                 _ => {}
             }
@@ -666,6 +721,65 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
     Ok(json!({ "status": "connected", "port": port, "pages": pages }).to_string())
 }
 
+/// 新开 tab（Chrome 调试 HTTP /json/new），并自动 attach 到新 tab。
+/// 受控 launch 与外部 connect 的会话都可用；后续操作立即作用于新 tab。
+pub(crate) fn cdp_new_tab(
+    url: Option<String>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    let url = url.unwrap_or_else(|| "about:blank".into());
+    let mut sessions = session_mut(agent_id);
+    let sess = sessions.entry(session_key(agent_id)).or_default();
+    if sess.port == 0 {
+        return Err("尚未 launch/connect 浏览器".into());
+    }
+    let port = sess.port;
+    let created = http_new_tab(port, &url)?;
+    let target_id = created["id"]
+        .as_str()
+        .ok_or("CDP /json/new 未返回 target id")?
+        .to_string();
+    sess.target_id = Some(target_id.clone());
+    ensure_observer_started(sess, port, &target_id);
+    audit_log(agent_id, "new_tab", &url, &target_id);
+    Ok(json!({
+        "created": true,
+        "targetId": target_id,
+        "url": url,
+        "note": "新 tab 已自动 attach，后续 browser 动作作用于该 tab",
+    })
+    .to_string())
+}
+
+/// 关闭 tab（Chrome 调试 HTTP /json/close）。若关闭的是当前 attach 的 tab，
+/// 会话回到未 attach 状态（用 browser(targets)+browser(attach) 切到剩余页面）。
+pub(crate) fn cdp_close_tab(target_id: &str, agent_id: Option<&str>) -> Result<String, String> {
+    if target_id.trim().is_empty() {
+        return Err("close_tab: targetId 不能为空".into());
+    }
+    let mut sessions = session_mut(agent_id);
+    let sess = sessions.entry(session_key(agent_id)).or_default();
+    if sess.port == 0 {
+        return Err("尚未 launch/connect 浏览器".into());
+    }
+    http_close_tab(sess.port, target_id)?;
+    if sess.target_id.as_deref() == Some(target_id) {
+        sess.target_id = None;
+        sess.observer = None;
+    }
+    audit_log(agent_id, "close_tab", target_id, "ok");
+    Ok(json!({
+        "closed": true,
+        "targetId": target_id,
+        "note": if sess.target_id.is_none() {
+            "已关闭当前 attach 的 tab；请用 browser(targets) 选择剩余页面"
+        } else {
+            "已关闭非当前 tab；当前 attach 目标不变"
+        },
+    })
+    .to_string())
+}
+
 /// 发现本机所有开了调试端口的 Chromium 系实例（用户自己启动的 Chrome/Edge/
 /// Electron 等）。查进程表命令行拿端口，再逐个确认 CDP 应答并列出页面——
 /// 用户无需知道端口号，从清单里选即可。
@@ -760,6 +874,46 @@ Get-CimInstance Win32_Process | ForEach-Object {
 // ═══════════════════════════════════════════════════════════
 // target 发现与 attach
 // ═══════════════════════════════════════════════════════════
+
+/// Chrome 调试 HTTP 端点：/json/new 用 PUT，返回 target JSON。
+fn http_new_tab(port: u16, url: &str) -> Result<Value, String> {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("url", url)
+        .finish();
+    let endpoint = format!("http://127.0.0.1:{port}/json/new?{query}");
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_per_call(Some(Duration::from_secs(5)))
+            .build(),
+    );
+    let resp = agent
+        .put(&endpoint)
+        .send_empty()
+        .map_err(|e| format!("CDP /json/new 请求失败: {e}"))?;
+    let mut body = resp.into_body();
+    let text = body
+        .read_to_string()
+        .map_err(|e| format!("CDP /json/new 读取失败: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("CDP /json/new 解析失败: {e}"))
+}
+
+/// Chrome 调试 HTTP 端点：/json/close/{targetId}，返回纯文本（非 JSON）。
+fn http_close_tab(port: u16, target_id: &str) -> Result<(), String> {
+    let endpoint = format!("http://127.0.0.1:{port}/json/close/{target_id}");
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_per_call(Some(Duration::from_secs(5)))
+            .build(),
+    );
+    let resp = agent
+        .get(&endpoint)
+        .call()
+        .map_err(|e| format!("CDP /json/close 请求失败: {e}"))?;
+    if resp.status() != 200 {
+        return Err(format!("CDP /json/close 返回 HTTP {}", resp.status()));
+    }
+    Ok(())
+}
 
 /// GET http://127.0.0.1:port/json — 列出所有 target（原始 JSON）。
 fn list_targets_raw(port: u16) -> Result<Value, String> {
@@ -1191,6 +1345,60 @@ pub(crate) fn cdp_network(agent_id: Option<&str>, limit: Option<usize>) -> Strin
     format!("{{\"entries\":{s}}}")
 }
 
+/// 查询 javascript dialog 事件（最新 N 条）+ 当前是否有未处理 dialog。
+pub(crate) fn cdp_dialogs(agent_id: Option<&str>, limit: Option<usize>) -> String {
+    let Some(obs) = ensure_observer(agent_id) else {
+        return json!({ "pending": false, "entries": [], "note": "未 attach target" }).to_string();
+    };
+    let bufs = crate::utils::lock_or_recover(&obs.buffers);
+    let s = read_buffer(&bufs.dialogs, limit.unwrap_or(10));
+    json!({ "pending": bufs.dialog_open, "entries": serde_json::from_str::<Value>(&s).unwrap_or_else(|_| json!([])) })
+        .to_string()
+}
+
+/// 处理当前 javascript dialog：accept=true 点确定，false 点取消；
+/// prompt 可用 prompt_text 提供输入。
+pub(crate) async fn cdp_handle_dialog(
+    accept: bool,
+    prompt_text: Option<String>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    let (port, tid) = require_target(agent_id)?;
+    let mut params = json!({ "accept": accept });
+    if let Some(t) = prompt_text {
+        params["promptText"] = json!(t);
+    }
+    ws_command(port, &tid, "Page.handleJavaScriptDialog", params).await?;
+    set_dialog_open(agent_id, false);
+    audit_log(
+        agent_id,
+        if accept { "dialog_accept" } else { "dialog_dismiss" },
+        "",
+        "ok",
+    );
+    Ok(json!({ "handled": true, "accept": accept }).to_string())
+}
+
+/// 取最近一次 file chooser 事件（upload 优先用 backendNodeId 注入）。
+fn latest_file_chooser(agent_id: Option<&str>) -> Option<Value> {
+    let obs = ensure_observer(agent_id)?;
+    let bufs = crate::utils::lock_or_recover(&obs.buffers);
+    let raw = bufs.file_choosers.back()?;
+    serde_json::from_str(raw).ok()
+}
+
+fn set_dialog_open(agent_id: Option<&str>, open: bool) {
+    if let Some(obs) = observer_of(agent_id) {
+        crate::utils::lock_or_recover(&obs.buffers).dialog_open = open;
+    }
+}
+
+fn set_file_chooser_open(agent_id: Option<&str>, open: bool) {
+    if let Some(obs) = observer_of(agent_id) {
+        crate::utils::lock_or_recover(&obs.buffers).file_chooser_open = open;
+    }
+}
+
 /// 当前错误缓冲条数（世界变化对比用）。
 fn error_count(agent_id: Option<&str>) -> usize {
     let Some(obs) = observer_of(agent_id) else { return 0 };
@@ -1468,6 +1676,24 @@ pub(crate) async fn cdp_click(target: &str, agent_id: Option<&str>) -> Result<St
     Ok(json!({ "clicked": target, "x": x.round(), "y": y.round(), "change": change }).to_string())
 }
 
+/// 悬停元素（中心点 mouseMoved）。复用 click 的 actionability 等待，
+/// 但不派发按下/释放——hover 菜单、tooltip、CSS :hover 状态。
+pub(crate) async fn cdp_hover(target: &str, agent_id: Option<&str>) -> Result<String, String> {
+    let sel = ref_to_selector(target);
+    let (x, y) = wait_actionable(&sel, "hover", agent_id).await?;
+    let (port, tid) = require_target(agent_id)?;
+    let _ = ws_command(port, &tid, "Page.bringToFront", json!({})).await;
+    ws_command(
+        port,
+        &tid,
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mouseMoved", "x": x, "y": y }),
+    )
+    .await?;
+    audit_log(agent_id, "hover", target, "ok");
+    Ok(json!({ "hovered": target, "x": x.round(), "y": y.round() }).to_string())
+}
+
 /// 查元素的可见文本（截断 40 字符），审计展示用。查不到返回 None。
 async fn element_label(sel: &str, agent_id: Option<&str>) -> Option<String> {
     let expr = format!(
@@ -1564,10 +1790,115 @@ pub(crate) async fn cdp_select(
     .to_string())
 }
 
-/// 按键（Enter/Tab/Escape/Backspace/方向键/单字符）。
+/// 给 <input type=file> 注入本地文件路径。
+/// 优先使用 observer 捕获的 Page.fileChooserOpened.backendNodeId；
+/// 没有事件（或 backend 注入失败）时回退到 selector + DOM.querySelector。
+pub(crate) async fn cdp_upload(
+    selector: Option<String>,
+    files: Vec<String>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    let files = files
+        .into_iter()
+        .filter(|f| !f.trim().is_empty())
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return Err("upload: files 不能为空".into());
+    }
+    let file_count = files.len();
+    let (port, tid) = require_target(agent_id)?;
+
+    // 路径 A：拦截到的 file chooser 直接带 backendNodeId。
+    if let Some(chooser) = latest_file_chooser(agent_id) {
+        if let Some(backend_node_id) = chooser["backendNodeId"].as_u64() {
+            match ws_command(
+                port,
+                &tid,
+                "DOM.setFileInputFiles",
+                json!({ "files": files.clone(), "backendNodeId": backend_node_id }),
+            )
+            .await
+            {
+                Ok(_) => {
+                    set_file_chooser_open(agent_id, false);
+                    audit_log(agent_id, "upload", "file_chooser", "ok");
+                    return Ok(json!({ "uploaded": file_count, "via": "fileChooser" }).to_string());
+                }
+                Err(e) if selector.is_none() => {
+                    return Err(format!("upload: file chooser 注入失败且未提供 selector 回退: {e}"));
+                }
+                Err(_) => {
+                    // 有 selector，继续走 DOM.querySelector 回退。
+                }
+            }
+        }
+    }
+
+    // 路径 B：selector → DOM.getDocument + DOM.querySelector。
+    let Some(sel) = selector.filter(|s| !s.trim().is_empty()) else {
+        return Err("upload: 需要 selector 参数（或先在页面触发 file chooser 事件）".into());
+    };
+    let sel = ref_to_selector(&sel);
+    let doc = ws_command(port, &tid, "DOM.getDocument", json!({ "depth": -1 })).await?;
+    let root_node_id = doc["result"]["root"]["nodeId"]
+        .as_i64()
+        .ok_or("upload: DOM.getDocument 未返回 root.nodeId")?;
+    let found = ws_command(
+        port,
+        &tid,
+        "DOM.querySelector",
+        json!({ "nodeId": root_node_id, "selector": sel }),
+    )
+    .await?;
+    let node_id = found["result"]["nodeId"]
+        .as_i64()
+        .ok_or("upload: DOM.querySelector 未返回 nodeId")?;
+    if node_id == 0 {
+        return Err(format!("upload: selector 无匹配: {sel}"));
+    }
+    ws_command(
+        port,
+        &tid,
+        "DOM.setFileInputFiles",
+        json!({ "files": files, "nodeId": node_id }),
+    )
+    .await?;
+    set_file_chooser_open(agent_id, false);
+    audit_log(agent_id, "upload", &sel, "ok");
+    Ok(json!({ "uploaded": file_count, "via": "selector", "selector": sel }).to_string())
+}
+
+/// 按键（Enter/Tab/Escape/Backspace/方向键/单字符）+ 组合键修饰。
 /// 单字符按键必须携带 text 字段——React 受控输入等场景 keyDown 不带 text
-/// 不会产生字符（P0-6）。
-pub(crate) async fn cdp_press(key: &str, agent_id: Option<&str>) -> Result<String, String> {
+/// 不会产生字符（P0-6）。modifiers 支持 ctrl/alt/shift/meta(cmd)，按
+/// “修饰键按下 → 主键按下/抬起 → 修饰键反向抬起”派发，主键事件带 modifiers 位掩码。
+/// 归一化组合键修饰参数（ctrl/alt/shift/meta），并去重。
+/// 返回 (CDP key 名, CDP code, windowsVirtualKeyCode, modifiers 位掩码位)。
+fn parse_modifiers(
+    modifiers: Option<Vec<String>>,
+) -> Result<Vec<(&'static str, &'static str, u32, u32)>, String> {
+    let mut mods: Vec<(&'static str, &'static str, u32, u32)> = Vec::new();
+    for raw in modifiers.unwrap_or_default() {
+        let item = match raw.to_lowercase().as_str() {
+            "ctrl" | "control" => ("Control", "ControlLeft", 17u32, 2u32),
+            "alt" => ("Alt", "AltLeft", 18, 1),
+            "shift" => ("Shift", "ShiftLeft", 16, 8),
+            "meta" | "cmd" | "command" | "win" | "windows" => ("Meta", "MetaLeft", 91, 4),
+            other => return Err(format!("不支持的修饰键: {other}（支持 ctrl/alt/shift/meta）")),
+        };
+        if !mods.iter().any(|m| m.0 == item.0) {
+            mods.push(item);
+        }
+    }
+    Ok(mods)
+}
+
+pub(crate) async fn cdp_press(
+    key: &str,
+    modifiers: Option<Vec<String>>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    let mods = parse_modifiers(modifiers)?;
     let (port, tid) = require_target(agent_id)?;
     let (key_name, code, vk, text): (&str, String, u32, Option<String>) = match key.to_lowercase().as_str() {
         "enter" => ("Enter", "Enter".into(), 13, None),
@@ -1600,16 +1931,59 @@ pub(crate) async fn cdp_press(key: &str, agent_id: Option<&str>) -> Result<Strin
             }
         }
     };
-    let mut down = json!({ "type": "keyDown", "key": key_name, "code": code, "windowsVirtualKeyCode": vk });
-    let mut up = json!({ "type": "keyUp", "key": key_name, "code": code, "windowsVirtualKeyCode": vk });
+
+    let mask: u32 = mods.iter().map(|m| m.3).sum();
+
+    for (name, code, vk, _) in &mods {
+        ws_command(
+            port,
+            &tid,
+            "Input.dispatchKeyEvent",
+            json!({ "type": "keyDown", "key": name, "code": code, "windowsVirtualKeyCode": vk }),
+        )
+        .await?;
+    }
+    let mut down = json!({
+        "type": "keyDown",
+        "key": key_name,
+        "code": code.clone(),
+        "windowsVirtualKeyCode": vk,
+        "modifiers": mask,
+    });
+    let mut up = json!({
+        "type": "keyUp",
+        "key": key_name,
+        "code": code,
+        "windowsVirtualKeyCode": vk,
+        "modifiers": mask,
+    });
     if let Some(t) = text {
         down["text"] = json!(t);
         up["text"] = json!(t);
     }
     ws_command(port, &tid, "Input.dispatchKeyEvent", down).await?;
     ws_command(port, &tid, "Input.dispatchKeyEvent", up).await?;
-    audit_log(agent_id, "press", key, "ok");
-    Ok(json!({ "pressed": key_name }).to_string())
+    for (name, code, vk, _) in mods.iter().rev() {
+        ws_command(
+            port,
+            &tid,
+            "Input.dispatchKeyEvent",
+            json!({ "type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk }),
+        )
+        .await?;
+    }
+
+    let label = if mods.is_empty() {
+        key.to_string()
+    } else {
+        format!(
+            "{}+{}",
+            mods.iter().map(|m| m.0.to_lowercase()).collect::<Vec<_>>().join("+"),
+            key_name
+        )
+    };
+    audit_log(agent_id, "press", &label, "ok");
+    Ok(json!({ "pressed": label }).to_string())
 }
 
 /// 滚动：有 selector → 滚到元素可见；否则页面滚动 direction（down/up/top）。
@@ -1739,9 +2113,19 @@ pub(crate) async fn check_sensitive(target: &str, action: &str, agent_id: Option
 // 截图（P2）— Page.captureScreenshot 落盘
 // ═══════════════════════════════════════════════════════════
 
-pub(crate) async fn cdp_screenshot(agent_id: Option<&str>) -> Result<String, String> {
+pub(crate) async fn cdp_screenshot(
+    full_page: bool,
+    inline: bool,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
     let (port, tid) = require_target(agent_id)?;
-    let resp = ws_command(port, &tid, "Page.captureScreenshot", json!({ "format": "png" })).await?;
+    let resp = ws_command(
+        port,
+        &tid,
+        "Page.captureScreenshot",
+        json!({ "format": "png", "captureBeyondViewport": full_page }),
+    )
+    .await?;
     let data = resp["result"]["data"]
         .as_str()
         .ok_or("截图失败: 响应无 data（Page.captureScreenshot 未返回图片）")?;
@@ -1758,10 +2142,31 @@ pub(crate) async fn cdp_screenshot(agent_id: Option<&str>) -> Result<String, Str
     let path = dir.join(format!("shot-{ts}.png"));
     std::fs::write(&path, bytes).map_err(|e| format!("写截图文件失败: {e}"))?;
     audit_log(agent_id, "screenshot", &tid, "ok");
+
+    // inline 上限保护：3MB 内直接回 data URL；更大的图只回路径，避免 IPC/上下文爆炸。
+    const MAX_INLINE_SHOT_BYTES: usize = 3 * 1024 * 1024;
+    let byte_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    if inline && byte_len <= MAX_INLINE_SHOT_BYTES as u64 {
+        return Ok(json!({
+            "path": path.to_string_lossy(),
+            "bytes": byte_len,
+            "fullPage": full_page,
+            "inline": true,
+            "dataUrl": format!("data:image/png;base64,{data}"),
+            "note": "dataUrl 为 PNG data URL，可直接作为图片内容消费",
+        })
+        .to_string());
+    }
     Ok(json!({
         "path": path.to_string_lossy(),
-        "bytes": std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
-        "note": "截图已落盘（纯文本模型看不到内容，可交给用户确认；vision 模型可读路径）",
+        "bytes": byte_len,
+        "fullPage": full_page,
+        "inline": false,
+        "note": if inline {
+            "截图超过 3MB 内联上限，已落盘（可用 read_file_base64 读取）"
+        } else {
+            "截图已落盘（纯文本模型看不到内容，可交给用户确认；vision 模型可读路径）"
+        },
     })
     .to_string())
 }
@@ -1828,12 +2233,27 @@ pub(crate) fn cdp_status(agent_id: Option<&str>) -> String {
     let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(session_key(agent_id)).or_default();
     let external = sess.chrome_child.is_none() && sess.port != 0;
+    let observer_alive = sess
+        .observer
+        .as_ref()
+        .map(|o| o.alive.load(Ordering::SeqCst))
+        .unwrap_or(false);
+    let observer = sess.observer.clone();
+    let (dialog_open, file_chooser_open) = match observer {
+        Some(obs) => {
+            let bufs = crate::utils::lock_or_recover(&obs.buffers);
+            (bufs.dialog_open, bufs.file_chooser_open)
+        }
+        None => (false, false),
+    };
     json!({
         "port": sess.port,
         "attached": sess.target_id.is_some(),
         "chromeRunning": sess.chrome_child.is_some(),
         "external": external,
-        "observerAlive": sess.observer.as_ref().map(|o| o.alive.load(Ordering::SeqCst)).unwrap_or(false),
+        "observerAlive": observer_alive,
+        "dialogPending": dialog_open,
+        "fileChooserPending": file_chooser_open,
     })
     .to_string()
 }
@@ -2027,6 +2447,70 @@ mod tests {
         assert!(e.contains("text 或 markdown"), "{e}");
         let e = super::cdp_select("37", "", None).await.unwrap_err();
         assert!(e.contains("value 不能为空"), "{e}");
+        let e = super::cdp_upload(None, vec![], None).await.unwrap_err();
+        assert!(e.contains("files 不能为空"), "{e}");
+        let e = super::cdp_close_tab("  ", None).unwrap_err();
+        assert!(e.contains("targetId 不能为空"), "{e}");
+        let e = super::cdp_press("a", Some(vec!["hyper".into()]), None)
+            .await
+            .unwrap_err();
+        assert!(e.contains("不支持的修饰键"), "{e}");
+    }
+
+    /// 组合键参数归一化：别名收口、去重、非法值明确报错。
+    #[test]
+    fn parse_modifiers_normalizes_aliases_and_dedupes() {
+        let m = super::parse_modifiers(Some(vec!["ctrl".into(), "Control".into(), "cmd".into()])).unwrap();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].0, "Control");
+        assert_eq!(m[1].0, "Meta");
+        assert!(super::parse_modifiers(Some(vec!["bad".into()])).is_err());
+    }
+
+    /// Chrome 调试 HTTP 端点协议级测试：/json/new?url=... 走 PUT 且解析 target；
+    /// /json/close/{targetId} 走 GET 且不要求 JSON body。不依赖真实 Chrome。
+    #[test]
+    fn http_new_tab_and_close_tab_protocol() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind 本地测试端口");
+        let port = listener.local_addr().expect("读取端口").port();
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).expect("read line");
+                    if n == 0 || line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                    head.push_str(&line);
+                }
+                let (status, body) = if head.starts_with("PUT /json/new?") {
+                    (
+                        "200 OK",
+                        r#"{"id":"tab-1","title":"x","url":"https://example.com/?q=1","webSocketDebuggerUrl":"ws://127.0.0.1/devtools/page/tab-1"}"#,
+                    )
+                } else if head.starts_with("GET /json/close/tab-1") {
+                    ("200 OK", "Target is closing")
+                } else {
+                    ("404 Not Found", "not found")
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(resp.as_bytes()).expect("write response");
+            }
+        });
+
+        let created = super::http_new_tab(port as u16, "https://example.com/?q=1").expect("new tab 请求");
+        assert_eq!(created["id"].as_str(), Some("tab-1"));
+        super::http_close_tab(port as u16, "tab-1").expect("close tab 请求");
+        server.join().expect("server join");
     }
 
     /// B3：cdp_wait 的固定 ms 路径——确定性休眠，不需要真实浏览器。
