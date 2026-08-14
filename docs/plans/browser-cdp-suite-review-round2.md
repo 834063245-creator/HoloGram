@@ -1,6 +1,6 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）+ 第三批（`2c8376a`）+ 第三批标记文档（`5ec03b8`）+ 第四批第一批（`9a9d810`）+ viewport（`54cea67`）已提交，均未 push；**第四批基本完成**（跨平台 + 轮转清理 + HAR + viewport + cdp.rs 四模块拆分），仅剩 eval 隔离 world（可选）
+> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）+ 第三批（`2c8376a`）+ 第三批标记文档（`5ec03b8`）+ 第四批已提交（`9a9d810` 跨平台/轮转/HAR、`54cea67` viewport、`2d25279` session 拆分、`60aaac2` actions 拆分），均未 push；**第四批基本完成**（跨平台 + 轮转清理 + HAR + viewport + cdp.rs 四模块拆分），仅剩 eval 隔离 world（可选）
 > 下一接手窗口任务：eval 隔离 world 若不做则第四批可收官；将来有 Windows 环境时补跑 E2E-1/2/3/4（重点 E2E-4 与 viewport 断言）
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
