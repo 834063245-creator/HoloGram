@@ -1,7 +1,7 @@
 {
   "productName": "全息观测站",
   "identifier": "com.hologram.hg",
-  "version": "10.1.0",
+  "version": "10.1.1",
   "build": {
     "frontendDist": "../src-ui/dist",
     "devUrl": "http://127.0.0.1:1420",
@@ -26,7 +26,12 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
     "resources": [
       "../grammars/*.dll",
       "onnxruntime.dll",
@@ -36,7 +41,9 @@
     "windows": {
       "wix": {
         "language": "zh-CN",
-        "fragmentPaths": ["wix/cleanup.wxs"]
+        "fragmentPaths": [
+          "wix/cleanup.wxs"
+        ]
       }
     }
   },
