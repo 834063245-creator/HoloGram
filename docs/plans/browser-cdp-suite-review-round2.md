@@ -1,6 +1,6 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）已提交，两个提交**尚未 push**；第三批（network 配对/详情 + AX snapshot + launch headless/windowSize）已在工作树完成、未提交（本文件即为该窗口产出）
+> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）已提交，两个提交**尚未 push**；第三批（network 配对/详情 + AX snapshot + launch headless/windowSize）已提交（`2c8376a`），当前工作树 clean
 > 下一接手窗口任务：当前无 Windows 真机环境——以 Linux 可跑测试（§8.3 注记）作为本批保障；将来有 Windows 环境时补跑 E2E-1/2/3/4（重点 E2E-4），再进入 **第四批**（跨平台 + cdp.rs 拆分 + 审计/截图轮转 + eval 隔离 world）
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
@@ -148,7 +148,7 @@
 - observer 增订 `Page.enable`、`Page.javascriptDialogOpening/Closed`、`Page.fileChooserOpened`，并 `Page.setInterceptFileChooserDialog`；`browser_status` 增加 `dialogPending` / `fileChooserPending`。
 - 测试：`cargo test cdp::tests` 16/16；`cargo test cdp::` 19/19（含 3 个真实 Chrome e2e，本机无 Chrome 自动跳过）；新增 `/json/new` 与 `/json/close` 的本地 TCP 协议级单测。全量 `cargo test` 262 passed / 8 failed（仍是同批历史环境失败）。`npx tsc --noEmit`、`npm run build` 通过；vitest 49/49。
 
-**第三批（2026-08-15，工作树未提交）**
+**第三批（2026-08-15，已提交 `2c8376a`）**
 
 - network 配对：`NetworkEntry` 单条记录 + `network_index`（requestId→entry），`responseReceived` 回填 status/statusText/mimeType/responseHeaders，`loadingFailed` 回填 error 且不再把 requestId 塞进 url；`browser_network` 输出 `{entries, paired:true}`。
 - 新增 `browser_network_detail(requestId)`：完整 URL/method/status/请求响应头/postData(2000 字符上限)/error；仅可查仍在 200 条窗口内的请求，HAR 导出仍为后续项。
@@ -161,7 +161,7 @@
 ### 4.2 后续批次（含本轮补入的原“未排批次”项）
 
 - **第二批（日常任务断点）**：✅ 已落地 —— dialog + upload + hover + 组合键 + 截图 inline/fullPage + tab 管理（new/close；切换复用 attach）。
-- **第三批（观察与调试）**：✅ 已落地（工作树）—— network requestId 配对 + `browser_network_detail` + AX snapshot（失败回退增强探针）+ launch headless/windowSize。HAR 导出与 `Emulation.setDeviceMetricsOverride` 留第四批/后续。
+- **第三批（观察与调试）**：✅ 已落地（`2c8376a`）—— network requestId 配对 + `browser_network_detail` + AX snapshot（失败回退增强探针）+ launch headless/windowSize。HAR 导出与 `Emulation.setDeviceMetricsOverride` 留第四批/后续。
 - **第四批（平台与工程债）**：跨平台 + cdp.rs 拆分 + 审计/截图轮转清理 + eval 隔离 world（可选）。
 - **第五批（身份与多账号）**：cookie 管理 + profile 配置 + proxy + 多账号会话隔离/切换。
 
@@ -204,7 +204,7 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 
 - HEAD：`fec19fe feat(browser-cdp): add dialog, upload, shortcuts and tab management`
 - 前序提交：`e0b9086`（第一批）、`c3a0628`（计划原始文档，origin/main）
-- 工作树：第三批改动已落地、**尚未 commit**；HEAD 仍是 `fec19fe`，前两个提交未 push。当前无 Windows 真机：提交前保障改为 Linux 可跑测试（`cargo test cdp::` + 全量 cargo test 失败数基线 + jsdom 探针测试 + `cargo check --tests`）。
+- 工作树：clean；第三批已提交（`2c8376a`），连同前两个提交（`e0b9086`、`fec19fe`）均未 push。当前无 Windows 真机：本批保障已用 Linux 可跑测试（`cargo test cdp::` + 全量 cargo test 失败数基线 + jsdom 探针测试 + `cargo check --tests`）完成。
 - 已实现能力：launch/connect/discover/targets/attach、navigate/back/forward/reload、snapshot(AX 优先 + iframe/shadow/accessible-name 回退)/content/inspect/report/console/network(按 requestId 配对)/network_detail/screenshot(fullPage,inline)/audit/status/wait、click/hover/type(replace)/select/upload/dialog/press(modifiers)/scroll/eval、new_tab/close_tab；launch 支持 headless/windowSize。
 - 本机验证（Linux）：`cargo test cdp::` 22/22（4 个 Chrome e2e 自动跳过）；`npx tsc --noEmit` 通过；vitest 50/50。全量 `cargo test` 第三批后重跑为 265 passed / 8 failed（+3 全部为本批 cdp 新测试；8 个失败仍是 bwrap/tasklist/%USERPROFILE%/worktree 路径历史基线，失败数未从 8 变多）。
 
@@ -215,7 +215,7 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 3. 将来有 Windows 环境时：`cd src-tauri && cargo test cdp:: -- --nocapture` 实跑 E2E-1/2/3/4；重点看 E2E-4 的 headless/windowSize、network 配对/详情、AX snapshot，失败输出贴回。
 4. 第四批不因「未跑 Windows e2e」硬阻塞；但开第四批前应把该风险连同本机测试结果一起记录。
 
-### 8.3 第三批任务（✅ 已落地，未提交）
+### 8.3 第三批任务（✅ 已落地，`2c8376a`）
 
 1. ✅ network 配对：observer 内 `requestId -> entry` 映射，`Network.responseReceived` 回填同条记录 status，`loadingFailed` 不再把 requestId 塞进 url；`browser_network` 输出成对记录。
 2. ✅ `browser_network_detail(requestId)` 已做；HAR 作为后续导出项。
