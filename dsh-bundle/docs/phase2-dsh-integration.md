@@ -1,11 +1,7 @@
 # 阶段2 · 3D 视图接进 DSH web —— client-plugin 集成规格（唯一事实来源）
 
-> 状态：渲染 + 实时数据链已跑通。剩「DSH 侧边栏入口」这块 client-plugin。
-> 本文件把机制与验收标准写死，实现时照做。
-
-## 已跑通（两个服务在跑）
-- `viewer` :5180 —— 完整 StarGraph 渲染，`?project=<path>` 走实时数据
-- `serve-graph` :5190 —— `GET /graph?project=<path>` 实时 analyze→GraphJSON（已验证 200/37/86）
+> 状态：渲染 + 实时数据链 + 侧边栏入口全部跑通并内嵌 DSH（/hologram 同源自托管）。
+> 本文件是机制事实来源与恢复步骤。
 
 ## DSH client-plugin 机制（已验证的事实）
 
@@ -38,7 +34,7 @@ bundle 的浏览器包按以下契约接入：
 ## 待定决策（实现前定）
 1. client-plugin 源码放哪：`dsh-bundle/` 下自建 vs DSH checkout 内
 2. 3D 视图嵌入方式：iframe 套独立服务 vs 原生 bundle 内核
-3. 「当前 workspace」从哪来：`window.__DSH_BOOT__`/workspace service 读
+3. 「当前 workspace」从哪来：**client 侧读 `ctx.sessions.list` 快照取当前会话 `cwd`**（点开按钮瞬间解析），无会话时回退 `FALLBACK_PROJECT`。✅ 已实现
 ## 关键发现（layout 槽位研究）
 - `sidebar` 槽是 **single 占用**：谁注册谁整列替换（ui-sidebar 的 SidebarRoot 占着）。
   ui-sidebar 只在内部声明了 `workspace` / `settings` 两个座位。
@@ -64,7 +60,6 @@ node --import tsx/esm apps/cli/src/bin.ts --profile web --dump-config | findstr 
 - 阶段1 引擎工具回来（mcp__hologram__*）
 - 侧边栏底部出现「3D 星图 / 🌌」按钮 → 全屏打开 viewer（?project= 实时分析）
 
-> 前置：`serve-graph`(:5190) + viewer(:5180) 需在跑（发货前会改成 DSH 托管，当前为开发地址）。
 ## 重要约束（我跑在 GUI 里，无法自己重启它）
 
 - 我已把更新后的 bundle（含 `lib/client.js` 侧边栏插件）在 **`hologram-cli` 测试 profile** 完整装好并验证
@@ -99,4 +94,17 @@ dsh web  # 重启
 
 侧边栏入口 iframe → 同源 `/hologram/?project=`（无 CORS/端口依赖）。
 
-> 发货前仍需用户重启 GUI 部署（live web profile 被运行中 GUI 锁包，见前节恢复步骤）。
+> 发货前仍需用户重启 GUI 部署（live web profile 的 node_modules 拷贝需 remove+add 刷新，跑完 add 见后注）。
+
+
+## 侧边栏入口：分析目标跟随当前会话工作区（2026-08-14 改进）
+
+`src/client/index.tsx` 不再写死 DEFAULT_PROJECT，改为**点开按钮的瞬间**解析 `ctx.sessions.list`
+快照里「当前会话的 cwd」作为 `?project=`（跟随正在工作的项目），取不到时回退到 `FALLBACK_PROJECT`
+（默认 `D:/HoloGramHG`）。`viewer/main.ts` 同源调 `/hologram/api/graph?project=`。
+
+## host 侧图缓存（2026-08-14 已并入 src/index.ts）
+
+`createGraphHandler` 带每项目内存缓存：首次 analyze 后 5 分钟内复用（TTL），`?refresh=1` 强制重新 analyze。
+该实现已在源码，**需重启 GUI 让新 host 模块（lib/index.mjs）落位后才生效**。
+（本 agent 已在运行中 GUI 的 web profile 执行 remove+add 落位新文件；下一步只需用户重启 GUI 激活。）
