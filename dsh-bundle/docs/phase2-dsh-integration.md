@@ -103,21 +103,16 @@ dsh web  # 重启
 快照里「当前会话的 cwd」作为 `?project=`（跟随正在工作的项目），取不到时回退到 `FALLBACK_PROJECT`
 （默认 `D:/HoloGramHG`）。`viewer/main.ts` 同源调 `/hologram/api/graph?project=`。
 
-## host 侧数据生命周期：单一长驻引擎（2026-08-14 重写）
+## 统一数据生命周期：单一引擎双入口 serve --tcp（2026-08-14 最终形态）
 
-早期实现每次 /hologram/api/graph 请求都临时 spawn 一个新引擎全量 analyze 再杀进程——
-把引擎「分析一次、反复查询」的数据生命周期整个绕过了，每次打开都是 20s 全量扫描。
-现改为与 Tauri 一致的长驻引擎模型：
+引擎以 `serve --project-root <root> --tcp` 启动：**stdio MCP（34 个工具）与 TCP 9777（viewer）
+跑在同一个进程里，共享同一份内存图 + watcher 实时增量更新**。
 
-- host 插件保持**一个长驻引擎进程**（TCP 9777）
-- `analyze` 只在**首次 / 换项目 / `?refresh=1`** 时发生
-- 其余请求直接 `get_graph`（读引擎内存，毫秒级）
-- 请求串行化（同一时刻一个未完成请求），引擎崩溃自动重启
+- host 插件**不再 spawn 自己的引擎**：`/hologram/api/graph` 直连共享引擎 9777
+- `get_graph`：读共享引擎内存（含 watcher 增量），毫秒级；现在也返回 communities/hierarchical_communities
+- `analyze:<project>`：只在「首次 / 图不属于该项目 / `?refresh=1`」时发送——切换共享引擎工作区（与 Tauri 一致），MCP 工具随之查同一份图
+- 引擎单进程持有：`analyze` 一次全量，watcher 增量维护，viewer 与 MCP 工具读到同一份数据
 
-**需重启 GUI 让新 host 模块（lib/index.mjs）落位后才生效。**
+**验证（同一进程）**：MCP ready + TCP ping OK；analyze 4.7s → get_graph 2922 节点/8670 边/452 社区/498 层级社区；二次 get_graph 秒回无重分析。
 
-### 与 MCP 引擎的关系（重要）
-
-MCP 工具（34 个 mcp__hologram__*）走 `hologram-mcp` 的 stdio 长驻引擎；viewer 走 host
-插件的 TCP 长驻引擎。两者是**独立进程、独立分析**——各自的 re-analyze 不互通。
-但它们现在都遵守同一生命周期：分析一次、反复查询，不再每次请求全量重扫。
+**需重启 GUI 生效**（新 host lib + 新引擎二进制都在 web profile 里等落位）。
