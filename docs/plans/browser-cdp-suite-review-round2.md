@@ -1,7 +1,7 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）+ 第三批（`2c8376a`）+ 第三批标记文档（`5ec03b8`）已提交，均未 push；**第四批第一批已落地**（跨平台 discover/chrome 查找 + 审计/截图/HAR 轮转 + HAR 导出 + cdp 拆出 transport/probes），cdp 的 session/actions 拆分与 eval 隔离 world 仍在第四批剩余项
-> 下一接手窗口任务：继续 **第四批剩余项**——`cdp.rs` 的 session/actions 继续拆分、`Emulation.setDeviceMetricsOverride`、eval 隔离 world（可选）；将来有 Windows 环境时补跑 E2E-1/2/3/4
+> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）+ 第三批（`2c8376a`）+ 第三批标记文档（`5ec03b8`）+ 第四批第一批（`9a9d810`）+ viewport（`54cea67`）已提交，均未 push；**第四批基本完成**（跨平台 + 轮转清理 + HAR + viewport + cdp.rs 四模块拆分），仅剩 eval 隔离 world（可选）
+> 下一接手窗口任务：eval 隔离 world 若不做则第四批可收官；将来有 Windows 环境时补跑 E2E-1/2/3/4（重点 E2E-4 与 viewport 断言）
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
 > `src-ui/src/agent/tools/browser.ts`、`src-tauri/src/cdp/probes/*.js`、`src-tauri/src/cdp/e2e.rs`
@@ -172,7 +172,7 @@
 
 - **第二批（日常任务断点）**：✅ 已落地 —— dialog + upload + hover + 组合键 + 截图 inline/fullPage + tab 管理（new/close；切换复用 attach）。
 - **第三批（观察与调试）**：✅ 已落地（`2c8376a`）—— network requestId 配对 + `browser_network_detail` + AX snapshot（失败回退增强探针）+ launch headless/windowSize。HAR 导出已在第四批第一批关闭；`Emulation.setDeviceMetricsOverride` 仍在第四批剩余项。
-- **第四批（平台与工程债）**：🔄 部分落地 —— 跨平台 + 审计/截图/HAR 轮转 + HAR 导出 + `browser_viewport`（`Emulation.setDeviceMetricsOverride`）+ transport/probes 拆分已完成；剩余 session/actions 拆分、eval 隔离 world（可选）。
+- **第四批（平台与工程债）**：✅ 基本完成 —— 跨平台 + 审计/截图/HAR 轮转 + HAR 导出 + `browser_viewport`（`Emulation.setDeviceMetricsOverride`）+ `cdp.rs` 四模块拆分（transport/session/actions/probes）已完成；剩余 eval 隔离 world（可选）。
 - **第五批（身份与多账号）**：cookie 管理 + profile 配置 + proxy + 多账号会话隔离/切换。
 
 ## 5. 基线命令（新窗口改代码前跑，留底）
@@ -221,7 +221,7 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 1. `git fetch` / `git pull` 到 `fec19fe`（或让用户 push 后拉取）。
 2. 当前条件：无 Windows 真机。可跑保障 = `cargo check --tests`、`npx tsc --noEmit`、vitest（browser-tools/domains-convergence/define-tool/browser-snapshot-probe）；内存充足时补 `cargo test cdp::` 与全量 `cargo test`（确认仍是 8 个历史失败）。E2E-1/2/3/4 自动跳过是已知未验证项，不是失败。
 3. 将来有 Windows 环境时：`cd src-tauri && cargo test cdp:: -- --nocapture` 实跑 E2E-1/2/3/4；重点看 E2E-4 的 headless/windowSize、network 配对/详情、AX snapshot，失败输出贴回。
-4. 第四批第一批已完成；继续剩余项（session/actions 拆分、`Emulation.setDeviceMetricsOverride`、eval 隔离 world 可选）前，先跑第 2 条。
+4. 第四批基本完成；若继续做 eval 隔离 world（可选），先跑第 2 条。
 
 ### 8.3 第三批任务（✅ 已落地，`2c8376a`）
 
@@ -232,7 +232,7 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 
 ### 8.4 后续批次
 
-- 第四批剩余：`cdp.rs` 继续拆 `session.rs` / `actions.rs`（transport/probes 已拆）、eval 隔离 world（可选）。`Emulation.setDeviceMetricsOverride` 已通过 `browser_viewport` 落地。
+- 第四批剩余：eval 隔离 world（可选）。其余均已落地：跨平台、轮转清理、HAR、viewport、`cdp.rs` 四模块拆分。
 - 第五批：cookie 管理、profile 配置、proxy、多账号会话隔离/切换。
 
 ### 8.5 踩坑速记（务必读）

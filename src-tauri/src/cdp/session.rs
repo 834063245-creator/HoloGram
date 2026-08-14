@@ -87,8 +87,8 @@ pub(super) fn sweep_stale_profiles(sessions: &HashMap<String, CdpSession>) {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let is_ours = name == PROFILE_DIR_PREFIX
-            || name.starts_with(&format!("{PROFILE_DIR_PREFIX}-"));
+        let is_ours =
+            name == PROFILE_DIR_PREFIX || name.starts_with(&format!("{PROFILE_DIR_PREFIX}-"));
         if !is_ours || !path.is_dir() || live.iter().any(|l| **l == path) {
             continue;
         }
@@ -316,10 +316,15 @@ pub(super) fn truncate_str(s: &str, max: usize) -> String {
 
 /// 写入/替换一条网络条目，并同步维护 requestId 索引与环形上限。
 pub(super) fn network_upsert(bufs: &mut EventBuffers, entry: NetworkEntry) {
-    if let Some(pos) = bufs.network.iter().position(|e| e.request_id == entry.request_id) {
+    if let Some(pos) = bufs
+        .network
+        .iter()
+        .position(|e| e.request_id == entry.request_id)
+    {
         bufs.network.remove(pos);
     }
-    bufs.network_index.insert(entry.request_id.clone(), entry.clone());
+    bufs.network_index
+        .insert(entry.request_id.clone(), entry.clone());
     bufs.network.push_back(entry);
     if bufs.network.len() > NETWORK_BUF_MAX {
         if let Some(old) = bufs.network.pop_front() {
@@ -344,7 +349,10 @@ pub(super) fn network_on_response(bufs: &mut EventBuffers, params: &Value) {
     }
     let response = &params["response"];
     let updated = if let Some(entry) = bufs.network_index.get_mut(&request_id) {
-        entry.url = response["url"].as_str().map(String::from).or_else(|| entry.url.clone());
+        entry.url = response["url"]
+            .as_str()
+            .map(String::from)
+            .or_else(|| entry.url.clone());
         entry.status = response["status"].as_u64();
         entry.status_text = response["statusText"].as_str().map(String::from);
         entry.mime_type = response["mimeType"].as_str().map(String::from);
@@ -413,7 +421,11 @@ pub(super) fn network_on_failed(bufs: &mut EventBuffers, params: &Value) {
 /// 观察任务因 target 抖动 / WS 断连短暂死亡后重启若重建新缓冲（旧实现默认），
 /// 会把已累积的 console/network/error 历史清空——agent 点完按钮查错误时
 /// 可能丢掉正是触发它排查的那条错误。传入旧 buffers 使历史跨重启保留。
-pub(super) fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<Arc<Mutex<EventBuffers>>>) -> Observer {
+pub(super) fn start_observer(
+    port: u16,
+    target_id: &str,
+    reuse_buffers: Option<Arc<Mutex<EventBuffers>>>,
+) -> Observer {
     let buffers = reuse_buffers.unwrap_or_else(|| Arc::new(Mutex::new(EventBuffers::default())));
     let alive = Arc::new(AtomicBool::new(false));
     let (b2, a2, tid) = (buffers.clone(), alive.clone(), target_id.to_string());
@@ -462,7 +474,9 @@ pub(super) fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<A
         a2.store(true, Ordering::SeqCst);
         while let Some(Ok(msg)) = ws.next().await {
             let Message::Text(t) = msg else { continue };
-            let Ok(v) = serde_json::from_str::<Value>(&t) else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(&t) else {
+                continue;
+            };
             if v["id"].as_u64().is_some() {
                 continue; // 命令响应，不属于事件流
             }
@@ -476,12 +490,15 @@ pub(super) fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<A
                         .as_array()
                         .map(|args| {
                             args.iter()
-                                .filter_map(|a| a["value"].as_str().or_else(|| a["description"].as_str()))
+                                .filter_map(|a| {
+                                    a["value"].as_str().or_else(|| a["description"].as_str())
+                                })
                                 .collect::<Vec<_>>()
                                 .join(" ")
                         })
                         .unwrap_or_default();
-                    let entry = json!({ "type": ctype, "text": truncate_str(&text, 300) }).to_string();
+                    let entry =
+                        json!({ "type": ctype, "text": truncate_str(&text, 300) }).to_string();
                     push_capped(&mut bufs.console, entry.clone(), CONSOLE_BUF_MAX);
                     if ctype == "error" {
                         push_capped(&mut bufs.errors, entry, ERROR_BUF_MAX);
@@ -491,7 +508,8 @@ pub(super) fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<A
                     let text = params["exceptionDetails"]["exception"]["description"]
                         .as_str()
                         .unwrap_or("exception");
-                    let entry = json!({ "type": "exception", "text": truncate_str(text, 300) }).to_string();
+                    let entry =
+                        json!({ "type": "exception", "text": truncate_str(text, 300) }).to_string();
                     push_capped(&mut bufs.errors, entry.clone(), ERROR_BUF_MAX);
                     push_capped(&mut bufs.console, entry, CONSOLE_BUF_MAX);
                 }
@@ -499,7 +517,8 @@ pub(super) fn start_observer(port: u16, target_id: &str, reuse_buffers: Option<A
                     let entry_obj = &params["entry"];
                     let level = entry_obj["level"].as_str().unwrap_or("info");
                     let text = entry_obj["text"].as_str().unwrap_or("");
-                    let entry = json!({ "type": level, "text": truncate_str(text, 300) }).to_string();
+                    let entry =
+                        json!({ "type": level, "text": truncate_str(text, 300) }).to_string();
                     push_capped(&mut bufs.console, entry.clone(), CONSOLE_BUF_MAX);
                     if level == "error" {
                         push_capped(&mut bufs.errors, entry, ERROR_BUF_MAX);
@@ -657,15 +676,21 @@ pub(super) fn enforce_lease() {
 }
 
 /// 取会话并刷新活跃时间。
-pub(super) fn session_mut(agent_id: Option<&str>) -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>> {
+pub(super) fn session_mut(
+    agent_id: Option<&str>,
+) -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>> {
     enforce_lease();
     let mut sessions = lock_sessions();
-    sessions.entry(session_key(agent_id)).or_default().last_active = Instant::now();
+    sessions
+        .entry(session_key(agent_id))
+        .or_default()
+        .last_active = Instant::now();
     sessions
 }
 
 /// 审计日志 — 内存环形 + 落盘（临时目录 jsonl）。
-pub(super) static AUDIT: LazyLock<Mutex<VecDeque<String>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
+pub(super) static AUDIT: LazyLock<Mutex<VecDeque<String>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 /// 审计落盘文件名前缀。按日期轮转：hologram-browser-audit-YYYYMMDD.jsonl。
 pub(super) const AUDIT_FILE_PREFIX: &str = "hologram-browser-audit";
@@ -702,14 +727,23 @@ pub(super) fn har_retain_days() -> u64 {
         .unwrap_or(7)
 }
 
-pub(super) fn is_expired_file_time(modified: std::time::SystemTime, now: std::time::SystemTime, retain_days: u64) -> bool {
+pub(super) fn is_expired_file_time(
+    modified: std::time::SystemTime,
+    now: std::time::SystemTime,
+    retain_days: u64,
+) -> bool {
     now.duration_since(modified)
         .map(|age| age.as_secs() > retain_days.saturating_mul(24 * 60 * 60))
         .unwrap_or(false)
 }
 
 /// 清理目录中指定前缀、按修改时间早于保留窗口的文件。失败静默（清理是尽力而为）。
-pub(super) fn cleanup_old_files_by_age(dir: &std::path::Path, prefix: &str, retain_days: u64, now: std::time::SystemTime) {
+pub(super) fn cleanup_old_files_by_age(
+    dir: &std::path::Path,
+    prefix: &str,
+    retain_days: u64,
+    now: std::time::SystemTime,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -766,7 +800,11 @@ pub(super) fn audit_log(agent_id: Option<&str>, action: &str, target: &str, summ
     );
     use std::io::Write;
     let path = audit_file_path();
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         let _ = writeln!(f, "{entry}");
     }
 }
@@ -897,7 +935,9 @@ pub(super) fn probe_free_port() -> Result<u16, String> {
         let p = DEFAULT_PORT_BASE + offset;
         let occupied = {
             let sessions = lock_sessions();
-            sessions.values().any(|s| s.port == p && s.chrome_child.is_some())
+            sessions
+                .values()
+                .any(|s| s.port == p && s.chrome_child.is_some())
         };
         if !occupied && list_targets_raw(p).is_err() {
             return Ok(p);
@@ -964,7 +1004,8 @@ pub(crate) async fn cdp_launch(
         None => probe_free_port()?,
     };
 
-    let chrome = find_chrome().ok_or("未找到 Chrome/Edge。可设置环境变量 HOLOGRAM_CHROME 指定路径")?;
+    let chrome =
+        find_chrome().ok_or("未找到 Chrome/Edge。可设置环境变量 HOLOGRAM_CHROME 指定路径")?;
     // 独立 profile（按端口隔离）— 绝不污染用户日常 Chrome 的 cookie/登录态
     let profile_dir = profile_dir_for(port);
 
@@ -1049,7 +1090,12 @@ pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
         sess.port = 0;
         sess.headless = None;
         sess.window_size = None;
-        audit_log(agent_id, "kill", "", if had_child { "ok" } else { "disconnected" });
+        audit_log(
+            agent_id,
+            "kill",
+            "",
+            if had_child { "ok" } else { "disconnected" },
+        );
         Ok(if had_child {
             "受控 Chrome 已终止".into()
         } else {
@@ -1074,8 +1120,7 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
         ));
     }
     // 端口必须真的有调试服务——connect 不猜端口，由用户告诉 Agent
-    let raw = list_targets_raw(port)
-        .map_err(|e| format!("端口 {port} 没有可用的调试服务: {e}"))?;
+    let raw = list_targets_raw(port).map_err(|e| format!("端口 {port} 没有可用的调试服务: {e}"))?;
     let pages = raw
         .as_array()
         .map(|arr| arr.iter().filter(|t| t["type"] == "page").count())
@@ -1100,16 +1145,18 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
     sess.headless = None;
     sess.window_size = None;
 
-    audit_log(agent_id, "connect", &port.to_string(), &format!("{pages} 个页面 target"));
+    audit_log(
+        agent_id,
+        "connect",
+        &port.to_string(),
+        &format!("{pages} 个页面 target"),
+    );
     Ok(json!({ "status": "connected", "port": port, "pages": pages }).to_string())
 }
 
 /// 新开 tab（Chrome 调试 HTTP /json/new），并自动 attach 到新 tab。
 /// 受控 launch 与外部 connect 的会话都可用；后续操作立即作用于新 tab。
-pub(crate) fn cdp_new_tab(
-    url: Option<String>,
-    agent_id: Option<&str>,
-) -> Result<String, String> {
+pub(crate) fn cdp_new_tab(url: Option<String>, agent_id: Option<&str>) -> Result<String, String> {
     let url = url.unwrap_or_else(|| "about:blank".into());
     let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(session_key(agent_id)).or_default();
@@ -1263,9 +1310,8 @@ Get-CimInstance Win32_Process | ForEach-Object {
 ///   - PowerShell 行：`chrome|9333|1234`
 ///   - ps 行：`  123 chrome --remote-debugging-port=9333 ...`
 pub(super) fn parse_discover_process_lines(text: &str) -> Vec<(String, u16)> {
-    static PS_LINE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"^\s*(\d+)\s+(\S+)\s+(.*)$").expect("ps 行格式正则")
-    });
+    static PS_LINE_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^\s*(\d+)\s+(\S+)\s+(.*)$").expect("ps 行格式正则"));
     let mut out: Vec<(String, u16)> = Vec::new();
     for line in text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
         if line.contains('|') {
@@ -1294,4 +1340,3 @@ pub(super) fn extract_debug_port_from_args(args: &str) -> Option<u16> {
             .and_then(|p| p.parse::<u16>().ok())
     })
 }
-
