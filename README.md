@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
+  <a href="https://whyihaveyou.github.io/dsh-suite/"><img src="https://img.shields.io/badge/featured%20on-dsh--suite-4d6bfe" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange&style=flat-square" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-1600%2B-brightgreen?style=flat-square" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20Linux-blue?style=flat-square" /></a>
@@ -17,7 +18,7 @@
 
 ## 定位
 
-HoloGram 把代码库编译成一张统一 IR 依赖图（节点=符号/函数/类/模块，边=调用/继承/读写/时序），并通过 MCP 协议向 AI Agent 暴露 33 个图查询工具。
+HoloGram 把代码库编译成一张统一 IR 依赖图（节点=符号/函数/类/模块，边=调用/继承/读写/时序），并通过 MCP 协议向 AI Agent 暴露 34 个图查询工具。
 
 **核心主张：依赖推理应当是确定性的，而不是猜的。**
 
@@ -79,9 +80,24 @@ hologram run list_flows .                  # 执行流（按安全敏感度排�
 
 [Releases](https://github.com/834063245-creator/HoloGram/releases) → 下载 `.msi`（Windows）→ 选项目 → 自动出图。桌面端与 MCP 模式共用同一个引擎。
 
+### DeepSeek Harness 集成（hologram-dsh）
+
+引擎 + 3D 星图打包为 DSH bundle 插件 [`@a834063245/hologram-dsh`](https://www.npmjs.com/package/@a834063245/hologram-dsh)：
+
+```sh
+dsh plugin --profile web add @a834063245/hologram-dsh
+dsh web
+# 重启后：34 个 mcp__hologram__* 工具进工具箱 + 侧边栏「3D 星图」入口
+```
+
+- **34 个 MCP 图分析工具**直接注入 DSH agent（与桌面/MCP 模式同一引擎、同一份数据）
+- **3D 星图**：DSH web 侧边栏入口，全屏渲染项目依赖图（同源自托管，无独立端口）
+- **单一数据生命周期**：引擎单进程双入口（MCP stdio + TCP），存量秒开 + watcher 增量更新
+- 安装说明与数据模型见 [`dsh-bundle/README.md`](dsh-bundle/README.md)
+
 ## 能力
 
-### 图查询（33 个 MCP 工具）
+### 图查询（34 个 MCP 工具）
 
 | 域 | 工具 |
 |:--|:--|
