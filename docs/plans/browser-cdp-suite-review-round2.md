@@ -1,6 +1,7 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：第一批 + 第二批已落地（导航/正文/select/type replace/权限收口/英文敏感词 + dialog/upload/hover/组合键/截图 inline/fullPage/tab 管理）
+> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）已落地；当前工作树 clean；两个提交**尚未 push**
+> 下一接手窗口任务：先看本文 §8，然后从 **第三批** 继续（network 配对/HAR + AX snapshot + headless/windowSize）
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
 > `src-ui/src/agent/tools/browser.ts`、`src-tauri/src/cdp/probes/*.js`、`src-tauri/src/cdp/e2e.rs`
@@ -154,17 +155,19 @@
 - **第四批（平台与工程债）**：跨平台 + cdp.rs 拆分 + 审计/截图轮转清理 + eval 隔离 world（可选）。
 - **第五批（身份与多账号）**：cookie 管理 + profile 配置 + proxy + 多账号会话隔离/切换。
 
-## 5. 基线命令（改代码前请先跑，留底）
+## 5. 基线命令（新窗口改代码前跑，留底）
 
 ```powershell
 cd D:\HoloGramHG\src-tauri
 cargo test
+cargo test cdp:: -- --nocapture
 
 cd D:\HoloGramHG\src-ui
 npx tsc --noEmit
+npm run build
 ```
 
-若基线本来有失败项，把输出贴回，避免把历史失败和新改动混淆。
+Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktree 路径），不是本套件回归；只需确认失败数没有从 8 变多。
 
 ## 6. Preflight 风险数据（Hologram，改前快照）
 
@@ -177,11 +180,48 @@ npx tsc --noEmit
 - 全仓库 unlocked concurrent writes：**0**
 - 结论：每批改动必须小步、可编译、可单测；禁止一批同时改传输层和工具面。
 
-## 7. 工作协议（针对当前 bash 工具不可用）
+## 7. 工作协议（新窗口接手）
 
-1. 由 Claude（我）用 `str_replace_editor` 改代码；
-2. 每批改完，由用户（你）在机器上跑：
-   - `cd src-tauri && cargo test`
-   - `cd src-ui && npx tsc --noEmit`
-3. 把失败输出贴回来，我修到全绿；
-4. 全绿后再进下一批，不进则 rollback（git 留档）。
+1. 新窗口先读 §8「新窗口接手」，不要从 §0 重新做已完成的第一/二批。
+2. 每批改动小步推进：先 Rust 后前端，`cargo check` / `cargo test cdp::` / `npx tsc --noEmit` 过一关再进下一关；全部绿了才 commit。
+3. 新增 browser 动作必须同步五处：`cdp.rs`（核心函数）、`rpc.rs`（分支 + `check_browser_permission`）、`tools/mod.rs`（`BrowserTool::is_read_only` 与 L2 清单）、`browser.ts`（nameMap + defineTool）、`domains.ts`（DOMAIN_SPECS + `collectHiddenToolNames`），并补 `browser-tools.test.ts` 路由守护。
+4. 真实 Chrome e2e 在本 Linux 机器会跳过；Windows 机器需实跑并回贴失败输出。
+
+
+## 8. 新窗口接手（2026-08-15）
+
+### 8.1 当前事实
+
+- HEAD：`fec19fe feat(browser-cdp): add dialog, upload, shortcuts and tab management`
+- 前序提交：`e0b9086`（第一批）、`c3a0628`（计划原始文档，origin/main）
+- 工作树：clean；两个新提交未 push。建议先在 Windows 机器拉取后跑基线 + e2e，确认已提交的第一/二批在真实 Chrome 上通过，再开始第三批。
+- 已实现能力：launch/connect/discover/targets/attach、navigate/back/forward/reload、snapshot/content/inspect/report/console/network/screenshot(fullPage,inline)/audit/status/wait、click/hover/type(replace)/select/upload/dialog/press(modifiers)/scroll/eval、new_tab/close_tab。
+- 本机验证（Linux）：`cargo test cdp::` 19/19（3 个 Chrome e2e 自动跳过）；全量 `cargo test` 262 passed / 8 failed（8 个为环境依赖历史失败）；`npx tsc --noEmit` 与 `npm run build` 通过；vitest 49/49。
+
+### 8.2 开局清单
+
+1. `git fetch` / `git pull` 到 `fec19fe`（或让用户 push 后拉取）。
+2. Windows：`cd src-tauri && cargo test cdp:: -- --nocapture` 实跑 E2E-1/2/3；重点看新增 E2E-3 的 dialog、upload、组合键、new_tab/close_tab。
+3. 如 Windows e2e 有失败，把 `--nocapture` 输出贴回；先修 e2e 再开第三批。
+4. 不要在没跑通 Windows e2e 的情况下继续堆第三批。
+
+### 8.3 第三批任务（下一窗口）
+
+1. network 配对：observer 内 `requestId -> entry` 映射，`Network.responseReceived` 回填同条记录 status，`loadingFailed` 不再把 requestId 塞进 url；`browser_network` 输出成对记录。
+2. 单请求详情/HAR：先做 `browser_network_detail(requestId)`；HAR 作为后续导出项。
+3. AX snapshot：优先 `Accessibility.getFullAXTree`（Chrome DevTools MCP 同款），失败回退增强 `snapshot.js`（accessible name、aria-labelledby、iframe 递归、shadow DOM 穿透）。
+4. `browser_launch` 增加 `headless` / `windowSize`；后续接 `Emulation.setDeviceMetricsOverride`。
+
+### 8.4 后续批次
+
+- 第四批：跨平台（`find_chrome` 补 macOS/Linux 路径，`cdp_discover` 非 Windows 走 `ps`）、`cdp.rs` 拆分、审计 jsonl/截图目录轮转清理、eval 隔离 world（可选）。
+- 第五批：cookie 管理、profile 配置、proxy、多账号会话隔离/切换。
+
+### 8.5 踩坑速记（务必读）
+
+- **不要跑 `cargo fmt --all`**：会把全仓库历史未格式化文件一起刷掉，diff 爆炸；只对当前改动文件做 `rustfmt --check` 或保持现有风格。
+- `cargo check/test` 可能把 `src-tauri/Cargo.lock` 的 hologram 版本从 10.0.1 改成 10.1.0；提交前 `git checkout -- src-tauri/Cargo.lock`。
+- `find_chrome` 当前只有 Windows 路径；Linux 没有 Chrome 时 e2e 设计为跳过，不是测试挂了。
+- e2e 端口：9444 外部实例、9445 launch、9446 round2；新增 e2e 端口避开 9222/9223-9238 和这三个。
+- `Page.setInterceptFileChooserDialog` 只在非 self 会话开启，self（9222）是只读通道，不要把文件选择框拦截加回 self。
+- 新增工具 schema 的 key 用 camelCase，Rust 参数用 snake_case；`bridge.rpc` 是唯一转换枢纽，不要手写 schema 绕过 `defineTool`。
