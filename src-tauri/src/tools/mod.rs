@@ -190,7 +190,7 @@ impl Tool for BrowserTool {
     fn is_read_only(&self) -> bool {
         matches!(
             self.action.as_str(),
-            "targets" | "discover" | "inspect" | "report" | "status" | "snapshot" | "console" | "network" | "screenshot" | "audit"
+            "targets" | "discover" | "inspect" | "report" | "status" | "snapshot" | "console" | "network" | "screenshot" | "audit" | "content" | "wait"
         )
     }
 
@@ -215,11 +215,19 @@ impl Tool for BrowserTool {
         if rules.find_allow("Browser", None).is_some() {
             return PermissionResult::Allow;
         }
-        // 3. 只读动作放行（targets/inspect/report/status — 不改变任何状态）
+        // 3. 只读动作放行（targets/inspect/content/wait/status — 不改变任何状态）
         if self.is_read_only() {
             return PermissionResult::Passthrough;
         }
-        // 4. 高危动作：launch/kill（受控浏览器进程）/ attach（接管外部页面）/
+        // 4. L2 普通页面动作放行：attach 已批过一次，页面内 navigate/back/forward/
+        //    reload/click/type/press/scroll/select 不再重复弹窗；敏感目标与高危动作除外。
+        if matches!(
+            self.action.as_str(),
+            "navigate" | "back" | "forward" | "reload" | "click" | "type" | "press" | "scroll" | "select"
+        ) {
+            return PermissionResult::Passthrough;
+        }
+        // 5. 高危动作：launch/kill（受控浏览器进程）/ attach（接管外部页面）/
         //    eval（任意 JS）/ click_sensitive·type_sensitive（敏感目标，L3）→ Ask。
         //    文案写实：attach 批准意味着该页面内的普通点击/输入不再二次确认
         //    （click/type 依赖 attach 时的授权；敏感目标仍每次单独确认）。
@@ -233,7 +241,7 @@ impl Tool for BrowserTool {
                 .into(),
             "eval" => "Agent 请求在该页面执行任意 JS（受基础白名单限制）".into(),
             "kill" => "Agent 请求终止其启动的受控浏览器（若为外部连接则仅断开）".into(),
-            "click_sensitive" => "Agent 请求点击一个敏感目标（提交按钮 / 下载 / 含确认、支付、删除等文本的元素）".into(),
+            "click_sensitive" => "Agent 请求点击一个敏感目标（提交按钮 / 下载 / 含确认、支付、删除或 Pay now、Delete、Confirm、Unsubscribe 等文本的元素）".into(),
             "type_sensitive" => "Agent 请求向已填值的输入框（或密码框）输入文字".into(),
             _ => format!("Agent 请求控制浏览器（动作: {}）", self.action),
         };

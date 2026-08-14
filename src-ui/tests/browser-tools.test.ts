@@ -37,8 +37,9 @@ describe('browser 领域工具注册', () => {
     const actions = t.actions?.() ?? [];
     for (const a of [
       'launch', 'kill', 'targets', 'attach',
-      'snapshot', 'inspect', 'report', 'console', 'network', 'screenshot', 'audit',
-      'click', 'type', 'press', 'scroll', 'eval', 'status', 'wait',
+      'navigate', 'back', 'forward', 'reload',
+      'snapshot', 'content', 'inspect', 'report', 'console', 'network', 'screenshot', 'audit',
+      'click', 'type', 'select', 'press', 'scroll', 'eval', 'status', 'wait',
     ]) {
       expect(actions).toContain(a);
     }
@@ -114,8 +115,19 @@ describe('browser 动作路由（统一走 Rust CDP）', () => {
     const registry = buildBrowserRegistry();
     const t = registry.get('browser')!;
     await t.execute({ action: 'click', selector: '37' });
-    await t.execute({ action: 'type', selector: '12', text: 'hello' });
+    await t.execute({ action: 'type', selector: '12', text: 'hello', replace: true });
     expect(invokeMock).toHaveBeenCalledWith('browser_click', expect.objectContaining({ selector: '37' }));
-    expect(invokeMock).toHaveBeenCalledWith('browser_type', expect.objectContaining({ selector: '12', text: 'hello' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_type', expect.objectContaining({ selector: '12', text: 'hello', replace: true }));
+  });
+
+  it('navigate/content/select 路由到新增 RPC', async () => {
+    const registry = buildBrowserRegistry();
+    const t = registry.get('browser')!;
+    await t.execute({ action: 'navigate', url: 'https://example.com' });
+    await t.execute({ action: 'content', scope: '#main', format: 'markdown', maxChars: 2000 });
+    await t.execute({ action: 'select', selector: '42', value: 'option-a' });
+    expect(invokeMock).toHaveBeenCalledWith('browser_navigate', expect.objectContaining({ url: 'https://example.com' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_content', expect.objectContaining({ scope: '#main', format: 'markdown', maxChars: 2000 }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_select', expect.objectContaining({ selector: '42', value: 'option-a' }));
   });
 });

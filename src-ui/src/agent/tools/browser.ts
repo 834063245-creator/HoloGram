@@ -45,15 +45,21 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     kill: 'browser_kill',
     targets: 'browser_targets',
     attach: 'browser_attach',
+    navigate: 'browser_navigate',
+    back: 'browser_back',
+    forward: 'browser_forward',
+    reload: 'browser_reload',
     inspect: 'browser_inspect',
     report: 'browser_report',
     snapshot: 'browser_snapshot',
+    content: 'browser_content',
     console: 'browser_console',
     network: 'browser_network',
     screenshot: 'browser_screenshot',
     audit: 'browser_audit',
     click: 'browser_click',
     type: 'browser_type',
+    select: 'browser_select',
     press: 'browser_press',
     scroll: 'browser_scroll',
     eval: 'browser_eval',
@@ -91,7 +97,7 @@ export function createBrowserTools(): Tool[] {
       description:
         'Connect to a browser instance the USER has already started with a remote debugging port ' +
         '(Chrome/Edge launched with --remote-debugging-port=NNNN, or a Chromium-based app exposing one). ' +
-        'The port must be provided by the user — there is no port discovery. ' +
+        'If the user did not provide a port, call browser_discover first to list instances and let the user pick one. ' +
         'Takes over that live instance with its real logins and data — requires user approval. ' +
         'After connect: targets → attach → snapshot/click as usual. ' +
         'kill only disconnects (never kills a browser this agent did not launch). 9222 is refused (HoloGram webview, read-only self channel).',
@@ -142,6 +148,34 @@ export function createBrowserTools(): Tool[] {
       execute: (args) => run('attach', args),
     }),
     defineTool({
+      name: 'browser_navigate',
+      description:
+        'Navigate the attached page to a URL (Page.navigate). Returns world-change feedback after the navigation settles. ' +
+        'Use for normal page navigation after attach.',
+      schema: z.object({
+        url: z.string().describe('URL to navigate to'),
+      }),
+      execute: (args) => run('navigate', args),
+    }),
+    defineTool({
+      name: 'browser_back',
+      description: 'Go back one entry in the attached page navigation history. Returns {navigated:"back", url, change}.',
+      schema: z.object({}),
+      execute: () => run('back', {}),
+    }),
+    defineTool({
+      name: 'browser_forward',
+      description: 'Go forward one entry in the attached page navigation history. Returns {navigated:"forward", url, change}.',
+      schema: z.object({}),
+      execute: () => run('forward', {}),
+    }),
+    defineTool({
+      name: 'browser_reload',
+      description: 'Reload the attached page (Page.reload). Returns {reloaded:true, url, change}.',
+      schema: z.object({}),
+      execute: () => run('reload', {}),
+    }),
+    defineTool({
       name: 'browser_snapshot',
       description:
         'Snapshot interactive elements on the attached page — returns {refs:[{ref,tag,type,text,id}], count, total, offset, truncated}. ' +
@@ -160,6 +194,27 @@ export function createBrowserTools(): Tool[] {
       }),
       readOnly: true,
       execute: (args) => run('snapshot', args),
+    }),
+    defineTool({
+      name: 'browser_content',
+      description:
+        'Extract page text content from the attached page — always returns {title, url, format}. ' +
+        'format "text" (default) returns cleaned innerText; "markdown" returns a lightweight markdown conversion ' +
+        '(headings/lists/links/images/tables). scope limits extraction to a CSS selector. ' +
+        'Pagination is character-based: maxChars (default 8000, max 20000) + offset read the next window. ' +
+        'Use instead of browser_eval(document.body.innerText) for readable page body.',
+      schema: z.object({
+        scope: z.string().optional().describe('Optional CSS selector to limit extraction (default: whole page)'),
+        format: z.enum(['text', 'markdown']).optional().describe('Output format: text (default) or markdown'),
+        maxChars: z.number().int().min(1).max(20000).optional().describe('Max content characters per page (default 8000)'),
+        offset: z.number().int().min(0).optional().describe('Skip this many content characters (for paging; default 0)'),
+        target: z
+          .string()
+          .optional()
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+      }),
+      readOnly: true,
+      execute: (args) => run('content', args),
     }),
     defineTool({
       name: 'browser_inspect',
@@ -243,12 +298,26 @@ export function createBrowserTools(): Tool[] {
       description:
         'Type text into an input in the attached page by snapshot ref number (e.g. selector: "37") or CSS selector. ' +
         'Focuses the element then inserts text (Chinese/IME friendly). ' +
+        'Set replace:true to clear the existing value first (dispatches input/change events). ' +
         'Typing into a pre-filled input or password field triggers a separate approval.',
       schema: z.object({
         selector: z.string().describe('Ref number from snapshot or CSS selector of input/textarea/contenteditable to focus'),
         text: z.string().describe('Text to type'),
+        replace: z.boolean().optional().describe('Replace existing value before typing (clears then dispatches input/change events)'),
       }),
       execute: (args) => run('type', args),
+    }),
+    defineTool({
+      name: 'browser_select',
+      description:
+        'Select an <option> in a <select> element on the attached page by ref number or CSS selector. ' +
+        'value matches option value first, then visible option text. Dispatches input/change events. ' +
+        'Returns {selected, value, change}.',
+      schema: z.object({
+        selector: z.string().describe('Ref number from snapshot or CSS selector of the <select> element'),
+        value: z.string().describe('Option value (preferred) or visible option text'),
+      }),
+      execute: (args) => run('select', args),
     }),
     defineTool({
       name: 'browser_press',

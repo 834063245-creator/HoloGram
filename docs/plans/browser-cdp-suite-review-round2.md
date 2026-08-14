@@ -1,6 +1,6 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：评审完成，待开工（第一批代码改动未开始）
+> 状态：评审完成，第一批已落地（导航 + 正文提取 + select + type replace + 权限收口 + 英文敏感词）
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
 > `src-ui/src/agent/tools/browser.ts`、`src-tauri/src/cdp/probes/*.js`、`src-tauri/src/cdp/e2e.rs`
@@ -128,7 +128,16 @@
 | `src-tauri/src/rpc.rs` | 新增 6 个 browser_* 分支；统一 browser 权限检查入口 |
 | `src-tauri/src/tools/mod.rs` | `BrowserTool::is_read_only` 补新动作；`check_permissions` 文案补新动作 |
 | `src-ui/src/agent/tools/browser.ts` | nameMap + 工具定义（navigate/back/forward/reload/content/select）+ type 的 replace 参数 + connect 描述修正 |
+| `src-ui/src/agent/tools/domains.ts` | browser 领域工具同步新动作 + 隐藏名清单（AGENTS.md 工具层收敛纪律） |
+| `src-ui/tests/browser-tools.test.ts` | 领域 action 覆盖清单补新动作；新增 navigate/content/select 路由守护 |
+| `src-tauri/src/cdp/e2e.rs` | 新增真实 Chrome e2e：本地 file:// 页面覆盖 navigate/back/forward/reload/content 分页/type replace/select |
 | 文档 | 本文件 + ADR 0003 落地状态追加一节 |
+
+### 4.1 第一批落地注记（2026-08-15）
+
+- 已完成上述第一批全部代码与文档改动；`cargo check` 通过，`cargo test cdp::tests` 14/14 通过（含新增 content.js 语法检查与英文敏感词单测）；`cargo test cdp::e2e --no-run` 编译通过。本 Linux 机器无 Chrome，3 个真实 Chrome e2e 自动跳过；Windows 机器有 Chrome 时会实跑新增 E2E-3 全链路。
+- `src-ui`：`npx tsc --noEmit` 与 `npm run build` 通过；`vitest run tests/browser-tools.test.ts tests/domains-convergence.test.ts tests/define-tool.test.ts` 48/48 通过。
+- 全量 `cargo test` 在本 Linux 机器上仍为 260 passed / 8 failed，失败项均为 Windows/bwrap 环境依赖的历史基线失败（agent_isolation worktree 路径、bwrap 沙箱、%USERPROFILE% 展开、tasklist 查找），与本批改动无关。
 
 第二批候选（暂不动）：dialog + upload + hover + 组合键 + 截图 inline/fullPage。
 第三批候选：network 配对 + AX snapshot + 跨平台 + cdp.rs 拆分。

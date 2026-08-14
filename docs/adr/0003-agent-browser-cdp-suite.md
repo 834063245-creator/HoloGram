@@ -13,6 +13,7 @@
 - 后续收尾：profile 按端口隔离随会话清理、租约 env 可调（`182ecbe`）；connect 动作——连接用户已启动的调试端口实例（`b988f87d`，见 D8）；星图空闲按需渲染根治 CPU 空转（`64051fb`，与本套件无关但同期修复）。
 - 第二批次（2026-08-14）：世界快照静默失效根因修复（`e1679a0`，D5 数据通道自落地起从未工作，端到端实测暴露）；probe 返回值契约锁死（`e581ae7c`）；观察任务竞态修复（`b7dd2d08`）；desktop_probe / desktop_screenshot 桌面快照工具（`6b2bf906`/`fffd554f`）；browser_wait 显式等待 + snapshot 分页（`14aea446`）。全部经端到端实测，详见路线图 §8。
 - 与计划的差异与遗留项见路线图文档各节「落地注记」与 §6。
+- 二轮评审第一批（2026-08-15）：补上 P0 日常任务缺口 —— `navigate` / `back` / `forward` / `reload`（Page.navigate + 导航历史）、`content`（正文提取探针 `cdp/probes/content.js`，text / markdown-lite + 字符分页）、`select`（value/option 文本匹配 + 原生 setter 派发事件）、`type(replace)`（先清空再输入）；`check_sensitive` 高危文本补英文词（Pay now / Delete / Confirm / Unsubscribe 等，Rust 与页面 JS 共用同一正则源并加单测）；rpc 层所有 `browser_*` 分支统一经过 `check_browser_permission`，`Browser=deny` 对只读/self 通道同样生效，L2 普通动作由 `BrowserTool` 统一裁决为 Passthrough。详见 `docs/plans/browser-cdp-suite-review-round2.md` §4.1。
 
 ## 总纲
 

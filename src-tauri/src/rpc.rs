@@ -11,6 +11,8 @@
 
 use serde_json::Value;
 
+use crate::permissions::Tool;
+
 // ── 参数辅助函数 ──
 
 fn req_str(params: &Value, name: &str, method: &str) -> Result<String, String> {
@@ -49,6 +51,33 @@ fn self_or_agent(params: &Value) -> Option<String> {
     } else {
         opt_str(params, "_agent_id")
     }
+}
+
+/// 全部 browser_* 分支统一过权限引擎（二轮评审 P2）：
+/// - Browser=deny 对包括只读在内的所有动作生效（Deny 最高优先级）；
+/// - 只读/L2 动作由 BrowserTool::check_permissions 裁决为 Passthrough；
+/// - launch/connect/kill/attach/eval 与敏感目标动作仍走 Ask。
+/// 无工作区时没有可加载的规则源：只读动作保持原行为放行，写动作维持原报错。
+async fn check_browser_permission(
+    action: &str,
+    agent_id: Option<&str>,
+    state: &tauri::State<'_, crate::WorkspaceState>,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
+    let tool = crate::tools::BrowserTool {
+        action: action.to_string(),
+        agent_id: agent_id.map(String::from),
+    };
+    let ctx = match crate::utils::get_ctx(state) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            if tool.is_read_only() {
+                return Ok(());
+            }
+            return Err(e);
+        }
+    };
+    crate::utils::check_permission(&tool, &ctx, app).await
 }
 fn req_strs(params: &Value, name: &str, method: &str) -> Result<Vec<String>, String> {
     params.get(name)
@@ -348,33 +377,27 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（18 个命令）
-        // 权限：launch/kill/attach/connect/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
-        //       inspect/report/targets/snapshot/console/network/screenshot/audit/status
-        //       只读放行；click/type/press/scroll 依赖 attach 时已获批准的 target，
-        //       不再重复弹窗——但敏感目标（已填值输入框/提交按钮/下载/高危文本）
-        //       每次单独 Ask（ADR 0003 D6 L3）。
+        // CDP 浏览器控制（26 个命令）
+        // 权限：所有 browser_* 分支统一经过 check_browser_permission（BrowserTool）。
+        //       launch/kill/attach/connect/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
+        //       inspect/report/targets/snapshot/content/console/network/screenshot/audit/status/wait
+        //       只读放行；navigate/back/forward/reload/click/type/press/scroll/select
+        //       依赖 attach 时已获批准的 target，不再重复弹窗——但敏感目标
+        //       （已填值输入框/提交按钮/下载/高危文本）每次单独 Ask（ADR 0003 D6 L3）。
+        //       工具级 Browser=deny 对所有动作生效（含只读与 self 通道）。
         // 会话：所有命令按 _agent_id 键控路由到各 Agent 自己的 CDP 会话；
         //       self=true 时路由到自家 webview 只读会话（操作类动作被拒）。
         // ═══════════════════════════════════════════════════════
         "browser_launch" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "launch".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
+            check_browser_permission("launch", agent_id.as_deref(), &state, &app).await?;
             let url = opt_str(&params, "url");
             let port = opt_u64(&params, "port").map(|n| n as u16);
             crate::cdp::cdp_launch(url, port, agent_id.as_deref()).await
         }
         "browser_connect" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "connect".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
+            check_browser_permission("connect", agent_id.as_deref(), &state, &app).await?;
             let port = opt_u64(&params, "port")
                 .ok_or_else(|| "browser_connect: missing 'port'".to_string())?;
             if port == 0 || port > 65535 {
@@ -384,19 +407,17 @@ pub(crate) async fn rpc(
         }
         "browser_kill" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "kill".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
+            check_browser_permission("kill", agent_id.as_deref(), &state, &app).await?;
             crate::cdp::cdp_kill(agent_id.as_deref())
         }
         "browser_targets" => {
             let agent_id = opt_str(&params, "_agent_id");
+            check_browser_permission("targets", agent_id.as_deref(), &state, &app).await?;
             crate::cdp::cdp_targets(agent_id.as_deref())
         }
         "browser_discover" => {
-            // 只读放行（工具级 Deny 仍生效）：只是列清单，不连接任何实例
+            // 只读：只列清单，不连接任何实例；但工具级 Deny 仍生效
+            check_browser_permission("discover", None, &state, &app).await?;
             crate::cdp::cdp_discover()
         }
         "desktop_probe" => {
@@ -421,11 +442,7 @@ pub(crate) async fn rpc(
         }
         "browser_attach" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "attach".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
+            check_browser_permission("attach", agent_id.as_deref(), &state, &app).await?;
             // 前端 schema 用 targetId（camelCase → target_id）；兼容旧调用方的 target
             let target = opt_str(&params, "target_id")
                 .or_else(|| opt_str(&params, "target"))
@@ -434,6 +451,7 @@ pub(crate) async fn rpc(
         }
         "browser_inspect" => {
             let agent_id = self_or_agent(&params);
+            check_browser_permission("inspect", agent_id.as_deref(), &state, &app).await?;
             let selector = req_str(&params, "selector", "browser_inspect")?;
             let props = params.get("props")
                 .and_then(|v| v.as_array())
@@ -443,31 +461,46 @@ pub(crate) async fn rpc(
         }
         "browser_report" => {
             let agent_id = self_or_agent(&params);
+            check_browser_permission("report", agent_id.as_deref(), &state, &app).await?;
             let scope = opt_str(&params, "scope");
             crate::cdp::cdp_report(scope, agent_id.as_deref()).await
         }
         "browser_snapshot" => {
             let agent_id = self_or_agent(&params);
+            check_browser_permission("snapshot", agent_id.as_deref(), &state, &app).await?;
             let scope = opt_str(&params, "scope");
             let max_results = opt_usize(&params, "max_results");
             let offset = opt_usize(&params, "offset");
             crate::cdp::cdp_snapshot(scope, max_results, offset, agent_id.as_deref()).await
         }
+        "browser_content" => {
+            let agent_id = self_or_agent(&params);
+            check_browser_permission("content", agent_id.as_deref(), &state, &app).await?;
+            let scope = opt_str(&params, "scope");
+            let format = opt_str(&params, "format");
+            let max_chars = opt_usize(&params, "max_chars");
+            let offset = opt_usize(&params, "offset");
+            crate::cdp::cdp_content(scope, format, max_chars, offset, agent_id.as_deref()).await
+        }
         "browser_console" => {
             let agent_id = self_or_agent(&params);
+            check_browser_permission("console", agent_id.as_deref(), &state, &app).await?;
             let limit = opt_usize(&params, "limit");
             Ok(crate::cdp::cdp_console(agent_id.as_deref(), limit))
         }
         "browser_network" => {
             let agent_id = self_or_agent(&params);
+            check_browser_permission("network", agent_id.as_deref(), &state, &app).await?;
             let limit = opt_usize(&params, "limit");
             Ok(crate::cdp::cdp_network(agent_id.as_deref(), limit))
         }
         "browser_screenshot" => {
             let agent_id = self_or_agent(&params);
+            check_browser_permission("screenshot", agent_id.as_deref(), &state, &app).await?;
             crate::cdp::cdp_screenshot(agent_id.as_deref()).await
         }
         "browser_audit" => {
+            check_browser_permission("audit", None, &state, &app).await?;
             let agent = opt_str(&params, "agent");
             let limit = opt_usize(&params, "limit");
             Ok(crate::cdp::cdp_audit(agent.as_deref(), limit))
@@ -478,11 +511,10 @@ pub(crate) async fn rpc(
                 return Err("browser_click: self 会话只读，不能操作自家 webview".into());
             }
             let selector = req_str(&params, "selector", "browser_click")?;
-            // 敏感目标（提交按钮/下载/高危文本）→ 每次单独 Ask（ADR 0003 D6 L3）
+            check_browser_permission("click", agent_id.as_deref(), &state, &app).await?;
+            // 敏感目标（提交按钮/下载/中英文高危文本）→ 每次单独 Ask（ADR 0003 D6 L3）
             if crate::cdp::check_sensitive(&selector, "click", agent_id.as_deref()).await {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "click_sensitive".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
+                check_browser_permission("click_sensitive", agent_id.as_deref(), &state, &app).await?;
             }
             crate::cdp::cdp_click(&selector, agent_id.as_deref()).await
         }
@@ -493,13 +525,13 @@ pub(crate) async fn rpc(
             }
             let selector = req_str(&params, "selector", "browser_type")?;
             let text = req_str(&params, "text", "browser_type")?;
+            let replace = opt_bool(&params, "replace").unwrap_or(false);
+            check_browser_permission("type", agent_id.as_deref(), &state, &app).await?;
             // 敏感目标（已填值输入框/密码框）→ 每次单独 Ask（ADR 0003 D6 L3）
             if crate::cdp::check_sensitive(&selector, "type", agent_id.as_deref()).await {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "type_sensitive".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
+                check_browser_permission("type_sensitive", agent_id.as_deref(), &state, &app).await?;
             }
-            crate::cdp::cdp_type(&selector, &text, agent_id.as_deref()).await
+            crate::cdp::cdp_type(&selector, &text, replace, agent_id.as_deref()).await
         }
         "browser_press" => {
             let agent_id = self_or_agent(&params);
@@ -507,6 +539,7 @@ pub(crate) async fn rpc(
                 return Err("browser_press: self 会话只读，不能操作自家 webview".into());
             }
             let key = req_str(&params, "key", "browser_press")?;
+            check_browser_permission("press", agent_id.as_deref(), &state, &app).await?;
             crate::cdp::cdp_press(&key, agent_id.as_deref()).await
         }
         "browser_scroll" => {
@@ -516,27 +549,69 @@ pub(crate) async fn rpc(
             }
             let selector = opt_str(&params, "selector");
             let direction = opt_str(&params, "direction");
+            check_browser_permission("scroll", agent_id.as_deref(), &state, &app).await?;
             crate::cdp::cdp_scroll(selector, direction, agent_id.as_deref()).await
         }
-        "browser_wait" => {
-            // 只读等待(selector 出现或固定 ms)，不改变状态
+        "browser_navigate" => {
             let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_navigate: self 会话只读，不能操作自家 webview".into());
+            }
+            let url = req_str(&params, "url", "browser_navigate")?;
+            check_browser_permission("navigate", agent_id.as_deref(), &state, &app).await?;
+            crate::cdp::cdp_navigate(&url, agent_id.as_deref()).await
+        }
+        "browser_back" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_back: self 会话只读，不能操作自家 webview".into());
+            }
+            check_browser_permission("back", agent_id.as_deref(), &state, &app).await?;
+            crate::cdp::cdp_back(agent_id.as_deref()).await
+        }
+        "browser_forward" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_forward: self 会话只读，不能操作自家 webview".into());
+            }
+            check_browser_permission("forward", agent_id.as_deref(), &state, &app).await?;
+            crate::cdp::cdp_forward(agent_id.as_deref()).await
+        }
+        "browser_reload" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_reload: self 会话只读，不能操作自家 webview".into());
+            }
+            check_browser_permission("reload", agent_id.as_deref(), &state, &app).await?;
+            crate::cdp::cdp_reload(agent_id.as_deref()).await
+        }
+        "browser_select" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_select: self 会话只读，不能操作自家 webview".into());
+            }
+            let selector = req_str(&params, "selector", "browser_select")?;
+            let value = req_str(&params, "value", "browser_select")?;
+            check_browser_permission("select", agent_id.as_deref(), &state, &app).await?;
+            crate::cdp::cdp_select(&selector, &value, agent_id.as_deref()).await
+        }
+        "browser_wait" => {
+            // 只读等待(selector 出现或固定 ms)，不改变状态；Deny 仍生效
+            let agent_id = self_or_agent(&params);
+            check_browser_permission("wait", agent_id.as_deref(), &state, &app).await?;
             let selector = opt_str(&params, "selector");
             let ms = opt_u64(&params, "ms");
             crate::cdp::cdp_wait(selector, ms, agent_id.as_deref()).await
         }
         "browser_eval" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::BrowserTool { action: "eval".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
+            check_browser_permission("eval", agent_id.as_deref(), &state, &app).await?;
             let expr = req_str(&params, "expr", "browser_eval")?;
             crate::cdp::cdp_eval(&expr, agent_id.as_deref()).await
         }
         "browser_status" => {
             let agent_id = self_or_agent(&params);
+            check_browser_permission("status", agent_id.as_deref(), &state, &app).await?;
             Ok(crate::cdp::cdp_status(agent_id.as_deref()))
         }
 

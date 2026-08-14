@@ -215,12 +215,13 @@ export const DOMAIN_SPECS: DomainSpec[] = [
   {
     name: 'browser',
     description:
-      'Browser control: launch a controlled Chrome/Edge (isolated profile), connect to a user-started debug-port browser instance, list/attach pages, snapshot interactive elements (ref-based ops), ' +
-      'inspect/report visual state, read console/network events, screenshot, audit log, and operate (click/type/press/scroll/eval). ' +
-      'target="self" = HoloGram webview 只读会话（inspect/report/snapshot/console/network/screenshot/status 支持）；省略 target = 已 attach 的外部页面。' +
+      'Browser control: launch a controlled Chrome/Edge (isolated profile), connect to a user-started debug-port browser instance, list/attach pages, navigate/back/forward/reload, ' +
+      'snapshot interactive elements (ref-based ops), extract page content (text/markdown), inspect/report visual state, read console/network events, screenshot, audit log, ' +
+      'and operate (click/type/select/press/scroll/eval). ' +
+      'target="self" = HoloGram webview 只读会话（inspect/report/snapshot/content/console/network/screenshot/status 支持）；省略 target = 已 attach 的外部页面。' +
       '交互范式：先 snapshot 拿 ref 编号，操作按 ref 引用（不要手写 CSS selector）；操作自带等待与反馈；敏感目标每次单独确认。' +
       'attach 用 targetId（来自 browser(targets) 的 CDP target id）。' +
-      'connect 连接用户已启动的浏览器实例（端口由用户提供），操作其真实数据；kill 只断开不杀该进程。' +
+      'connect 连接用户已启动的浏览器实例（端口由用户提供，或先 discover 选择），操作其真实数据；kill 只断开不杀该进程。' +
       '用户没给端口时先 discover 列实例让用户选（进程表查询，用户无需知道端口号）。',
     actions: {
       launch: 'browser_launch',
@@ -229,7 +230,12 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       kill: 'browser_kill',
       targets: 'browser_targets',
       attach: 'browser_attach',
+      navigate: 'browser_navigate',
+      back: 'browser_back',
+      forward: 'browser_forward',
+      reload: 'browser_reload',
       snapshot: 'browser_snapshot',
+      content: 'browser_content',
       inspect: 'browser_inspect',
       report: 'browser_report',
       console: 'browser_console',
@@ -238,6 +244,7 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       audit: 'browser_audit',
       click: 'browser_click',
       type: 'browser_type',
+      select: 'browser_select',
       press: 'browser_press',
       scroll: 'browser_scroll',
       eval: 'browser_eval',
@@ -314,7 +321,12 @@ export function collectHiddenToolNames(): string[] {
     'browser_kill',
     'browser_targets',
     'browser_attach',
+    'browser_navigate',
+    'browser_back',
+    'browser_forward',
+    'browser_reload',
     'browser_snapshot',
+    'browser_content',
     'browser_inspect',
     'browser_report',
     'browser_console',
@@ -323,6 +335,7 @@ export function collectHiddenToolNames(): string[] {
     'browser_audit',
     'browser_click',
     'browser_type',
+    'browser_select',
     'browser_press',
     'browser_scroll',
     'browser_eval',

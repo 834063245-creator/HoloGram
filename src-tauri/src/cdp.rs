@@ -1029,6 +1029,7 @@ async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Result<Value, S
 // 语法由底部 #[cfg(test)] probes_are_valid_javascript 用 node --check 强制验证。
 // ═══════════════════════════════════════════════════════════
 
+const CONTENT_PROBE: &str = include_str!("cdp/probes/content.js");
 const INSPECT_PROBE: &str = include_str!("cdp/probes/inspect.js");
 const REPORT_PROBE: &str = include_str!("cdp/probes/report.js");
 const SNAPSHOT_PROBE: &str = include_str!("cdp/probes/snapshot.js");
@@ -1081,6 +1082,33 @@ pub(crate) async fn cdp_report(scope: Option<String>, agent_id: Option<&str>) ->
     );
     let val = runtime_evaluate(&expr, agent_id).await?;
     probe_result_str(&val, "report")
+}
+
+/// 页面正文提取（P0）：title/url 固定返回，正文支持 text / markdown-lite，
+/// scope 限制根节点，offset/max_chars 做字符级分页（默认 8000，上限 20000）。
+/// 返回探针原样 JSON（含分页信息），复用 probe_result_str 字符串契约。
+pub(crate) async fn cdp_content(
+    scope: Option<String>,
+    content_format: Option<String>,
+    max_chars: Option<usize>,
+    offset: Option<usize>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    let fmt = content_format.unwrap_or_else(|| "text".into());
+    if fmt != "text" && fmt != "markdown" {
+        return Err("content: format 只支持 text 或 markdown".into());
+    }
+    let max = max_chars.unwrap_or(8000).clamp(1, 20000);
+    let expr = format!(
+        "JSON.stringify(({})({}, {}, {}, {}))",
+        CONTENT_PROBE,
+        serde_json::to_string(&scope.unwrap_or_default()).map_err(|e| e.to_string())?,
+        serde_json::to_string(&fmt).map_err(|e| e.to_string())?,
+        offset.unwrap_or(0),
+        max
+    );
+    let val = runtime_evaluate(&expr, agent_id).await?;
+    probe_result_str(&val, "content")
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1219,6 +1247,8 @@ fn world_diff(
 
 /// 导航轮询上限——链接点击的导航通常 <1s，2s 兜底。
 const NAV_POLL_TIMEOUT: Duration = Duration::from_secs(2);
+/// reload 新文档提交等待上限——reload 可能重建 service worker/长缓存，给得比导航宽。
+const RELOAD_POLL_TIMEOUT: Duration = Duration::from_secs(5);
 /// 导航轮询间隔。
 const NAV_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
@@ -1254,6 +1284,121 @@ async fn wait_nav_settle(before: &(String, usize, usize), agent_id: Option<&str>
         }
         tokio::time::sleep(NAV_POLL_INTERVAL).await;
     }
+}
+
+/// reload 专项等待：URL/DOM 都可能与刷新前完全相同，不能复用 wait_nav_settle
+/// （它看到 URL 不变 + DOM 无显著变化会立即返回，可能抢在刷新完成前采样）。
+/// 以 performance.timeOrigin 变化为「新文档已提交」信号，再等 readyState=complete。
+async fn wait_reload_commit(before_origin: f64, agent_id: Option<&str>) {
+    let deadline = Instant::now() + RELOAD_POLL_TIMEOUT;
+    loop {
+        match runtime_evaluate("({t: performance.timeOrigin, r: document.readyState})", agent_id).await {
+            Ok(v) => {
+                let committed = v["t"]
+                    .as_f64()
+                    .map(|t| (t - before_origin).abs() > 0.001)
+                    .unwrap_or(false);
+                if committed && v["r"].as_str() == Some("complete") {
+                    tokio::time::sleep(POST_ACTION_SETTLE).await;
+                    return;
+                }
+            }
+            Err(_) => {
+                // 刷新过程中旧文档上下文销毁——继续轮询，等新文档能响应 evaluate。
+            }
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(NAV_POLL_INTERVAL).await;
+    }
+}
+
+/// 导航后统一结算：等待潜在导航稳定 → 采样新世界 → 返回 (当前 URL, 变化摘要)。
+/// 供 navigate / back / forward / reload 复用，与 click 的反馈语义一致。
+async fn navigation_outcome(
+    before: &(String, usize, usize),
+    agent_id: Option<&str>,
+) -> Result<(String, String), String> {
+    wait_nav_settle(before, agent_id).await;
+    let after = world_snapshot(agent_id).await?;
+    let change = world_diff(before, &after).unwrap_or_else(|| "无显著变化".into());
+    Ok((after.0, change))
+}
+
+/// 导航到 URL（Page.navigate）。操作前采样旧世界，操作后返回 URL/DOM/错误变化。
+pub(crate) async fn cdp_navigate(url: &str, agent_id: Option<&str>) -> Result<String, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("navigate: url 不能为空".into());
+    }
+    let (port, tid) = require_target(agent_id)?;
+    let before = world_snapshot(agent_id).await?;
+    let resp = ws_command(port, &tid, "Page.navigate", json!({ "url": url })).await?;
+    if let Some(err) = resp["result"]["errorText"].as_str() {
+        return Err(format!("Page.navigate 错误: {err}"));
+    }
+    let (current, change) = navigation_outcome(&before, agent_id).await?;
+    audit_log(agent_id, "navigate", url, &change);
+    Ok(json!({ "navigated": url, "url": current, "change": change }).to_string())
+}
+
+/// 读取导航历史并跳转到 currentIndex + delta 的条目（delta = -1 back / +1 forward）。
+async fn cdp_history_step(delta: isize, action: &str, agent_id: Option<&str>) -> Result<String, String> {
+    let (port, tid) = require_target(agent_id)?;
+    let before = world_snapshot(agent_id).await?;
+    let resp = ws_command(port, &tid, "Page.getNavigationHistory", json!({})).await?;
+    let current = resp["result"]["currentIndex"]
+        .as_i64()
+        .ok_or("Page.getNavigationHistory 未返回 currentIndex")?;
+    let target_index = current + delta as i64;
+    if target_index < 0 {
+        return Err(format!("{action}: 没有更早的历史记录"));
+    }
+    let entries = resp["result"]["entries"]
+        .as_array()
+        .ok_or("Page.getNavigationHistory 未返回 entries")?;
+    let entry = entries
+        .get(target_index as usize)
+        .ok_or_else(|| format!("{action}: 没有可跳转的历史记录"))?;
+    let entry_id = entry["id"]
+        .as_i64()
+        .ok_or_else(|| format!("{action}: 历史条目缺少 id"))?;
+    ws_command(
+        port,
+        &tid,
+        "Page.navigateToHistoryEntry",
+        json!({ "entryId": entry_id }),
+    )
+    .await?;
+    let (current_url, change) = navigation_outcome(&before, agent_id).await?;
+    audit_log(agent_id, action, &current_url, &change);
+    Ok(json!({ "navigated": action, "url": current_url, "change": change }).to_string())
+}
+
+/// 后退一页。
+pub(crate) async fn cdp_back(agent_id: Option<&str>) -> Result<String, String> {
+    cdp_history_step(-1, "back", agent_id).await
+}
+
+/// 前进一页。
+pub(crate) async fn cdp_forward(agent_id: Option<&str>) -> Result<String, String> {
+    cdp_history_step(1, "forward", agent_id).await
+}
+
+/// 刷新当前页。
+pub(crate) async fn cdp_reload(agent_id: Option<&str>) -> Result<String, String> {
+    let (port, tid) = require_target(agent_id)?;
+    let before = world_snapshot(agent_id).await?;
+    let before_origin = runtime_evaluate("performance.timeOrigin", agent_id)
+        .await?
+        .as_f64()
+        .ok_or("reload: 无法读取 performance.timeOrigin")?;
+    ws_command(port, &tid, "Page.reload", json!({ "ignoreCache": false })).await?;
+    wait_reload_commit(before_origin, agent_id).await;
+    let (current, change) = navigation_outcome(&before, agent_id).await?;
+    audit_log(agent_id, "reload", &current, &change);
+    Ok(json!({ "reloaded": true, "url": current, "change": change }).to_string())
 }
 
 /// actionability 等待：元素存在、可见、中心点未被遮挡、位置稳定（两次采样差 <1px）。
@@ -1338,16 +1483,18 @@ async fn element_label(sel: &str, agent_id: Option<&str>) -> Option<String> {
 pub(crate) async fn cdp_type(
     target: &str,
     text: &str,
+    replace: bool,
     agent_id: Option<&str>,
 ) -> Result<String, String> {
     let sel = ref_to_selector(target);
     let before = world_snapshot(agent_id).await?;
     let focus_expr = format!(
-        r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; el.focus(); return true; }})()"#,
-        sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?
+        r#"(() => {{ const el = document.querySelector({sel}); if (!el) return {{ ok: false, reason: 'missing' }}; el.focus(); if ({replace}) {{ if (el.isContentEditable) {{ el.textContent = ''; }} else if (el.value !== undefined) {{ const proto = Object.getPrototypeOf(el); const desc = Object.getOwnPropertyDescriptor(proto, 'value') || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value') || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value'); if (desc && desc.set) desc.set.call(el, ''); else el.value = ''; if (el.setSelectionRange) el.setSelectionRange(0, 0); el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); }} }} el.focus(); return {{ ok: true }}; }})()"#,
+        sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?,
+        replace = if replace { "true" } else { "false" }
     );
     let ok = runtime_evaluate(&focus_expr, agent_id).await?;
-    if !ok.as_bool().unwrap_or(false) {
+    if !ok["ok"].as_bool().unwrap_or(false) {
         return Err(format!(
             "type: 目标不存在或已失效（{target}）——页面可能已变化，请重新 browser(snapshot)"
         ));
@@ -1367,7 +1514,54 @@ pub(crate) async fn cdp_type(
     // 审计对象存人话：输入内容摘要（UI 展示）；ref 号对用户无意义
     let tgt = format!("输入「{}」", text.chars().take(30).collect::<String>());
     audit_log(agent_id, "type", &tgt, &change);
-    Ok(json!({ "typed": text.chars().take(50).collect::<String>(), "change": change }).to_string())
+    Ok(json!({
+        "typed": text.chars().take(50).collect::<String>(),
+        "replace": replace,
+        "change": change,
+    })
+    .to_string())
+}
+
+/// 选择 <select> 的 option：value 优先精确匹配，其次 option 可见文本精确匹配。
+/// 使用原生 setter 派发 input/change，React/Vue 受控组件也能收到更新。
+pub(crate) async fn cdp_select(
+    target: &str,
+    value: &str,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    if value.is_empty() {
+        return Err("select: value 不能为空".into());
+    }
+    let sel = ref_to_selector(target);
+    let before = world_snapshot(agent_id).await?;
+    // 与其他操作一致：先等元素可见/无遮挡/稳定，再改值。
+    let _ = wait_actionable(&sel, "select", agent_id).await?;
+    let target_json = serde_json::to_string(target).map_err(|e| e.to_string())?;
+    let expr = format!(
+        r#"(() => {{ const el = document.querySelector({sel}); if (!el) return {{ ok: false, error: '目标不存在或已失效（' + {target_json} + '）——请重新 browser(snapshot)' }}; if ((el.tagName || '').toLowerCase() !== 'select') return {{ ok: false, error: '目标不是 <select> 元素' }}; const wanted = {value}; const options = Array.from(el.options).map((o) => {{ const text = (o.textContent || '').trim().replace(/\s+/g, ' '); return {{ value: o.value, text }}; }}); const match = options.find((o) => o.value === wanted) || options.find((o) => o.text === wanted); if (!match) return {{ ok: false, error: '没有匹配的 option（value 或可见文本）: ' + wanted + '。可用: ' + options.slice(0, 20).map((o) => o.value + ':' + o.text).join(' | ') }}; const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value'); if (desc && desc.set) desc.set.call(el, match.value); else el.value = match.value; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return {{ ok: true, value: match.value, text: match.text }}; }})()"#,
+        sel = serde_json::to_string(&sel).map_err(|e| e.to_string())?,
+        target_json = target_json,
+        value = serde_json::to_string(value).map_err(|e| e.to_string())?
+    );
+    let val = runtime_evaluate(&expr, agent_id).await?;
+    if let Some(err) = val["error"].as_str() {
+        return Err(format!("select: {err}"));
+    }
+    if !val["ok"].as_bool().unwrap_or(false) {
+        return Err("select: 页面返回异常结果".into());
+    }
+    tokio::time::sleep(POST_ACTION_SETTLE).await;
+    wait_nav_settle(&before, agent_id).await;
+    let after = world_snapshot(agent_id).await?;
+    let change = world_diff(&before, &after).unwrap_or_else(|| "无显著变化".into());
+    let selected = val["text"].as_str().unwrap_or(value);
+    audit_log(agent_id, "select", selected, &change);
+    Ok(json!({
+        "selected": selected,
+        "value": val["value"].as_str().unwrap_or(value),
+        "change": change,
+    })
+    .to_string())
 }
 
 /// 按键（Enter/Tab/Escape/Backspace/方向键/单字符）。
@@ -1499,6 +1693,20 @@ pub(crate) async fn cdp_wait(
 // 敏感操作判定（ADR 0003 D6 L3）— rpc 层据此触发单独 Ask
 // ═══════════════════════════════════════════════════════════
 
+/// click 高危文本正则源（中文子串 + 英文单词边界）。Rust 单测与页面内 JS
+/// 共用这一份源字符串，避免两边单词清单漂移后「英文 Pay now 不触发 Ask」复发。
+const SENSITIVE_CLICK_RE_SOURCE: &str = r"(确认|提交|支付|转账|购买|删除|注销|退订|清空|\b(pay(?:\s+now)?|payment|purchase|buy(?:\s+now)?|delete|confirm|unsubscribe|sign\s*out|log\s*out|transfer|checkout|clear|submit)\b)";
+
+/// 纯函数版高危文本判定（单测锁定英文词覆盖）。页面内 JS 用同一正则源。
+#[cfg(test)]
+fn is_sensitive_click_text(text: &str) -> bool {
+    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(&format!("(?i)({SENSITIVE_CLICK_RE_SOURCE})"))
+            .expect("SENSITIVE_CLICK_RE_SOURCE 是静态正则")
+    });
+    RE.is_match(text)
+}
+
 /// 判定目标是否为敏感操作：type 到已填值输入框/password 框；click 提交按钮、
 /// 下载链接、或文本含高危动词的元素。判定失败（未 attach 等）静默放行——
 /// 后续操作本身会给出明确错误。
@@ -1508,14 +1716,16 @@ pub(crate) async fn check_sensitive(target: &str, action: &str, agent_id: Option
         Ok(s) => s,
         Err(_) => return false,
     };
+    let click_re = format!("/{SENSITIVE_CLICK_RE_SOURCE}/i");
     let expr = match action {
         "type" => format!(
             r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const t = (el.tagName || '').toLowerCase(); if (t === 'input' && el.type === 'password') return true; return (t === 'input' || t === 'textarea') && !!el.value; }})()"#,
             sel = sel_json
         ),
         "click" => format!(
-            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const t = (el.tagName || '').toLowerCase(); const ty = (t === 'input' || t === 'button') ? (el.type || '').toLowerCase() : ''; if (ty === 'submit') return true; if (el.hasAttribute && el.hasAttribute('download')) return true; const text = (el.innerText || el.value || '').slice(0, 40); return /确认|提交|支付|转账|购买|删除|注销|退订|清空/.test(text); }})()"#,
-            sel = sel_json
+            r#"(() => {{ const el = document.querySelector({sel}); if (!el) return false; const t = (el.tagName || '').toLowerCase(); const ty = (t === 'input' || t === 'button') ? (el.type || '').toLowerCase() : ''; if (ty === 'submit') return true; if (el.hasAttribute && el.hasAttribute('download')) return true; const text = (el.innerText || el.value || '').slice(0, 40); return {click_re}.test(text); }})()"#,
+            sel = sel_json,
+            click_re = click_re
         ),
         _ => return false,
     };
@@ -1664,6 +1874,7 @@ mod tests {
 
     #[test]
     fn probes_are_valid_javascript() {
+        assert_valid_js(CONTENT_PROBE, "content");
         assert_valid_js(INSPECT_PROBE, "inspect");
         assert_valid_js(REPORT_PROBE, "report");
         assert_valid_js(SNAPSHOT_PROBE, "snapshot");
@@ -1684,6 +1895,40 @@ mod tests {
         assert_eq!(super::ref_to_selector(".btn-primary"), ".btn-primary");
         assert_eq!(super::ref_to_selector("#submit"), "#submit");
         assert_eq!(super::ref_to_selector(""), "");
+    }
+
+    /// P0 二轮评审：敏感点击检测只有中文动词 → 英文 "Pay now / Delete / Confirm /
+    /// Unsubscribe" 不触发单独 Ask。此处锁定页面内 JS 同源正则的 Rust 纯函数版。
+    #[test]
+    fn sensitive_click_text_covers_english_high_risk_words() {
+        for text in [
+            "Pay now",
+            "PAY NOW",
+            "Delete account",
+            "Confirm subscription",
+            "Unsubscribe",
+            "Sign out",
+            "Transfer money",
+            "Checkout",
+            "确认支付",
+        ] {
+            assert!(
+                super::is_sensitive_click_text(text),
+                "高危文本应触发敏感点击 Ask: {text}"
+            );
+        }
+        for text in [
+            "Read more",
+            "Sign in",
+            "Delivery status",
+            "Deletion is not supported", // 单词边界：delete 不匹配 deletion
+            "Play now",                  // 单词边界：pay 不匹配 play
+        ] {
+            assert!(
+                !super::is_sensitive_click_text(text),
+                "普通文本不应触发敏感点击 Ask: {text}"
+            );
+        }
     }
 
     #[test]
@@ -1768,6 +2013,20 @@ mod tests {
             Arc::ptr_eq(&before.unwrap(), &after.unwrap()),
             "在途闸生效时不得替换 observer（防孤儿任务）"
         );
+    }
+
+    /// P0 新动作的参数校验单测：在触及真实 CDP 前先拒绝非法参数，
+    /// 避免坏参数被误判成「需要真实浏览器」而漏测。
+    #[tokio::test]
+    async fn new_actions_reject_invalid_args_before_cdp() {
+        let e = super::cdp_navigate("   ", None).await.unwrap_err();
+        assert!(e.contains("url 不能为空"), "{e}");
+        let e = super::cdp_content(None, Some("pdf".into()), None, None, None)
+            .await
+            .unwrap_err();
+        assert!(e.contains("text 或 markdown"), "{e}");
+        let e = super::cdp_select("37", "", None).await.unwrap_err();
+        assert!(e.contains("value 不能为空"), "{e}");
     }
 
     /// B3：cdp_wait 的固定 ms 路径——确定性休眠，不需要真实浏览器。
