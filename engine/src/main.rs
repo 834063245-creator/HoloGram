@@ -286,7 +286,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// 供 Tauri 前端 / viewer（/hologram/api/graph）等客户端调用；
 /// 与 MCP stdio 共享同一进程级 ENGINE 内存图与 watcher。
 async fn run_tcp_server() -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind("127.0.0.1:9777").await?;
+    // 端口可用 HOLOGRAM_TCP_PORT 覆盖（默认 9777）——多实例测试 / 避免与 Tauri 端口冲突
+    let port: u16 = std::env::var("HOLOGRAM_TCP_PORT")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(9777);
+    let listener = TcpListener::bind(("127.0.0.1", port)).await?;
     info!("TCP server listening on 127.0.0.1:9777");
 
     loop {
@@ -333,8 +338,14 @@ async fn run_tcp_server() -> Result<(), Box<dyn std::error::Error>> {
                 handle_simple("timeline", req_owned.trim(), |_g, _a| {
                     json!(hologram_engine::engine::engine_query_timeline(50).unwrap_or_default())
                 })
+            } else if req_owned.starts_with("reanalyze:") {
+                // 强制全量分析（?refresh=1）：忽略存量缓存，解析项目源码重建依赖图
+                let path = req_owned.trim().strip_prefix("reanalyze:").unwrap_or(".").trim().to_string();
+                tokio::task::spawn_blocking(move || handle_reanalyze(&path))
+                    .await.unwrap_or_else(|_| b"{\"error\":\"reanalyze panicked\"}".to_vec())
             } else if req_owned.starts_with("analyze:") {
-                // 全量分析：解析项目源码并构建依赖图，CPU 密集型，卸载到阻塞线程
+                // 智能分析：存量优先 —— 已加载且缓存未过期则直接返回已有图（秒开），
+                // 否则全量分析（解析源码 → 构建依赖图）
                 let path = req_owned.trim().strip_prefix("analyze:").unwrap_or(".").trim().to_string();
                 tokio::task::spawn_blocking(move || handle_analyze(&path))
                     .await.unwrap_or_else(|_| b"{\"error\":\"analyze panicked\"}".to_vec())
@@ -465,7 +476,7 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         .unwrap_or_default();
     }
 
-    // 初始化引擎（打开 GraphStore + SQLite）
+    // 初始化引擎（打开 GraphStore + SQLite → 读回存量图：快照/SQLite）
     if let Err(e) = hologram_engine::engine::engine_init(&root) {
         return serde_json::to_vec(&serde_json::json!({
             "error": format!("engine init failed: {}", e),
@@ -473,8 +484,50 @@ fn handle_analyze(path: &str) -> Vec<u8> {
         }))
         .unwrap_or_default();
     }
+
+    // ── 存量优先：已有图且缓存未过期 → 直接返回，不重新分析 ──
+    let cached_nodes = hologram_engine::engine::engine_read(|idx| idx.node_count()).unwrap_or(0);
+    let stale = cache_is_stale(&root);
+    eprintln!("[analyze] cache check: cached_nodes={}, stale={}", cached_nodes, stale);
+    if cached_nodes > 0 && !stale {
+        eprintln!("[analyze] 使用存量图（{} 节点），跳过全量分析", cached_nodes);
+        let mut resp = serde_json::from_slice::<serde_json::Value>(&handle_get_graph())
+            .unwrap_or_else(|_| serde_json::json!({"nodes": [], "edges": []}));
+        if let Some(obj) = resp.as_object_mut() {
+            obj.insert("cache".into(), serde_json::json!("hit"));
+            obj.insert("node_count".into(), serde_json::json!(cached_nodes));
+        }
+        return serde_json::to_vec(&resp).unwrap_or_default();
+    }
+
+    full_analyze_impl(&root)
+}
+
+/// 强制全量分析（?refresh=1 / 显式重新分析）：无视存量缓存。
+fn handle_reanalyze(path: &str) -> Vec<u8> {
+    let root = PathBuf::from(path);
+    if !root.exists() {
+        return serde_json::to_vec(&serde_json::json!({
+            "error": "path not found",
+            "path": path
+        }))
+        .unwrap_or_default();
+    }
+    if let Err(e) = hologram_engine::engine::engine_init(&root) {
+        return serde_json::to_vec(&serde_json::json!({
+            "error": format!("engine init failed: {}", e),
+            "path": path
+        }))
+        .unwrap_or_default();
+    }
+    full_analyze_impl(&root)
+}
+
+/// 全量分析并序列化完整图（含社区）。原 handle_analyze 主体。
+fn full_analyze_impl(root: &std::path::Path) -> Vec<u8> {
+    let root_str = root.to_string_lossy().to_string();
     // 执行全量分析（解析源码 → 构建依赖图）
-    let result = match hologram_engine::engine::engine_analyze(&root) {
+    let result = match hologram_engine::engine::engine_analyze(std::path::Path::new(&root_str)) {
         Ok(r) => r,
         Err(e) => return serde_json::to_vec(&serde_json::json!({"error": e})).unwrap_or_default(),
     };
@@ -538,6 +591,65 @@ fn handle_analyze(path: &str) -> Vec<u8> {
     }))
     .unwrap_or_default()
 }
+
+/// 缓存是否过期：基线 = <root>/.hologram/hologram.db 的 mtime；
+/// 遍历源码文件，任一文件 mtime 晚于基线 → 过期（源码在上次落盘后被改过）。
+/// 跳过依赖/构建/虚拟环境等目录（与 discovery.rs / 原版 Tauri cache_is_stale 一致）。
+fn cache_is_stale(root: &std::path::Path) -> bool {
+    let db_path = root.join(".hologram").join("hologram.db");
+    let baseline = match std::fs::metadata(&db_path).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return true, // 无 DB → 无存量 → 视为过期（会走全量分析）
+    };
+
+    const EXTS: &[&str] = &[
+        ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".go", ".rs", ".java", ".c",
+        ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".rb", ".cs", ".kt", ".kts", ".swift",
+        ".php", ".lua",
+    ];
+    const SKIP: &[&str] = &[
+        ".git", "node_modules", "target", "build", "dist", "out", ".venv", "venv",
+        ".hologram", "release-bin", "__pycache__", ".pytest_cache", ".ruff_cache",
+        ".mypy_cache", ".next", ".nuxt", ".svelte-kit", ".turbo", ".cursor",
+        ".idea", ".vscode", ".coverage",
+    ];
+
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.file_type().is_dir() {
+                let name = e.file_name().to_string_lossy();
+                !(SKIP.iter().any(|d| name.as_ref() == *d)
+                    || name.starts_with(".venv")
+                    || name.starts_with("venv-")
+                    || name.starts_with("venv_"))
+            } else {
+                true
+            }
+        })
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() { continue; }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext_dot = format!(".{}", ext);
+        if !EXTS.contains(&ext_dot.as_str()) { continue; }
+        if let Ok(meta) = path.metadata() {
+            if let Ok(mtime) = meta.modified() {
+                if mtime > baseline {
+                    eprintln!(
+                        "[analyze] 缓存已过期: {} 在上次落盘后被修改",
+                        path.display()
+                    );
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 
 /// 处理提交前预检（preflight check）请求。
 ///

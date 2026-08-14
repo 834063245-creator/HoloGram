@@ -224,8 +224,10 @@ async function fetchGraphFromEngine(
     analyzedProject = project
     return { nodes: g.nodes ?? [], edges: g.edges ?? [], meta: { project } }
   }
-  // 需要分析：切换共享引擎到该项目（与 Tauri 工作区切换一致）
-  const raw = await engineRequest('analyze:' + project)
+  // 需要分析：切换共享引擎到该项目（与 Tauri 工作区切换一致）。
+  // ?refresh=1 → reanalyze:（强制全量）；否则 analyze:（引擎内先查存量缓存，
+  // 有且源码未变则秒回，避免每次打开都全量重扫）。
+  const raw = await engineRequest(refresh ? 'reanalyze:' + project : 'analyze:' + project)
   const parsed = JSON.parse(raw)
   if (parsed && typeof parsed === 'object' && parsed.error) throw new Error(String(parsed.error))
   analyzedProject = project
