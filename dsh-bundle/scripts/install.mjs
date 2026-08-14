@@ -19,7 +19,7 @@ import { get as httpsGet } from 'node:https'
 // new URL('..', scripts/install.mjs) 已指向包根，不要再 dirname
 const BUNDLE_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const BIN_DIR = join(BUNDLE_ROOT, 'bin')
-const PKG_VERSION = process.env.npm_package_version ?? '0.2.0'
+const PKG_VERSION = process.env.npm_package_version ?? '1.0.0'
 const REPO = '834063245-creator/HoloGram'
 const TAG = 'v' + PKG_VERSION
 
