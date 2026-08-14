@@ -1,7 +1,7 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）+ 第三批（`2c8376a`）+ 第三批标记文档（`5ec03b8`）+ 第四批已提交（`9a9d810` 跨平台/轮转/HAR、`54cea67` viewport、`2d25279` session 拆分、`60aaac2` actions 拆分），均未 push；**第四批基本完成**（跨平台 + 轮转清理 + HAR + viewport + cdp.rs 四模块拆分），仅剩 eval 隔离 world（可选）
-> 下一接手窗口任务：eval 隔离 world 若不做则第四批可收官；将来有 Windows 环境时补跑 E2E-1/2/3/4（重点 E2E-4 与 viewport 断言）
+> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）+ 第三批（`2c8376a`）+ 第四批（`9a9d810`/`54cea67`/`2d25279`/`60aaac2`/`1593973`）+ 交接文档（`5ec03b8`/`cb87eaf`）已提交，均未 push；**第四批完成**（跨平台 + 轮转清理 + HAR + viewport + cdp.rs 四模块拆分 + 可行 e2e 补齐），eval 隔离 world 保持可选不做
+> 下一接手窗口任务：有 Windows 环境则先补跑 E2E-1/2/3/4；随后进入 **第五批**（cookie 管理 + profile 配置 + proxy + 多账号会话隔离/切换）
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
 > `src-ui/src/agent/tools/browser.ts`、`src-tauri/src/cdp/probes/*.js`、`src-tauri/src/cdp/e2e.rs`
@@ -212,9 +212,9 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 
 ### 8.1 当前事实
 
-- HEAD：`5ec03b8`（第三批标记文档）；前序提交 `e0b9086`/`d9d0ae0`/`fec19fe`/`2c8376a`/`5ec03b8` 均未 push。当前工作树为第四批第一批改动。
+- HEAD：`1593973`（第四批 e2e 补齐）；工作树 clean；`e0b9086` 起至 `1593973` 的 9 个提交均未 push。
 - 已实现能力：launch/connect/discover/targets/attach、navigate/back/forward/reload、snapshot(AX 优先 + iframe/shadow/accessible-name 回退)/content/inspect/report/console/network(按 requestId 配对)/network_detail/network_har(HAR 1.2 文件导出)/screenshot(fullPage,inline)/audit/status/wait、click/hover/type(replace)/select/upload/dialog/press(modifiers)/scroll/viewport/eval、new_tab/close_tab；launch 支持 headless/windowSize。`find_chrome` 与 `cdp_discover` 跨平台。
-- 本机验证（Linux）：`cargo check --tests` 通过；`npx tsc --noEmit` 通过；vitest 53/53。`cargo test cdp::` 与全量 `cargo test` 因当前机器内存压力暂不能重新链接，已有基线为 265 passed / 8 failed（8 个历史环境失败）。
+- 本机验证（Linux）：`cargo check --tests` 通过；`npx tsc --noEmit` 通过；vitest 54/54。`cargo test cdp::` 与全量 `cargo test` 因当前机器内存压力暂不能重新链接，已有基线为 265 passed / 8 failed（8 个历史环境失败）。
 
 ### 8.2 开局清单
 
