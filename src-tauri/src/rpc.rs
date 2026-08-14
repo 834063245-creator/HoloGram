@@ -377,13 +377,13 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（33 个命令）
+        // CDP 浏览器控制（34 个命令）
         // 权限：所有 browser_* 分支统一经过 check_browser_permission（BrowserTool）。
         //       launch/kill/attach/connect/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
         //       inspect/report/targets/snapshot/content/console/network/network_detail/network_har/
 //       screenshot/audit/status/wait
         //       只读放行；navigate/back/forward/reload/click/hover/type/select/upload/
-        //       dialog/press/scroll/new_tab/close_tab 依赖 attach 时已获批准的 target，
+        //       dialog/press/scroll/viewport/new_tab/close_tab 依赖 attach 时已获批准的 target，
         //       不再重复弹窗——但敏感目标
         //       （已填值输入框/提交按钮/下载/高危文本）每次单独 Ask（ADR 0003 D6 L3）。
         //       工具级 Browser=deny 对所有动作生效（含只读与 self 通道）。
@@ -534,6 +534,22 @@ pub(crate) async fn rpc(
             let full_page = opt_bool(&params, "full_page").unwrap_or(false);
             let inline = opt_bool(&params, "inline").unwrap_or(false);
             crate::cdp::cdp_screenshot(full_page, inline, agent_id.as_deref()).await
+        }
+        "browser_viewport" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_viewport: self 会话只读，不能操作自家 webview".into());
+            }
+            check_browser_permission("viewport", agent_id.as_deref(), &state, &app).await?;
+            let width = opt_u64(&params, "width")
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| "browser_viewport: missing or invalid 'width'".to_string())?;
+            let height = opt_u64(&params, "height")
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| "browser_viewport: missing or invalid 'height'".to_string())?;
+            let device_scale_factor = params.get("device_scale_factor").and_then(|v| v.as_f64());
+            let mobile = opt_bool(&params, "mobile");
+            crate::cdp::cdp_set_viewport(width, height, device_scale_factor, mobile, agent_id.as_deref()).await
         }
         "browser_audit" => {
             check_browser_permission("audit", None, &state, &app).await?;

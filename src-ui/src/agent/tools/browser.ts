@@ -69,6 +69,7 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     dialog: 'browser_dialog',
     press: 'browser_press',
     scroll: 'browser_scroll',
+    viewport: 'browser_viewport',
     eval: 'browser_eval',
     status: 'browser_status',
     wait: 'browser_wait',
@@ -447,6 +448,20 @@ export function createBrowserTools(): Tool[] {
         direction: z.string().optional().describe('Page scroll direction: down/up/top'),
       }),
       execute: (args) => run('scroll', args),
+    }),
+    defineTool({
+      name: 'browser_viewport',
+      description:
+        'Set viewport metrics on the attached page via Emulation.setDeviceMetricsOverride: width/height in CSS px, ' +
+        'deviceScaleFactor (0.5-3, default 1) and mobile emulation flag (default false). ' +
+        'This is the CDP viewport override, separate from browser_launch windowSize (the physical window).',
+      schema: z.object({
+        width: z.number().int().min(1).max(16384).describe('Viewport width in CSS pixels'),
+        height: z.number().int().min(1).max(16384).describe('Viewport height in CSS pixels'),
+        deviceScaleFactor: z.number().min(0.5).max(3).optional().describe('Device pixel ratio (default 1)'),
+        mobile: z.boolean().optional().describe('Emulate a mobile viewport (default false)'),
+      }),
+      execute: (args) => run('viewport', args),
     }),
     defineTool({
       name: 'browser_wait',

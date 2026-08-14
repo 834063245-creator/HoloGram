@@ -223,7 +223,7 @@ impl Tool for BrowserTool {
         //    reload/click/type/press/scroll/select 不再重复弹窗；敏感目标与高危动作除外。
         if matches!(
             self.action.as_str(),
-            "navigate" | "back" | "forward" | "reload" | "click" | "type" | "press" | "scroll" | "select" | "hover" | "dialog" | "upload" | "new_tab" | "close_tab"
+            "navigate" | "back" | "forward" | "reload" | "click" | "type" | "press" | "scroll" | "select" | "hover" | "dialog" | "upload" | "viewport" | "new_tab" | "close_tab"
         ) {
             return PermissionResult::Passthrough;
         }

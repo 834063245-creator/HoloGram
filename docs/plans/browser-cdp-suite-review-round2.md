@@ -165,13 +165,14 @@
 - HAR 导出：新增 `browser_network_har(limit)` —— 观察缓冲导出 HAR 1.2 文件（URL/queryString/请求响应头/postData/status/mimeType；timing 因观察通道未采样记 -1）。第三批遗留的「HAR 导出」至此关闭。
 - 模块拆分（部分）：新增 `src-tauri/src/cdp/transport.rs`（HTTP `/json` + 命令 WS/批量 WS）与 `src-tauri/src/cdp/probes.rs`（探针常量 + 返回值契约）；`cdp.rs` 仍承担 session/actions，下一窗口继续拆。
 - 测试：新增跨平台路径候选、discover 解析、过期文件清理、HAR entry 形状单测；`cargo check --tests` 通过。前端 `npx tsc --noEmit` 通过，vitest 53/53。
-- 未做：`cdp.rs` session/actions 拆分、`Emulation.setDeviceMetricsOverride`、eval 隔离 world（可选）。
+- 又补：`browser_viewport(width,height,deviceScaleFactor,mobile)` 落地 `Emulation.setDeviceMetricsOverride`（width/height 1-16384，DPR 0.5-3）；E2E-4 增补视口覆盖断言。
+- 未做：`cdp.rs` session/actions 拆分、eval 隔离 world（可选）。
 
 ### 4.2 后续批次（含本轮补入的原“未排批次”项）
 
 - **第二批（日常任务断点）**：✅ 已落地 —— dialog + upload + hover + 组合键 + 截图 inline/fullPage + tab 管理（new/close；切换复用 attach）。
 - **第三批（观察与调试）**：✅ 已落地（`2c8376a`）—— network requestId 配对 + `browser_network_detail` + AX snapshot（失败回退增强探针）+ launch headless/windowSize。HAR 导出已在第四批第一批关闭；`Emulation.setDeviceMetricsOverride` 仍在第四批剩余项。
-- **第四批（平台与工程债）**：🔄 部分落地 —— 跨平台 + 审计/截图/HAR 轮转 + HAR 导出 + transport/probes 拆分已完成；剩余 session/actions 拆分、`Emulation.setDeviceMetricsOverride`、eval 隔离 world（可选）。
+- **第四批（平台与工程债）**：🔄 部分落地 —— 跨平台 + 审计/截图/HAR 轮转 + HAR 导出 + `browser_viewport`（`Emulation.setDeviceMetricsOverride`）+ transport/probes 拆分已完成；剩余 session/actions 拆分、eval 隔离 world（可选）。
 - **第五批（身份与多账号）**：cookie 管理 + profile 配置 + proxy + 多账号会话隔离/切换。
 
 ## 5. 基线命令（新窗口改代码前跑，留底）
@@ -212,7 +213,7 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 ### 8.1 当前事实
 
 - HEAD：`5ec03b8`（第三批标记文档）；前序提交 `e0b9086`/`d9d0ae0`/`fec19fe`/`2c8376a`/`5ec03b8` 均未 push。当前工作树为第四批第一批改动。
-- 已实现能力：launch/connect/discover/targets/attach、navigate/back/forward/reload、snapshot(AX 优先 + iframe/shadow/accessible-name 回退)/content/inspect/report/console/network(按 requestId 配对)/network_detail/network_har(HAR 1.2 文件导出)/screenshot(fullPage,inline)/audit/status/wait、click/hover/type(replace)/select/upload/dialog/press(modifiers)/scroll/eval、new_tab/close_tab；launch 支持 headless/windowSize。`find_chrome` 与 `cdp_discover` 跨平台。
+- 已实现能力：launch/connect/discover/targets/attach、navigate/back/forward/reload、snapshot(AX 优先 + iframe/shadow/accessible-name 回退)/content/inspect/report/console/network(按 requestId 配对)/network_detail/network_har(HAR 1.2 文件导出)/screenshot(fullPage,inline)/audit/status/wait、click/hover/type(replace)/select/upload/dialog/press(modifiers)/scroll/viewport/eval、new_tab/close_tab；launch 支持 headless/windowSize。`find_chrome` 与 `cdp_discover` 跨平台。
 - 本机验证（Linux）：`cargo check --tests` 通过；`npx tsc --noEmit` 通过；vitest 53/53。`cargo test cdp::` 与全量 `cargo test` 因当前机器内存压力暂不能重新链接，已有基线为 265 passed / 8 failed（8 个历史环境失败）。
 
 ### 8.2 开局清单
@@ -231,7 +232,7 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 
 ### 8.4 后续批次
 
-- 第四批剩余：`cdp.rs` 继续拆 `session.rs` / `actions.rs`（transport/probes 已拆）、`Emulation.setDeviceMetricsOverride`、eval 隔离 world（可选）。
+- 第四批剩余：`cdp.rs` 继续拆 `session.rs` / `actions.rs`（transport/probes 已拆）、eval 隔离 world（可选）。`Emulation.setDeviceMetricsOverride` 已通过 `browser_viewport` 落地。
 - 第五批：cookie 管理、profile 配置、proxy、多账号会话隔离/切换。
 
 ### 8.5 踩坑速记（务必读）

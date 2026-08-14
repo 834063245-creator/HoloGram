@@ -2754,6 +2754,47 @@ pub(crate) async fn check_sensitive(target: &str, action: &str, agent_id: Option
 }
 
 // ═══════════════════════════════════════════════════════════
+// viewport / device metrics — Emulation.setDeviceMetricsOverride
+// ═══════════════════════════════════════════════════════════
+
+/// 设置 attach 页面的 viewport 指标（DPR / mobile 模拟）。
+/// launch 的 windowSize 是窗口物理尺寸；本动作覆盖 CDP 内视口与 DPR，
+/// 两者可叠加使用。width/height 1-16384，DPR 0.5-3。
+pub(crate) async fn cdp_set_viewport(
+    width: u32,
+    height: u32,
+    device_scale_factor: Option<f64>,
+    mobile: Option<bool>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    if width == 0 || height == 0 || width > 16384 || height > 16384 {
+        return Err("viewport: width/height 必须在 1-16384 之间".into());
+    }
+    let dpr = device_scale_factor.unwrap_or(1.0);
+    if !dpr.is_finite() || !(0.5..=3.0).contains(&dpr) {
+        return Err("viewport: deviceScaleFactor 必须在 0.5-3 之间".into());
+    }
+    let (port, tid) = require_target(agent_id)?;
+    ws_command(
+        port,
+        &tid,
+        "Emulation.setDeviceMetricsOverride",
+        json!({
+            "width": width,
+            "height": height,
+            "deviceScaleFactor": dpr,
+            "mobile": mobile.unwrap_or(false),
+        }),
+    )
+    .await?;
+    audit_log(agent_id, "viewport", &format!("{width}x{height}@{dpr}"), "ok");
+    Ok(json!({
+        "viewport": { "width": width, "height": height, "deviceScaleFactor": dpr, "mobile": mobile.unwrap_or(false) },
+    })
+    .to_string())
+}
+
+// ═══════════════════════════════════════════════════════════
 // 截图（P2）— Page.captureScreenshot 落盘
 // ═══════════════════════════════════════════════════════════
 
@@ -3251,6 +3292,17 @@ bash|9222|99
             ..NetworkEntry::default()
         };
         assert_eq!(failed.har_entry()["response"]["_error"], "net::ERR_FAILED");
+    }
+
+    /// 第四批 viewport 参数：坏尺寸/DPR 在碰真实 CDP 前拒绝。
+    #[tokio::test]
+    async fn viewport_rejects_invalid_args_before_cdp() {
+        let e = cdp_set_viewport(0, 600, None, None, None).await.unwrap_err();
+        assert!(e.contains("width/height"), "{e}");
+        let e = cdp_set_viewport(800, 600, Some(4.0), None, None)
+            .await
+            .unwrap_err();
+        assert!(e.contains("deviceScaleFactor"), "{e}");
     }
 
     /// 第三批 launch 参数：windowSize 非法值在找 Chrome 之前就被拒绝。

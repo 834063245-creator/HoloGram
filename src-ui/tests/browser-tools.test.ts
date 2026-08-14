@@ -39,7 +39,7 @@ describe('browser 领域工具注册', () => {
       'launch', 'kill', 'targets', 'attach', 'new_tab', 'close_tab',
       'navigate', 'back', 'forward', 'reload',
       'snapshot', 'content', 'inspect', 'report', 'console', 'network', 'network_detail', 'network_har', 'screenshot', 'audit',
-      'click', 'hover', 'type', 'select', 'upload', 'dialog', 'press', 'scroll', 'eval', 'status', 'wait',
+      'click', 'hover', 'type', 'select', 'upload', 'dialog', 'press', 'scroll', 'viewport', 'eval', 'status', 'wait',
     ]) {
       expect(actions).toContain(a);
     }
@@ -145,6 +145,16 @@ describe('browser 动作路由（统一走 Rust CDP）', () => {
       expect.objectContaining({ headless: true, windowSize: { width: 800, height: 600 } }),
     );
     expect(invokeMock).toHaveBeenCalledWith('browser_network_detail', expect.objectContaining({ requestId: 'r-1' }));
+  });
+
+  it('viewport 路由到 browser_viewport 并透传 DPR/mobile', async () => {
+    const registry = buildBrowserRegistry();
+    const t = registry.get('browser')!;
+    await t.execute({ action: 'viewport', width: 800, height: 600, deviceScaleFactor: 2, mobile: true });
+    expect(invokeMock).toHaveBeenCalledWith(
+      'browser_viewport',
+      expect.objectContaining({ width: 800, height: 600, deviceScaleFactor: 2, mobile: true }),
+    );
   });
 
   it('tab/dialog/upload/hover/组合键/截图参数路由到新增 RPC', async () => {

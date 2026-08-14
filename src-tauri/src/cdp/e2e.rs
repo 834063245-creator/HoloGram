@@ -744,6 +744,18 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
         "headless 视口应可用: {viewport}"
     );
 
+    // Emulation.setDeviceMetricsOverride：视口覆盖应立刻反映到 innerWidth/innerHeight。
+    let vp = cdp_set_viewport(640, 480, Some(2.0), Some(false), Some(agent))
+        .await
+        .expect("viewport 应成功");
+    assert!(vp.contains(r#""width":640"#), "viewport 返回异常: {vp}");
+    let inner = runtime_evaluate("({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio })", Some(agent))
+        .await
+        .expect("读覆盖后视口应成功");
+    assert_eq!(inner["w"].as_i64(), Some(640), "Emulation 后 innerWidth 应为 640: {inner}");
+    assert_eq!(inner["h"].as_i64(), Some(480), "Emulation 后 innerHeight 应为 480: {inner}");
+    assert_eq!(inner["dpr"].as_f64(), Some(2.0), "Emulation 后 devicePixelRatio 应为 2: {inner}");
+
     let k = cdp_kill(Some(agent)).expect("kill 应成功");
     assert!(k.contains("已终止"), "受控 Chrome kill 应报终止: {k}");
     stop.store(true, Ordering::SeqCst);
