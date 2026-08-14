@@ -71,6 +71,8 @@
     "install": "node scripts/install.mjs"
   },
   "devDependencies": {
-    "tsdown": "^0.22.2"
+    "tsdown": "^0.22.2",
+    "vite": "^6.0.0",
+    "three": "^0.185.1"
   }
 }
