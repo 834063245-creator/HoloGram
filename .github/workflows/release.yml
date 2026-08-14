@@ -133,7 +133,7 @@ jobs:
       - name: Build viewer
         shell: bash
         working-directory: dsh-bundle/viewer
-        run: ../../src-ui/node_modules/.bin/vite build
+        run: node ../../src-ui/node_modules/vite/bin/vite.js build
 
       - name: Align package version to tag
         shell: bash
