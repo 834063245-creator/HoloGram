@@ -69,5 +69,8 @@
     "build:client": "tsdown --config tsdown.client.config.ts",
     "pack:bin": "node scripts/pack-bin.mjs",
     "install": "node scripts/install.mjs"
+  },
+  "devDependencies": {
+    "tsdown": "^0.22.2"
   }
 }

@@ -78,16 +78,21 @@ jobs:
             ${{ matrix.artifact }}.zip
 
   dsh-bundle:
-    # hologram-dsh npm 包的引擎二进制附件（路线 A：Windows x64 先行）
-    # npm 包的 postinstall 从 GitHub Release 下载：hologram-engine-win32-x64.exe
+    # hologram-dsh npm 包：构建引擎二进制传 Release + 自动 npm publish
+    # 版本跟随主版本线：tag v<version> → npm 发 <version>（install.mjs 按版本从 Release 下载二进制）
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       RUSTC_WRAPPER: ''
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -108,6 +113,41 @@ jobs:
         with:
           files: |
             staging/hologram-engine-win32-x64.exe
+
+      - name: Install plugin build deps
+        working-directory: dsh-bundle
+        run: npm ci || npm install --no-audit --no-fund
+
+      - name: Build host plugin
+        working-directory: dsh-bundle
+        run: npx tsdown --config tsdown.config.ts
+
+      - name: Build client plugin
+        working-directory: dsh-bundle
+        run: npx tsdown --config tsdown.client.config.ts
+
+      - name: Install viewer build deps (src-ui)
+        working-directory: src-ui
+        run: npm ci || npm install --no-audit --no-fund
+
+      - name: Build viewer
+        shell: bash
+        working-directory: dsh-bundle/viewer
+        run: ../../src-ui/node_modules/.bin/vite build
+
+      - name: Align package version to tag
+        shell: bash
+        working-directory: dsh-bundle
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          echo "Publishing version: $VER"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$VER"
+
+      - name: Publish to npm
+        working-directory: dsh-bundle
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
   desktop:
     runs-on: windows-latest
@@ -170,3 +210,4 @@ jobs:
           prerelease: false
           updaterJsonPreferNsis: true
           args: --config '{"build":{"beforeBuildCommand":""}}'
+
