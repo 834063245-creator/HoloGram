@@ -539,57 +539,19 @@ fn full_analyze_impl(root: &std::path::Path) -> Vec<u8> {
         &format!("全量分析完成：{} 节点, {} 边, {:.1}s", result.node_count, result.edge_count, result.elapsed_secs),
     );
 
-    // ── 序列化完整图数据，供前端消费 ──
-    // 节点：ID、名称、类型、位置、入度、出度、属性、位置坐标、社区 ID
-    let nodes: Vec<serde_json::Value> = result.graph.nodes_iter().map(|(_, n)| {
-        serde_json::json!({
-            "id": n.id, "name": n.name, "type": n.kind.as_str(),
-            "location": n.location, "in_degree": n.in_degree,
-            "out_degree": n.out_degree, "properties": n.properties,
-            "position": n.position, "community_id": n.community_id
-        })
-    }).collect();
-
-    // 边：ID、源节点、目标节点、类型、耦合深度、是否跨文件、时序延迟
-    let edges: Vec<serde_json::Value> = result.graph.edges_iter().map(|(_, e)| {
-        serde_json::json!({
-            "id": e.id, "source": e.source, "target": e.target,
-            "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,
-            "cross_file": e.cross_file,
-            "temporal_delay_sec": e.temporal_delay_sec
-        })
-    }).collect();
-
-    // ── 社区检测（扁平结构）──
-    // 使用 Louvain 算法（随机种子 42），将节点聚类为模块化社区
-    let communities = detect_communities(&result.graph, 42);
-    let communities_json: Vec<serde_json::Value> = communities.iter().enumerate()
-        .map(|(i, c)| serde_json::json!({
-            "id": format!("comm_{}", i), "label": format!("社区 {}", i + 1),
-            "size": c.len(), "node_ids": c
-        }))
-        .collect();
-    // ── 层级社区检测（Level 0 + Level 1+ 超级社区）──
-    // 提供多粒度的社区视图，便于前端做折叠/展开
-    let hcommunities = detect_hierarchical_communities(&result.graph, 42);
-    let hcommunities_json: Vec<serde_json::Value> = hcommunities.iter()
-        .map(|hc| serde_json::json!({
-            "id": hc.id,
-            "label": hc.label,
-            "node_ids": hc.node_ids,
-            "level": hc.level,
-            "parent_id": hc.parent_id,
-        }))
-        .collect();
-
-    serde_json::to_vec(&serde_json::json!({
-        "nodes": nodes, "edges": edges, "communities": communities_json,
-        "hierarchical_communities": hcommunities_json,
-        "elapsed_secs": result.elapsed_secs,
-        "node_count": result.node_count, "edge_count": result.edge_count,
-        "generator": "HoloGram v4.0 — Copyright (c) 2026 Wenbing Jing — MIT License"
-    }))
-    .unwrap_or_default()
+    // ── 序列化完整图数据 ──
+    // 注意：pipeline 末尾 result.graph 已被 take_nodes/take_edges 掏空（图已 swap 进
+    // GraphStore 内存索引）。因此图数据统一从 store 读（与 handle_get_graph 同源），
+    // 这里只附加分析 meta。
+    let mut resp = serde_json::from_slice::<serde_json::Value>(&handle_get_graph())
+        .unwrap_or_else(|_| serde_json::json!({"nodes": [], "edges": []}));
+    if let Some(obj) = resp.as_object_mut() {
+        obj.insert("elapsed_secs".into(), serde_json::json!(result.elapsed_secs));
+        obj.insert("node_count".into(), serde_json::json!(result.node_count));
+        obj.insert("edge_count".into(), serde_json::json!(result.edge_count));
+        obj.insert("generator".into(), serde_json::json!("HoloGram v4.0 — Copyright (c) 2026 Wenbing Jing — MIT License"));
+    }
+    serde_json::to_vec(&resp).unwrap_or_default()
 }
 
 /// 缓存是否过期：基线 = <root>/.hologram/hologram.db 的 mtime；
