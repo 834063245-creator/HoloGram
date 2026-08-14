@@ -58,6 +58,7 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     console: 'browser_console',
     network: 'browser_network',
     network_detail: 'browser_network_detail',
+    network_har: 'browser_network_har',
     screenshot: 'browser_screenshot',
     audit: 'browser_audit',
     click: 'browser_click',
@@ -336,6 +337,23 @@ export function createBrowserTools(): Tool[] {
       }),
       readOnly: true,
       execute: (args) => run('network_detail', args),
+    }),
+    defineTool({
+      name: 'browser_network_har',
+      description:
+        'Export recently observed network events from the attached page to a HAR 1.2 file in the temp directory. ' +
+        'Returns {path, bytes, entries}. Includes URL, request/response headers, queryString, postData, status and mimeType; ' +
+        'timing fields are -1 because the event observer does not sample timings. ' +
+        'Use fs(read) or hand the path to the user when a full request archive is needed.',
+      schema: z.object({
+        limit: z.number().int().min(1).max(200).optional().describe('Max entries to export (default 100; max 200)'),
+        target: z
+          .string()
+          .optional()
+          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+      }),
+      readOnly: true,
+      execute: (args) => run('network_har', args),
     }),
     defineTool({
       name: 'browser_click',

@@ -1,0 +1,194 @@
+// Copyright (c) 2026 Wenbing Jing. MIT License.
+// SPDX-License-Identifier: MIT
+
+//! CDP 传输层：/json HTTP 端点 + 命令 WebSocket（短连接）。
+//! 从 cdp.rs 拆出（第四批工程债）：只做「连上、发命令、收响应」，
+//! 不持有会话状态；全链路超时仍由 WS_TIMEOUT 统一约束。
+
+use std::collections::HashMap;
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{json, Value};
+use tokio_tungstenite::tungstenite::Message;
+
+/// WS 命令全链路超时——connect/发送/等待响应任一步卡住都在此上限内返回错误。
+pub(super) const WS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Chrome 调试 HTTP 端点：/json/new 用 PUT，返回 target JSON。
+pub(super) fn http_new_tab(port: u16, url: &str) -> Result<Value, String> {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("url", url)
+        .finish();
+    let endpoint = format!("http://127.0.0.1:{port}/json/new?{query}");
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_per_call(Some(Duration::from_secs(5)))
+            .build(),
+    );
+    let resp = agent
+        .put(&endpoint)
+        .send_empty()
+        .map_err(|e| format!("CDP /json/new 请求失败: {e}"))?;
+    let mut body = resp.into_body();
+    let text = body
+        .read_to_string()
+        .map_err(|e| format!("CDP /json/new 读取失败: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("CDP /json/new 解析失败: {e}"))
+}
+
+/// Chrome 调试 HTTP 端点：/json/close/{targetId}，返回纯文本（非 JSON）。
+pub(super) fn http_close_tab(port: u16, target_id: &str) -> Result<(), String> {
+    let endpoint = format!("http://127.0.0.1:{port}/json/close/{target_id}");
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_per_call(Some(Duration::from_secs(5)))
+            .build(),
+    );
+    let resp = agent
+        .get(&endpoint)
+        .call()
+        .map_err(|e| format!("CDP /json/close 请求失败: {e}"))?;
+    if resp.status() != 200 {
+        return Err(format!("CDP /json/close 返回 HTTP {}", resp.status()));
+    }
+    Ok(())
+}
+
+/// GET http://127.0.0.1:port/json — 列出所有 target（原始 JSON）。
+pub(super) fn list_targets_raw(port: u16) -> Result<Value, String> {
+    let url = format!("http://127.0.0.1:{port}/json");
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_per_call(Some(Duration::from_secs(2)))
+            .build(),
+    );
+    let resp = agent
+        .get(&url)
+        .call()
+        .map_err(|e| format!("CDP /json 请求失败: {e}"))?;
+    let mut body = resp.into_body();
+    let text = body
+        .read_to_string()
+        .map_err(|e| format!("CDP /json 读取失败: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("CDP /json 解析失败: {e}"))
+}
+
+/// 通过 CDP WebSocket 发送一条命令，返回响应 JSON（含 result）。
+pub(super) async fn ws_command(
+    port: u16,
+    target_id: &str,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let fut = async {
+        let raw = list_targets_raw(port)?;
+        let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
+        let ws_url = arr
+            .iter()
+            .find(|t| t["id"].as_str() == Some(target_id))
+            .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
+            .ok_or_else(|| format!("target {target_id} 已消失（页面可能被关闭）"))?;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .map_err(|e| format!("CDP WS 连接失败: {e}"))?;
+
+        let id: u64 = 1;
+        let msg = json!({ "id": id, "method": method, "params": params }).to_string();
+        ws.send(Message::text(msg))
+            .await
+            .map_err(|e| format!("CDP WS 发送失败: {e}"))?;
+
+        loop {
+            let reply = ws
+                .next()
+                .await
+                .ok_or("CDP WS 连接关闭")?
+                .map_err(|e| format!("CDP WS 接收失败: {e}"))?;
+            match reply {
+                Message::Text(t) => {
+                    let v: Value =
+                        serde_json::from_str(&t).map_err(|e| format!("CDP 响应解析失败: {e}"))?;
+                    if v["id"].as_u64() == Some(id) {
+                        let _ = ws.close(None).await;
+                        if let Some(err) = v["error"].as_object() {
+                            return Err(format!(
+                                "CDP {} 错误: {}",
+                                method,
+                                err.get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("unknown")
+                            ));
+                        }
+                        return Ok(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+    };
+    tokio::time::timeout(WS_TIMEOUT, fut)
+        .await
+        .map_err(|_| format!("CDP {method} 超时（{WS_TIMEOUT:?} 无响应）——页面主线程可能卡死"))?
+}
+
+/// 在一条 WS 连接上批量发送命令并收集全部响应。
+/// AX snapshot 需要给每个 backendNodeId 依次 resolveNode + callFunctionOn；
+/// 逐条走 ws_command 会反复建连，80 个节点就是 160 次握手。这里一次建连、
+/// 顺序发完、再按 id 收集，把 AX 路径的固定开销压到单次 WS 往返。
+pub(super) async fn ws_command_batch(
+    port: u16,
+    target_id: &str,
+    commands: Vec<(u64, String, Value)>,
+) -> Result<HashMap<u64, Value>, String> {
+    let expected = commands.len();
+    if expected == 0 {
+        return Ok(HashMap::new());
+    }
+    let fut = async {
+        let raw = list_targets_raw(port)?;
+        let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
+        let ws_url = arr
+            .iter()
+            .find(|t| t["id"].as_str() == Some(target_id))
+            .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
+            .ok_or_else(|| format!("target {target_id} 已消失（页面可能被关闭）"))?;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .map_err(|e| format!("CDP WS 连接失败: {e}"))?;
+        for (id, method, params) in &commands {
+            let msg = json!({ "id": id, "method": method, "params": params }).to_string();
+            ws.send(Message::text(msg))
+                .await
+                .map_err(|e| format!("CDP WS 批量发送失败: {e}"))?;
+        }
+
+        let mut replies: HashMap<u64, Value> = HashMap::new();
+        while replies.len() < expected {
+            let reply = ws
+                .next()
+                .await
+                .ok_or("CDP WS 连接关闭")?
+                .map_err(|e| format!("CDP WS 接收失败: {e}"))?;
+            match reply {
+                Message::Text(t) => {
+                    let v: Value =
+                        serde_json::from_str(&t).map_err(|e| format!("CDP 响应解析失败: {e}"))?;
+                    if let Some(id) = v["id"].as_u64() {
+                        if commands.iter().any(|(cid, _, _)| *cid == id) {
+                            replies.insert(id, v);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let _ = ws.close(None).await;
+        Ok::<HashMap<u64, Value>, String>(replies)
+    };
+    tokio::time::timeout(WS_TIMEOUT, fut)
+        .await
+        .map_err(|_| "CDP 批量命令超时——页面主线程可能卡死".to_string())?
+}

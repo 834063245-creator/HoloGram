@@ -216,9 +216,9 @@ export const DOMAIN_SPECS: DomainSpec[] = [
     name: 'browser',
     description:
       'Browser control: launch a controlled Chrome/Edge (isolated profile; headless/windowSize supported), connect to a user-started debug-port browser instance, list/attach/switch tabs (new_tab/close_tab), navigate/back/forward/reload, ' +
-      'snapshot interactive elements (AX tree preferred, iframe/shadow+accessible-name fallback; ref-based ops), extract page content (text/markdown), inspect/report visual state, read console/network events (paired by requestId) + single request detail, screenshot (fullPage/inline), audit log, ' +
+      'snapshot interactive elements (AX tree preferred, iframe/shadow+accessible-name fallback; ref-based ops), extract page content (text/markdown), inspect/report visual state, read console/network events (paired by requestId) + single request detail + HAR export, screenshot (fullPage/inline), audit log, ' +
       'and operate (click/hover/type/select/upload/dialog/press with modifiers/scroll/eval). ' +
-      'target="self" = HoloGram webview 只读会话（inspect/report/snapshot/content/console/network/network_detail/screenshot/status 支持）；省略 target = 已 attach 的外部页面。' +
+      'target="self" = HoloGram webview 只读会话（inspect/report/snapshot/content/console/network/network_detail/network_har/screenshot/status 支持）；省略 target = 已 attach 的外部页面。' +
       '交互范式：先 snapshot 拿 ref 编号，操作按 ref 引用（不要手写 CSS selector）；操作自带等待与反馈；敏感目标每次单独确认。' +
       'attach 用 targetId（来自 browser(targets) 的 CDP target id）。' +
       'connect 连接用户已启动的浏览器实例（端口由用户提供，或先 discover 选择），操作其真实数据；kill 只断开不杀该进程。' +
@@ -243,6 +243,7 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       console: 'browser_console',
       network: 'browser_network',
       network_detail: 'browser_network_detail',
+      network_har: 'browser_network_har',
       screenshot: 'browser_screenshot',
       audit: 'browser_audit',
       click: 'browser_click',
@@ -340,6 +341,7 @@ export function collectHiddenToolNames(): string[] {
     'browser_console',
     'browser_network',
     'browser_network_detail',
+    'browser_network_har',
     'browser_screenshot',
     'browser_audit',
     'browser_click',

@@ -32,6 +32,13 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 
+mod probes;
+mod transport;
+use probes::{probe_result_str, CONTENT_PROBE, INSPECT_PROBE, REPORT_PROBE, SNAPSHOT_PROBE};
+use transport::{
+    http_close_tab, http_new_tab, list_targets_raw, ws_command, ws_command_batch,
+};
+
 // ═══════════════════════════════════════════════════════════
 // 常量
 // ═══════════════════════════════════════════════════════════
@@ -43,9 +50,6 @@ const WEBVIEW_DEBUG_PORT: u16 = 9222;
 /// 受控 Chrome 默认端口起点，占用则向后探测（避开 9222）。
 const DEFAULT_PORT_BASE: u16 = 9223;
 const PORT_PROBE_LIMIT: u16 = 16;
-
-/// WS 命令全链路超时——connect/发送/等待响应任一步卡住都在此上限内返回错误。
-const WS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Runtime.evaluate 的 CDP 层超时（毫秒）——表达式死循环在此上限内被打断。
 const EVAL_TIMEOUT_MS: u64 = 5000;
@@ -209,6 +213,86 @@ impl NetworkEntry {
             "error": self.error,
         })
     }
+
+    /// 转成 HAR 1.2 entry。observer 没有保存 timing，所以 timings 置 -1；
+    /// 请求/响应头、queryString、postData、状态与 mimeType 均保留真实内容。
+    fn har_entry(&self) -> Value {
+        let url = self.url.as_deref().unwrap_or("");
+        let started = self
+            .wall_time
+            .and_then(|secs| {
+                let whole = secs.trunc() as i64;
+                let nanos = ((secs.fract().abs()) * 1_000_000_000.0) as u32;
+                let nanos = nanos.min(999_999_999);
+                chrono::DateTime::from_timestamp(whole, nanos)
+            })
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
+        let mut request = json!({
+            "method": self.method,
+            "url": url,
+            "httpVersion": "",
+            "headers": har_headers(&self.request_headers),
+            "queryString": har_query_string(url),
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": -1,
+        });
+        if let Some(post_data) = &self.post_data {
+            request["postData"] = json!({ "mimeType": "text/plain", "text": post_data });
+        }
+        let mut response = json!({
+            "status": self.status.unwrap_or(0),
+            "statusText": self.status_text,
+            "httpVersion": "",
+            "headers": har_headers(&self.response_headers),
+            "cookies": [],
+            "content": { "size": 0, "mimeType": self.mime_type },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1,
+        });
+        if let Some(error) = &self.error {
+            response["_error"] = json!(error);
+        }
+        json!({
+            "startedDateTime": started,
+            "time": 0,
+            "request": request,
+            "response": response,
+            "cache": {},
+            "timings": { "send": -1, "wait": -1, "receive": -1 },
+            "connection": self.request_id,
+        })
+    }
+}
+
+/// CDP headers 对象 → HAR `[{name,value}]`。值为非字符串时按 JSON 序列化。
+fn har_headers(headers: &Option<Value>) -> Vec<Value> {
+    headers
+        .as_ref()
+        .and_then(|v| v.as_object())
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| {
+                    json!({
+                        "name": k,
+                        "value": v.as_str().map(String::from).unwrap_or_else(|| v.to_string()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn har_query_string(url: &str) -> Vec<Value> {
+    url::Url::parse(url)
+        .map(|u| {
+            u.query_pairs()
+                .map(|(k, v)| json!({ "name": k, "value": v }))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// 页面事件环形缓冲——事件 task 写入，查询动作读取。
@@ -606,6 +690,76 @@ fn session_mut(agent_id: Option<&str>) -> std::sync::MutexGuard<'static, HashMap
 /// 审计日志 — 内存环形 + 落盘（临时目录 jsonl）。
 static AUDIT: LazyLock<Mutex<VecDeque<String>>> = LazyLock::new(|| Mutex::new(VecDeque::new()));
 
+/// 审计落盘文件名前缀。按日期轮转：hologram-browser-audit-YYYYMMDD.jsonl。
+const AUDIT_FILE_PREFIX: &str = "hologram-browser-audit";
+/// 截图目录/文件名前缀。
+const SHOT_DIR_NAME: &str = "hologram-browser-shots";
+const SHOT_FILE_PREFIX: &str = "shot-";
+/// HAR 导出目录/文件名前缀。
+const HAR_DIR_NAME: &str = "hologram-browser-har";
+const HAR_FILE_PREFIX: &str = "hologram-";
+
+/// 保留天数读取：`HOLOGRAM_BROWSER_AUDIT_RETAIN_DAYS` / `HOLOGRAM_BROWSER_SHOT_RETAIN_DAYS`
+/// 可覆盖，最小 1 天。测试与真实运行共享临时目录——清理只看本套件前缀。
+fn audit_retain_days() -> u64 {
+    std::env::var("HOLOGRAM_BROWSER_AUDIT_RETAIN_DAYS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&d| d >= 1)
+        .unwrap_or(7)
+}
+
+fn shot_retain_days() -> u64 {
+    std::env::var("HOLOGRAM_BROWSER_SHOT_RETAIN_DAYS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&d| d >= 1)
+        .unwrap_or(7)
+}
+
+fn har_retain_days() -> u64 {
+    std::env::var("HOLOGRAM_BROWSER_HAR_RETAIN_DAYS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&d| d >= 1)
+        .unwrap_or(7)
+}
+
+fn is_expired_file_time(modified: std::time::SystemTime, now: std::time::SystemTime, retain_days: u64) -> bool {
+    now.duration_since(modified)
+        .map(|age| age.as_secs() > retain_days.saturating_mul(24 * 60 * 60))
+        .unwrap_or(false)
+}
+
+/// 清理目录中指定前缀、按修改时间早于保留窗口的文件。失败静默（清理是尽力而为）。
+fn cleanup_old_files_by_age(dir: &std::path::Path, prefix: &str, retain_days: u64, now: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(prefix) {
+            continue;
+        }
+        let expired = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|modified| is_expired_file_time(modified, now, retain_days))
+            .unwrap_or(false);
+        if expired {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+fn audit_file_path() -> std::path::PathBuf {
+    let day = chrono::Local::now().format("%Y%m%d").to_string();
+    std::env::temp_dir().join(format!("{AUDIT_FILE_PREFIX}-{day}.jsonl"))
+}
+
 fn audit_log(agent_id: Option<&str>, action: &str, target: &str, summary: &str) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -626,9 +780,15 @@ fn audit_log(agent_id: Option<&str>, action: &str, target: &str, summary: &str) 
         }
         buf.push_back(entry.clone());
     }
-    // 落盘：临时目录 jsonl，跨会话可查。失败静默（审计是尽力而为）。
+    // 落盘：按日期轮转 jsonl，只保留最近 N 天。失败静默（审计是尽力而为）。
+    cleanup_old_files_by_age(
+        &std::env::temp_dir(),
+        AUDIT_FILE_PREFIX,
+        audit_retain_days(),
+        std::time::SystemTime::now(),
+    );
     use std::io::Write;
-    let path = std::env::temp_dir().join("hologram-browser-audit.jsonl");
+    let path = audit_file_path();
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{entry}");
     }
@@ -663,7 +823,72 @@ pub(crate) fn cdp_audit(agent: Option<&str>, limit: Option<usize>) -> String {
 // Chrome 启动
 // ═══════════════════════════════════════════════════════════
 
-/// 查找 Chrome 可执行文件（Windows 常见路径 + 环境变量覆盖）。
+/// 当前平台的 Chrome/Edge 固定安装路径候选。HOLOGRAM_CHROME 始终优先。
+fn chrome_candidate_paths() -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        for c in [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        ] {
+            out.push(std::path::PathBuf::from(c));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        for c in [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ] {
+            out.push(std::path::PathBuf::from(c));
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for c in [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/microsoft-edge",
+            "/usr/bin/microsoft-edge-stable",
+            "/opt/google/chrome/chrome",
+            "/opt/microsoft/msedge/msedge",
+            "/snap/bin/chromium",
+        ] {
+            out.push(std::path::PathBuf::from(c));
+        }
+    }
+    // 固定路径之外的兜底：从 PATH 找常见可执行名（Flatpak/自建安装/Nix 等）。
+    for name in [
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        "microsoft-edge",
+        "microsoft-edge-stable",
+        "msedge",
+    ] {
+        if let Some(p) = find_executable_on_path(name) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+fn find_executable_on_path(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(name))
+            .find(|p| p.is_file())
+    })
+}
+
+/// 查找 Chrome 可执行文件（各平台固定路径 + PATH 兜底 + 环境变量覆盖）。
 fn find_chrome() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("HOLOGRAM_CHROME") {
         let p = std::path::PathBuf::from(p);
@@ -671,19 +896,7 @@ fn find_chrome() -> Option<std::path::PathBuf> {
             return Some(p);
         }
     }
-    let candidates = [
-        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-        "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-        "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    ];
-    for c in candidates {
-        let p = std::path::PathBuf::from(c);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+    chrome_candidate_paths().into_iter().find(|p| p.exists())
 }
 
 /// 等待调试端口就绪（launch 后 Chrome 需要几百 ms 启动）。
@@ -978,27 +1191,7 @@ pub(crate) fn cdp_close_tab(target_id: &str, agent_id: Option<&str>) -> Result<S
 /// 用户无需知道端口号，从清单里选即可。
 /// 自家 webview（9222）被过滤——那是 self 只读通道，不是可连接实例。
 pub(crate) fn cdp_discover() -> Result<String, String> {
-    // PowerShell 查所有进程命令行里的 --remote-debugging-port=<port>。
-    // 不限定进程名：Electron 应用进程名各异，端口参数是唯一可靠特征。
-    let script = r#"
-$ErrorActionPreference='SilentlyContinue'
-Get-CimInstance Win32_Process | ForEach-Object {
-  if ($_.CommandLine -match '--remote-debugging-port=(\d+)') {
-    "{0}|{1}|{2}" -f $_.Name, $Matches[1], $_.ProcessId
-  }
-}"#;
-    let mut ps = std::process::Command::new("powershell");
-    ps.args(["-NoProfile", "-Command", script]);
-    // 静默后台运行：不弹 PowerShell 窗口（discover 每次调用都会闪控制台）
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        ps.creation_flags(crate::utils::NO_WINDOW);
-    }
-    let out = ps.output()
-        .map_err(|e| format!("discover: 查询进程表失败: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout);
-
+    let text = query_process_debug_ports()?;
     // 同端口多进程（Chrome 主进程 + 各渲染进程共享一个调试端口）去重。
     // 启动器进程（bash/cmd/powershell）命令行也含端口参数——若已有条目
     // 名字是启动器而新名字更可信，替换显示名。
@@ -1009,22 +1202,14 @@ Get-CimInstance Win32_Process | ForEach-Object {
 
     let mut seen: Vec<u16> = Vec::new();
     let mut instances: Vec<Value> = Vec::new();
-    for line in text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
-        let parts: Vec<&str> = line.split('|').collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let port: u16 = match parts[1].trim().parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
+    for (name, port) in parse_discover_process_lines(&text) {
         if port == 0 || port == WEBVIEW_DEBUG_PORT {
             continue;
         }
         if let Some(idx) = seen.iter().position(|&p| p == port) {
             let old = instances[idx]["browser"].as_str().unwrap_or("");
-            if is_launcher(old) && !is_launcher(parts[0]) {
-                instances[idx]["browser"] = json!(parts[0]);
+            if is_launcher(old) && !is_launcher(&name) {
+                instances[idx]["browser"] = json!(name);
             }
             continue;
         }
@@ -1048,7 +1233,7 @@ Get-CimInstance Win32_Process | ForEach-Object {
             })
             .unwrap_or_default();
         instances.push(json!({
-            "browser": parts[0],
+            "browser": name,
             "port": port,
             "pages": pages,
         }));
@@ -1064,68 +1249,78 @@ Get-CimInstance Win32_Process | ForEach-Object {
     }
 }
 
+/// 查进程表命令行中的 `--remote-debugging-port=<port>`。
+/// Windows 走 PowerShell（Electron 进程名各异，命令行是唯一可靠特征）；
+/// macOS/Linux 走 `ps -ax -o pid=,comm=,args=`。
+fn query_process_debug_ports() -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        let script = r#"
+$ErrorActionPreference='SilentlyContinue'
+Get-CimInstance Win32_Process | ForEach-Object {
+  if ($_.CommandLine -match '--remote-debugging-port=(\d+)') {
+    "{0}|{1}|{2}" -f $_.Name, $Matches[1], $_.ProcessId
+  }
+}"#;
+        let mut ps = std::process::Command::new("powershell");
+        ps.args(["-NoProfile", "-Command", script]);
+        // 静默后台运行：不弹 PowerShell 窗口（discover 每次调用都会闪控制台）
+        use std::os::windows::process::CommandExt;
+        ps.creation_flags(crate::utils::NO_WINDOW);
+        let out = ps
+            .output()
+            .map_err(|e| format!("discover: 查询进程表失败: {e}"))?;
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+    #[cfg(not(windows))]
+    {
+        let out = std::process::Command::new("ps")
+            .args(["-ax", "-o", "pid=,comm=,args="])
+            .output()
+            .map_err(|e| format!("discover: ps 查询进程表失败: {e}"))?;
+        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    }
+}
+
+/// 解析 discover 输出为 (进程名, 调试端口)：
+///   - PowerShell 行：`chrome|9333|1234`
+///   - ps 行：`  123 chrome --remote-debugging-port=9333 ...`
+fn parse_discover_process_lines(text: &str) -> Vec<(String, u16)> {
+    static PS_LINE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^\s*(\d+)\s+(\S+)\s+(.*)$").expect("ps 行格式正则")
+    });
+    let mut out: Vec<(String, u16)> = Vec::new();
+    for line in text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+        if line.contains('|') {
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() >= 2 {
+                if let Ok(port) = parts[1].trim().parse::<u16>() {
+                    out.push((parts[0].trim().to_string(), port));
+                }
+            }
+            continue;
+        }
+        if let Some(caps) = PS_LINE_RE.captures(line) {
+            let args = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            if let Some(port) = extract_debug_port_from_args(args) {
+                let name = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
+                out.push((name, port));
+            }
+        }
+    }
+    out
+}
+
+fn extract_debug_port_from_args(args: &str) -> Option<u16> {
+    args.split_whitespace().find_map(|tok| {
+        tok.strip_prefix("--remote-debugging-port=")
+            .and_then(|p| p.parse::<u16>().ok())
+    })
+}
+
 // ═══════════════════════════════════════════════════════════
 // target 发现与 attach
 // ═══════════════════════════════════════════════════════════
-
-/// Chrome 调试 HTTP 端点：/json/new 用 PUT，返回 target JSON。
-fn http_new_tab(port: u16, url: &str) -> Result<Value, String> {
-    let query = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("url", url)
-        .finish();
-    let endpoint = format!("http://127.0.0.1:{port}/json/new?{query}");
-    let agent = ureq::Agent::new_with_config(
-        ureq::config::Config::builder()
-            .timeout_per_call(Some(Duration::from_secs(5)))
-            .build(),
-    );
-    let resp = agent
-        .put(&endpoint)
-        .send_empty()
-        .map_err(|e| format!("CDP /json/new 请求失败: {e}"))?;
-    let mut body = resp.into_body();
-    let text = body
-        .read_to_string()
-        .map_err(|e| format!("CDP /json/new 读取失败: {e}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("CDP /json/new 解析失败: {e}"))
-}
-
-/// Chrome 调试 HTTP 端点：/json/close/{targetId}，返回纯文本（非 JSON）。
-fn http_close_tab(port: u16, target_id: &str) -> Result<(), String> {
-    let endpoint = format!("http://127.0.0.1:{port}/json/close/{target_id}");
-    let agent = ureq::Agent::new_with_config(
-        ureq::config::Config::builder()
-            .timeout_per_call(Some(Duration::from_secs(5)))
-            .build(),
-    );
-    let resp = agent
-        .get(&endpoint)
-        .call()
-        .map_err(|e| format!("CDP /json/close 请求失败: {e}"))?;
-    if resp.status() != 200 {
-        return Err(format!("CDP /json/close 返回 HTTP {}", resp.status()));
-    }
-    Ok(())
-}
-
-/// GET http://127.0.0.1:port/json — 列出所有 target（原始 JSON）。
-fn list_targets_raw(port: u16) -> Result<Value, String> {
-    let url = format!("http://127.0.0.1:{port}/json");
-    let agent = ureq::Agent::new_with_config(
-        ureq::config::Config::builder()
-            .timeout_per_call(Some(Duration::from_secs(2)))
-            .build(),
-    );
-    let resp = agent
-        .get(&url)
-        .call()
-        .map_err(|e| format!("CDP /json 请求失败: {e}"))?;
-    let mut body = resp.into_body();
-    let text = body
-        .read_to_string()
-        .map_err(|e| format!("CDP /json 读取失败: {e}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("CDP /json 解析失败: {e}"))
-}
 
 /// 列出所有页面 target（type=page），返回 [{id, title, url}]。
 pub(crate) fn cdp_targets(agent_id: Option<&str>) -> Result<String, String> {
@@ -1282,116 +1477,6 @@ fn require_target(agent_id: Option<&str>) -> Result<(u16, String), String> {
     Ok((sess.port, tid))
 }
 
-/// 通过 CDP WebSocket 发送一条命令，返回响应 JSON（含 result）。
-async fn ws_command(port: u16, target_id: &str, method: &str, params: Value) -> Result<Value, String> {
-    let fut = async {
-        let raw = list_targets_raw(port)?;
-        let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
-        let ws_url = arr
-            .iter()
-            .find(|t| t["id"].as_str() == Some(target_id))
-            .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
-            .ok_or_else(|| format!("target {target_id} 已消失（页面可能被关闭）"))?;
-
-        let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
-            .await
-            .map_err(|e| format!("CDP WS 连接失败: {e}"))?;
-
-        let id: u64 = 1;
-        let msg = json!({ "id": id, "method": method, "params": params }).to_string();
-        ws.send(Message::text(msg))
-            .await
-            .map_err(|e| format!("CDP WS 发送失败: {e}"))?;
-
-        loop {
-            let reply = ws
-                .next()
-                .await
-                .ok_or("CDP WS 连接关闭")?
-                .map_err(|e| format!("CDP WS 接收失败: {e}"))?;
-            match reply {
-                Message::Text(t) => {
-                    let v: Value = serde_json::from_str(&t).map_err(|e| format!("CDP 响应解析失败: {e}"))?;
-                    if v["id"].as_u64() == Some(id) {
-                        let _ = ws.close(None).await;
-                        if let Some(err) = v["error"].as_object() {
-                            return Err(format!(
-                                "CDP {} 错误: {}",
-                                method,
-                                err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown")
-                            ));
-                        }
-                        return Ok(v);
-                    }
-                }
-                _ => {}
-            }
-        }
-    };
-    tokio::time::timeout(WS_TIMEOUT, fut)
-        .await
-        .map_err(|_| format!("CDP {method} 超时（{WS_TIMEOUT:?} 无响应）——页面主线程可能卡死"))?
-}
-
-/// 在一条 WS 连接上批量发送命令并收集全部响应。
-/// AX snapshot 需要给每个 backendNodeId 依次 resolveNode + callFunctionOn；
-/// 逐条走 ws_command 会反复建连，80 个节点就是 160 次握手。这里一次建连、
-/// 顺序发完、再按 id 收集，把 AX 路径的固定开销压到单次 WS 往返。
-async fn ws_command_batch(
-    port: u16,
-    target_id: &str,
-    commands: Vec<(u64, String, Value)>,
-) -> Result<HashMap<u64, Value>, String> {
-    let expected = commands.len();
-    if expected == 0 {
-        return Ok(HashMap::new());
-    }
-    let fut = async {
-        let raw = list_targets_raw(port)?;
-        let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
-        let ws_url = arr
-            .iter()
-            .find(|t| t["id"].as_str() == Some(target_id))
-            .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
-            .ok_or_else(|| format!("target {target_id} 已消失（页面可能被关闭）"))?;
-
-        let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
-            .await
-            .map_err(|e| format!("CDP WS 连接失败: {e}"))?;
-        for (id, method, params) in &commands {
-            let msg = json!({ "id": id, "method": method, "params": params }).to_string();
-            ws.send(Message::text(msg))
-                .await
-                .map_err(|e| format!("CDP WS 批量发送失败: {e}"))?;
-        }
-
-        let mut replies: HashMap<u64, Value> = HashMap::new();
-        while replies.len() < expected {
-            let reply = ws
-                .next()
-                .await
-                .ok_or("CDP WS 连接关闭")?
-                .map_err(|e| format!("CDP WS 接收失败: {e}"))?;
-            match reply {
-                Message::Text(t) => {
-                    let v: Value = serde_json::from_str(&t).map_err(|e| format!("CDP 响应解析失败: {e}"))?;
-                    if let Some(id) = v["id"].as_u64() {
-                        if commands.iter().any(|(cid, _, _)| *cid == id) {
-                            replies.insert(id, v);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        let _ = ws.close(None).await;
-        Ok::<HashMap<u64, Value>, String>(replies)
-    };
-    tokio::time::timeout(WS_TIMEOUT, fut)
-        .await
-        .map_err(|_| "CDP 批量命令超时——页面主线程可能卡死".to_string())?
-}
-
 /// 在 target 内执行 JS 表达式，返回 result.value（JSON 字符串或值）。
 async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Result<Value, String> {
     if is_self(agent_id) {
@@ -1428,30 +1513,6 @@ async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Result<Value, S
         return Err(format!("页面内 JS 错误: {text} {desc}"));
     }
     Ok(resp["result"]["result"]["value"].clone())
-}
-
-// ═══════════════════════════════════════════════════════════
-// 探针 JS — 独立文件，include_str! 嵌入（单一来源，ADR 0003 D4/D7）
-// 语法由底部 #[cfg(test)] probes_are_valid_javascript 用 node --check 强制验证。
-// ═══════════════════════════════════════════════════════════
-
-const CONTENT_PROBE: &str = include_str!("cdp/probes/content.js");
-const INSPECT_PROBE: &str = include_str!("cdp/probes/inspect.js");
-const REPORT_PROBE: &str = include_str!("cdp/probes/report.js");
-const SNAPSHOT_PROBE: &str = include_str!("cdp/probes/snapshot.js");
-
-/// 解析探针 evaluate 返回值，统一兑现「probe 返回 stringify 字符串」的契约
-/// （ADR 0003 D7：probe 用 JSON.stringify 包裹 + returnByValue 取字符串）。
-/// 违反契约（如误返回对象 / 被二次序列化）时返回明确错误，而非静默落到空结果
-/// ——空快照会掩盖"探针根本没跑出东西"这条线索（曾因 JSON.stringify 形态错乱
-/// 在 world_snapshot 静默失效，e1679a0f 修复；这里把同类契约显式锁死）。
-fn probe_result_str(val: &Value, label: &str) -> Result<String, String> {
-    val.as_str().map(|s| s.to_string()).ok_or_else(|| {
-        format!(
-            "{label}: 探针返回形态异常（期望 stringify 字符串，实际 {:?}）——             页面上下文可能被销毁，或返回契约被破坏",
-            if val.is_object() { "对象" } else { "非字符串" }
-        )
-    })
 }
 
 pub(crate) async fn cdp_inspect(
@@ -1873,6 +1934,58 @@ pub(crate) fn cdp_network_detail(request_id: &str, agent_id: Option<&str>) -> Re
             )
         })?;
     Ok(json!({ "entry": entry.detail_value() }).to_string())
+}
+
+/// 导出当前观察缓冲为 HAR 1.2 文件（HAR 后续落地为文件导出而非内联大 JSON）。
+/// 返回 {path, bytes, entries, note}；读文件可用 fs(read) 或直接给用户路径。
+pub(crate) fn cdp_network_har(agent_id: Option<&str>, limit: Option<usize>) -> Result<String, String> {
+    let Some(obs) = ensure_observer(agent_id) else {
+        return Err("network_har: 未 attach target（先 browser(attach) 后事件才会被观察）".into());
+    };
+    let bufs = crate::utils::lock_or_recover(&obs.buffers);
+    let n = limit
+        .unwrap_or(100)
+        .clamp(1, NETWORK_BUF_MAX)
+        .min(bufs.network.len());
+    let entries: Vec<Value> = bufs
+        .network
+        .iter()
+        .rev()
+        .take(n)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|e| e.har_entry())
+        .collect();
+    let har = json!({
+        "log": {
+            "version": "1.2",
+            "creator": { "name": "HoloGram browser-cdp", "version": env!("CARGO_PKG_VERSION") },
+            "entries": entries,
+        }
+    });
+
+    let dir = std::env::temp_dir().join(HAR_DIR_NAME);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建 HAR 目录失败: {e}"))?;
+    cleanup_old_files_by_age(&dir, HAR_FILE_PREFIX, har_retain_days(), std::time::SystemTime::now());
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = dir.join(format!("{HAR_FILE_PREFIX}{ts}.har"));
+    let bytes = serde_json::to_vec(&har).map_err(|e| format!("HAR 序列化失败: {e}"))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("写 HAR 文件失败: {e}"))?;
+    Ok(json!({
+        "path": path.to_string_lossy(),
+        "bytes": bytes.len(),
+        "entries": entries_count(&har),
+        "note": "HAR 1.2 文件已导出；包含 URL/请求响应头/queryString/postData/status/mimeType，timing 因观察通道未采样记为 -1",
+    })
+    .to_string())
+}
+
+fn entries_count(har: &Value) -> usize {
+    har["log"]["entries"].as_array().map(|a| a.len()).unwrap_or(0)
 }
 
 /// 查询 javascript dialog 事件（最新 N 条）+ 当前是否有未处理 dialog。
@@ -2664,8 +2777,9 @@ pub(crate) async fn cdp_screenshot(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data)
         .map_err(|e| format!("截图 base64 解码失败: {e}"))?;
-    let dir = std::env::temp_dir().join("hologram-browser-shots");
+    let dir = std::env::temp_dir().join(SHOT_DIR_NAME);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建截图目录失败: {e}"))?;
+    cleanup_old_files_by_age(&dir, SHOT_FILE_PREFIX, shot_retain_days(), std::time::SystemTime::now());
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -2829,6 +2943,32 @@ mod tests {
         assert_valid_js(INSPECT_PROBE, "inspect");
         assert_valid_js(REPORT_PROBE, "report");
         assert_valid_js(SNAPSHOT_PROBE, "snapshot");
+    }
+
+    #[test]
+    fn chrome_candidate_paths_cover_current_platform() {
+        let paths = chrome_candidate_paths();
+        assert!(!paths.is_empty(), "每个平台都应有 Chrome/Edge 候选路径");
+        #[cfg(target_os = "windows")]
+        assert!(paths.iter().any(|p| p.to_string_lossy().ends_with("chrome.exe")));
+        #[cfg(target_os = "macos")]
+        assert!(paths.iter().any(|p| p.to_string_lossy().contains("Google Chrome.app")));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert!(paths.iter().any(|p| p.to_string_lossy().contains("google-chrome")));
+    }
+
+    #[test]
+    fn discover_parser_handles_powershell_and_ps_formats() {
+        let text = "chrome|9333|1234
+bash|9222|99
+  456 chromium --remote-debugging-port=9444 --user-data-dir=/tmp/x
+";
+        let found = parse_discover_process_lines(text);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0], ("chrome".to_string(), 9333));
+        assert_eq!(found[1], ("chromium".to_string(), 9444));
+        assert_eq!(extract_debug_port_from_args("--remote-debugging-port=9447 --flag"), Some(9447));
+        assert_eq!(extract_debug_port_from_args("--remote-debugging-port 9447"), None, "Chrome 使用 = 形态");
     }
 
     #[test]
@@ -3074,6 +3214,45 @@ mod tests {
         assert!(ax_node_from_value(&no_backend).is_none(), "没有 backendDOMNodeId 无法回写 ref");
     }
 
+    /// 第四批 HAR 导出的纯函数部分：不依赖 observer/Chrome 即可锁定
+    /// entry 形状（queryString、headers、postData、状态、error 均不丢）。
+    #[test]
+    fn network_entry_har_shape_keeps_observable_fields() {
+        let entry = NetworkEntry {
+            request_id: "r1".into(),
+            method: "GET".into(),
+            url: Some("https://example.com/p?q=1&x=a b".into()),
+            status: Some(200),
+            status_text: Some("OK".into()),
+            mime_type: Some("application/json".into()),
+            resource_type: Some("XHR".into()),
+            wall_time: Some(1_700_000_000.5),
+            request_headers: Some(serde_json::json!({ "accept": "*/*" })),
+            response_headers: Some(serde_json::json!({ "content-type": "application/json" })),
+            post_data: Some("{\"a\":1}".into()),
+            error: None,
+            ..NetworkEntry::default()
+        };
+        let har = entry.har_entry();
+        assert_eq!(har["request"]["method"], "GET");
+        assert_eq!(har["request"]["url"], "https://example.com/p?q=1&x=a b");
+        assert_eq!(har["request"]["queryString"][0]["name"], "q");
+        assert_eq!(har["request"]["postData"]["text"], "{\"a\":1}");
+        assert_eq!(har["response"]["status"], 200);
+        assert_eq!(har["response"]["content"]["mimeType"], "application/json");
+        assert_eq!(har["response"]["headers"][0]["name"], "content-type");
+        assert!(!har["startedDateTime"].as_str().unwrap_or("").is_empty());
+        assert_eq!(har["connection"], "r1");
+
+        let failed = NetworkEntry {
+            request_id: "r2".into(),
+            url: Some("https://example.com/fail".into()),
+            error: Some("net::ERR_FAILED".into()),
+            ..NetworkEntry::default()
+        };
+        assert_eq!(failed.har_entry()["response"]["_error"], "net::ERR_FAILED");
+    }
+
     /// 第三批 launch 参数：windowSize 非法值在找 Chrome 之前就被拒绝。
     #[tokio::test]
     async fn launch_rejects_invalid_window_size_before_cdp() {
@@ -3207,6 +3386,40 @@ mod tests {
             assert!(!sessions.contains_key(key), "租约到期会话应被移除");
         }
         assert!(!dir.exists(), "profile 目录应随会话回收一并删除");
+    }
+
+    /// 第四批轮转清理：按修改时间淘汰前缀文件。用 File::set_times 把
+    /// 文件 mtime 拨回过去，验证「保留窗口内不动、窗口外删除」。
+    #[test]
+    fn cleanup_old_files_by_age_removes_expired_prefix_only() {
+        let dir = std::env::temp_dir().join(format!("hologram-cleanup-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("创建清理测试目录");
+        let now = std::time::SystemTime::now();
+        let old_path = dir.join("hologram-browser-audit-20200101.jsonl");
+        let fresh_path = dir.join("hologram-browser-audit-20260815.jsonl");
+        let other_path = dir.join("keep-me.txt");
+        for path in [&old_path, &fresh_path, &other_path] {
+            let f = std::fs::File::create(path).expect("创建测试文件");
+            let modified = if path == &old_path {
+                now - std::time::Duration::from_secs(8 * 24 * 60 * 60)
+            } else {
+                now
+            };
+            let times = std::fs::FileTimes::new().set_modified(modified);
+            f.set_times(times).expect("设置 mtime");
+        }
+        cleanup_old_files_by_age(&dir, "hologram-browser-audit-", 7, now);
+        assert!(!old_path.exists(), "过期审计文件应被删除");
+        assert!(fresh_path.exists(), "窗口内文件应保留");
+        assert!(other_path.exists(), "非本套件前缀文件不得误删");
+        assert!(
+            !is_expired_file_time(now - std::time::Duration::from_secs(6 * 24 * 60 * 60), now, 7)
+        );
+        assert!(
+            is_expired_file_time(now - std::time::Duration::from_secs(8 * 24 * 60 * 60), now, 7)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 审计回放（遗留项实测的代码侧）：写入 → 查询可见，内存环形路径闭环。

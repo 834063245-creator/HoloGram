@@ -377,10 +377,10 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（32 个命令）
+        // CDP 浏览器控制（33 个命令）
         // 权限：所有 browser_* 分支统一经过 check_browser_permission（BrowserTool）。
         //       launch/kill/attach/connect/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
-        //       inspect/report/targets/snapshot/content/console/network/network_detail/
+        //       inspect/report/targets/snapshot/content/console/network/network_detail/network_har/
 //       screenshot/audit/status/wait
         //       只读放行；navigate/back/forward/reload/click/hover/type/select/upload/
         //       dialog/press/scroll/new_tab/close_tab 依赖 attach 时已获批准的 target，
@@ -521,6 +521,12 @@ pub(crate) async fn rpc(
             check_browser_permission("network_detail", agent_id.as_deref(), &state, &app).await?;
             let request_id = req_str(&params, "request_id", "browser_network_detail")?;
             crate::cdp::cdp_network_detail(&request_id, agent_id.as_deref())
+        }
+        "browser_network_har" => {
+            let agent_id = self_or_agent(&params);
+            check_browser_permission("network_har", agent_id.as_deref(), &state, &app).await?;
+            let limit = opt_usize(&params, "limit");
+            crate::cdp::cdp_network_har(agent_id.as_deref(), limit)
         }
         "browser_screenshot" => {
             let agent_id = self_or_agent(&params);

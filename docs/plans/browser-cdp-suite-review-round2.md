@@ -1,7 +1,7 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）已提交，两个提交**尚未 push**；第三批（network 配对/详情 + AX snapshot + launch headless/windowSize）已提交（`2c8376a`），当前工作树 clean
-> 下一接手窗口任务：当前无 Windows 真机环境——以 Linux 可跑测试（§8.3 注记）作为本批保障；将来有 Windows 环境时补跑 E2E-1/2/3/4（重点 E2E-4），再进入 **第四批**（跨平台 + cdp.rs 拆分 + 审计/截图轮转 + eval 隔离 world）
+> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）+ 第三批（`2c8376a`）+ 第三批标记文档（`5ec03b8`）已提交，均未 push；**第四批第一批已落地**（跨平台 discover/chrome 查找 + 审计/截图/HAR 轮转 + HAR 导出 + cdp 拆出 transport/probes），cdp 的 session/actions 拆分与 eval 隔离 world 仍在第四批剩余项
+> 下一接手窗口任务：继续 **第四批剩余项**——`cdp.rs` 的 session/actions 继续拆分、`Emulation.setDeviceMetricsOverride`、eval 隔离 world（可选）；将来有 Windows 环境时补跑 E2E-1/2/3/4
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
 > `src-ui/src/agent/tools/browser.ts`、`src-tauri/src/cdp/probes/*.js`、`src-tauri/src/cdp/e2e.rs`
@@ -158,11 +158,20 @@
 - 无 Chrome 环境的行为保障：新增 `src-ui/tests/browser-snapshot-probe.test.ts`（jsdom）实测回退探针的可访问名称、label[for]/aria-labelledby、iframe + shadow DOM 遍历、ref 回写与 scope 错误；`npx tsc --noEmit` 通过；vitest（browser-tools/domains-convergence/define-tool/browser-snapshot-probe）53/53。
 - 未做（按计划留到第四批/后续）：HAR 导出、`Emulation.setDeviceMetricsOverride`、跨平台 find_chrome/discover、cdp.rs 拆分、审计/截图轮转清理。
 
+**第四批第一批（2026-08-15）**
+
+- 跨平台：`find_chrome` 补 macOS/Linux 固定路径 + `PATH` 兜底（Windows 路径保留）；`cdp_discover` 非 Windows 走 `ps -ax -o pid=,comm=,args=`，PowerShell 与 ps 两种输出统一进 `parse_discover_process_lines`。
+- 轮转清理：审计 jsonl 改为按日文件（`hologram-browser-audit-YYYYMMDD.jsonl`），截图目录与 HAR 目录按前缀 + mtime 清理，保留天数可经 `HOLOGRAM_BROWSER_*_RETAIN_DAYS` 覆盖（默认 7 天）。
+- HAR 导出：新增 `browser_network_har(limit)` —— 观察缓冲导出 HAR 1.2 文件（URL/queryString/请求响应头/postData/status/mimeType；timing 因观察通道未采样记 -1）。第三批遗留的「HAR 导出」至此关闭。
+- 模块拆分（部分）：新增 `src-tauri/src/cdp/transport.rs`（HTTP `/json` + 命令 WS/批量 WS）与 `src-tauri/src/cdp/probes.rs`（探针常量 + 返回值契约）；`cdp.rs` 仍承担 session/actions，下一窗口继续拆。
+- 测试：新增跨平台路径候选、discover 解析、过期文件清理、HAR entry 形状单测；`cargo check --tests` 通过。前端 `npx tsc --noEmit` 通过，vitest 53/53。
+- 未做：`cdp.rs` session/actions 拆分、`Emulation.setDeviceMetricsOverride`、eval 隔离 world（可选）。
+
 ### 4.2 后续批次（含本轮补入的原“未排批次”项）
 
 - **第二批（日常任务断点）**：✅ 已落地 —— dialog + upload + hover + 组合键 + 截图 inline/fullPage + tab 管理（new/close；切换复用 attach）。
-- **第三批（观察与调试）**：✅ 已落地（`2c8376a`）—— network requestId 配对 + `browser_network_detail` + AX snapshot（失败回退增强探针）+ launch headless/windowSize。HAR 导出与 `Emulation.setDeviceMetricsOverride` 留第四批/后续。
-- **第四批（平台与工程债）**：跨平台 + cdp.rs 拆分 + 审计/截图轮转清理 + eval 隔离 world（可选）。
+- **第三批（观察与调试）**：✅ 已落地（`2c8376a`）—— network requestId 配对 + `browser_network_detail` + AX snapshot（失败回退增强探针）+ launch headless/windowSize。HAR 导出已在第四批第一批关闭；`Emulation.setDeviceMetricsOverride` 仍在第四批剩余项。
+- **第四批（平台与工程债）**：🔄 部分落地 —— 跨平台 + 审计/截图/HAR 轮转 + HAR 导出 + transport/probes 拆分已完成；剩余 session/actions 拆分、`Emulation.setDeviceMetricsOverride`、eval 隔离 world（可选）。
 - **第五批（身份与多账号）**：cookie 管理 + profile 配置 + proxy + 多账号会话隔离/切换。
 
 ## 5. 基线命令（新窗口改代码前跑，留底）
@@ -202,18 +211,16 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 
 ### 8.1 当前事实
 
-- HEAD：`fec19fe feat(browser-cdp): add dialog, upload, shortcuts and tab management`
-- 前序提交：`e0b9086`（第一批）、`c3a0628`（计划原始文档，origin/main）
-- 工作树：clean；第三批已提交（`2c8376a`），连同前两个提交（`e0b9086`、`fec19fe`）均未 push。当前无 Windows 真机：本批保障已用 Linux 可跑测试（`cargo test cdp::` + 全量 cargo test 失败数基线 + jsdom 探针测试 + `cargo check --tests`）完成。
-- 已实现能力：launch/connect/discover/targets/attach、navigate/back/forward/reload、snapshot(AX 优先 + iframe/shadow/accessible-name 回退)/content/inspect/report/console/network(按 requestId 配对)/network_detail/screenshot(fullPage,inline)/audit/status/wait、click/hover/type(replace)/select/upload/dialog/press(modifiers)/scroll/eval、new_tab/close_tab；launch 支持 headless/windowSize。
-- 本机验证（Linux）：`cargo test cdp::` 22/22（4 个 Chrome e2e 自动跳过）；`npx tsc --noEmit` 通过；vitest 50/50。全量 `cargo test` 第三批后重跑为 265 passed / 8 failed（+3 全部为本批 cdp 新测试；8 个失败仍是 bwrap/tasklist/%USERPROFILE%/worktree 路径历史基线，失败数未从 8 变多）。
+- HEAD：`5ec03b8`（第三批标记文档）；前序提交 `e0b9086`/`d9d0ae0`/`fec19fe`/`2c8376a`/`5ec03b8` 均未 push。当前工作树为第四批第一批改动。
+- 已实现能力：launch/connect/discover/targets/attach、navigate/back/forward/reload、snapshot(AX 优先 + iframe/shadow/accessible-name 回退)/content/inspect/report/console/network(按 requestId 配对)/network_detail/network_har(HAR 1.2 文件导出)/screenshot(fullPage,inline)/audit/status/wait、click/hover/type(replace)/select/upload/dialog/press(modifiers)/scroll/eval、new_tab/close_tab；launch 支持 headless/windowSize。`find_chrome` 与 `cdp_discover` 跨平台。
+- 本机验证（Linux）：`cargo check --tests` 通过；`npx tsc --noEmit` 通过；vitest 53/53。`cargo test cdp::` 与全量 `cargo test` 因当前机器内存压力暂不能重新链接，已有基线为 265 passed / 8 failed（8 个历史环境失败）。
 
 ### 8.2 开局清单
 
 1. `git fetch` / `git pull` 到 `fec19fe`（或让用户 push 后拉取）。
-2. 当前条件：无 Windows 真机。可跑保障 = `cargo test cdp::`、全量 `cargo test`（确认仍是 8 个历史失败）、`npx vitest run tests/browser-snapshot-probe.test.ts`、`cargo check --tests`；E2E-1/2/3/4 自动跳过是已知未验证项，不是失败。
+2. 当前条件：无 Windows 真机。可跑保障 = `cargo check --tests`、`npx tsc --noEmit`、vitest（browser-tools/domains-convergence/define-tool/browser-snapshot-probe）；内存充足时补 `cargo test cdp::` 与全量 `cargo test`（确认仍是 8 个历史失败）。E2E-1/2/3/4 自动跳过是已知未验证项，不是失败。
 3. 将来有 Windows 环境时：`cd src-tauri && cargo test cdp:: -- --nocapture` 实跑 E2E-1/2/3/4；重点看 E2E-4 的 headless/windowSize、network 配对/详情、AX snapshot，失败输出贴回。
-4. 第四批不因「未跑 Windows e2e」硬阻塞；但开第四批前应把该风险连同本机测试结果一起记录。
+4. 第四批第一批已完成；继续剩余项（session/actions 拆分、`Emulation.setDeviceMetricsOverride`、eval 隔离 world 可选）前，先跑第 2 条。
 
 ### 8.3 第三批任务（✅ 已落地，`2c8376a`）
 
@@ -224,14 +231,14 @@ Linux 环境已知 8 个历史失败（bwrap / tasklist / %USERPROFILE% / worktr
 
 ### 8.4 后续批次
 
-- 第四批：跨平台（`find_chrome` 补 macOS/Linux 路径，`cdp_discover` 非 Windows 走 `ps`）、`cdp.rs` 拆分、审计 jsonl/截图目录轮转清理、eval 隔离 world（可选）。
+- 第四批剩余：`cdp.rs` 继续拆 `session.rs` / `actions.rs`（transport/probes 已拆）、`Emulation.setDeviceMetricsOverride`、eval 隔离 world（可选）。
 - 第五批：cookie 管理、profile 配置、proxy、多账号会话隔离/切换。
 
 ### 8.5 踩坑速记（务必读）
 
 - **不要跑 `cargo fmt --all`**：会把全仓库历史未格式化文件一起刷掉，diff 爆炸；只对当前改动文件做 `rustfmt --check` 或保持现有风格。
 - `cargo check/test` 可能把 `src-tauri/Cargo.lock` 的 hologram 版本从 10.0.1 改成 10.1.0；提交前 `git checkout -- src-tauri/Cargo.lock`。
-- `find_chrome` 当前只有 Windows 路径；Linux 没有 Chrome 时 e2e 设计为跳过，不是测试挂了。
+- `find_chrome` 现在有各平台固定路径 + PATH 兜底；Linux 没有 Chrome 时 e2e 设计为跳过，不是测试挂了。
 - e2e 端口：9444 外部实例、9445 launch、9446 round2、9447 round3（headless/network/AX）；新增 e2e 端口避开 9222/9223-9238 和这四个。
 - `Page.setInterceptFileChooserDialog` 只在非 self 会话开启，self（9222）是只读通道，不要把文件选择框拦截加回 self。
 - 新增工具 schema 的 key 用 camelCase，Rust 参数用 snake_case；`bridge.rpc` 是唯一转换枢纽，不要手写 schema 绕过 `defineTool`。
