@@ -1,0 +1,909 @@
+{
+  "_source": "hologram-engine get_graph (TCP) on D:/HoloGramHG/engine/fixtures/test_project",
+  "nodes": [
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py._cache_lookup",
+      "name": "_cache_lookup",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:27",
+      "community_id": 21
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.result",
+      "name": "result",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/main.py:11",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "name": "process",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/worker.py:5",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result",
+      "name": "save_result",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/main.py:18",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.getCached",
+      "name": "getCached",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/helper.js:5",
+      "community_id": 19
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource",
+      "name": "loadResource",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/helper.js:13",
+      "community_id": 19
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host",
+      "name": "self.host",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:8",
+      "community_id": 22
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._format",
+      "name": "_format",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/worker.py:17",
+      "community_id": 23
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "name": "D:/HoloGramHG/engine/fixtures/test_project/db.py",
+      "type": "file",
+      "kind": "file",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py",
+      "community_id": 21
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data",
+      "name": "data",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/main.py:10",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "name": "execute_query",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:21",
+      "community_id": 21
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process.raw",
+      "name": "raw",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/worker.py:7",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection",
+      "name": "PooledConnection",
+      "type": "class",
+      "kind": "class",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:11",
+      "community_id": 24
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.setCached",
+      "name": "setCached",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/helper.js:9",
+      "community_id": 19
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_pool",
+      "name": "_connection_pool",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:3",
+      "community_id": 21
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js",
+      "name": "D:/HoloGramHG/engine/fixtures/test_project/helper.js",
+      "type": "file",
+      "kind": "file",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/helper.js",
+      "community_id": 19
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db._connection_count",
+      "name": "_connection_count",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:18",
+      "community_id": 22
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process._connection_pool",
+      "name": "_connection_pool",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/worker.py:6",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py",
+      "name": "D:/HoloGramHG/engine/fixtures/test_project/worker.py",
+      "type": "file",
+      "kind": "file",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/worker.py",
+      "community_id": 23
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_count",
+      "name": "_connection_count",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:4",
+      "community_id": 21
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config",
+      "name": "Config",
+      "type": "class",
+      "kind": "class",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:6",
+      "community_id": 24
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query",
+      "name": "_do_query",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:30",
+      "community_id": 21
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query.result",
+      "name": "result",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:22",
+      "community_id": 21
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.port",
+      "name": "self.port",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:9",
+      "community_id": 22
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "name": "_transform",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/worker.py:10",
+      "community_id": 23
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.transform",
+      "name": "transform",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/helper.js:23",
+      "community_id": 19
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__.self.pool_size",
+      "name": "self.pool_size",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:14",
+      "community_id": 25
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py._app_config",
+      "name": "_app_config",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/main.py:6",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "name": "connect_db",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:16",
+      "community_id": 22
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "name": "D:/HoloGramHG/engine/fixtures/test_project/main.py",
+      "type": "file",
+      "kind": "file",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/main.py",
+      "community_id": 20
+    },
+    {
+      "id": "di_syn_D:_HoloGramHG_engine_fixtures_test_project_helper_js_<cross-lang:http:fetch>",
+      "name": "<cross-lang:http:fetch>",
+      "type": "symbol",
+      "kind": "symbol",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/helper.js:18",
+      "community_id": 19
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__",
+      "name": "__init__",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:12",
+      "community_id": 25
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__",
+      "name": "__init__",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/db.py:7",
+      "community_id": 22
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.fetch_remote",
+      "name": "fetch_remote",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/main.py:14",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform.results",
+      "name": "results",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/worker.py:11",
+      "community_id": 23
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "name": "main",
+      "type": "function",
+      "kind": "function",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/main.py:8",
+      "community_id": 20
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db",
+      "name": "db",
+      "type": "variable",
+      "kind": "variable",
+      "location": "D:/HoloGramHG/engine/fixtures/test_project/main.py:9",
+      "community_id": 20
+    }
+  ],
+  "edges": [
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js::D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.worker.py.process.raw::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process.raw",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource::di_syn_D:_HoloGramHG_engine_fixtures_test_project_helper_js_<cross-lang:http:fetch>::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource",
+      "target": "di_syn_D:_HoloGramHG_engine_fixtures_test_project_helper_js_<cross-lang:http:fetch>",
+      "type": "calls",
+      "coupling_depth": 4
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py::D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.port::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.port",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_pool::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_pool",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py::D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.main.py._app_config::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py._app_config",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__::D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__.self.pool_size::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__.self.pool_size",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::D:.HoloGramHG.engine.fixtures.test_project.db.py._cache_lookup::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._cache_lookup",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource::D:.HoloGramHG.engine.fixtures.test_project.helper.js.setCached::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.setCached",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_pool::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_pool",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform::D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform.results::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform.results",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_count::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_count",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform::D:.HoloGramHG.engine.fixtures.test_project.worker.py._format::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._format",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_count::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_count",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.worker.py::imports",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py",
+      "type": "imports",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.result::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.result",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.main.py.main::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.main.py._app_config::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py._app_config",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform::D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform.results::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform.results",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py::D:.HoloGramHG.engine.fixtures.test_project.worker.py._format::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._format",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py._cache_lookup::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._cache_lookup",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js::D:.HoloGramHG.engine.fixtures.test_project.helper.js.transform::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.transform",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.fetch_remote::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.fetch_remote",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.fetch_remote::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.fetch_remote",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_pool::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_pool",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.save_result",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.data",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection::D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.main.py.fetch_remote::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.fetch_remote",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py._app_config::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py._app_config",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db::D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db._connection_count::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db._connection_count",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform::D:.HoloGramHG.engine.fixtures.test_project.worker.py.process.raw::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process.raw",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db::D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db._connection_count::writes",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db._connection_count",
+      "type": "writes",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js::D:.HoloGramHG.engine.fixtures.test_project.helper.js.getCached::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.getCached",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__::D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__.self.pool_size::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection.__init__.self.pool_size",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource::D:.HoloGramHG.engine.fixtures.test_project.helper.js.getCached::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.getCached",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.port::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.port",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.worker.py.process._connection_pool::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process._connection_pool",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.port::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.port",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.worker.py.process.raw::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process.raw",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db::imports",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db",
+      "type": "imports",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource::D:.HoloGramHG.engine.fixtures.test_project.helper.js.getCached::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.getCached",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js::D:.HoloGramHG.engine.fixtures.test_project.helper.js.setCached::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.setCached",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query.result::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query.result",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config::inherits",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config",
+      "type": "inherits",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query::D:.HoloGramHG.engine.fixtures.test_project.db.py._cache_lookup::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.execute_query",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._cache_lookup",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource::D:.HoloGramHG.engine.fixtures.test_project.helper.js.setCached::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.loadResource",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.helper.js.setCached",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__::D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.Config.__init__.self.host",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db::imports",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db",
+      "type": "imports",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query::D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py._do_query",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main.db",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db::D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_count::usage",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py.connect_db",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py._connection_count",
+      "type": "usage",
+      "coupling_depth": 3
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.db.py::D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection::defines",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.db.py",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.db.py.PooledConnection",
+      "type": "defines",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform::D:.HoloGramHG.engine.fixtures.test_project.worker.py._format::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._transform",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py._format",
+      "type": "calls",
+      "coupling_depth": 1
+    },
+    {
+      "id": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main::D:.HoloGramHG.engine.fixtures.test_project.worker.py.process::calls",
+      "source": "D:.HoloGramHG.engine.fixtures.test_project.main.py.main",
+      "target": "D:.HoloGramHG.engine.fixtures.test_project.worker.py.process",
+      "type": "calls",
+      "coupling_depth": 1
+    }
+  ],
+  "meta": {
+    "generator": "HoloGram engine TCP export",
+    "fixture": "D:/HoloGramHG/engine/fixtures/test_project"
+  }
+}

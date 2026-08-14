@@ -1,0 +1,52 @@
+{
+  "name": "hologram-dsh",
+  "description": "HoloGram code-dependency graph engine + 3D viewer, packaged as a DeepSeek Harness bundle plugin.",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "lib/index.mjs",
+  "exports": {
+    ".": {
+      "default": "./lib/index.mjs"
+    },
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.mjs",
+    "lib/client.js",
+    "lib/client.js.map",
+    "viewer/dist/index.html",
+    "viewer/dist/assets",
+    "cordis.patch.yml",
+    "bin/hologram-engine.exe",
+    "bin/onnxruntime.dll"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-web-react"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "pack:bin": "node scripts/pack-bin.mjs",
+    "build:client": "tsdown --config tsdown.client.config.ts"
+  }
+}

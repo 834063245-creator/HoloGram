@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HoloGram · 深空星图 (DSH viewer)</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #030812; overflow: hidden; }
+      #app { position: fixed; inset: 0; }
+      .hud {
+        position: fixed; top: 12px; left: 14px; z-index: 10;
+        color: #9fd8ff; font: 12px/1.5 ui-monospace, monospace;
+        background: rgba(3,8,18,.55); border: 1px solid rgba(159,216,255,.18);
+        border-radius: 8px; padding: 8px 12px; pointer-events: none;
+      }
+      .hud b { color: #7df9ff; }
+      .galaxy-label {
+        position: absolute; pointer-events: none;
+        color: rgba(180,230,255,.75); font: 11px ui-monospace, monospace;
+        text-shadow: 0 0 8px rgba(80,160,255,.6); white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="hud" id="hud">…loading</div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

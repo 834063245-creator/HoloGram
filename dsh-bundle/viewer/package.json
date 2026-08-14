@@ -1,0 +1,13 @@
+{
+  "name": "hologram-dsh-viewer",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "HoloGram 深空星图 — DSH web 独立 3D 查看器（阶段2）。复用 HoloGram src-ui 渲染内核。",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }
+}

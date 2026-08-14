@@ -1,0 +1,36 @@
+# hologram-dsh — HoloGram as a DeepSeek Harness bundle.
+#
+# Phase 1: wire the HoloGram engine as an MCP server so its 33 code-graph
+# analysis tools become available to the DSH agent under the `hologram__*`
+# namespace.
+#
+# The `hologram-engine` row is this bundle's node-half glue plugin. It
+# resolves the bundled engine binary path (an install-time fact of THIS
+# package, not user config) and provides the `hologramEngine` service. The
+# `hologram-mcp` row injects that service so its `!!js` config expressions
+# can reference the resolved binary — the same service-injection pattern the
+# dsh-web-app bundle uses for `webStartup`/`webRuntime`.
+#
+# This layer is designed to be ADDITIVE over dsh-base (or dsh-base +
+# dsh-web-app): it only inserts rows and never touches existing row ids.
+
+- insert:
+    # Node-half glue plugin: resolves the shipped engine binary and the
+    # analysis project root.
+    - id: hologram-engine
+      name: 'hologram-dsh'
+
+    # Connect the HoloGram engine over stdio MCP. `failOnStartupError: false`
+    # keeps the DSH tree alive (with a reconnect loop) even if the engine
+    # binary is missing or fails to start — a transient engine is never allowed
+    # to take the whole harness down.
+    - id: hologram-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      inject: [hologramEngine]
+      config:
+        transport: stdio
+        serverName: hologram
+        command: !!js ctx.hologramEngine.bin
+        args: !!js ctx.hologramEngine.serveArgs
+        env: !!js Object.assign({}, ctx.hologramEngine.env)
+        failOnStartupError: false
