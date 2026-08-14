@@ -1,6 +1,6 @@
 {
-  "name": "hologram-dsh",
-  "description": "HoloGram code-dependency graph engine + 3D viewer, packaged as a DeepSeek Harness bundle plugin.",
+  "name": "@a834063245/hologram-dsh",
+  "description": "HoloGram code-dependency graph engine + 3D viewer, packaged as a DeepSeek Harness bundle plugin. Engine binary is fetched from GitHub Releases on install (Windows x64).",
   "version": "0.1.0",
   "type": "module",
   "main": "lib/index.mjs",
@@ -19,10 +19,30 @@
     "viewer/dist/index.html",
     "viewer/dist/assets",
     "cordis.patch.yml",
-    "bin/hologram-engine.exe",
-    "bin/onnxruntime.dll"
+    "scripts/install.mjs",
+    "README.md"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/834063245-creator/HoloGram.git",
+    "directory": "dsh-bundle"
+  },
+  "keywords": [
+    "hologram",
+    "deepseek-harness",
+    "dsh",
+    "code-graph",
+    "mcp",
+    "3d",
+    "dependency-graph"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -46,7 +66,8 @@
   },
   "scripts": {
     "build": "tsdown",
+    "build:client": "tsdown --config tsdown.client.config.ts",
     "pack:bin": "node scripts/pack-bin.mjs",
-    "build:client": "tsdown --config tsdown.client.config.ts"
+    "install": "node scripts/install.mjs"
   }
 }

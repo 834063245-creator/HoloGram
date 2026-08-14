@@ -77,6 +77,38 @@ jobs:
             ${{ matrix.artifact }}.tar.gz
             ${{ matrix.artifact }}.zip
 
+  dsh-bundle:
+    # hologram-dsh npm 包的引擎二进制附件（路线 A：Windows x64 先行）
+    # npm 包的 postinstall 从 GitHub Release 下载：hologram-engine-win32-x64.exe
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      RUSTC_WRAPPER: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Build engine (release)
+        run: cargo build --release
+        working-directory: engine
+
+      - name: Stage engine binary for dsh-bundle
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp engine/target/release/hologram-engine.exe staging/hologram-engine-win32-x64.exe
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            staging/hologram-engine-win32-x64.exe
+
   desktop:
     runs-on: windows-latest
     timeout-minutes: 30

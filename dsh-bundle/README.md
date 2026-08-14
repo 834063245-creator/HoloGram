@@ -88,19 +88,26 @@ node --import tsx/esm apps/cli/src/bin.ts --profile hologram-test --dump-config
     projectRoot: D:/some/project
 ```
 
-## 发布形态（三选一）
+## 安装（用户侧）
 
-| 方式 | 命令 | 适用 |
-|------|------|------|
-| 本地 `file:` | `dsh plugin add file:../dsh-bundle` | 自己/CI 测试，零发布 |
-| git | `dsh plugin add git+https://…` | 分发但不发 npm；pnpm 需放行 build 脚本 |
-| npm | `dsh plugin add hologram-dsh` | 最顺滑；需 npm 账号、包名全局唯一 |
+```sh
+# 需要 DeepSeek Harness 的 dsh CLI
+dsh plugin --profile web add @a834063245/hologram-dsh
+dsh web
+```
 
-本包设计已按可发布形态写：`@deepseek-ai/*` 走 `peerDependencies`（共享 DSH 安装实例，
-避免重复 cordis），`bin/` 里的引擎二进制随包分发。
+postinstall 会自动从 GitHub Releases 下载对应平台的引擎二进制（Windows x64 先行）。
+重启后：34 个 mcp__hologram__* 工具 + 侧边栏「3D 星图」。
 
-## 阶段 2（待做）：3D 图谱内嵌 DSH Web
+> 平台矩阵：路线 A 目前仅 Windows x64。Linux/macOS 支持在路上。
+> 引擎分析的项目根默认取 DSH 进程的 cwd，可在 profile 的 cordis.patch.yml 里覆盖
+> hologram-engine 行的 config.projectRoot。
 
-在 DSH 的 web GUI 渲染 `src-ui` 的 Three.js 星图。方向：把 3D 面板做成 DSH 的
-client-plugin（`dsh.client` 行的 browser 插件），从引擎 MCP 拉图数据实时渲染。
-依赖本阶段已验证的地基。
+## 发布流程（维护者）
+
+1. 本地构建：`cd engine && cargo build --release` → `cd dsh-bundle && npm run build && npm run build:client` → viewer `vite build`
+2. 打 tag `v<version>` 并 push → GitHub Actions 构建引擎二进制并传到 Release
+3. `npm publish`（壳包 ~200KB，postinstall 从 Release 下载二进制）
+
+npm 包：`@a834063245/hologram-dsh`（公开）
+二进制：GitHub Release 附件 `hologram-engine-win32-x64.exe`
