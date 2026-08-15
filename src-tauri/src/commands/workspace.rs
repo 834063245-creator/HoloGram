@@ -16,6 +16,21 @@ pub(crate) async fn workspace_activate(
     let handle = crate::workspace::WorkspaceHandle::new(&path);
     handle.activate(&crate::utils::project_root());
 
+    // 孤儿 worktree 收养（2026-08-15 收口）：isolation 注册表是内存态，
+    // 重启后 .hologram/worktrees/ 里未合并的 worktree 会变成无法
+    // diff/merge/discard 的死账。启动时扫描并重建记录，前端再把它
+    // 重挂到新主 Agent 的 TaskBoard，agent_merge 即恢复可用。
+    let adopted = crate::agent_isolation::AgentIsolation::scan_orphan_worktrees(std::path::Path::new(&path));
+    for (slug, wt_path) in &adopted {
+        match crate::agent_isolation::AgentIsolation::adopt_worktree(std::path::Path::new(&path), wt_path) {
+            Ok(iso) => handle.permission_ctx.set_isolation(slug, iso),
+            Err(e) => eprintln!("[isolation] 孤儿 worktree 收养失败 {slug}: {e}"),
+        }
+    }
+    if !adopted.is_empty() {
+        eprintln!("[isolation] 收养 {} 个重启前遗留的孤儿 worktree", adopted.len());
+    }
+
     *crate::utils::lock_or_recover(&state) = Some(handle);
     Ok(())
 }

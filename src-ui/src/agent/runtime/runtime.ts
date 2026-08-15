@@ -294,6 +294,68 @@ export class AgentRuntime implements RuntimePort {
     // 更新会话映射 — 子 Agent 经 _agentSessions.get(parentId) 继承正确会话，
     // _disposeAgent 据此清理正确会话的 board
     this._agentSessions.set(agentId, sessionId);
+    // 重启收养：根 Agent 绑定会话板后，认领上次进程遗留的条目与 worktree
+    // （子 Agent 完成时父已退出 → 旧父 id 死账；Rust isolation 注册表内存态
+    // → 磁盘 worktree 死账。两侧都收养后 agent_merge 恢复可用。）
+    const handle = this.agents.get(agentId);
+    if (handle && handle.parentId === null) {
+      void tb.restore().then(() => this._adoptRestartOrphans(agentId, tb));
+    }
+  }
+
+  /** 重启收养：重挂旧父 id 条目 + 注册磁盘孤儿 worktree（best-effort，不阻塞会话）。
+   *  Rust 侧已在 workspace_activate 重建 isolation 注册表，这里把状态接回
+   *  TaskBoard 使 agent_board / agent_merge 恢复可见可用。 */
+  private async _adoptRestartOrphans(rootAgentId: string, tb: TaskBoard): Promise<void> {
+    try {
+      let adopted = 0;
+      // 1. 旧父 id 条目重挂（父进程已消亡，条目还挂在死 id 上）
+      const liveIds = new Set(this.agents.keys());
+      for (const entry of tb.getAllEntries()) {
+        if (entry.parentAgentId === rootAgentId || liveIds.has(entry.parentAgentId)) continue;
+        tb.reparent(entry.agentId, rootAgentId);
+        adopted++;
+      }
+      // 2. 磁盘孤儿 worktree（Rust 已收养、board 无记录）→ 注册为可合并条目
+      const statusText = await agentInvoke<string>('agent_isolation_status', {});
+      const status = JSON.parse(statusText) as {
+        isolations?: Array<{ agent_id: string; worktree_exists: boolean }>;
+      };
+      const known = new Set(
+        tb.getAllEntries().map((e) => e.isolationId).filter((v): v is string => !!v),
+      );
+      for (const iso of status.isolations ?? []) {
+        if (!iso.worktree_exists || known.has(iso.agent_id)) continue;
+        tb.register({
+          agentId: iso.agent_id,
+          parentAgentId: rootAgentId,
+          description: '重启前遗留的子 Agent worktree（启动收养，可直接 agent_merge 或丢弃）',
+          isolationId: iso.agent_id,
+        });
+        tb.complete(
+          iso.agent_id,
+          '重启收养的孤儿 worktree — 变更未经本轮验证，合并前请先 agent_isolation_diff 审阅',
+          '',
+        );
+        adopted++;
+      }
+      if (adopted > 0) {
+        console.warn(`[AgentRuntime] 收养 ${adopted} 个重启前遗留的子 Agent 条目到 ${rootAgentId}`);
+        // 通知模型上下文（bus），不只发 console — 收养结果必须可见
+        try {
+          this._bus.send({
+            from: 'system',
+            to: rootAgentId,
+            type: 'status',
+            payload: `已收养 ${adopted} 个重启前遗留的子 Agent 条目（agent_board 可见；completed 条目可直接 agent_merge）`,
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
+    } catch {
+      // best-effort — 收养失败不阻塞会话启动
+    }
   }
 
   /** 启动恢复 — 在 createAgent() 之前完成。
@@ -319,21 +381,30 @@ export class AgentRuntime implements RuntimePort {
       await defaultDB.restore();
       this._restoredSessions.add('default');
 
-      // 4. 孤儿检测：找 status === 'running' 的条目 — 这些是崩溃时还在跑的子 agent
+      // 4. 孤儿检测：status === 'running' 的条目是崩溃时还在跑的子 agent。
+      //    进程已死 → 标记 stopped；worktree 不销毁 — 先抓 diff 保全到 board
+      //    （TTL 清理纪律：不销毁无记录的工作），抓不到则保留现场。
       const orphans = defaultTB.getAllEntries().filter((e) => e.status === 'running');
       for (const orphan of orphans) {
         defaultTB.stop(orphan.agentId);
-        // 清理 worktree
         if (orphan.isolationId) {
           try {
             await enqueueIsolationOp(async () => {
-              await agentInvoke<string>('agent_isolation_discard', { agent_id: orphan.isolationId! }).catch(() => {});
+              const diffText = await agentInvoke<string>('agent_isolation_diff', { agent_id: orphan.isolationId! }).catch(() => '');
+              if (diffText) {
+                try {
+                  const parsed = JSON.parse(diffText) as { has_changes?: boolean; diff?: string };
+                  if (parsed.has_changes && parsed.diff) defaultTB.attachDiff(orphan.agentId, parsed.diff);
+                } catch {
+                  defaultTB.attachDiff(orphan.agentId, diffText);
+                }
+              }
             });
           } catch {
-            /* best-effort */
+            /* best-effort — Rust 注册表可能尚未收养（workspace_activate 顺序），保留现场即可 */
           }
         }
-        console.warn(`[AgentRuntime] 检测到孤儿 agent: ${orphan.agentId}, 已标记为 stopped`);
+        console.warn(`[AgentRuntime] 检测到孤儿 agent: ${orphan.agentId}, 已标记 stopped（worktree 保留，diff 已尽力保全）`);
       }
 
       // 5. 刷新持久化（把 stop 状态写回）

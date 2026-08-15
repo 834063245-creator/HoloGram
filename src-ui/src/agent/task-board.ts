@@ -204,6 +204,23 @@ export class TaskBoard {
     this._scheduleFlush();
   }
 
+  /** 重启收养：把条目重挂到新父 Agent（旧父 id 已随进程消亡） */
+  reparent(agentId: string, newParentAgentId: string): void {
+    const entry = this.entries.get(agentId);
+    if (!entry) return;
+    entry.parentAgentId = newParentAgentId;
+    this._scheduleFlush();
+  }
+
+  /** 重启收养：给 stopped 条目保全 diff — TTL 清理纪律：不销毁无记录的工作 */
+  attachDiff(agentId: string, diff: string): void {
+    const entry = this.entries.get(agentId);
+    if (!entry) return;
+    entry.diff = diff;
+    this._scheduleFlush();
+    void this.flush(); // 关键保全 — 立即落盘
+  }
+
   /** 父 Agent 查询全部子 Agent 状态 */
   getChildren(parentAgentId: string): BoardEntry[] {
     return Array.from(this.entries.values()).filter((e) => e.parentAgentId === parentAgentId);
@@ -268,6 +285,12 @@ export class TaskBoardProxy {
   }
   touch(agentId: string): void {
     this._target.touch(agentId);
+  }
+  reparent(agentId: string, newParentAgentId: string): void {
+    this._target.reparent(agentId, newParentAgentId);
+  }
+  attachDiff(agentId: string, diff: string): void {
+    this._target.attachDiff(agentId, diff);
   }
   unregister(agentId: string): void {
     this._target.unregister(agentId);

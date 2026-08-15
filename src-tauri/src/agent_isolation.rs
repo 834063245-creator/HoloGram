@@ -102,6 +102,74 @@ impl AgentIsolation {
         })
     }
 
+    /// 收养重启前遗留的 worktree：从磁盘重建隔离记录。
+    /// isolation 注册表是内存态，重启后为空 — 磁盘上未合并的 worktree
+    /// 若不收养，diff/merge/discard 全部报「没有活跃的隔离环境」变死账。
+    /// `original_head` 通过祖先回溯解析（见 find_base_commit）：不能拿
+    /// 当前 HEAD 冒充 — 子 Agent 在 worktree 里已提交的 commit 会随
+    /// worktree 删除静默丢失。
+    pub fn adopt_worktree(main_repo_path: &Path, worktree_path: &Path) -> Result<Self, String> {
+        let head = git_rev_parse(worktree_path, "HEAD")?;
+        let base = find_base_commit(main_repo_path, worktree_path, &head)?;
+        Ok(Self {
+            kind: IsolationKind::Worktree,
+            worktree_path: Some(worktree_path.to_path_buf()),
+            original_head: base,
+            main_repo_path: main_repo_path.to_path_buf(),
+        })
+    }
+
+    /// 扫描 `.hologram/worktrees/` 下仍注册在 git 中的孤儿 worktree。
+    /// 返回 (slug, worktree 绝对路径)。只认 git worktree list 里的真实
+    /// 注册项，不收养垃圾目录。
+    pub(crate) fn scan_orphan_worktrees(main_repo_path: &Path) -> Vec<(String, PathBuf)> {
+        let wt_root = main_repo_path.join(".hologram").join("worktrees");
+        let Ok(dir_entries) = std::fs::read_dir(&wt_root) else {
+            return Vec::new();
+        };
+        let slugs: Vec<String> = dir_entries
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|s| s.starts_with("agent-") || s.starts_with("subagent-"))
+            .collect();
+        if slugs.is_empty() {
+            return Vec::new();
+        }
+
+        let Ok(output) = git_cmd()
+            .args(["-C", &normalize(main_repo_path), "worktree", "list", "--porcelain"])
+            .output()
+        else {
+            return Vec::new();
+        };
+        if !output.status.success() {
+            return Vec::new();
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut out = Vec::new();
+        for line in stdout.lines() {
+            let Some(p) = line.strip_prefix("worktree ") else {
+                continue;
+            };
+            let path = PathBuf::from(p);
+            // 路径父目录必须就是 .hologram/worktrees（防主 worktree 或外部目录误收养）
+            let parent_ok = path
+                .parent()
+                .map(|par| normalize(par) == normalize(&wt_root))
+                .unwrap_or(false);
+            if !parent_ok {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if slugs.iter().any(|s| s == name) {
+                    out.push((name.to_string(), path));
+                }
+            }
+        }
+        out
+    }
+
     /// 反向映射：worktree 物理路径 → 主仓库逻辑路径。
     /// 用于权限规则匹配，使用户规则如 `Edit("src/**")` 能匹配
     /// worktree 路径如 `.hologram/worktrees/agent-abc/src/main.rs` (spec §5.6)。
@@ -311,6 +379,34 @@ impl AgentIsolation {
 }
 
 // ── 辅助函数 ──────────────────────────────────────────────────────
+
+/// 沿 worktree HEAD 祖先链找到第一个是主仓 HEAD 祖先的 commit（worktree 的诞生基）。
+/// 上限 512 代；找不到则回退主仓当前 HEAD（尽力而为 — 极端历史重写下
+/// merge_to_main 的 range cherry-pick 会退回单 commit 路径）。
+/// 判定用 `merge-base --is-ancestor` 而非 `cat-file -e`：worktree 与主仓
+/// 共享对象库，对象存在 ≠ 主仓可达 — 拿「存在但不可达」的孤儿 commit
+/// 当基，cherry-pick 范围会包含已被主仓视为陌生的提交。
+fn find_base_commit(main_repo_path: &Path, worktree_path: &Path, wt_head: &str) -> Result<String, String> {
+    let revs = run_git(worktree_path, &["rev-list", "--max-count=512", wt_head])?;
+    for sha in revs.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let is_ancestor = git_cmd()
+            .args([
+                "-C",
+                &normalize(main_repo_path),
+                "merge-base",
+                "--is-ancestor",
+                sha,
+                "HEAD",
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if is_ancestor {
+            return Ok(sha.to_string());
+        }
+    }
+    git_rev_parse(main_repo_path, "HEAD")
+}
 
 /// 验证 agent id slug — 防止路径穿越 (spec §5.5)。
 fn validate_agent_id(id: &str) -> Result<(), String> {
@@ -785,6 +881,60 @@ mod tests {
     fn wt_git(wt: &Path, args: &[&str]) {
         let st = git_cmd().args(["-C"]).arg(wt).args(args).status().unwrap();
         assert!(st.success(), "git {:?} failed", args);
+    }
+
+    /// 收养回归：重启后 scan 只认 git 注册的真实 worktree（垃圾目录跳过），
+    /// adopt 回溯出真正的诞生基 commit — 子 Agent 已提交的 commit 不得随
+    /// merge 静默丢失。
+    #[test]
+    fn test_scan_and_adopt_orphan_worktree() {
+        let tmp = setup_repo("hologram_test_adopt_orphan");
+        let iso = AgentIsolation::create_worktree(&tmp, "agent-orphan-1").expect("worktree create");
+        let wt = iso.worktree_path.as_ref().unwrap().clone();
+        let base_head = iso.original_head.clone();
+
+        // 模拟崩溃现场：worktree 里有已提交的变更
+        std::fs::write(wt.join("orphan.txt"), "orphan-work").unwrap();
+        wt_git(&wt, &["add", "-A"]);
+        wt_git(&wt, &["commit", "-m", "orphan commit", "--quiet"]);
+
+        // 垃圾目录（非 git worktree）不得被收养
+        let junk = tmp.join(".hologram/worktrees/agent-junk-x");
+        std::fs::create_dir_all(&junk).unwrap();
+        std::fs::write(junk.join("noise.txt"), "noise").unwrap();
+
+        let orphans = AgentIsolation::scan_orphan_worktrees(&tmp);
+        assert_eq!(orphans.len(), 1, "只收养真实注册的 worktree: {orphans:?}");
+        assert_eq!(orphans[0].0, "agent-orphan-1");
+
+        // adopt 重建记录：original_head 必须回溯到诞生基，而非当前 HEAD
+        let adopted =
+            AgentIsolation::adopt_worktree(&tmp, &orphans[0].1).expect("adopt should succeed");
+        assert_eq!(
+            adopted.original_head, base_head,
+            "original_head 必须回溯到 worktree 诞生基，否则已提交 commit 会丢失"
+        );
+
+        // 收养后可正常 merge — 已提交的变更必须落地主仓
+        let result = adopted.merge_to_main().expect("adopted merge should succeed");
+        assert!(result.starts_with("已合并变更 ("), "前缀必须保持: {result}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("orphan.txt")).unwrap(),
+            "orphan-work",
+            "重启收养后 merge 不得丢失子 Agent 已提交的变更"
+        );
+        assert!(!wt.exists(), "merge 成功后 worktree 应被清理");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 无 worktree 时 scan 返回空 — 启动路径不得报错。
+    #[test]
+    fn test_scan_orphan_worktrees_empty() {
+        let tmp = setup_repo("hologram_test_adopt_empty");
+        let orphans = AgentIsolation::scan_orphan_worktrees(&tmp);
+        assert!(orphans.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// 回归：多 commit worktree 必须合并 original_head..HEAD 全部 commit。
