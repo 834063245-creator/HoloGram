@@ -106,15 +106,16 @@ mod tests {
         let got = arena.intern_with_handle(&s, h);
         assert_eq!(got, h);
         assert_eq!(arena.get(h), s);
-        // 稀疏空洞为 ""(h = 当前水位 + 10 万,前后槽在并发下不会被触碰)
-        assert_eq!(arena.get(h - 1), "");
-        assert_eq!(arena.get(h + 1), "");
         // 幂等:已驻留字符串返回现有句柄
         assert_eq!(arena.intern_with_handle(&s, h + 1), h);
         // 后续普通驻留不受稀疏槽影响
         let h2 = arena.intern("after-sparse");
         assert_eq!(arena.get(h2), "after-sparse");
         assert_eq!(arena.get_handle("after-sparse"), Some(h2));
+        // 注意：不断言 h±1 槽为空 —— 全局驻留器跨测试共享，
+        // 并发的 intern 可以填满「读取水位 + 偏移」之间的任何槽位
+        // （引擎测试 test_cancel_token_stops_pipeline 单测即可驻留
+        // 约 10 万字符串，水位假设在并行下不成立）。
     }
 
     #[test]

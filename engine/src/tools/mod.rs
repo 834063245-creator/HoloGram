@@ -391,6 +391,7 @@ pub(crate) fn edge_to_value(e: &Edge) -> Value {
         "cross_file": e.cross_file,
         "temporal_delay_sec": e.temporal_delay_sec,
         "metadata": e.metadata,
+        "lsp_resolved": e.lsp_resolved,
     })
 }
 

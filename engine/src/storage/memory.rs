@@ -107,6 +107,10 @@ pub struct MemoryIndex {
     has_aux_indexes: bool,
     /// 合成边索引: (source_handle, target_handle) — 结构工具遍历时跳过
     synthesized_edges: HashSet<(u32, u32)>,
+    /// LSP 解析边覆盖层（P1-2）：(source, target, kind) → 已由真实 LSP 解析。
+    /// 不进入 CSR 热路径 —— 由 mark_lsp_resolved 写入，随 bulk/snapshot
+    /// 持久化，from_existing_graph 从 Graph 边的 lsp_resolved 标志重建。
+    lsp_resolved_edges: HashSet<(String, String, EdgeKind)>,
     /// FTS 索引是否与内存图脱节（需要惰性重建）。
     /// 不进快照 —— 快照反序列化后恒置 true。
     /// 语义：from_sqlite → false（fts 随 bulk 重建过）；
@@ -458,6 +462,7 @@ impl MemoryIndex {
             edge_count: 0,
             has_aux_indexes: true,
             synthesized_edges: HashSet::new(),
+            lsp_resolved_edges: HashSet::new(),
             // 空索引无从重建（节点数 0 跳过）；from_* 构造器按来源覆盖
             fts_dirty: AtomicBool::new(false),
         }
@@ -569,6 +574,14 @@ impl MemoryIndex {
             if edge.is_synthesized {
                 idx.synthesized_edges.insert((src, tgt));
             }
+            // LSP 解析标记随图边重建（P1-2）
+            if edge.lsp_resolved {
+                idx.lsp_resolved_edges.insert((
+                    edge.source.to_string(),
+                    edge.target.to_string(),
+                    edge.kind,
+                ));
+            }
             let kind_u8 = edge.kind.to_u8();
             let delay_f64 = pack_delay(edge.temporal_delay_sec);
             let cross_file = pack_cross_file(edge.cross_file);
@@ -617,7 +630,7 @@ impl MemoryIndex {
         let mut out_buckets: Vec<Vec<CsrEdge>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
         let mut in_buckets: Vec<Vec<CsrEdge>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
 
-        for (source, target, kind, coupling_depth, delay, cross_file, metadata) in db_edges {
+        for (source, target, kind, coupling_depth, delay, cross_file, metadata, lsp_resolved) in db_edges {
             let src = idx.intern(&source);
             let tgt = idx.intern(&target);
             let kind_u8 = kind.to_u8();
@@ -627,6 +640,9 @@ impl MemoryIndex {
             if let (Some(&src_idx), Some(&tgt_idx)) = (idx.handle_to_idx.get(&src), idx.handle_to_idx.get(&tgt)) {
                 out_buckets[src_idx as usize].push((tgt, kind_u8, coupling_depth, delay_f64, cross_file, metadata_handle));
                 in_buckets[tgt_idx as usize].push((src, kind_u8, coupling_depth, delay_f64, cross_file, metadata_handle));
+            }
+            if lsp_resolved {
+                idx.lsp_resolved_edges.insert((source, target, kind));
             }
         }
 
@@ -658,7 +674,7 @@ impl MemoryIndex {
         let mut out_buckets: Vec<Vec<CsrEdge>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
         let mut in_buckets: Vec<Vec<CsrEdge>> = (0..n).map(|_| Vec::with_capacity(est)).collect();
 
-        for (source, target, kind, coupling_depth, delay, cross_file, metadata) in db_edges {
+        for (source, target, kind, coupling_depth, delay, cross_file, metadata, lsp_resolved) in db_edges {
             let src = idx.intern(&source);
             let tgt = idx.intern(&target);
             let kind_u8 = kind.to_u8();
@@ -668,6 +684,9 @@ impl MemoryIndex {
             if let (Some(&src_idx), Some(&tgt_idx)) = (idx.handle_to_idx.get(&src), idx.handle_to_idx.get(&tgt)) {
                 out_buckets[src_idx as usize].push((tgt, kind_u8, coupling_depth, delay_f64, cross_file, metadata_handle));
                 in_buckets[tgt_idx as usize].push((src, kind_u8, coupling_depth, delay_f64, cross_file, metadata_handle));
+            }
+            if lsp_resolved {
+                idx.lsp_resolved_edges.insert((source, target, kind));
             }
         }
 
@@ -697,6 +716,7 @@ impl MemoryIndex {
             Option<f64>,
             bool,
             Option<serde_json::Value>,
+            bool,
         )> = Vec::new();
         let mut seen: HashSet<(String, String, EdgeKind)> = HashSet::new();
         for &src_handle in &self.node_by_idx {
@@ -715,6 +735,7 @@ impl MemoryIndex {
                         unpack_delay(delay),
                         unpack_cross_file(cross_file),
                         self.unpack_metadata(metadata_handle),
+                        self.is_lsp_resolved(src_str, tgt_str, kind),
                     ));
                 }
             }
@@ -729,10 +750,11 @@ impl MemoryIndex {
             Option<f64>,
             bool,
             Option<&serde_json::Value>,
+            bool,
         )> = edges
             .iter()
-            .map(|(s, t, k, d, delay, cf, m)| {
-                (s.as_str(), t.as_str(), *k, *d, *delay, *cf, m.as_ref())
+            .map(|(s, t, k, d, delay, cf, m, lr)| {
+                (s.as_str(), t.as_str(), *k, *d, *delay, *cf, m.as_ref(), *lr)
             })
             .collect();
         db.bulk_replace_all(&nodes, &edge_refs)?;
@@ -1394,11 +1416,13 @@ impl MemoryIndex {
             for (target, kind, coupling_depth, temporal_delay, cross_file, metadata) in targets {
                 edge_id_counter += 1;
                 let eid = format!("e_{}_{}_{}", source, target, edge_id_counter);
+                let lsp_resolved = self.is_lsp_resolved(&source, &target, kind);
                 let mut edge = Edge::new(eid, source.clone(), target, kind);
                 edge.coupling_depth = coupling_depth;
                 edge.temporal_delay_sec = temporal_delay;
                 edge.cross_file = cross_file;
                 edge.metadata = metadata;
+                edge.lsp_resolved = lsp_resolved;
                 graph.add_edge_unchecked(edge);
             }
         }
@@ -1453,6 +1477,9 @@ impl MemoryIndex {
         let pending_before = self.pending_adds.len();
         self.pending_adds.retain(|&(s, t, _, _, _, _, _)| s != handle && t != handle);
         removed += pending_before - self.pending_adds.len();
+        // LSP 标记层同步清理 —— 涉及被删节点的标记作废，避免统计虚高
+        self.lsp_resolved_edges
+            .retain(|(s, t, _)| s != id && t != id);
         self.edge_count = self.edge_count.saturating_sub(removed);
         self.nodes.remove(&handle)
     }
@@ -1536,6 +1563,68 @@ impl MemoryIndex {
         self.edge_count += 1;
     }
 
+    // ── LSP 解析覆盖层（P1-2）──────────────────────────────
+    // 边必须真实存在（CSR 或 pending）才允许标记 ——
+    // 不凭空造边，防止把启发式猜测写成「LSP 已解析」。
+
+    /// 标记一条已存在边的 lsp_resolved=true。边不存在 → false。
+    pub fn mark_lsp_resolved(&mut self, source: &str, target: &str, kind: EdgeKind) -> bool {
+        let src = match self.handle_of(source) {
+            Some(h) => h,
+            None => return false,
+        };
+        let tgt = match self.handle_of(target) {
+            Some(h) => h,
+            None => return false,
+        };
+        let in_csr = self.edge_exists_in_csr(src, tgt, kind.to_u8());
+        let in_pending = self
+            .pending_adds
+            .iter()
+            .any(|&(s, t, k, _, _, _, _)| s == src && t == tgt && k == kind);
+        if !in_csr && !in_pending {
+            return false;
+        }
+        self.lsp_resolved_edges
+            .insert((source.to_string(), target.to_string(), kind));
+        true
+    }
+
+    /// 该边是否已被真实 LSP 解析（对比同名启发式）。
+    pub fn is_lsp_resolved(&self, source: &str, target: &str, kind: EdgeKind) -> bool {
+        self.lsp_resolved_edges
+            .contains(&(source.to_string(), target.to_string(), kind))
+    }
+
+    /// 已标记 LSP 解析的边数。
+    pub fn lsp_resolved_count(&self) -> usize {
+        self.lsp_resolved_edges.len()
+    }
+
+    /// (calls 边总数, 其中 lsp_resolved 数) —— graph_summary 的解析率统计。
+    pub fn lsp_resolution_stats(&self) -> (usize, usize) {
+        let mut total_calls = 0usize;
+        let mut resolved_calls = 0usize;
+        for (source, targets) in self.edges_iter_full() {
+            for (target, kind, _, _, _, _) in targets {
+                if kind != EdgeKind::Calls {
+                    continue;
+                }
+                total_calls += 1;
+                if self.is_lsp_resolved(&source, &target, kind) {
+                    resolved_calls += 1;
+                }
+            }
+        }
+        (total_calls, resolved_calls)
+    }
+
+    /// 继承另一索引的 LSP 标记层（增量更新克隆路径用，
+    /// 增量器逐边 upsert 不携带该标志）。
+    pub(crate) fn inherit_lsp_resolved(&mut self, other: &MemoryIndex) {
+        self.lsp_resolved_edges = other.lsp_resolved_edges.clone();
+    }
+
     /// 移除特定边。
     pub fn remove_edge(&mut self, source: &str, target: &str, kind: EdgeKind) -> bool {
         let src = match self.handle_of(source) {
@@ -1610,7 +1699,7 @@ impl Default for MemoryIndex {
 /// 字段一一对应；字符串表导出为引用句柄对（全局驻留空间精确重建）。
 pub(crate) fn to_snapshot(idx: &MemoryIndex) -> MemoryIndexSnapshot {
     MemoryIndexSnapshot {
-        version: 3,
+        version: 4,
         arena_strings: collect_arena_entries(idx),
         // 节点镜像并行化：SnapshotNode::from_node 的 properties JSON 序列化
         // 是纯 CPU 工作，2.49M 节点串行序列化是快照耗时大头。
@@ -1642,6 +1731,7 @@ pub(crate) fn to_snapshot(idx: &MemoryIndex) -> MemoryIndexSnapshot {
         edge_count: idx.edge_count,
         has_aux_indexes: idx.has_aux_indexes,
         synthesized_edges: idx.synthesized_edges.clone(),
+        lsp_resolved_edges: idx.lsp_resolved_edges.clone(),
     }
 }
 
@@ -1707,6 +1797,7 @@ pub(crate) fn from_snapshot(snap: MemoryIndexSnapshot) -> MemoryIndex {
         edge_count: snap.edge_count,
         has_aux_indexes: snap.has_aux_indexes,
         synthesized_edges: snap.synthesized_edges,
+        lsp_resolved_edges: snap.lsp_resolved_edges,
         fts_dirty: AtomicBool::new(true),
     }
 }
@@ -1732,6 +1823,37 @@ mod tests {
         let idx = MemoryIndex::new();
         assert_eq!(idx.node_count(), 0);
         assert_eq!(idx.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_mark_lsp_resolved_only_existing_edges() {
+        let mut idx = MemoryIndex::new();
+        idx.insert_node(test_node("a", "fn_a", Some("src/a.rs:1")));
+        idx.insert_node(test_node("b", "fn_b", Some("src/b.rs:1")));
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
+        idx.flush_pending();
+
+        assert!(!idx.is_lsp_resolved("a", "b", EdgeKind::Calls));
+        assert!(idx.mark_lsp_resolved("a", "b", EdgeKind::Calls));
+        assert!(idx.is_lsp_resolved("a", "b", EdgeKind::Calls));
+        assert_eq!(idx.lsp_resolved_count(), 1);
+
+        // 不存在的边拒绝标记 —— 不凭空造边
+        assert!(!idx.mark_lsp_resolved("a", "b", EdgeKind::Reads));
+        assert!(!idx.mark_lsp_resolved("b", "a", EdgeKind::Calls));
+        assert_eq!(idx.lsp_resolved_count(), 1);
+
+        let (total, resolved) = idx.lsp_resolution_stats();
+        assert_eq!((total, resolved), (1, 1));
+
+        // to_graph 透出标志
+        let g = idx.to_graph();
+        let edges: Vec<_> = g.edges_iter().map(|(_, e)| e.clone()).collect();
+        assert!(edges.iter().any(|e| e.kind == EdgeKind::Calls && e.lsp_resolved));
+
+        // remove_node 清理孤儿标记
+        idx.remove_node("b");
+        assert_eq!(idx.lsp_resolved_count(), 0, "dangling marks must be pruned");
     }
 
     #[test]

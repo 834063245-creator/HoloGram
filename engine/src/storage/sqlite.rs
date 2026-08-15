@@ -12,7 +12,7 @@ use tracing::info;
 
 use crate::graph::{EdgeKind, Node, NodeKind};
 
-/// bulk 写边元组：(source, target, kind, coupling, delay, cross_file, metadata)。
+/// bulk 写边元组：(source, target, kind, coupling, delay, cross_file, metadata, lsp_resolved)。
 pub type EdgeRow<'a> = (
     &'a str,
     &'a str,
@@ -21,6 +21,7 @@ pub type EdgeRow<'a> = (
     Option<f64>,
     bool,
     Option<&'a serde_json::Value>,
+    bool,
 );
 
 /// 包装单一 hologram.db 连接。
@@ -334,15 +335,15 @@ impl SqliteDb {
     }
 
     /// 返回 (source, target, kind, coupling_depth, temporal_delay_sec,
-    ///        cross_file, metadata) 元组。
+    ///        cross_file, metadata, lsp_resolved) 元组。
     pub fn load_all_edges(
         &self,
-    ) -> Result<Vec<(String, String, EdgeKind, u8, Option<f64>, bool, Option<serde_json::Value>)>, String> {
+    ) -> Result<Vec<(String, String, EdgeKind, u8, Option<f64>, bool, Option<serde_json::Value>, bool)>, String> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT source, target, kind, coupling_depth, temporal_delay_sec, \
-                        cross_file, metadata FROM edges",
+                        cross_file, metadata, lsp_resolved FROM edges",
             )
             .map_err(|e| format!("prepare edges: {}", e))?;
         let rows = stmt
@@ -361,6 +362,7 @@ impl SqliteDb {
                     Some(text) if !text.is_empty() => serde_json::from_str(&text).ok(),
                     _ => None,
                 };
+                let lsp_resolved: i64 = row.get::<_, Option<i64>>(7)?.unwrap_or(0);
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -369,6 +371,7 @@ impl SqliteDb {
                     delay,
                     cross_file != 0,
                     metadata,
+                    lsp_resolved != 0,
                 ))
             })
             .map_err(|e| format!("query edges: {}", e))?;
@@ -377,6 +380,22 @@ impl SqliteDb {
             edges.push(row.map_err(|e| format!("edge row: {}", e))?);
         }
         Ok(edges)
+    }
+
+    /// 单边 UPDATE：标记 lsp_resolved=1（resolve_call 回写，P1-2）。
+    /// 返回受影响行数（0 = 该边不在库中）。
+    pub fn mark_edge_lsp_resolved(
+        &self,
+        source: &str,
+        target: &str,
+        kind: &str,
+    ) -> Result<usize, String> {
+        self.conn
+            .execute(
+                "UPDATE edges SET lsp_resolved=1 WHERE source=?1 AND target=?2 AND kind=?3",
+                params![source, target, kind],
+            )
+            .map_err(|e| format!("mark lsp_resolved: {}", e))
     }
 
     // ── 批量写入（全量分析 + 增量）──
@@ -495,15 +514,15 @@ impl SqliteDb {
         // ── 分块插入边（cross_file + metadata 一并落库）──
         let t = std::time::Instant::now();
         const EDGE_CHUNK: usize = 110; // 8 列 × 110 = 880 参数
-        let edge_sql = "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata) VALUES ";
+        let edge_sql = "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata, lsp_resolved) VALUES ";
         for chunk in edges.chunks(EDGE_CHUNK) {
             let mut sql = String::with_capacity(edge_sql.len() + chunk.len() * 80);
             sql.push_str(edge_sql);
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(chunk.len() * 8);
-            for (i, &(source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata)) in chunk.iter().enumerate() {
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(chunk.len() * 9);
+            for (i, &(source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata, lsp_resolved)) in chunk.iter().enumerate() {
                 if i > 0 { sql.push_str(", "); }
-                let b = 1 + i * 8;
-                sql.push_str(&format!("(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{})", b, b+1, b+2, b+3, b+4, b+5, b+6, b+7));
+                let b = 1 + i * 9;
+                sql.push_str(&format!("(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{})", b, b+1, b+2, b+3, b+4, b+5, b+6, b+7, b+8));
                 params.push(Box::new(format!("{}::{}::{}", source, target, kind.as_str())));
                 params.push(Box::new(source.to_string()));
                 params.push(Box::new(target.to_string()));
@@ -515,6 +534,7 @@ impl SqliteDb {
                     Some(m) => serde_json::to_string(m).unwrap_or_else(|_| "{}".into()),
                     None => "".to_string(),
                 }));
+                params.push(Box::new(if lsp_resolved { 1i64 } else { 0i64 }));
             }
             let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
             tx.execute(&sql, param_refs.as_slice())
@@ -620,20 +640,21 @@ impl SqliteDb {
             .conn
             .unchecked_transaction()
             .map_err(|e| format!("tx: {}", e))?;
-        for &(source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata) in edges {
+        for &(source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata, lsp_resolved) in edges {
             let id = format!("{}::{}::{}", source, target, kind.as_str());
             let metadata_text = match metadata {
                 Some(m) => serde_json::to_string(m).unwrap_or_else(|_| "{}".into()),
                 None => "".to_string(),
             };
             tx.execute(
-                "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata, lsp_resolved)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(id) DO UPDATE SET
                     coupling_depth=excluded.coupling_depth,
                     temporal_delay_sec=excluded.temporal_delay_sec,
                     cross_file=excluded.cross_file,
-                    metadata=excluded.metadata",
+                    metadata=excluded.metadata,
+                    lsp_resolved=excluded.lsp_resolved",
                 params![
                     id,
                     source,
@@ -643,6 +664,7 @@ impl SqliteDb {
                     temporal_delay_sec,
                     if cross_file { 1i64 } else { 0i64 },
                     metadata_text,
+                    if lsp_resolved { 1i64 } else { 0i64 },
                 ],
             )
             .map_err(|e| format!("insert edge {}: {}", id, e))?;
@@ -957,7 +979,7 @@ mod tests {
             .map(|k| make_test_node(k.as_str(), *k))
             .collect();
         let edges: Vec<EdgeRow<'_>> = vec![
-            ("symbol", "function", EdgeKind::Calls, 1u8, None::<f64>, true, None),
+            ("symbol", "function", EdgeKind::Calls, 1u8, None::<f64>, true, None, false),
         ];
 
         db.bulk_replace_all(&nodes.iter().collect::<Vec<_>>(), &edges).unwrap();
@@ -1004,8 +1026,8 @@ mod tests {
         ];
         let meta = serde_json::json!({"resolved_by": "import-binding", "unresolved_import": false});
         let edges: Vec<EdgeRow<'_>> = vec![
-            ("a", "b", EdgeKind::Calls, 3u8, Some(0.5), true, Some(&meta)),
-            ("a", "b", EdgeKind::Reads, 2u8, None, false, None),
+            ("a", "b", EdgeKind::Calls, 3u8, Some(0.5), true, Some(&meta), true),
+            ("a", "b", EdgeKind::Reads, 2u8, None, false, None, false),
         ];
 
         db.bulk_replace_all(&nodes.iter().collect::<Vec<_>>(), &edges).unwrap();
@@ -1013,17 +1035,19 @@ mod tests {
         let loaded = db.load_all_edges().unwrap();
         assert_eq!(loaded.len(), 2);
 
-        let calls = loaded.iter().find(|(_, _, k, _, _, _, _)| *k == EdgeKind::Calls).unwrap();
+        let calls = loaded.iter().find(|(_, _, k, _, _, _, _, _)| *k == EdgeKind::Calls).unwrap();
         assert_eq!(calls.3, 3); // coupling_depth
         assert_eq!(calls.4, Some(0.5)); // temporal_delay_sec
         assert!(calls.5, "cross_file 应落库读回");
         assert_eq!(calls.6.as_ref().and_then(|m| m.get("resolved_by")).and_then(|v| v.as_str()), Some("import-binding"));
+        assert!(calls.7, "lsp_resolved 应落库读回（P1-2）");
 
-        let reads = loaded.iter().find(|(_, _, k, _, _, _, _)| *k == EdgeKind::Reads).unwrap();
+        let reads = loaded.iter().find(|(_, _, k, _, _, _, _, _)| *k == EdgeKind::Reads).unwrap();
         assert_eq!(reads.3, 2);
         assert!(reads.4.is_none());
         assert!(!reads.5);
         assert!(reads.6.is_none());
+        assert!(!reads.7, "未解析边 lsp_resolved 应为 false");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1042,7 +1066,7 @@ mod tests {
             make_test_node("beta", NodeKind::Function),
         ];
         let edges1: Vec<EdgeRow<'_>> = vec![
-            ("alpha", "beta", EdgeKind::Calls, 1u8, None, false, None),
+            ("alpha", "beta", EdgeKind::Calls, 1u8, None, false, None, false),
         ];
         db.bulk_replace_all(&nodes1.iter().collect::<Vec<_>>(), &edges1).unwrap();
 
@@ -1052,7 +1076,7 @@ mod tests {
             make_test_node("delta", NodeKind::Class),
         ];
         let edges2: Vec<EdgeRow<'_>> = vec![
-            ("gamma", "delta", EdgeKind::Inherits, 2u8, None, true, None),
+            ("gamma", "delta", EdgeKind::Inherits, 2u8, None, true, None, false),
         ];
         db.bulk_replace_all(&nodes2.iter().collect::<Vec<_>>(), &edges2).unwrap();
 
@@ -1098,7 +1122,7 @@ mod tests {
 
         // 外键约束真实生效 —— 插入悬挂边必须失败
         let dangling: Vec<EdgeRow<'_>> = vec![
-            ("gamma", "no_such_node", EdgeKind::Calls, 1u8, None, false, None),
+            ("gamma", "no_such_node", EdgeKind::Calls, 1u8, None, false, None, false),
         ];
         assert!(db.batch_upsert_edges(&dangling).is_err(),
             "FK 恢复后悬挂边插入应被拒绝");

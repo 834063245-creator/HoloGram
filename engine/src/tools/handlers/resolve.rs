@@ -59,10 +59,97 @@ pub(crate) fn lsp_has_real_reference(location: &str, name: &str) -> LspCheck {
     }
 }
 
+/// P1-2：将 resolve_call 的 LSP 解析结果回写图。
+/// 定位源节点（同文件、同名、行号邻近）与目标节点（定义位置 file:line），
+/// 把图中已存在的 calls 边标记 lsp_resolved=true 并落库。
+/// 只标记真实存在的边 —— 图里没有的边如实报告，不凭空造边。
+fn write_back_lsp_resolution(
+    file: &str,
+    func_name: &str,
+    line0: u32,
+    defs: &[Value],
+) -> Value {
+    use crate::graph::EdgeKind;
+
+    // 1) 定位源节点：同文件 + 同名 + 行号邻近（节点行号 1-based，LSP 0-based → +1）
+    let src_id: Option<String> = crate::tools::with_store(|idx| {
+        let mut best: Option<String> = None;
+        for nid in idx.get_nodes_by_file(file) {
+            if let Some(n) = idx.get_node(nid.as_str()) {
+                if n.name != func_name {
+                    continue;
+                }
+                if let Some(ref loc) = n.location {
+                    let node_line = loc.rsplit(':').next().and_then(|l| l.parse::<u32>().ok());
+                    if let Some(nl) = node_line {
+                        let expect = line0.saturating_add(1);
+                        if nl == expect || nl + 1 == expect || nl == expect + 1 {
+                            best = Some(nid.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Value::String(best.unwrap_or_default())
+    })
+    .as_str()
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_string());
+
+    // 2) 对每个定义位置：定位目标节点并标记已存在的 calls 边
+    let mut marked = 0usize;
+    let mut targets: Vec<Value> = Vec::new();
+    for d in defs {
+        let def_path = crate::lsp_manager::uri_to_path(d["file"].as_str().unwrap_or(""))
+            .replace('\\', "/");
+        let def_line1 = d["line"].as_u64().unwrap_or(0) as u32 + 1;
+        let tgt_id: Option<String> = crate::tools::with_store(|idx| {
+            let mut hit: Option<String> = None;
+            for nid in idx.get_nodes_by_file(&def_path) {
+                if let Some(n) = idx.get_node(nid.as_str()) {
+                    if let Some(ref loc) = n.location {
+                        let nl = loc.rsplit(':').next().and_then(|l| l.parse::<u32>().ok());
+                        if nl == Some(def_line1) {
+                            hit = Some(nid.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+            Value::String(hit.unwrap_or_default())
+        })
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+        if let (Some(ref s), Some(ref t)) = (src_id.as_ref(), tgt_id.as_ref()) {
+            let edge_marked = crate::engine::with_engine(|eng| eng.mark_edge_lsp_resolved(s, t, EdgeKind::Calls))
+                .and_then(|r| r.ok())
+                .unwrap_or(false);
+            if edge_marked {
+                marked += 1;
+            }
+            targets.push(json!({"target": t, "edge_marked": edge_marked}));
+        } else {
+            targets.push(json!({
+                "target": tgt_id,
+                "edge_marked": false,
+                "reason": if src_id.is_none() { "call site node not in graph" } else { "definition node not in graph" },
+            }));
+        }
+    }
+    json!({
+        "edges_marked": marked,
+        "source_node": src_id,
+        "targets": targets,
+        "note": "只标记图中已存在的 calls 边为 lsp_resolved；图里没有的边如实报告，不凭空造边"
+    })
+}
+
 /// 通过原生 LSP 按需进行类型感知的调用解析。
 /// LSP 服务器未安装时优雅降级。
-pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
-    let file_path = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
+pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {    let file_path = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
     let func_name = args.get("function").and_then(|v| v.as_str()).unwrap_or("");
     let line = args.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let column = args.get("column").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -114,12 +201,16 @@ pub(crate) fn handler_resolve_call(args: &Value) -> ToolResponse {
 
     if let Some(ref locs) = lsp_result {
         if !locs.is_empty() {
+            // P1-2 回写：LSP 解析命中的 calls 边标记 lsp_resolved=true 并落库，
+            // 结果在 graph_summary.lsp_resolution 中可统计、逐边可追溯。
+            let write_back = write_back_lsp_resolution(&path_str, func_name, line, locs);
             return ToolResponse::Success(json!({
                 "file": path_str,
                 "function": func_name,
                 "backend": "native_lsp",
                 "definitions": locs,
                 "note": "resolved via real LSP server",
+                "write_back": write_back,
             }));
         }
     }

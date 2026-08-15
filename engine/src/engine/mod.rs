@@ -982,6 +982,63 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// P1-2 回归：mark_edge_lsp_resolved 只标记图中已存在的边，
+    /// 并同步落库（load_all_edges 可读回）。
+    #[test]
+    fn test_mark_edge_lsp_resolved_engine_api() {
+        use crate::graph::{EdgeKind, Node, NodeKind};
+
+        let tmp = std::env::temp_dir().join("hologram_test_lsp_writeback");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut engine = Engine::new();
+        engine.init(&tmp).unwrap();
+
+        {
+            let store_guard = engine.store.lock().unwrap();
+            let store = store_guard.as_ref().unwrap();
+            let mut idx = store.index.write();
+            idx.insert_node(Node::new("a", "caller", NodeKind::Symbol));
+            idx.insert_node(Node::new("b", "callee", NodeKind::Symbol));
+            idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
+            idx.flush_pending();
+            // 落库 —— 生产路径中索引在分析完成后即已持久化
+            idx.to_sqlite(&store.db).unwrap();
+        }
+
+        // 不存在的边 → Ok(false)，不凭空造边
+        assert!(!engine
+            .mark_edge_lsp_resolved("a", "b", EdgeKind::Reads)
+            .unwrap());
+        // 真实存在的 calls 边 → Ok(true)
+        assert!(engine
+            .mark_edge_lsp_resolved("a", "b", EdgeKind::Calls)
+            .unwrap());
+
+        {
+            let store_guard = engine.store.lock().unwrap();
+            let store = store_guard.as_ref().unwrap();
+            let idx = store.index.read();
+            assert!(idx.is_lsp_resolved("a", "b", EdgeKind::Calls));
+            assert_eq!(idx.lsp_resolved_count(), 1);
+        }
+
+        // 持久化可读回（restart 语义）
+        {
+            let store_guard = engine.store.lock().unwrap();
+            let store = store_guard.as_ref().unwrap();
+            let loaded = store.db.load_all_edges().unwrap();
+            let calls = loaded
+                .iter()
+                .find(|(_, _, k, _, _, _, _, _)| *k == EdgeKind::Calls)
+                .expect("calls edge should be persisted");
+            assert!(calls.7, "lsp_resolved 应落库读回");
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// [已移除] test_lsp_type_resolved_edges_in_graph — 此测试耦合到
     /// 已移除的手写 python_lsp 适配器。LSP 解析现在
     /// 通过 LspManager 按需执行；graph 边在索引时仅使用短名称。

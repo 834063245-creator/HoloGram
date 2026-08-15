@@ -266,6 +266,32 @@ impl Engine {
         }
     }
 
+    /// P1-2：把 resolve_call 的 LSP 解析结果回写图 ——
+    /// 标记图中已存在的边 lsp_resolved=true（内存覆盖层 + SQLite 单边 UPDATE）。
+    /// 返回 Ok(false) = 图中不存在该边（不凭空造边，防止把启发式写成「LSP 已解析」）。
+    pub fn mark_edge_lsp_resolved(
+        &self,
+        source: &str,
+        target: &str,
+        kind: crate::graph::EdgeKind,
+    ) -> Result<bool, String> {
+        let mut store_guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("store lock poisoned: {}", e))?;
+        let store = store_guard
+            .as_mut()
+            .ok_or_else(|| "Store not initialized".to_string())?;
+        {
+            let mut idx = store.index.write();
+            if !idx.mark_lsp_resolved(source, target, kind) {
+                return Ok(false);
+            }
+        }
+        store.db.mark_edge_lsp_resolved(source, target, kind.as_str())?;
+        Ok(true)
+    }
+
     /// 处理来自 watcher 的文件变更。先尝试增量更新，
     /// 失败则回退到全量重新分析。设为静态方法，以便 watcher 线程
     /// 通过全局 ENGINE 函数调用。

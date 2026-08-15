@@ -216,6 +216,8 @@ pub struct MemoryIndexSnapshot {
     pub has_aux_indexes: bool,
     /// 合成边索引: (source_handle, target_handle)
     pub synthesized_edges: HashSet<(u32, u32)>,
+    /// LSP 解析边覆盖层（P1-2）：(source, target, kind) 字符串键。
+    pub lsp_resolved_edges: HashSet<(String, String, EdgeKind)>,
 }
 
 /// env 串行锁 —— HOLOGRAM_SNAPSHOT_MIN_EDGES 相关测试互斥，
@@ -252,6 +254,7 @@ mod tests {
         let mut e1 = Edge::new("e1", "src/a.rs::fn_a", "src/b.rs::fn_b", EdgeKind::Calls);
         e1.coupling_depth = 2;
         e1.temporal_delay_sec = Some(0.5);
+        e1.lsp_resolved = true;
         let e2 = Edge::synthesized("e2", "src/b.rs::fn_b", "src/c.rs::Cls", EdgeKind::Usage, "test-channel");
         g.add_edge_unchecked(e1);
         g.add_edge_unchecked(e2);
@@ -332,6 +335,10 @@ mod tests {
         // 合成边索引保留
         assert!(loaded.is_edge_synthesized("src/b.rs::fn_b", "src/c.rs::Cls"));
         assert!(!loaded.is_edge_synthesized("src/a.rs::fn_a", "src/b.rs::fn_b"));
+
+        // LSP 解析标记层保留（P1-2）
+        assert!(loaded.is_lsp_resolved("src/a.rs::fn_a", "src/b.rs::fn_b", EdgeKind::Calls));
+        assert!(!loaded.is_lsp_resolved("src/b.rs::fn_b", "src/c.rs::Cls", EdgeKind::Usage));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

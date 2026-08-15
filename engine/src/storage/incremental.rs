@@ -223,6 +223,8 @@ impl IncrementalUpdater {
                 idx.upsert_edge(&source, &target, kind, depth, delay);
             }
         }
+        // LSP 解析标记层随克隆继承（P1-2）—— upsert 不携带该标志。
+        idx.inherit_lsp_resolved(old);
         idx
     }
 

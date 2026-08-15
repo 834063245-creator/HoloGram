@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-use crate::graph::{Graph, NodeKind};
+use crate::graph::{EdgeKind, Graph, NodeKind};
 use crate::storage::MemoryIndex;
 use std::collections::HashMap;
 
@@ -13,13 +13,22 @@ pub fn graph_summary(graph: &Graph) -> serde_json::Value {
             NodeKind::Temporal=>{tmp+=1} }
     }
     let mut edge_types: HashMap<String, u32> = HashMap::new();
+    let mut calls_total: u32 = 0;
+    let mut calls_lsp: u32 = 0;
     for (_, e) in graph.edges_iter() {
         *edge_types.entry(e.kind.as_str().to_string()).or_default() += 1;
+        if e.kind == EdgeKind::Calls {
+            calls_total += 1;
+            if e.lsp_resolved {
+                calls_lsp += 1;
+            }
+        }
     }
     serde_json::json!({
         "nodes_total": graph.node_count(), "edges_total": graph.edge_count(),
         "symbols": sym, "media": med, "temporals": tmp,
-        "edge_types": edge_types
+        "edge_types": edge_types,
+        "lsp_resolution": lsp_resolution_json(calls_total as usize, calls_lsp as usize)
     })
 }
 
@@ -54,6 +63,8 @@ pub fn graph_summary_from_index(idx: &MemoryIndex) -> serde_json::Value {
     } else {
         1.0
     };
+    // P1-2：LSP 解析率 —— calls 边中被真实 LSP 解析的占比。
+    let (calls_total, calls_lsp) = idx.lsp_resolution_stats();
     serde_json::json!({
         "nodes_total": idx.node_count(), "edges_total": idx.edge_count(),
         "symbols": sym, "media": med, "temporals": tmp,
@@ -64,7 +75,23 @@ pub fn graph_summary_from_index(idx: &MemoryIndex) -> serde_json::Value {
             "unresolved_edges": unresolved_edges,
             "resolution_rate": (rate * 1000.0).round() / 1000.0,
             "_note": "未解析边保留为裸名引用（不再静默丢弃）；解析率 = 目标存在节点的边 / 总边数。用 resolve_call/trace_dataflow 按需深化。"
-        }
+        },
+        "lsp_resolution": lsp_resolution_json(calls_total, calls_lsp)
+    })
+}
+
+/// P1-2：LSP 解析率统计对象。
+fn lsp_resolution_json(calls_total: usize, calls_lsp: usize) -> serde_json::Value {
+    let ratio = if calls_total > 0 {
+        calls_lsp as f64 / calls_total as f64
+    } else {
+        0.0
+    };
+    serde_json::json!({
+        "calls_edges": calls_total,
+        "lsp_resolved_edges": calls_lsp,
+        "lsp_resolved_ratio": (ratio * 1000.0).round() / 1000.0,
+        "_note": "lsp_resolved = 经真实 LSP 服务器解析的 calls 边（resolve_call 回写）；其余为同名启发式。"
     })
 }
 
@@ -113,5 +140,29 @@ mod tests {
         let et = &s["edge_types"];
         assert_eq!(et["calls"], 1);
         assert_eq!(et["reads"], 2);
+    }
+
+    #[test]
+    fn test_summary_reports_lsp_resolution() {
+        let mut idx = MemoryIndex::new();
+        idx.insert_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        idx.insert_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        idx.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
+        assert!(idx.mark_lsp_resolved("a", "b", EdgeKind::Calls));
+
+        let s = graph_summary_from_index(&idx);
+        assert_eq!(s["lsp_resolution"]["calls_edges"], 1);
+        assert_eq!(s["lsp_resolution"]["lsp_resolved_edges"], 1);
+        assert_eq!(s["lsp_resolution"]["lsp_resolved_ratio"], 1.0);
+
+        // 无 LSP 标记时占比为 0
+        let mut idx2 = MemoryIndex::new();
+        idx2.insert_node(Node::new("a", "fn_a", NodeKind::Symbol));
+        idx2.insert_node(Node::new("b", "fn_b", NodeKind::Symbol));
+        idx2.upsert_edge("a", "b", EdgeKind::Calls, 1, None);
+        let s2 = graph_summary_from_index(&idx2);
+        assert_eq!(s2["lsp_resolution"]["calls_edges"], 1);
+        assert_eq!(s2["lsp_resolution"]["lsp_resolved_edges"], 0);
+        assert_eq!(s2["lsp_resolution"]["lsp_resolved_ratio"], 0.0);
     }
 }
