@@ -57,6 +57,30 @@ function wrapTool(original: Tool, execute: Tool['execute']): Tool {
     execute,
   };
 }
+
+/** 构造子 Agent 工具集：从源注册表克隆 + 可选允许列表，再剥离委派越权工具。
+ *  独立为纯函数 — 委派边界（不可扩权）是正确性语义，必须可单测断言。 */
+export function buildSubAgentTools(source: ToolRegistry, toolAllowlist?: string[] | null): ToolRegistry {
+  const subTools = new ToolRegistry();
+  const allowed = toolAllowlist && toolAllowlist.length > 0 ? new Set(toolAllowlist) : null;
+  for (const t of source.all()) {
+    if (!allowed || allowed.has(t.name())) {
+      subTools.register(t);
+    }
+  }
+  // 子 Agent 是工人不是编排者 — 不递归派生、不杀兄弟、不观测池
+  subTools.unregister('agent_spawn');
+  subTools.unregister('agent_kill');
+  subTools.unregister('agent_status');
+  // 委派不可扩权（DSH delegation policy 对应物）：
+  // - ask_user：子 Agent 不直接与人类交互 — 需要人类决策时写进报告由父 Agent 转达
+  // - enter/exit_plan_mode：plan 状态机是父级协作模式，闭包绑定父 planState —
+  //   子 Agent 调用会翻父 Agent 的模式，构成越权
+  subTools.unregister('ask_user');
+  subTools.unregister('enter_plan_mode');
+  subTools.unregister('exit_plan_mode');
+  return subTools;
+}
 import type { MessageBus } from './message-bus';
 import type { TaskBoard } from './task-board';
 import type { DiscoveryBoard } from './discovery-board';
@@ -2353,19 +2377,7 @@ ${resumeNote}
     // 但子 Agent 生命周期可能跨越 plan 退出，故静态降级为只读克隆，
     // 保持"plan 中 spawn = 并行只读探索"语义（与原 planR 克隆一致）。
     const cloneSource = this._planState?.state.active ? planRegistry(this.tools, this._planState) : this.tools;
-    const subTools = new ToolRegistry();
-    const allowed = toolAllowlist && toolAllowlist.length > 0 ? new Set(toolAllowlist) : null;
-    for (const t of cloneSource.all()) {
-      if (!allowed || allowed.has(t.name())) {
-        subTools.register(t);
-      }
-    }
-    // 子 Agent 永远不获得递归派生工具（fork 子 Agent 直接执行）。
-    subTools.unregister('agent_spawn');
-    // 子 Agent 不能杀死兄弟 — 只有父 Agent 能杀死子 Agent。
-    subTools.unregister('agent_kill');
-    // Pool 可观测性也是父 Agent 的职责 — 子 Agent 不获得 agent_status。
-    subTools.unregister('agent_status');
+    const subTools = buildSubAgentTools(cloneSource, toolAllowlist);
 
     // 用子 Agent 自己的 id 重新注册 discovery 工具 — 克隆的
     // 工具的 getAgentId 闭包捕获的是父 Agent 的 id，会导致
@@ -2493,6 +2505,13 @@ ${subTools
   .map((t) => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
   .join('\n')}`;
     }
+
+    // 委派边界 — 权限范围在派发时固定，会话内不可扩权（DSH delegation 语义）
+    subSystem += `
+
+## 委派边界（不可逾越）
+- 你的工具集在派发时已固定，就是你的全部能力 — 不可要求新工具，不可绕过限制。
+- 你没有 ask_user：不得直接向用户提问或请求授权。需要人类决策时，把问题写进最终报告，由父 Agent 转达。`;
 
     // 结构化返回：在系统提示末尾追加强制 JSON 输出契约
     if (outputSchema) {
