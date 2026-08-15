@@ -21,6 +21,7 @@ import type { Tool, ToolExecutor } from '../tool';
 import { enqueueIsolationOp } from '../isolation-queue';
 import { runGraphGate, runCompileTest } from './merge-gate';
 import { defineTool } from './define-tool';
+import { parseIsolationDiff } from '../spill';
 
 // ── Merge 门禁配置 ──
 // v1：图检查默认开（merge-then-verify，轮询 hologram_run_check）；
@@ -138,12 +139,16 @@ export function createMergeTool(
 
         // R3 冲突保全：重抓 diff 并**写回 board**（此前返回值直接丢弃，
         // 「diff 已保存在 TaskBoard」名存实亡）；worktree 保留不删 ——
-        // diff 有 32KB 截断，worktree 才是全量现场。
+        // 大 diff 由 Rust 侧溢写落盘 .hologram/spill/，board 存 locator。
         try {
           const freshDiff = await enqueueIsolationOp(async () => {
             return await exec('agent_isolation_diff', { agent_id: entry.isolationId });
           });
-          if (freshDiff && freshDiff.length > (entry.diff?.length ?? 0)) {
+          const spill = parseIsolationDiff(freshDiff);
+          if (spill?.spillPath) {
+            board.complete(entry.agentId, entry.summary ?? '', `[diff 全量落盘] ${spill.spillPath}`);
+            conflictDetails.push(`  ↳ 全量 diff 已溢写: ${spill.spillPath}（read_file 读取）`);
+          } else if (freshDiff && freshDiff.length > (entry.diff?.length ?? 0)) {
             board.complete(entry.agentId, entry.summary ?? '', freshDiff);
           }
         } catch {

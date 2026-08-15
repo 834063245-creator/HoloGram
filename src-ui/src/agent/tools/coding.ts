@@ -660,7 +660,9 @@ export function createCodingTools(exec: ToolExecutor, ui?: CodingToolsUI): Tool[
     }),
     defineTool({
       name: 'agent_isolation_diff',
-      description: 'Show the diff of changes made in an isolation workspace.',
+      description:
+        'Show the diff of changes made in an isolation workspace. ' +
+        'Diffs over ~8000 chars are spilled to .hologram/spill/ — the result then carries the file path; read it with read_file to get the full diff.',
       schema: z.object({
         agent_id: z.string().describe('Isolation workspace to diff'),
       }),

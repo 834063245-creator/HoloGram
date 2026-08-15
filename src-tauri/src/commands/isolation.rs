@@ -2,7 +2,27 @@
 // SPDX-License-Identifier: MIT
 // Agent 隔离 — 基于 worktree 的沙箱（创建、差异、合并、丢弃、状态、清理）。
 
+use std::path::PathBuf;
+
 use crate::agent_isolation::{AgentIsolation, IsolationKind};
+
+/// diff 溢写阈值 — 超过则落盘 .hologram/spill/，只回传 locator。
+/// 远低于 IPC 32KB 截断上限：大 diff 截断即信息丢失，且烧模型上下文。
+const DIFF_SPILL_THRESHOLD_CHARS: usize = 8_000;
+
+/// 把超长 diff 写到 .hologram/spill/ 并返回文件路径（spill 目录即创建）。
+fn spill_diff_file(project_path: &str, agent_id: &str, diff: &str) -> Result<PathBuf, String> {
+    let spill_dir = PathBuf::from(project_path).join(".hologram").join("spill");
+    std::fs::create_dir_all(&spill_dir).map_err(|e| format!("spill 目录创建失败: {e}"))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    // agent_id 已在 create_worktree 校验过 slug 格式，无路径穿越风险
+    let file_path = spill_dir.join(format!("{agent_id}-{ts}.diff"));
+    std::fs::write(&file_path, diff).map_err(|e| format!("diff 落盘失败: {e}"))?;
+    Ok(file_path)
+}
 
 #[tauri::command]
 pub(crate) fn agent_isolation_create(
@@ -57,6 +77,8 @@ pub(crate) fn agent_isolation_diff(
     // 纯只读检查（diff_readonly 从不删除 worktree）。
     // 修复：cleanup() 用 git diff HEAD 判断变更，untracked 新文件不可见 →
     // 子 Agent 只新建文件时误判"无变更"并移除 worktree → 后续 merge 失败。
+    // 大 diff 溢写：截断即丢信息 — 落盘 .hologram/spill/ 回传 locator，
+    // 模型用 read_file 读全量；落盘失败退回截断（带明确标记，不静默）。
     match isolation.diff_readonly()? {
         crate::agent_isolation::CleanupResult::NoChanges => Ok(
             serde_json::json!({"has_changes": false, "diff": ""}).to_string(),
@@ -64,13 +86,41 @@ pub(crate) fn agent_isolation_diff(
         crate::agent_isolation::CleanupResult::HasChanges {
             diff,
             worktree_path,
-        } => Ok(serde_json::json!({
-            "has_changes": true,
-            // 全量 diff 可能 MB 级（子 Agent 改大文件），截断防 IPC 击毁 WebView2
-            "diff": crate::utils::truncate_output(&diff),
-            "worktree_path": worktree_path.to_string_lossy(),
-        })
-        .to_string()),
+        } => {
+            if diff.chars().count() > DIFF_SPILL_THRESHOLD_CHARS {
+                let project_path = crate::utils::workspace_path(&state)?;
+                match spill_diff_file(&project_path, &agent_id, &diff) {
+                    Ok(file_path) => Ok(serde_json::json!({
+                        "has_changes": true,
+                        "diff": format!(
+                            "[diff 全量落盘] {} — {} 字符，超过 IPC 截断阈值，已溢写到文件",
+                            file_path.to_string_lossy(),
+                            diff.chars().count()
+                        ),
+                        "spill_path": file_path.to_string_lossy(),
+                        "worktree_path": worktree_path.to_string_lossy(),
+                    })
+                    .to_string()),
+                    Err(e) => {
+                        eprintln!("[isolation] diff 溢写失败（退回截断）: {e}");
+                        Ok(serde_json::json!({
+                            "has_changes": true,
+                            "diff": crate::utils::truncate_output(&diff),
+                            "spill_error": e,
+                            "worktree_path": worktree_path.to_string_lossy(),
+                        })
+                        .to_string())
+                    }
+                }
+            } else {
+                Ok(serde_json::json!({
+                    "has_changes": true,
+                    "diff": diff,
+                    "worktree_path": worktree_path.to_string_lossy(),
+                })
+                .to_string())
+            }
+        }
     }
 }
 
@@ -183,5 +233,29 @@ mod tests {
         let ws: crate::WorkspaceState = std::sync::Arc::new(std::sync::Mutex::new(None));
         let r = agent_isolation_diff("agent-x".into(), &ws);
         assert!(r.is_err());
+    }
+
+    /// spill 回归：大 diff 必须完整落盘、路径含 .hologram/spill、内容无损。
+    #[test]
+    fn spill_diff_file_writes_full_content() {
+        let tmp = std::env::temp_dir().join("hologram_test_spill_diff");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let project = tmp.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let diff = "diff-line\n".repeat(2_000); // ~20KB > 8KB 阈值
+        let path = spill_diff_file(&project.to_string_lossy(), "agent-test-spill", &diff).unwrap();
+        assert!(path.exists(), "spill 文件必须存在");
+        assert!(
+            path.to_string_lossy().contains(".hologram/spill"),
+            "spill 路径必须在 .hologram/spill 下: {}",
+            path.to_string_lossy()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            diff,
+            "spill 内容必须与全量 diff 一致（不得截断）"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

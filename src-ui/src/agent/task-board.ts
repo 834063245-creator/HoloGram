@@ -49,6 +49,11 @@ export class TaskBoard {
     });
   }
 
+  /** 项目路径 — spill 溢写落盘用 */
+  get projectPath(): string {
+    return this._store.projectPath;
+  }
+
   /** 序列化 entries（Map → Array）写文件。best-effort — 永不抛异常。 */
   async flush(): Promise<void> {
     if (this._store.destroyed) return;
@@ -254,6 +259,10 @@ export class TaskBoardProxy {
 
   get target(): TaskBoard {
     return this._target;
+  }
+
+  get projectPath(): string {
+    return this._target.projectPath;
   }
 
   getAllEntries(): BoardEntry[] {
