@@ -1,0 +1,21 @@
+{
+  "fixture": "gap_probe",
+  "note": "Python 对抗样本。positive = P0-1/P0-2 目标；negative = 当前引擎会犯、修复后禁止出现的错误边（含 import 误绑局部变量）。",
+  "positive": [
+    { "src": "app.controllers.user_ctl.py", "tgt": "app.services.user_svc.py", "kind": "imports", "count": 1 },
+    { "src": "app.controllers.user_ctl.py", "tgt": "vendor.pkg_a.utils.py", "kind": "imports", "count": 1 },
+    { "src": "app.controllers.user_ctl.py", "tgt": "vendor.pkg_b.utils.py", "kind": "imports", "count": 1 },
+    { "src": "app.services.user_svc.py", "tgt": "db.py", "kind": "imports", "count": 1 },
+    { "src": "app.controllers.user_ctl.py.create_user", "tgt": "app.services.user_svc.py.UserService", "kind": "usage", "count": 1 },
+    { "src": "app.controllers.user_ctl.py.create_user", "tgt": "app.services.user_svc.py.UserService.create", "kind": "calls", "count": 1 },
+    { "src": "app.controllers.user_ctl.py.create_user", "tgt": "vendor.pkg_a.utils.py.format_user", "kind": "calls", "count": 1 },
+    { "src": "app.controllers.user_ctl.py.lookup", "tgt": "app.controllers.user_ctl.py.query", "kind": "calls", "count": 1 },
+    { "src": "app.controllers.user_ctl.py.lookup", "tgt": "app.controllers.user_ctl.py._fake_request", "kind": "usage", "count": 1 },
+    { "src": "app.services.user_svc.py.UserService.create", "tgt": "db.py.Database", "kind": "usage", "count": 1 }
+  ],
+  "positive_p03": [],
+  "negative": [
+    { "src": "app.services.user_svc.py", "tgt": "app.services.user_svc.py.UserService.create.db", "kind": "imports" },
+    { "src": "app.controllers.user_ctl.py.create_user", "tgt": "vendor.pkg_b.utils.py.format_user", "kind": "calls" }
+  ]
+}

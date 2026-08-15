@@ -113,23 +113,14 @@ fn graph_from_index(idx: &MemoryIndex) -> Graph {
     for node in idx.nodes_iter() {
         g.add_node(node.clone());
     }
-    for (source, targets) in idx.edges_iter() {
-        for (target, kind, coupling_depth, delay) in targets {
+    for (source, targets) in idx.edges_iter_full() {
+        for (target, kind, coupling_depth, delay, cross_file, metadata) in targets {
             let id = format!("{}::{}::{}", source, target, kind.as_str());
-            // ponytail: cross_file 是在 CSR 往返中丢失的分析元数据。
-            // 在 target 被 move 到 Edge::new 之前从节点位置计算。
-            let cross_file = {
-                let sf = idx.get_node(&source).and_then(|n| n.file());
-                let tf = idx.get_node(&target).and_then(|n| n.file());
-                match (sf, tf) {
-                    (Some(s), Some(t)) => s != t,
-                    _ => false,
-                }
-            };
             let mut edge = crate::graph::Edge::new(id, source.clone(), target, kind);
             edge.coupling_depth = coupling_depth;
             edge.temporal_delay_sec = delay;
             edge.cross_file = cross_file;
+            edge.metadata = metadata;
             g.add_edge_unchecked(edge);
         }
     }
@@ -678,6 +669,16 @@ pub fn engine_try_incremental(
 // 测试
 // ═══════════════════════════════════════════════════════════════
 
+/// lib 测试中会写全局 ENGINE 的用例共享此锁，避免并行时
+/// 互相 engine_init 把对方刚写入的 store 换掉。
+#[cfg(test)]
+pub(crate) static GLOBAL_ENGINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn global_engine_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    GLOBAL_ENGINE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,6 +776,7 @@ mod tests {
     /// 修复后 stop_watcher 2s 超时分离，切换必须正常完成。
     #[test]
     fn test_workspace_switch_no_deadlock_when_watcher_blocked_on_read() {
+        let _global_guard = global_engine_test_guard();
         let tmp = std::env::temp_dir().join("hologram_test_ws_switch_deadlock");
         let _ = std::fs::remove_dir_all(&tmp);
         let dir_a = tmp.join("project_a");
@@ -976,8 +978,8 @@ mod tests {
         n3.location = Some("src/main.rs:5".into());
         idx.insert_node(n3);
 
-        idx.upsert_edge("n1", "n2", EdgeKind::Calls, 0, None); // 相同文件
-        idx.upsert_edge("n1", "n3", EdgeKind::Calls, 0, None); // 跨文件
+        idx.upsert_edge_full("n1", "n2", EdgeKind::Calls, 0, None, false, None); // 相同文件
+        idx.upsert_edge_full("n1", "n3", EdgeKind::Calls, 0, None, true, None); // 跨文件
         idx.flush_pending(); // upsert_edge → pending_adds，flush → CSR 以便 graph_from_index 能看到
 
         let g = graph_from_index(&idx);
@@ -1457,6 +1459,7 @@ mod tests {
     /// 使用此机器上可用的 LSP 服务器。
     #[test]
     fn test_native_lsp_resolve_call_e2e() {
+        let _global_guard = global_engine_test_guard();
         let tmp = std::env::temp_dir().join("hologram_test_native_lsp");
         let _ = std::fs::remove_dir_all(&tmp);
         let test_dir = tmp.join("lsp_project");
@@ -1466,8 +1469,9 @@ mod tests {
         let _ = crate::engine::engine_init(&test_dir);
         let root_str = test_dir.to_string_lossy().to_string();
 
-        // 预热 LSP 池
-        crate::lsp_manager::LspManager::warm(&root_str);
+        // 预热 LSP 池（只预热测试会访问的 Java 通道，
+        // 避免全量 spawn 9 个 LSP 进程后在测试退出时遗留孤儿）。
+        crate::lsp_manager::LspManager::warm_filtered(&root_str, &["java"]);
 
         // ── 测试 1：engine_status 返回 LSP 信息 ──
         let status = crate::tools::handlers::handler_status(&json!({}));

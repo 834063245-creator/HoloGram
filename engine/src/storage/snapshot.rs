@@ -179,7 +179,7 @@ impl SnapshotNode {
 /// fts_dirty 不进快照 —— 反序列化后恒置 true(FTS 惰性重建)。
 #[derive(Serialize, Deserialize)]
 pub struct MemoryIndexSnapshot {
-    /// 快照格式版本(当前 2)。
+    /// 快照格式版本(当前 3)。
     pub version: u32,
     /// 引用句柄 → 字符串(按句柄排序去重;含索引 0 空哨兵)
     pub arena_strings: Vec<(u32, String)>,
@@ -195,14 +195,18 @@ pub struct MemoryIndexSnapshot {
     pub out_kinds: Vec<u8>,
     pub out_coupling: Vec<u8>,
     pub out_delays: Vec<f64>,
+    pub out_cross_file: Vec<u8>,
+    pub out_metadata: Vec<u32>,
     // ── CSR 入边 ──
     pub in_offsets: Vec<u32>,
     pub in_targets: Vec<u32>,
     pub in_kinds: Vec<u8>,
     pub in_coupling: Vec<u8>,
     pub in_delays: Vec<f64>,
+    pub in_cross_file: Vec<u8>,
+    pub in_metadata: Vec<u32>,
     // ── 变更缓冲区 ──
-    pub pending_adds: Vec<(u32, u32, EdgeKind, u8, Option<f64>)>,
+    pub pending_adds: Vec<(u32, u32, EdgeKind, u8, Option<f64>, u8, u32)>,
     pub pending_removes: HashSet<(u32, u32, EdgeKind)>,
     /// 符号名称 → 节点句柄
     pub name_index: HashMap<String, Vec<u32>>,

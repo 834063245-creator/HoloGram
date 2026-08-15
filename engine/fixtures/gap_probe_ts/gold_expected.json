@@ -1,0 +1,25 @@
+{
+  "fixture": "gap_probe_ts",
+  "note": "positive = P0-1/P0-2 目标（import 确定性解析+别名绑定）；positive_p03 = P0-3 目标（外部依赖节点）；negative = 解析后禁止出现的错误边。src/tgt 用点分后缀匹配入库边的节点 id。",
+  "positive": [
+    { "src": "src.app.tsx", "tgt": "src.components.button.tsx", "kind": "imports", "count": 1 },
+    { "src": "src.app.tsx", "tgt": "src.theme.colors.ts", "kind": "imports", "count": 1 },
+    { "src": "src.components.button.tsx", "tgt": "src.theme.colors.ts", "kind": "imports", "count": 1 },
+    { "src": "src.main.ts", "tgt": "src.util.format.ts", "kind": "imports", "count": 1 },
+    { "src": "src.main.ts", "tgt": "src.util.parse.ts", "kind": "imports", "count": 1 },
+    { "src": "src.app.tsx.render", "tgt": "src.components.button.tsx.Button", "kind": "calls", "count": 1 },
+    { "src": "src.app.tsx.render", "tgt": "src.theme.colors.ts.darken", "kind": "calls", "count": 1 },
+    { "src": "src.app.tsx.render", "tgt": "src.theme.colors.ts.theme", "kind": "usage", "count": 1 },
+    { "src": "src.components.button.tsx.Button", "tgt": "src.theme.colors.ts.theme", "kind": "usage", "count": 1 },
+    { "src": "src.main.ts.go", "tgt": "src.util.format.ts.normalize", "kind": "calls", "count": 1 },
+    { "src": "src.main.ts.go", "tgt": "src.util.parse.ts.normalize", "kind": "calls", "count": 1 }
+  ],
+  "positive_p03": [
+    { "src": "src.uses_leftpad.ts", "tgt": "leftpad", "kind": "imports", "external": true },
+    { "src": "src.uses_react.ts", "tgt": "react", "kind": "imports", "external": true }
+  ],
+  "negative": [
+    { "src": "src.main.ts.go", "tgt": "src.util.parse.ts.normalize", "kind": "imports" },
+    { "src": "src.uses_leftpad.ts", "tgt": "src.app.tsx", "kind": "imports" }
+  ]
+}

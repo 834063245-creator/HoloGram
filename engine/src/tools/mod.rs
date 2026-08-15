@@ -432,7 +432,7 @@ fn all_schemas() -> &'static [ToolSchema] {
         ToolSchema {
             name: "get_neighbors",
             description: "Get the direct neighborhood of a node — who depends on it and who it depends on (1-hop subgraph). Use after search_symbols when you've found a symbol and want to see its immediate coupling. \"这个模块被谁依赖？\" → call this.",
-            params: &[p!("nodeId", "string", "The node ID")],
+            params: &[p!("nodeId", "string", "The node ID"), p!("excludeSynthesized", "boolean", "Exclude heuristic-synthesized edges (dynamic dispatch / framework routes / DI reflection) from incoming/outgoing lists (default false)")],
             required: &["nodeId"],
             read_only: true,
             category: "graph",
@@ -682,7 +682,7 @@ fn all_schemas() -> &'static [ToolSchema] {
         // ── 数据流追踪 ──
         ToolSchema {
             name: "trace_dataflow",
-            description: "Per-function variable reads/writes, cross-function shared state, async triggers, call sequences. Answers: \"where is X written?\" \"who reads Y?\" \"which functions share Z?\". Pass the file paths you're investigating — returns scoped data movement analysis. Follow up with trace_impact on shared variables to trace downstream effects.",
+            description: "Syntax-level identifier usage census per function scope (heuristic, NOT semantic dataflow): which identifiers each function scope reads/writes, name-collision-based shared-state candidates, await/trigger patterns, and consecutive call sequences. No interprocedural propagation, no aliasing, no taint sources/sinks — do NOT treat results as proven data flow. Use resolve_call (LSP) for precise per-call resolution, trace_impact for structural blast radius. Pass the file paths you're investigating.",
             params: &[p!("files", "array", "File paths, e.g. [\"src/auth.js\", \"src/db.js\"]")],
             required: &["files"],
             read_only: true,

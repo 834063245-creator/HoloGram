@@ -1,0 +1,18 @@
+{
+  "fixture": "gap_probe_rs",
+  "note": "positive = P0-1/P0-2 目标；positive_p03 = P0-3 目标（std 外部依赖）；negative = 禁止出现的错误边。",
+  "positive": [
+    { "src": "src.main.rs", "tgt": "src.util.format.rs", "kind": "imports", "count": 1 },
+    { "src": "src.main.rs", "tgt": "src.other.rs", "kind": "imports", "count": 1 },
+    { "src": "src.main.rs.main", "tgt": "src.util.format.rs.fmt", "kind": "calls", "count": 1 },
+    { "src": "src.main.rs.main", "tgt": "src.other.rs.fmt", "kind": "calls", "count": 1 },
+    { "src": "src.util.mod.rs.also_here", "tgt": "src.util.format.rs.fmt", "kind": "calls", "count": 1 }
+  ],
+  "positive_p03": [
+    { "src": "src.main.rs", "tgt": "std", "kind": "imports", "external": true }
+  ],
+  "negative": [
+    { "src": "src.main.rs.main", "tgt": "src.other.rs.also_here", "kind": "calls" },
+    { "src": "src.main.rs", "tgt": "src.util.format.rs.fmt", "kind": "imports" }
+  ]
+}

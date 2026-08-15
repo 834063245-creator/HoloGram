@@ -9,6 +9,8 @@ use crate::tools::ToolResponse;
 pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
     // 仅在未初始化或项目根目录变更时预热 LSP 池。
     //（不在每次 engine_status 轮询时重启健康的服务器。）
+    // 按已索引节点中真实出现的扩展名过滤，避免把 9 个 LSP
+    // 服务器全部 spawn 一遍。
     {
         let proj = project_root();
         let root = if proj.as_os_str().is_empty() {
@@ -20,8 +22,30 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
         if !crate::lsp_manager::LspManager::is_initialized()
             || crate::lsp_manager::LspManager::root_changed(&root_str)
         {
+            let mut lsp_exts: Vec<String> = Vec::new();
+            let _ = engine::engine_read(|idx| {
+                for node in idx.nodes_iter() {
+                    if let Some(file) = node.file() {
+                        if let Some(ext) = std::path::Path::new(file)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                        {
+                            let ext = ext.to_ascii_lowercase();
+                            if !lsp_exts.contains(&ext) {
+                                lsp_exts.push(ext);
+                            }
+                        }
+                    }
+                }
+            });
             std::thread::spawn(move || {
-                crate::lsp_manager::LspManager::warm(&root_str);
+                if lsp_exts.is_empty() {
+                    // 尚无索引（首次打开/分析中）：保留旧的保守行为。
+                    crate::lsp_manager::LspManager::warm(&root_str);
+                } else {
+                    let ext_filter: Vec<&str> = lsp_exts.iter().map(|s| s.as_str()).collect();
+                    crate::lsp_manager::LspManager::warm_filtered(&root_str, &ext_filter);
+                }
             });
         }
     }

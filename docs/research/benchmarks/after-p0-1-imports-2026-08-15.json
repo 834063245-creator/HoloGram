@@ -1,0 +1,196 @@
+{
+  "engine_binary": "/home/jingjianhua/HoloGram/engine/target/release/hologram-engine",
+  "results": [
+    {
+      "fixture": "gap_probe",
+      "gold_positive": 10,
+      "gold_positive_p03": 0,
+      "gold_negative": 2,
+      "tp": 8,
+      "tp_p03": 0,
+      "false_positive": 0,
+      "recall_p0": 0.8,
+      "recall_p03": 1.0,
+      "precision": 1.0,
+      "missed": [
+        {
+          "src": "app.controllers.user_ctl.py.create_user",
+          "tgt": "app.services.user_svc.py.UserService",
+          "kind": "usage",
+          "count": 1
+        },
+        {
+          "src": "app.controllers.user_ctl.py.create_user",
+          "tgt": "vendor.pkg_a.utils.py.format_user",
+          "kind": "calls",
+          "count": 1
+        }
+      ],
+      "count_warnings": [
+        {
+          "src": "app.controllers.user_ctl.py.create_user",
+          "tgt": "app.services.user_svc.py.UserService",
+          "kind": "usage",
+          "count": 1,
+          "actual_count": 0
+        },
+        {
+          "src": "app.controllers.user_ctl.py.create_user",
+          "tgt": "vendor.pkg_a.utils.py.format_user",
+          "kind": "calls",
+          "count": 1,
+          "actual_count": 0
+        }
+      ],
+      "false_positive_details": [],
+      "engine_diag": [
+        "[cross-file diag] unresolved=26 | no_short=23 (dotted=8, bare_ext=15) | bare_multi=1 | dotted_no_suffix=2 | src_miss=0",
+        "[cross-file diag] by kind: usage=19, calls=7",
+        "[engine]   db-save: persist+swap 0.0s"
+      ],
+      "db_edges": 38
+    },
+    {
+      "fixture": "gap_probe_ts",
+      "gold_positive": 11,
+      "gold_positive_p03": 2,
+      "gold_negative": 2,
+      "tp": 7,
+      "tp_p03": 2,
+      "false_positive": 0,
+      "recall_p0": 0.6364,
+      "recall_p03": 1.0,
+      "precision": 1.0,
+      "missed": [
+        {
+          "src": "src.app.tsx.render",
+          "tgt": "src.theme.colors.ts.theme",
+          "kind": "usage",
+          "count": 1
+        },
+        {
+          "src": "src.components.button.tsx.Button",
+          "tgt": "src.theme.colors.ts.theme",
+          "kind": "usage",
+          "count": 1
+        },
+        {
+          "src": "src.main.ts.go",
+          "tgt": "src.util.format.ts.normalize",
+          "kind": "calls",
+          "count": 1
+        },
+        {
+          "src": "src.main.ts.go",
+          "tgt": "src.util.parse.ts.normalize",
+          "kind": "calls",
+          "count": 1
+        }
+      ],
+      "count_warnings": [
+        {
+          "src": "src.app.tsx.render",
+          "tgt": "src.theme.colors.ts.theme",
+          "kind": "usage",
+          "count": 1,
+          "actual_count": 0
+        },
+        {
+          "src": "src.components.button.tsx.Button",
+          "tgt": "src.theme.colors.ts.theme",
+          "kind": "usage",
+          "count": 1,
+          "actual_count": 0
+        },
+        {
+          "src": "src.main.ts.go",
+          "tgt": "src.util.format.ts.normalize",
+          "kind": "calls",
+          "count": 1,
+          "actual_count": 0
+        },
+        {
+          "src": "src.main.ts.go",
+          "tgt": "src.util.parse.ts.normalize",
+          "kind": "calls",
+          "count": 1,
+          "actual_count": 0
+        }
+      ],
+      "false_positive_details": [],
+      "engine_diag": [
+        "[cross-file diag] unresolved=12 | no_short=12 (dotted=4, bare_ext=8) | bare_multi=0 | dotted_no_suffix=0 | src_miss=0",
+        "[cross-file diag] by kind: calls=7, usage=5",
+        "[engine]   db-save: persist+swap 0.0s"
+      ],
+      "db_edges": 21
+    },
+    {
+      "fixture": "gap_probe_rs",
+      "gold_positive": 5,
+      "gold_positive_p03": 1,
+      "gold_negative": 2,
+      "tp": 2,
+      "tp_p03": 1,
+      "false_positive": 0,
+      "recall_p0": 0.4,
+      "recall_p03": 1.0,
+      "precision": 1.0,
+      "missed": [
+        {
+          "src": "src.main.rs.main",
+          "tgt": "src.util.format.rs.fmt",
+          "kind": "calls",
+          "count": 1
+        },
+        {
+          "src": "src.main.rs.main",
+          "tgt": "src.other.rs.fmt",
+          "kind": "calls",
+          "count": 1
+        },
+        {
+          "src": "src.util.mod.rs.also_here",
+          "tgt": "src.util.format.rs.fmt",
+          "kind": "calls",
+          "count": 1
+        }
+      ],
+      "count_warnings": [
+        {
+          "src": "src.main.rs.main",
+          "tgt": "src.util.format.rs.fmt",
+          "kind": "calls",
+          "count": 1,
+          "actual_count": 0
+        },
+        {
+          "src": "src.main.rs.main",
+          "tgt": "src.other.rs.fmt",
+          "kind": "calls",
+          "count": 1,
+          "actual_count": 0
+        },
+        {
+          "src": "src.util.mod.rs.also_here",
+          "tgt": "src.util.format.rs.fmt",
+          "kind": "calls",
+          "count": 1,
+          "actual_count": 0
+        }
+      ],
+      "false_positive_details": [],
+      "engine_diag": [
+        "[cross-file diag] unresolved=17 | no_short=17 (dotted=0, bare_ext=17) | bare_multi=0 | dotted_no_suffix=0 | src_miss=0",
+        "[cross-file diag] by kind: usage=9, calls=8",
+        "[engine]   db-save: persist+swap 0.0s"
+      ],
+      "db_edges": 7
+    }
+  ],
+  "summary": {
+    "p0_recall": 0.6538,
+    "p03_recall": 1.0,
+    "precision": 1.0
+  }
+}

@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-use super::{Edge, EdgeKind, Graph};
+use super::{Edge, EdgeKind, Graph, Node, NodeKind};
 use crate::engine::GRAMMAR_LOADER;
 
 /// 源码文件扩展名，从 GRAMMAR_LOADER 动态派生。
@@ -292,64 +292,65 @@ impl CrossFileResolver {
         }
         let wb_secs = t_wb.elapsed().as_secs_f64();
 
-        // 清理：移除端点不存在的跨文件边。
-        // 文件内边（Usage、Writes、同文件 Calls）的 target 是裸名
-        // 而非 node ID — 它们原样有效。
-        // 歧义边（上面标记的）保留供用户/LSP 解析。
+        // P0-3：不再静默丢弃未解析的跨文件边。
+        // 端点缺失的边改写为 `unresolved:<裸名>` 占位节点并保留，
+        // 查询层诚实呈现；解析率由 graph_summary 报告。
+        // 文件内边（Usage、Writes、同文件 Calls）的 target 本就是裸名，原样有效。
         let t_orphan = std::time::Instant::now();
-        let orphan_edges: Vec<String> = graph
+        let unresolved_list: Vec<(String, String)> = graph
             .edges_iter()
             .filter(|(_, e)| {
-                if !e.cross_file {
-                    return false;
-                }
-                if graph.get_node(&e.source).is_some() && graph.get_node(&e.target).is_some() {
-                    return false;
-                }
-                // 保留歧义边
-                !e.metadata.as_ref()
-                    .and_then(|m| m.get("ambiguous"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
+                e.cross_file
+                    && !(graph.get_node(&e.source).is_some() && graph.get_node(&e.target).is_some())
             })
-            .map(|(id, _)| id.to_string())
+            .map(|(id, e)| (id.to_string(), e.target.as_str().to_string()))
             .collect();
-        for eid in &orphan_edges {
-            graph.remove_edge(eid);
+        let mut kept_unresolved = 0usize;
+        for (eid, bare_target) in unresolved_list {
+            let uid = format!("unresolved:{}", bare_target);
+            if graph.get_node(&uid).is_none() {
+                let mut n = Node::new(&uid, &bare_target, NodeKind::Symbol);
+                n.properties = serde_json::json!({ "unresolved": true });
+                graph.add_node(n);
+            }
+            if let Some(e) = graph.get_edge_mut(&eid) {
+                e.target = uid.into();
+            }
+            kept_unresolved += 1;
         }
         let orphan_secs = t_orphan.elapsed().as_secs_f64();
         eprintln!(
-            "[cross-file] loop {:.1}s (misses={}, cand_scans={}) | writeback {:.1}s (+{} -{} edges) | orphan {:.1}s (-{} edges)",
+            "[cross-file] loop {:.1}s (misses={}, cand_scans={}) | writeback {:.1}s (+{} -{} edges) | keep-unresolved {:.1}s ({} edges kept)",
             loop_secs, stats.cache_misses, stats.candidate_scans,
             wb_secs, resolved, to_remove.len(),
-            orphan_secs, orphan_edges.len()
+            orphan_secs, kept_unresolved
         );
 
-        if unresolved_count > 0 || !orphan_edges.is_empty() || !ambiguous_edges.is_empty() {
+        if unresolved_count > 0 || kept_unresolved > 0 || !ambiguous_edges.is_empty() {
             if unresolved_count > 0 {
                 tracing::warn!(
                     resolved,
                     unresolved = unresolved_count,
-                    orphans = orphan_edges.len(),
+                    kept_unresolved,
                     ambiguous = ambiguous_edges.len(),
-                    "cross-file resolver: {} edges unresolved, {} orphans cleaned, {} ambiguous (preserved)",
+                    "cross-file resolver: {} edges unresolved (kept), {} unresolved cross-file (kept), {} ambiguous (preserved)",
                     unresolved_count,
-                    orphan_edges.len(),
+                    kept_unresolved,
                     ambiguous_edges.len()
                 );
             } else {
                 tracing::debug!(
                     resolved,
-                    orphans = orphan_edges.len(),
+                    kept_unresolved,
                     ambiguous = ambiguous_edges.len(),
-                    "cross-file resolver: {} orphans cleaned (stale edges), {} ambiguous (preserved)",
-                    orphan_edges.len(),
+                    "cross-file resolver: {} unresolved cross-file kept, {} ambiguous (preserved)",
+                    kept_unresolved,
                     ambiguous_edges.len()
                 );
             }
         }
 
-        resolved // 注意：孤儿边不计入已解析 — 它们只是过时清理
+        resolved // 未解析边不计入 resolved — 它们被保留而非清理
     }
 }
 
@@ -854,9 +855,11 @@ mod tests {
         g.add_edge_unchecked(cross_edge("e1", "a", "nonexistent", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // 孤儿边应被清理，但不计入已解析
-        assert!(g.get_edge("e1").is_none(), "orphan edge should be removed");
-        assert_eq!(resolved, 0, "orphan cleanup does not count as resolved");
+        // P0-3：孤儿边不再删除——改写为 unresolved:<裸名> 占位节点保留
+        let e = g.get_edge("e1").expect("P0-3: unresolved edge must be kept");
+        assert_eq!(e.target.as_str(), "unresolved:nonexistent");
+        assert!(g.get_node("unresolved:nonexistent").is_some());
+        assert_eq!(resolved, 0, "unresolved edges do not count as resolved");
     }
 
     #[test]
@@ -867,9 +870,10 @@ mod tests {
         g.add_edge_unchecked(cross_edge("e1", "a", "totally_unknown_name", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // 应作为孤儿边清理
-        assert!(g.get_edge("e1").is_none());
-        assert_eq!(resolved, 0, "unresolved edge → orphan, not resolved");
+        // P0-3：保留为 unresolved 占位节点
+        let e = g.get_edge("e1").expect("P0-3: unresolved edge must be kept");
+        assert_eq!(e.target.as_str(), "unresolved:totally_unknown_name");
+        assert_eq!(resolved, 0, "unresolved edge → kept, not resolved");
     }
 
     // ── 新增：import 边的文件主干解析 ──
@@ -1015,10 +1019,12 @@ mod tests {
         g.add_edge_unchecked(cross_edge("e1", "main.py", "os", EdgeKind::Imports));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // 边应作为孤儿边清理（无法解析标准库）
-        assert!(g.get_edge("e1").is_none());
+        // P0-3：无法解析的标准库 import 保留为 unresolved 占位节点（不再静默丢弃）
+        let e = g.get_edge("e1").expect("P0-3: unresolved import must be kept");
+        assert_eq!(e.target.as_str(), "unresolved:os");
+        assert!(g.get_node("unresolved:os").is_some());
         assert!(g.get_edge("e1_resolved").is_none());
-        assert_eq!(resolved, 0, "stdlib import not resolved → orphan, not counted");
+        assert_eq!(resolved, 0, "stdlib import not resolved → kept unresolved, not counted");
     }
 
     #[test]

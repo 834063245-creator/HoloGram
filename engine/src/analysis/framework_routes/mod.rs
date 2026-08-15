@@ -470,8 +470,11 @@ pub(crate) fn inject_routes(graph: &mut Graph, routes: &[DetectedRoute], framewo
             cross_file: is_cross_file(graph, &handler_node_id, file),
                         temporal_delay_sec: None,
             lsp_resolved: false,
-            is_synthesized: false,
-            metadata: None,
+            is_synthesized: true,
+            metadata: Some(serde_json::json!({
+                "synthesizedBy": "framework-route",
+                "provenance": "heuristic"
+            })),
         };
 
         graph.add_node(route_node);

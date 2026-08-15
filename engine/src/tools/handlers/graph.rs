@@ -18,6 +18,11 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
             details: json!({}),
         };
     }
+    let exclude_synth = args
+        .get("exclude_synthesized")
+        .or_else(|| args.get("excludeSynthesized"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     match engine::engine_read(|idx| {
         let resolved = match resolve_in_index(idx, &node_id) {
             Some(rid) => rid,
@@ -25,8 +30,21 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
         };
         let node = idx.get_node(&resolved).expect("节点已解析").clone();
         let nb = idx.neighbors(&resolved, 1, None);
-        let incoming = idx.get_incoming_edges(&resolved);
-        let outgoing = idx.get_outgoing_edges(&resolved);
+        let mut incoming = idx.get_incoming_edges(&resolved);
+        let mut outgoing = idx.get_outgoing_edges(&resolved);
+        // P0-5：合成边（动态调度/框架路由/DI 启发式）诚实标记 + 可过滤
+        if exclude_synth {
+            incoming.retain(|e| !idx.is_edge_synthesized(&e.source, &e.target));
+            outgoing.retain(|e| !idx.is_edge_synthesized(&e.source, &e.target));
+        }
+        let edge_with_flag = |e: &crate::graph::Edge| {
+            let mut v = edge_to_value(e);
+            let synthesized = idx.is_edge_synthesized(&e.source, &e.target);
+            if synthesized {
+                v["synthesized"] = json!(true);
+            }
+            v
+        };
         // neighbors 附带 name/kind/file —— 只有裸 ID 时 LLM 不知道邻居是谁。
         let neighbors_value: Vec<Value> = nb.iter().map(|(_, t, d)| {
             match idx.get_node(t) {
@@ -42,8 +60,9 @@ pub(crate) fn handler_neighbors(args: &Value) -> ToolResponse {
             "node": node_to_value(&node),
             "neighbor_count": nb.len(),
             "neighbors": neighbors_value,
-            "incoming": incoming.iter().map(edge_to_value).collect::<Vec<_>>(),
-            "outgoing": outgoing.iter().map(edge_to_value).collect::<Vec<_>>(),
+            "incoming": incoming.iter().map(edge_with_flag).collect::<Vec<_>>(),
+            "outgoing": outgoing.iter().map(edge_with_flag).collect::<Vec<_>>(),
+            "exclude_synthesized": exclude_synth,
         })
     }) {
         Ok(value) if value.get("error").is_none() => return ToolResponse::Success(value),

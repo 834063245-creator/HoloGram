@@ -624,6 +624,9 @@ HelloReply resp = stub.sayHello(req);
 
     #[test]
     fn test_grpc_services_full_pipeline() {
+        // 本测试最后会 engine_init 到全局 ENGINE 并调用工具处理器；
+        // 与其它写全局 ENGINE 的测试串行，避免并行测试换掉 store。
+        let _global_guard = crate::engine::global_engine_test_guard();
         // 真实项目级验证：完整 pipeline 解析 fixture（客户端文件真实解析出节点，
         // 实现/调用匹配走真实 location 与名称）
         let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

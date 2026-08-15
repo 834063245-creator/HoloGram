@@ -78,6 +78,47 @@ impl Engine {
         // (resolve_call)。Graph 存储粗粒度 CALLS 边；
         // 类型感知的消歧在 Agent 请求时延迟执行。
 
+        // 1.7. 确定性 import 路径解析（P0-1）
+        // 在 CrossFileResolver 的名字猜测之前，把 imports 边按语言规则
+        // （相对路径/tsconfig paths/node_modules/包路径/use 路径）解析到
+        // 具体文件或外部依赖节点。
+        set_progress("import 路径解析", 0, 0, "");
+        let stage_start = std::time::Instant::now();
+        let import_stats = crate::graph::import_resolver::resolve_import_edges(
+            &mut result.graph,
+            project_root,
+        );
+        eprintln!(
+            "[engine] stage: import-path done in {:.1}s ({})",
+            stage_start.elapsed().as_secs_f64(),
+            import_stats.summary()
+        );
+        stage_timings.push(StageTiming {
+            name: "Import-Path".into(),
+            elapsed_secs: stage_start.elapsed().as_secs_f64(),
+            detail: import_stats.summary(),
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
+
+        // 1.8. import 符号绑定与别名传播（P0-2）
+        // 把引用导入别名/符号的 usage/calls 边确定性绑定到符号节点，
+        // 剩余未绑定的引用再交给 CrossFileResolver 名字猜测。
+        let binding_stats = crate::graph::import_resolver::apply_import_bindings(&mut result.graph);
+        eprintln!(
+            "[engine] stage: import-binding done ({})",
+            binding_stats.summary()
+        );
+        stage_timings.push(StageTiming {
+            name: "Import-Binding".into(),
+            elapsed_secs: 0.0,
+            detail: binding_stats.summary(),
+        });
+        if cancel.load(Ordering::Relaxed) {
+            return Err("分析已被新的重分析请求取消".to_string());
+        }
+
         // 2. 跨文件解析
         set_progress("跨文件解析", 0, 0, "");
         let stage_start = std::time::Instant::now();
@@ -448,12 +489,23 @@ impl Engine {
         });
 
         // 后台预热 LSP 服务器池 — 异步执行，
-        // 不阻塞流水线完成。失败的服务器被
-        // 静默跳过；手写适配器作为后备。
+        // 不阻塞流水线完成。按本次分析实际出现的扩展名过滤：
+        // 只为项目里真实存在的语言 spawn LSP，避免 9 个服务器
+        // 无条件全部拉起（进程退出时无人 kill 的孤儿进程来源）。
         let proj_root = project_root.to_path_buf();
+        let mut lsp_exts: Vec<String> = result
+            .discovered_files
+            .iter()
+            .filter_map(|p| p.extension())
+            .filter_map(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .collect();
+        lsp_exts.sort();
+        lsp_exts.dedup();
         std::thread::spawn(move || {
             let root_str = proj_root.to_string_lossy().to_string();
-            crate::lsp_manager::LspManager::warm(&root_str);
+            let ext_filter: Vec<&str> = lsp_exts.iter().map(|s| s.as_str()).collect();
+            crate::lsp_manager::LspManager::warm_filtered(&root_str, &ext_filter);
         });
 
         // 将状态恢复为 Ready

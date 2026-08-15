@@ -5,6 +5,7 @@ mod node;
 mod edge;
 mod graph;
 pub(crate) mod id;
+pub mod import_resolver;
 pub mod merge;
 pub mod resolver;
 pub mod query;

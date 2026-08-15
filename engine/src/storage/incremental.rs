@@ -394,7 +394,15 @@ impl IncrementalUpdater {
         // 从分析结果中查找该节点为源节点的跨文件边
         for edge in &analysis.edges {
             if edge.source == node_id && edge.cross_file {
-                index.upsert_edge(&edge.source, &edge.target, edge.kind, edge.coupling_depth, edge.temporal_delay_sec);
+                index.upsert_edge_full(
+                    &edge.source,
+                    &edge.target,
+                    edge.kind,
+                    edge.coupling_depth,
+                    edge.temporal_delay_sec,
+                    edge.cross_file,
+                    edge.metadata.as_ref(),
+                );
             }
         }
     }
@@ -430,15 +438,22 @@ impl IncrementalUpdater {
                             .unwrap_or(old_loc);
                         if old_file != changed_file {
                             // 来自未变更文件 —— 保留边
-                            let targets = old_index.outgoing(cid, None);
-                            for (tgt, kind, depth, _delay) in &targets {
+                            let targets = old_index.get_outgoing_edges(cid);
+                            for old_edge in &targets {
                                 // 如果目标在变更文件中，则重新指向
-                                let tgt_node = old_index.get_node(tgt);
-                                if let Some(tn) = tgt_node {
+                                if let Some(tn) = old_index.get_node(&old_edge.target) {
                                     if let Some(ref tl) = tn.location {
                                         let tf = tl.rsplit_once(':').map(|(f, _)| f).unwrap_or(tl);
                                         if tf == changed_file && tn.name == name {
-                                            new_index.upsert_edge(cid, node_id, *kind, *depth, None);
+                                            new_index.upsert_edge_full(
+                                                cid,
+                                                node_id,
+                                                old_edge.kind,
+                                                old_edge.coupling_depth,
+                                                old_edge.temporal_delay_sec,
+                                                old_edge.cross_file,
+                                                old_edge.metadata.as_ref(),
+                                            );
                                         }
                                     }
                                 }

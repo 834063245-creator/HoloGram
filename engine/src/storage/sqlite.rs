@@ -12,6 +12,17 @@ use tracing::info;
 
 use crate::graph::{EdgeKind, Node, NodeKind};
 
+/// bulk 写边元组：(source, target, kind, coupling, delay, cross_file, metadata)。
+pub type EdgeRow<'a> = (
+    &'a str,
+    &'a str,
+    EdgeKind,
+    u8,
+    Option<f64>,
+    bool,
+    Option<&'a serde_json::Value>,
+);
+
 /// 包装单一 hologram.db 连接。
 pub struct SqliteDb {
     conn: Connection,
@@ -322,11 +333,17 @@ impl SqliteDb {
         Ok(nodes)
     }
 
-    /// 返回 (source, target, kind, coupling_depth, temporal_delay_sec) 元组。
-    pub fn load_all_edges(&self) -> Result<Vec<(String, String, EdgeKind, u8, Option<f64>)>, String> {
+    /// 返回 (source, target, kind, coupling_depth, temporal_delay_sec,
+    ///        cross_file, metadata) 元组。
+    pub fn load_all_edges(
+        &self,
+    ) -> Result<Vec<(String, String, EdgeKind, u8, Option<f64>, bool, Option<serde_json::Value>)>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT source, target, kind, coupling_depth, temporal_delay_sec FROM edges")
+            .prepare(
+                "SELECT source, target, kind, coupling_depth, temporal_delay_sec, \
+                        cross_file, metadata FROM edges",
+            )
             .map_err(|e| format!("prepare edges: {}", e))?;
         let rows = stmt
             .query_map([], |row| {
@@ -338,7 +355,21 @@ impl SqliteDb {
                     });
                 let depth: i64 = row.get(3)?;
                 let delay: Option<f64> = row.get(4)?;
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, kind, depth as u8, delay))
+                let cross_file: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
+                let metadata_text: Option<String> = row.get(6)?;
+                let metadata = match metadata_text {
+                    Some(text) if !text.is_empty() => serde_json::from_str(&text).ok(),
+                    _ => None,
+                };
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    kind,
+                    depth as u8,
+                    delay,
+                    cross_file != 0,
+                    metadata,
+                ))
             })
             .map_err(|e| format!("query edges: {}", e))?;
         let mut edges = Vec::new();
@@ -363,7 +394,7 @@ impl SqliteDb {
     pub fn bulk_replace_all(
         &self,
         nodes: &[&Node],
-        edges: &[(&str, &str, EdgeKind, u8, Option<f64>)],
+        edges: &[EdgeRow<'_>],
     ) -> Result<(), String> {
         let t_total = std::time::Instant::now();
 
@@ -395,7 +426,7 @@ impl SqliteDb {
     fn bulk_replace_inner(
         &self,
         nodes: &[&Node],
-        edges: &[(&str, &str, EdgeKind, u8, Option<f64>)],
+        edges: &[EdgeRow<'_>],
     ) -> Result<(), String> {
         let tx = self.conn.unchecked_transaction()
             .map_err(|e| format!("tx: {}", e))?;
@@ -461,24 +492,29 @@ impl SqliteDb {
         }
         let t_nodes = t.elapsed().as_secs_f64();
 
-        // ── 分块插入边 ──
+        // ── 分块插入边（cross_file + metadata 一并落库）──
         let t = std::time::Instant::now();
-        const EDGE_CHUNK: usize = 150; // 6 列 × 150 = 900 参数
-        let edge_sql = "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec) VALUES ";
+        const EDGE_CHUNK: usize = 110; // 8 列 × 110 = 880 参数
+        let edge_sql = "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata) VALUES ";
         for chunk in edges.chunks(EDGE_CHUNK) {
-            let mut sql = String::with_capacity(edge_sql.len() + chunk.len() * 60);
+            let mut sql = String::with_capacity(edge_sql.len() + chunk.len() * 80);
             sql.push_str(edge_sql);
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(chunk.len() * 6);
-            for (i, &(source, target, kind, coupling_depth, temporal_delay_sec)) in chunk.iter().enumerate() {
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(chunk.len() * 8);
+            for (i, &(source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata)) in chunk.iter().enumerate() {
                 if i > 0 { sql.push_str(", "); }
-                let b = 1 + i * 6;
-                sql.push_str(&format!("(?{}, ?{}, ?{}, ?{}, ?{}, ?{})", b, b+1, b+2, b+3, b+4, b+5));
+                let b = 1 + i * 8;
+                sql.push_str(&format!("(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{}, ?{})", b, b+1, b+2, b+3, b+4, b+5, b+6, b+7));
                 params.push(Box::new(format!("{}::{}::{}", source, target, kind.as_str())));
                 params.push(Box::new(source.to_string()));
                 params.push(Box::new(target.to_string()));
                 params.push(Box::new(kind.as_str().to_string()));
                 params.push(Box::new(coupling_depth as i64));
                 params.push(Box::new(temporal_delay_sec));
+                params.push(Box::new(if cross_file { 1i64 } else { 0i64 }));
+                params.push(Box::new(match metadata {
+                    Some(m) => serde_json::to_string(m).unwrap_or_else(|_| "{}".into()),
+                    None => "".to_string(),
+                }));
             }
             let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
             tx.execute(&sql, param_refs.as_slice())
@@ -574,24 +610,40 @@ impl SqliteDb {
         Ok(())
     }
 
-    /// 使用 (source, target, kind, coupling_depth, temporal_delay_sec) 元组批量 upsert 边。
+    /// 使用 (source, target, kind, coupling_depth, temporal_delay_sec,
+    ///        cross_file, metadata) 元组批量 upsert 边。
     pub fn batch_upsert_edges(
         &self,
-        edges: &[(&str, &str, EdgeKind, u8, Option<f64>)],
+        edges: &[EdgeRow<'_>],
     ) -> Result<(), String> {
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|e| format!("tx: {}", e))?;
-        for &(source, target, kind, coupling_depth, temporal_delay_sec) in edges {
+        for &(source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata) in edges {
             let id = format!("{}::{}::{}", source, target, kind.as_str());
+            let metadata_text = match metadata {
+                Some(m) => serde_json::to_string(m).unwrap_or_else(|_| "{}".into()),
+                None => "".to_string(),
+            };
             tx.execute(
-                "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO edges (id, source, target, kind, coupling_depth, temporal_delay_sec, cross_file, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET
                     coupling_depth=excluded.coupling_depth,
-                    temporal_delay_sec=excluded.temporal_delay_sec",
-                params![id, source, target, kind.as_str(), coupling_depth as i64, temporal_delay_sec],
+                    temporal_delay_sec=excluded.temporal_delay_sec,
+                    cross_file=excluded.cross_file,
+                    metadata=excluded.metadata",
+                params![
+                    id,
+                    source,
+                    target,
+                    kind.as_str(),
+                    coupling_depth as i64,
+                    temporal_delay_sec,
+                    if cross_file { 1i64 } else { 0i64 },
+                    metadata_text,
+                ],
             )
             .map_err(|e| format!("insert edge {}: {}", id, e))?;
         }
@@ -904,8 +956,8 @@ mod tests {
         let nodes: Vec<Node> = all_kinds.iter()
             .map(|k| make_test_node(k.as_str(), *k))
             .collect();
-        let edges = vec![
-            ("symbol", "function", EdgeKind::Calls, 1u8, None::<f64>),
+        let edges: Vec<EdgeRow<'_>> = vec![
+            ("symbol", "function", EdgeKind::Calls, 1u8, None::<f64>, true, None),
         ];
 
         db.bulk_replace_all(&nodes.iter().collect::<Vec<_>>(), &edges).unwrap();
@@ -950,9 +1002,10 @@ mod tests {
             make_test_node("a", NodeKind::Symbol),
             make_test_node("b", NodeKind::Symbol),
         ];
-        let edges: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = vec![
-            ("a", "b", EdgeKind::Calls, 3u8, Some(0.5)),
-            ("a", "b", EdgeKind::Reads, 2u8, None),
+        let meta = serde_json::json!({"resolved_by": "import-binding", "unresolved_import": false});
+        let edges: Vec<EdgeRow<'_>> = vec![
+            ("a", "b", EdgeKind::Calls, 3u8, Some(0.5), true, Some(&meta)),
+            ("a", "b", EdgeKind::Reads, 2u8, None, false, None),
         ];
 
         db.bulk_replace_all(&nodes.iter().collect::<Vec<_>>(), &edges).unwrap();
@@ -960,13 +1013,17 @@ mod tests {
         let loaded = db.load_all_edges().unwrap();
         assert_eq!(loaded.len(), 2);
 
-        let calls = loaded.iter().find(|(_, _, k, _, _)| *k == EdgeKind::Calls).unwrap();
+        let calls = loaded.iter().find(|(_, _, k, _, _, _, _)| *k == EdgeKind::Calls).unwrap();
         assert_eq!(calls.3, 3); // coupling_depth
         assert_eq!(calls.4, Some(0.5)); // temporal_delay_sec
+        assert!(calls.5, "cross_file 应落库读回");
+        assert_eq!(calls.6.as_ref().and_then(|m| m.get("resolved_by")).and_then(|v| v.as_str()), Some("import-binding"));
 
-        let reads = loaded.iter().find(|(_, _, k, _, _)| *k == EdgeKind::Reads).unwrap();
+        let reads = loaded.iter().find(|(_, _, k, _, _, _, _)| *k == EdgeKind::Reads).unwrap();
         assert_eq!(reads.3, 2);
         assert!(reads.4.is_none());
+        assert!(!reads.5);
+        assert!(reads.6.is_none());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -984,8 +1041,8 @@ mod tests {
             make_test_node("alpha", NodeKind::Function),
             make_test_node("beta", NodeKind::Function),
         ];
-        let edges1: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = vec![
-            ("alpha", "beta", EdgeKind::Calls, 1u8, None),
+        let edges1: Vec<EdgeRow<'_>> = vec![
+            ("alpha", "beta", EdgeKind::Calls, 1u8, None, false, None),
         ];
         db.bulk_replace_all(&nodes1.iter().collect::<Vec<_>>(), &edges1).unwrap();
 
@@ -994,8 +1051,8 @@ mod tests {
             make_test_node("gamma", NodeKind::Class),
             make_test_node("delta", NodeKind::Class),
         ];
-        let edges2: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = vec![
-            ("gamma", "delta", EdgeKind::Inherits, 2u8, None),
+        let edges2: Vec<EdgeRow<'_>> = vec![
+            ("gamma", "delta", EdgeKind::Inherits, 2u8, None, true, None),
         ];
         db.bulk_replace_all(&nodes2.iter().collect::<Vec<_>>(), &edges2).unwrap();
 
@@ -1040,8 +1097,8 @@ mod tests {
         assert_eq!(sync, 1, "synchronous 应恢复为 NORMAL(1)");
 
         // 外键约束真实生效 —— 插入悬挂边必须失败
-        let dangling: Vec<(&str, &str, EdgeKind, u8, Option<f64>)> = vec![
-            ("gamma", "no_such_node", EdgeKind::Calls, 1u8, None),
+        let dangling: Vec<EdgeRow<'_>> = vec![
+            ("gamma", "no_such_node", EdgeKind::Calls, 1u8, None, false, None),
         ];
         assert!(db.batch_upsert_edges(&dangling).is_err(),
             "FK 恢复后悬挂边插入应被拒绝");

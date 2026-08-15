@@ -599,12 +599,29 @@ impl LspManager {
     /// 启动慢的不阻塞启动快的。失败记录到 `last_warm_errors` 中供诊断。
     /// 应在索引完成后调用。
     pub fn warm(project_root: &str) {
+        Self::warm_filtered(project_root, &[]);
+    }
+
+    /// 异步预热，仅启动与 `ext_filter` 中扩展名有交集的服务器。
+    /// `ext_filter` 为空时行为与 [`warm`] 完全一致。
+    ///
+    /// 索引完成后应优先使用本方法：避免对不存在的语言
+    /// 无条件 spawn 全部 LSP 进程（孤儿进程来源）。
+    pub fn warm_filtered(project_root: &str, ext_filter: &[&str]) {
         let mgr = Self::global();
         *mgr.project_root.write().unwrap_or_else(|e| e.into_inner()) = Some(project_root.to_string());
         *mgr.initialized.write().unwrap_or_else(|e| e.into_inner()) = true;
 
         let root = project_root.to_string();
         for cfg in SERVER_CONFIGS {
+            if !ext_filter.is_empty() {
+                let has_match = ext_filter
+                    .iter()
+                    .any(|e| cfg.extensions.contains(e));
+                if !has_match {
+                    continue;
+                }
+            }
             let cmd = cfg.command;
             // 跳过池中已在运行的服务器 —— 避免在重复 warm 调用
             //（如 engine_status 轮询）时杀死健康的进程。

@@ -102,6 +102,301 @@ fn resolve_import_path(import_path: &str, current_file: &str) -> String {
     }
 }
 
+// ── P0-1/P0-2：import 符号绑定收集 ──
+
+/// TS/JS：遍历 import_clause 的 default identifier 与 named_imports，
+/// 产出 [{"imported": name, "local": alias}, ...]。
+fn collect_ts_import_bindings(node: &tree_sitter::Node, source_bytes: &[u8]) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() != "import_clause" {
+            continue;
+        }
+        let mut c2 = child.walk();
+        for cc in child.children(&mut c2) {
+            match cc.kind() {
+                "identifier" => {
+                    if let Ok(name) = cc.utf8_text(source_bytes) {
+                        out.push(serde_json::json!({ "imported": "default", "local": name }));
+                    }
+                }
+                "named_imports" => {
+                    let mut c3 = cc.walk();
+                    for spec in cc.children(&mut c3) {
+                        if spec.kind() != "import_specifier" {
+                            continue;
+                        }
+                        let imported = spec
+                            .child_by_field_name("name")
+                            .and_then(|n| n.utf8_text(source_bytes).ok())
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        if imported.is_empty() {
+                            continue;
+                        }
+                        let local = spec
+                            .child_by_field_name("alias")
+                            .and_then(|n| n.utf8_text(source_bytes).ok())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| imported.clone());
+                        out.push(serde_json::json!({ "imported": imported, "local": local }));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Python `from X import Y [as Z], W`：排除 module_name 子节点后，
+/// dotted_name → imported=Y local=Y；aliased_import → imported=name local=alias。
+fn collect_py_import_from_bindings(node: &tree_sitter::Node, source_bytes: &[u8]) -> Vec<serde_json::Value> {
+    let module_child = node.child_by_field_name("module_name");
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if module_child.is_some_and(|m| m.id() == child.id()) {
+            continue;
+        }
+        match child.kind() {
+            "dotted_name" => {
+                if let Ok(name) = child.utf8_text(source_bytes) {
+                    let local = name.rsplit('.').next().unwrap_or(name).to_string();
+                    out.push(serde_json::json!({ "imported": name, "local": local }));
+                }
+            }
+            "aliased_import" => {
+                let name = child
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source_bytes).ok())
+                    .unwrap_or("");
+                if name.is_empty() {
+                    continue;
+                }
+                let alias = child
+                    .child_by_field_name("alias")
+                    .and_then(|n| n.utf8_text(source_bytes).ok())
+                    .unwrap_or(name);
+                out.push(serde_json::json!({ "imported": name, "local": alias }));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Python `import X [as Y]`：dotted_name → local=首段；aliased_import → local=alias。
+fn collect_py_import_bindings(node: &tree_sitter::Node, source_bytes: &[u8]) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "dotted_name" => {
+                if let Ok(name) = child.utf8_text(source_bytes) {
+                    let local = name.split('.').next().unwrap_or(name).to_string();
+                    out.push(serde_json::json!({ "imported": name, "local": local }));
+                }
+            }
+            "aliased_import" => {
+                let name = child
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source_bytes).ok())
+                    .unwrap_or("");
+                if name.is_empty() {
+                    continue;
+                }
+                let alias = child
+                    .child_by_field_name("alias")
+                    .and_then(|n| n.utf8_text(source_bytes).ok())
+                    .unwrap_or(name);
+                out.push(serde_json::json!({ "imported": name, "local": alias }));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Rust `use a::b::{c, d}` / `use a::b::C as D;` →
+/// (基础路径, 绑定列表, 顶层别名)。
+///
+/// 输入应为 tree-sitter `use_declaration` 的 `argument` 字段文本；
+/// 也可接受完整语句文本（兼容旧调用方，会剥掉 `use`/可见性/分号）。
+fn parse_rust_use(raw: &str) -> (String, Vec<serde_json::Value>, Option<String>) {
+    let mut s = raw.trim();
+    if let Some(r) = s.strip_suffix(';') {
+        s = r.trim();
+    }
+    if let Some(r) = s.strip_prefix("pub(in ") {
+        // `pub(in crate::x) use …` —— 剥到右括号后的 use
+        if let Some(pos) = r.find(") use ") {
+            s = r[pos + 6..].trim();
+        }
+    } else if let Some(r) = s.strip_prefix("pub(crate) ") {
+        s = r.trim();
+    } else if let Some(r) = s.strip_prefix("pub(super) ") {
+        s = r.trim();
+    } else if let Some(r) = s.strip_prefix("pub(self) ") {
+        s = r.trim();
+    } else if let Some(r) = s.strip_prefix("pub ") {
+        s = r.trim();
+    }
+    if let Some(r) = s.strip_prefix("use ") {
+        s = r.trim();
+    }
+
+    let mut bindings: Vec<serde_json::Value> = Vec::new();
+
+    // 花括号分组：`a::b::{c, d as e}` → 基础路径 `a::b` + 多个绑定。
+    if let Some(open) = s.find('{') {
+        let close = find_matching_brace(s, open).unwrap_or(s.len());
+        let head = s[..open].trim().trim_end_matches("::").to_string();
+        let inside = &s[open + 1..close];
+        let base_last = head.rsplit("::").next().unwrap_or("").to_string();
+        for item in split_top_level_commas(inside) {
+            let item = item.trim();
+            if item.is_empty() || item.ends_with("::*") || item == "*" {
+                continue;
+            }
+            let (path_text, item_alias) = match item.split_once(" as ") {
+                Some((p, a)) => (p.trim(), Some(a.trim().to_string())),
+                None => (item, None),
+            };
+            push_rust_use_binding(&mut bindings, path_text, item_alias, &base_last);
+        }
+        return (head, bindings, None);
+    }
+
+    // `use a::b::*;` → 通配导入，无符号绑定。
+    if s.ends_with("::*") {
+        let head = s[..s.len() - 3].trim().trim_end_matches("::").to_string();
+        return (head, bindings, None);
+    }
+    if s == "*" {
+        return (String::new(), bindings, None);
+    }
+
+    // 单路径，可带顶层别名。
+    let (path_text, alias) = match s.split_once(" as ") {
+        Some((p, a)) => (p.trim(), Some(a.trim().to_string())),
+        None => (s, None),
+    };
+    let base_last = path_text.rsplit("::").next().unwrap_or("").to_string();
+    push_rust_use_binding(&mut bindings, path_text, alias.clone(), &base_last);
+    (path_text.to_string(), bindings, alias)
+}
+
+/// 找到与 `s[open] == '{'` 匹配的右花括号（支持嵌套分组）。
+fn find_matching_brace(s: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, ch) in s[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(open + i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 按顶层逗号拆分 use 分组内容（忽略嵌套 `{}` 内的逗号）。
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// 把一个 use 绑定写入 JSON 数组。`self` 指基础路径末段。
+fn push_rust_use_binding(
+    out: &mut Vec<serde_json::Value>,
+    path_text: &str,
+    alias: Option<String>,
+    base_last: &str,
+) {
+    let path_text = path_text.trim().trim_end_matches("::");
+    if path_text.is_empty() || path_text == "*" || path_text.ends_with("::*") {
+        return;
+    }
+    let imported = if path_text == "self" {
+        base_last.to_string()
+    } else {
+        path_text.rsplit("::").next().unwrap_or(path_text).to_string()
+    };
+    if imported.is_empty() {
+        return;
+    }
+    let local = alias.unwrap_or_else(|| imported.clone());
+    out.push(serde_json::json!({ "imported": imported, "local": local }));
+}
+
+/// use 声明所在的**内联 mod 链**（相对文件模块路径，如 `tests`）。
+fn rust_use_scope_rel(node: &tree_sitter::Node, source_bytes: &[u8]) -> Option<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut cur = node.parent();
+    while let Some(p) = cur {
+        if p.kind() == "mod_item" {
+            if let Some(name) = p
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source_bytes).ok())
+            {
+                names.push(name.to_string());
+            }
+        }
+        cur = p.parent();
+    }
+    if names.is_empty() {
+        None
+    } else {
+        names.reverse();
+        Some(names.join("::"))
+    }
+}
+
+/// 收集文件内全部 `mod` 声明，供 ImportResolver 构建 Rust 模块树。
+fn collect_rust_modules(root: &tree_sitter::Node, source_bytes: &[u8]) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut stack = vec![*root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "mod_item" {
+            if let Some(name) = node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source_bytes).ok())
+            {
+                let inline = node.child_by_field_name("body").is_some();
+                out.push(serde_json::json!({
+                    "name": name,
+                    "inline": inline,
+                }));
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    out
+}
+
 // ── 继承名称提取 ──
 
 // ── 适配器 ──
@@ -274,14 +569,22 @@ fn process_query(
     // ponytail: 在 module_id 中包含扩展名，使 CrossFileResolver 能将
     // import 目标匹配到 module 节点。匹配旧适配器使用的格式。
     let module_id = file_id.replace(['/', '\\'], ".");
-
-    // Module 节点
-    let mut file_node = Node::new(&module_id, &file_id, NodeKind::File);
-    file_node.location = Some(file_path.to_string());
-    nodes.push(file_node);
+    let ext = file_path.rsplit('.').next().unwrap_or("");
+    let source_bytes = source.as_bytes();
 
     let root = tree.root_node();
-    let source_bytes = source.as_bytes();
+
+    // Module 节点。Rust 额外记录文件内的 mod 声明树，供 P0-1
+    // ImportResolver 做多级模块归属（mod x; / mod x { … }）。
+    let mut file_node = Node::new(&module_id, &file_id, NodeKind::File);
+    file_node.location = Some(file_path.to_string());
+    if ext == "rs" {
+        let rust_mods = collect_rust_modules(&root, source_bytes);
+        if !rust_mods.is_empty() {
+            file_node.properties["rust_modules"] = serde_json::Value::Array(rust_mods);
+        }
+    }
+    nodes.push(file_node);
 
     // ── Phase 1：收集具有正确嵌套的 scope 边界 ──
     // ponytail: 压入 (node, parent_scope_name) 对，使嵌套
@@ -493,6 +796,7 @@ fn process_query(
                                 &module_id, target, EdgeKind::Imports,
                             );
                             e.cross_file = true;
+                            e.metadata = Some(serde_json::json!({ "import_raw": target }));
                             edges.push(e);
                         }
                     }
@@ -510,6 +814,7 @@ fn process_query(
                                 &module_id, &resolved, EdgeKind::Imports,
                             );
                             e.cross_file = true;
+                            e.metadata = Some(serde_json::json!({ "import_raw": target }));
                             edges.push(e);
                         }
                     }
@@ -536,59 +841,150 @@ fn process_query(
                 // Python import_from_statement："module_name" 字段（"from X import Y"）
                 // Python import_statement：子节点包含 dotted_name（"import X"）
                 // Rust：use_declaration 文本（如 "use std::collections::HashMap"）
-                let raw_target = match node.child_by_field_name("source")
-                    .and_then(|n| n.utf8_text(source_bytes).ok())
-                {
-                    Some(s) => s.to_string(),
-                    None => {
-                        let kind = node.kind();
-                        if kind == "export_statement" {
-                            continue; // 命名导出，非重新导出 — 跳过
-                        }
-                        // Python：from X import Y
-                        if kind == "import_from_statement" {
-                            match node.child_by_field_name("module_name")
-                                .and_then(|n| n.utf8_text(source_bytes).ok())
-                            {
-                                Some(name) => name.to_string(),
-                                None => continue,
-                            }
-                        } else if kind == "import_statement" {
-                            // Python：import X → 每个 dotted_name 子节点一条边
-                            let mut cursor = node.walk();
-                            for child in node.children(&mut cursor) {
-                                if child.kind() == "dotted_name" {
-                                    if let Ok(name) = child.utf8_text(source_bytes) {
-                                        counter += 1;
-                                        let mut e = Edge::new(
-                                            format!("imp_{}_{}", file_id, counter),
-                                            &module_id, name, EdgeKind::Imports,
-                                        );
-                                        e.cross_file = true;
-                                        edges.push(e);
-                                    }
-                                }
-                            }
-                            continue; // 已发出边
-                        } else {
-                            // Rust use_declaration 或其他 import 类节点：使用完整文本
-                            node.utf8_text(source_bytes).ok()
-                                .map(|s| s.to_string())
-                                .unwrap_or_default()
-                        }
+                //
+                // P0-1/P0-2：边 metadata 里保存 import_raw（原始 specifier）与
+                // import_bindings（导入符号 + 本地别名），供 ImportResolver
+                // 做确定性路径解析与别名绑定。
+                let kind = node.kind();
+
+                // ── JS/TS：import/export ... from "source" ──
+                if let Some(s) = node.child_by_field_name("source").and_then(|n| n.utf8_text(source_bytes).ok()) {
+                    let raw = s.to_string();
+                    if raw.is_empty() {
+                        continue;
                     }
-                };
-                if raw_target.is_empty() {
+                    let target = resolve_import_path(&raw, file_path);
+                    counter += 1;
+                    let mut e = Edge::new(
+                        format!("imp_{}_{}", file_id, counter),
+                        &module_id, &target, EdgeKind::Imports,
+                    );
+                    e.cross_file = true;
+                    let bindings = collect_ts_import_bindings(&node, source_bytes);
+                    let mut meta = serde_json::json!({ "import_raw": raw });
+                    if !bindings.is_empty() {
+                        meta["import_bindings"] = serde_json::Value::Array(bindings);
+                    }
+                    e.metadata = Some(meta);
+                    edges.push(e);
                     continue;
                 }
-                let target = resolve_import_path(&raw_target, file_path);
-                counter += 1;
-                let mut e = Edge::new(
-                    format!("imp_{}_{}", file_id, counter),
-                    &module_id, &target, EdgeKind::Imports,
-                );
-                e.cross_file = true;
-                edges.push(e);
+
+                match kind {
+                    "export_statement" => {
+                        continue; // 命名导出（无 source），非重新导出 — 跳过
+                    }
+                    "import_from_statement" => {
+                        // Python：from X import Y [as Z]
+                        let Some(module) = node
+                            .child_by_field_name("module_name")
+                            .and_then(|n| n.utf8_text(source_bytes).ok())
+                        else {
+                            continue;
+                        };
+                        let bindings = collect_py_import_from_bindings(&node, source_bytes);
+                        counter += 1;
+                        let mut e = Edge::new(
+                            format!("imp_{}_{}", file_id, counter),
+                            &module_id, module, EdgeKind::Imports,
+                        );
+                        e.cross_file = true;
+                        let mut meta = serde_json::json!({ "import_raw": module.to_string() });
+                        if !bindings.is_empty() {
+                            meta["import_bindings"] = serde_json::Value::Array(bindings);
+                        }
+                        e.metadata = Some(meta);
+                        edges.push(e);
+                    }
+                    "import_statement" => {
+                        // Python：import X 或 import X as Y → 每个 dotted_name 一条边
+                        let bindings = collect_py_import_bindings(&node, source_bytes);
+                        let mut cursor = node.walk();
+                        for child in node.children(&mut cursor) {
+                            if child.kind() == "dotted_name" {
+                                if let Ok(name) = child.utf8_text(source_bytes) {
+                                    counter += 1;
+                                    let mut e = Edge::new(
+                                        format!("imp_{}_{}", file_id, counter),
+                                        &module_id, name, EdgeKind::Imports,
+                                    );
+                                    e.cross_file = true;
+                                    let mut meta =
+                                        serde_json::json!({ "import_raw": name.to_string() });
+                                    if !bindings.is_empty() {
+                                        meta["import_bindings"] =
+                                            serde_json::Value::Array(bindings.clone());
+                                    }
+                                    e.metadata = Some(meta);
+                                    edges.push(e);
+                                }
+                            }
+                        }
+                    }
+                    "use_declaration" => {
+                        // Rust：优先取 tree-sitter 的 argument 字段，避免
+                        // `pub(crate) use` 的可见性修饰符混入路径。
+                        let raw = node
+                            .utf8_text(source_bytes)
+                            .ok()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        if raw.is_empty() {
+                            continue;
+                        }
+                        let arg_text = node
+                            .child_by_field_name("argument")
+                            .and_then(|n| n.utf8_text(source_bytes).ok())
+                            .unwrap_or(&raw);
+                        let (use_path, bindings, alias) = parse_rust_use(arg_text);
+                        counter += 1;
+                        let mut e = Edge::new(
+                            format!("imp_{}_{}", file_id, counter),
+                            &module_id, &raw, EdgeKind::Imports,
+                        );
+                        e.cross_file = true;
+                        let mut meta = serde_json::json!({
+                            "import_raw": raw,
+                            "import_path": use_path,
+                        });
+                        if let Some(a) = alias {
+                            meta["import_alias"] = serde_json::json!(a);
+                        }
+                        if !bindings.is_empty() {
+                            meta["import_bindings"] = serde_json::Value::Array(bindings);
+                        }
+                        if let Some(scope) = rust_use_scope_rel(&node, source_bytes) {
+                            meta["rust_scope"] = serde_json::json!(scope);
+                        }
+                        e.metadata = Some(meta);
+                        edges.push(e);
+                    }
+                    _ => {
+                        // 其他语言（Go/Java/...）：完整文本兜底
+                        let raw = node
+                            .utf8_text(source_bytes)
+                            .ok()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        if raw.is_empty() {
+                            continue;
+                        }
+                        let target = resolve_import_path(&raw, file_path);
+                        counter += 1;
+                        let mut e = Edge::new(
+                            format!("imp_{}_{}", file_id, counter),
+                            &module_id, &target, EdgeKind::Imports,
+                        );
+                        e.cross_file = true;
+                        let mut meta = serde_json::json!({ "import_raw": raw });
+                        // Go import 块：提取引号内路径存为 import_path
+                        if let Some(quoted) = extract_first_string_arg(&node, source_bytes) {
+                            meta["import_path"] = serde_json::json!(quoted.trim_matches(|c| c == '"' || c == '`'));
+                        }
+                        e.metadata = Some(meta);
+                        edges.push(e);
+                    }
+                }
             }
 
             "inherit" => {
@@ -609,35 +1005,53 @@ fn process_query(
                 // ponytail: 限定到外层 function/class，使 `foo()` 内的
                 // `x = 1` 创建 `module.foo.x` 而非 `module.x`。这避免了
                 // 跨函数名称冲突并与 cbm 的作用域规则一致。
-                let name = match node
+                let scope_id = find_scope(node.start_byte(), &scopes).unwrap_or(&module_id);
+                let mut names: Vec<String> = Vec::new();
+                if let Some(n) = node
                     .child_by_field_name("name")
                     .and_then(|n| n.utf8_text(source_bytes).ok())
                 {
-                    Some(n) => n.to_string(),
-                    None => {
-                        // 无 name 字段 — 尝试赋值的左侧
-                        let left = node.child_by_field_name("left")
-                            .and_then(|l| l.utf8_text(source_bytes).ok())
-                            .map(|s| s.to_string());
-                        match left {
-                            Some(s) => s,
-                            None => continue,
+                    names.push(n.to_string());
+                } else if let Some(l) = node
+                    .child_by_field_name("left")
+                    .and_then(|l| l.utf8_text(source_bytes).ok())
+                {
+                    names.push(l.to_string());
+                } else if node.kind() == "lexical_declaration"
+                    || node.kind() == "variable_declaration"
+                {
+                    // TS/TSX：`const theme = ..., x = ...;` → 每个
+                    // variable_declarator 一个 Variable 节点。
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        if child.kind() == "variable_declarator" {
+                            if let Some(nn) = child
+                                .child_by_field_name("name")
+                                .and_then(|n| n.utf8_text(source_bytes).ok())
+                            {
+                                names.push(nn.to_string());
+                            }
                         }
                     }
-                };
-                if name.is_empty() { continue; }
-                let scope_id = find_scope(node.start_byte(), &scopes).unwrap_or(&module_id);
-                let nid = format!("{}.{}", scope_id, name);
-                if created_ids.contains(&nid) { continue; }
-                created_ids.insert(nid.clone());
-                counter += 1;
-                edges.push(Edge::new(
-                    format!("def_{}_{}", file_id, counter),
-                    scope_id, &nid, EdgeKind::Defines,
-                ));
-                let mut n = Node::new(&nid, &name, NodeKind::Variable);
-                n.location = Some(format!("{}:{}", file_path, node.start_position().row + 1));
-                nodes.push(n);
+                }
+                for name in names {
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let nid = format!("{}.{}", scope_id, name);
+                    if created_ids.contains(&nid) {
+                        continue;
+                    }
+                    created_ids.insert(nid.clone());
+                    counter += 1;
+                    edges.push(Edge::new(
+                        format!("def_{}_{}", file_id, counter),
+                        scope_id, &nid, EdgeKind::Defines,
+                    ));
+                    let mut n = Node::new(&nid, &name, NodeKind::Variable);
+                    n.location = Some(format!("{}:{}", file_path, node.start_position().row + 1));
+                    nodes.push(n);
+                }
             }
 
             "write" => {
@@ -1723,6 +2137,34 @@ mod tests {
         let (_nodes, edges, _) = a.analyze("lib.rs", src);
         let imports: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Imports)).collect();
         assert!(!imports.is_empty(), "use declaration should create import edge");
+    }
+
+    #[test]
+    fn test_rust_use_brace_bindings_and_inline_mod_scope() {
+        let a = QueryStructureAdapter::new_rust();
+        let src = "mod tests {\n    use super::super::{Edge, EdgeKind as E};\n}\npub(crate) use crate::util::{fmt as util_fmt, other};";
+        let (_nodes, edges, _) = a.analyze("lib.rs", src);
+        let imports: Vec<_> = edges.iter().filter(|e| matches!(e.kind, EdgeKind::Imports)).collect();
+        assert_eq!(imports.len(), 2, "got {:?}", imports.iter().map(|e| e.target.as_str()).collect::<Vec<_>>());
+
+        let scoped = imports.iter().find(|e| e.metadata.as_ref().and_then(|m| m.get("rust_scope")).and_then(|v| v.as_str()) == Some("tests")).unwrap();
+        let meta = scoped.metadata.as_ref().unwrap();
+        assert_eq!(meta["import_path"], "super::super");
+        let bindings = meta["import_bindings"].as_array().unwrap();
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0]["imported"], "Edge");
+        assert_eq!(bindings[0]["local"], "Edge");
+        assert_eq!(bindings[1]["imported"], "EdgeKind");
+        assert_eq!(bindings[1]["local"], "E");
+
+        let pub_use = imports.iter().find(|e| e.metadata.as_ref().and_then(|m| m.get("rust_scope")).is_none()).unwrap();
+        let meta = pub_use.metadata.as_ref().unwrap();
+        assert_eq!(meta["import_path"], "crate::util");
+        let bindings = meta["import_bindings"].as_array().unwrap();
+        assert_eq!(bindings[0]["imported"], "fmt");
+        assert_eq!(bindings[0]["local"], "util_fmt");
+        assert_eq!(bindings[1]["imported"], "other");
+        assert_eq!(bindings[1]["local"], "other");
     }
 
     #[test]
