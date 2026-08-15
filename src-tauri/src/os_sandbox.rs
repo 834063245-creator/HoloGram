@@ -148,11 +148,16 @@ impl SandboxedChild {
 // 公共函数
 // ═══════════════════════════════════════════════════════════════
 
-/// 一次性初始化 — 在应用启动时调用。创建 Job Object (Windows)。
+/// 一次性初始化 — 在应用启动时调用。创建 Job Object (Windows)；
+/// 解析捆绑 MSYS2 bash 路径（shell-stability P1：解释器钉死，不再探测）。
 /// 在 Linux 上，检查 bubblewrap 可用性并记录状态。
-pub fn init() {
+#[cfg_attr(not(windows), allow(unused_variables))]
+pub fn init(app: &tauri::AppHandle) {
     #[cfg(windows)]
-    imp::job::init();
+    {
+        imp::job::init();
+        imp::shell::init_bundled(app);
+    }
     #[cfg(target_os = "linux")]
     {
         let s = linux::status();
@@ -190,23 +195,21 @@ pub fn status() -> SandboxStatus {
 pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     #[cfg(windows)]
     {
-        // 固定解释器策略（对齐 kimi-code / hermes-agent）：
-        // - 探测到 Git Bash → 一律用 bash，spawn 失败直接报错，不静默回退 cmd
-        //   （静默回退会让 Agent 猜不到命令跑在哪个解释器上，语法必踩坑）
-        // - 探测结果就是 Cmd（本机无 Git Bash）→ 用 cmd，但 shell_env() 会
-        //   显式上报，前端注入 Agent system prompt 声明 shell=cmd
+        // 固定解释器策略（shell-stability P1，对齐 dsh 钉死思路）：
+        // - 捆绑 MSYS2 bash 为主解释器：随 App 分发、版本钉死，用户装没装
+        //   Git 都不影响行为——消灭"探测失败静默降级"这个不稳定根源。
+        // - 资源缺失才回退系统 Git Bash（大声告警）；再不行才 cmd。
         //
         // 命令传递策略（2026-08：修复"转译问题/斜杠问题"）：
         // - Bash：命令串原样经 Command::arg 传给 bash -c（不经 split_cmdline 分词，
         //   也不做任何包裹）— 模型写的 $VAR / $(...) / 引号嵌套由 bash 正常解析。
-        //   此前整体单引号包裹把 $、$()、` 全部变成字面量，模型写什么都"不生效"。
         // - Cmd：命令写入临时 .cmd 文件再执行 — cmd /s /c 的引号剥离规则对内嵌
         //   双引号必错乱，批处理文件免疫一切 cmd 引号/展开问题。
-        match imp::detect_shell() {
+        match imp::resolve_shell() {
             imp::Shell::Bash(ref bash_path) => imp::spawn_bash(bash_path, command, cwd),
             imp::Shell::Cmd => {
                 eprintln!(
-                    "[hologram] no Git Bash detected — shell=cmd (Agent environment block will declare this)"
+                    "[hologram] no bash available — shell=cmd (Agent environment block will declare this)"
                 );
                 imp::spawn_cmd_script(command, cwd)
             }
@@ -243,18 +246,26 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
 pub fn shell_env() -> serde_json::Value {
     #[cfg(windows)]
     {
-        match imp::detect_shell() {
-            imp::Shell::Bash(path) => serde_json::json!({
-                "os": "windows",
-                "shell": "bash",
-                "shell_path": path,
-                "notes": "命令跑在 Git Bash (bash) 上，用 Unix 语法：$VAR / $(...) / 引号嵌套正常解析；路径用正斜杠（/c/Users/... 或相对路径），D:\\foo 这种反斜杠路径在 bash 内建命令里不可靠；MSYS 路径自动转换已关闭，/ 开头的参数按字面传给程序"
-            }),
+        match imp::resolve_shell() {
+            imp::Shell::Bash(path) => {
+                let version = imp::BUNDLED_BASH_VERSION
+                    .get()
+                    .and_then(|o| o.clone())
+                    .unwrap_or_else(|| "unknown".into());
+                serde_json::json!({
+                    "os": "windows",
+                    "shell": "bash",
+                    "shell_path": path,
+                    "shell_version": version,
+                    "bundled": imp::BUNDLED_BASH.get().and_then(|o| o.as_ref()).map(|p| p.to_string_lossy().into_owned()).is_some(),
+                    "notes": "命令跑在捆绑的 MSYS2 bash 上（版本随 App 钉死），用 Unix 语法：$VAR / $(...) / 引号嵌套正常解析；路径用正斜杠（/c/Users/... 或相对路径），D:\\foo 这种反斜杠路径在 bash 内建命令里不可靠；MSYS 路径自动转换已关闭，/ 开头的参数按字面传给程序；输出编码 UTF-8（LC_ALL=C.UTF-8 已钉死）"
+                })
+            }
             imp::Shell::Cmd => serde_json::json!({
                 "os": "windows",
                 "shell": "cmd",
                 "shell_path": "",
-                "notes": "未检测到 Git Bash，命令跑在 cmd.exe 上：用 %var% 而非 $var，用 dir 而非 ls"
+                "notes": "捆绑 bash 与 Git Bash 均不可用，命令跑在 cmd.exe 上：用 %var% 而非 $var，用 dir 而非 ls"
             }),
         }
     }
@@ -330,6 +341,8 @@ pub mod imp {
     use std::os::windows::process::CommandExt;
     use std::sync::OnceLock;
 
+    use tauri::Manager;
+
     use super::SandboxStatus;
 
     // ── FFI 声明 ──
@@ -403,6 +416,67 @@ pub mod imp {
     }
 
     static DETECTED_SHELL: OnceLock<Shell> = OnceLock::new();
+
+    /// 捆绑 MSYS2 bash 的绝对路径（shell-stability P1）。
+    /// init_bundled 在应用启动时解析一次；None = 资源缺失（回退探测）。
+    static BUNDLED_BASH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+
+    /// 捆绑 bash 的版本串（`bash --version` 首行），供 shell_env 注入 Agent。
+    static BUNDLED_BASH_VERSION: OnceLock<Option<String>> = OnceLock::new();
+
+    /// 捆绑资源内 bash.exe 的相对路径（tauri bundle.resources 带出）。
+    const BUNDLED_BASH_REL: &str = "vendor/msys2/bin/bash.exe";
+
+    /// 解析捆绑 bash：resource_dir 必须含 vendor/msys2/bin/bash.exe。
+    /// 缺失时保留 None——resolve_shell 走回退阶梯并大声告警，不静默。
+    pub fn init_bundled(app: &tauri::AppHandle) {
+        let resolved = app
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|d| d.join(BUNDLED_BASH_REL))
+            .filter(|p| p.is_file());
+        if resolved.is_none() {
+            eprintln!(
+                "[hologram] bundled MSYS2 bash missing at resource {BUNDLED_BASH_REL} — falling back to system detection"
+            );
+        }
+        BUNDLED_BASH.get_or_init(|| resolved.clone());
+        // 版本探针（带超时纪律，与 smoke_test_bash 同款）：
+        // bash --version 可能卡住（杀毒/损坏），失败只影响 prompt 注入文本。
+        if let Some(path) = resolved {
+            BUNDLED_BASH_VERSION.get_or_init(|| probe_bash_version(&path));
+        }
+    }
+
+    /// 探测 `bash --version` 首行，5s 超时，失败返回 None。
+    fn probe_bash_version(bash_path: &std::path::Path) -> Option<String> {
+        let out = std::process::Command::new(bash_path)
+            .arg("--version")
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.lines().next().map(|l| l.trim().to_string())
+    }
+
+    /// 解释器解析阶梯（shell-stability P1）：
+    /// 捆绑 bash（主，钉死版本）→ 系统 Git Bash（资源缺失回退，告警）→ cmd（最后）。
+    pub fn resolve_shell() -> Shell {
+        if let Some(path) = BUNDLED_BASH.get().and_then(|o| o.clone()) {
+            return Shell::Bash(path.to_string_lossy().into_owned());
+        }
+        match DETECTED_SHELL.get_or_init(detect_shell_inner).clone() {
+            Shell::Bash(path) => {
+                eprintln!("[hologram] using system Git Bash ({path}) — bundled bash unavailable");
+                Shell::Bash(path)
+            }
+            Shell::Cmd => Shell::Cmd,
+        }
+    }
 
     fn detect_shell_inner() -> Shell {
         let bash_candidates = [
@@ -613,13 +687,26 @@ pub mod imp {
         Ok(super::SandboxedChild { inner: child })
     }
 
-    /// Git Bash：`bash -c <command>` — 命令串原样传参，bash 自行解析
+    /// Git Bash / 捆绑 MSYS2 bash：`bash -c <command>` — 命令串原样传参，bash 自行解析
     /// $VAR / $(...) / 引号嵌套。设 MSYS2_ARG_CONV_EXCL='*' 关闭 MSYS
     /// 参数路径自动转换（否则 /src/main.ts 会被改写成
     /// C:\Program Files\Git\src\main.ts，正斜杠参数必错）。
+    /// env 纪律（shell-stability P3，对齐 dsh ENV_OVERRIDES）：
+    /// LC_ALL=C.UTF-8 钉死输出编码，NO_COLOR/PAGER/GIT_PAGER 消灭彩色转义与 pager 卡管道。
     pub fn spawn_bash(bash_path: &str, command: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
         let arg = command.to_string();
-        spawn_argv(bash_path, &[String::from("-c"), arg], cwd, &[("MSYS2_ARG_CONV_EXCL", "*")])
+        spawn_argv(
+            bash_path,
+            &[String::from("-c"), arg],
+            cwd,
+            &[
+                ("MSYS2_ARG_CONV_EXCL", "*"),
+                ("LC_ALL", "C.UTF-8"),
+                ("NO_COLOR", "1"),
+                ("PAGER", "cat"),
+                ("GIT_PAGER", "cat"),
+            ],
+        )
     }
 
     /// cmd.exe：命令写入临时 .cmd 批处理文件再执行 —

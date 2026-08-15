@@ -101,8 +101,8 @@ fn main() {
             get_active_project,
         ])
         .setup(|app| {
-            // Phase 4a: OS 沙箱 — Job Object 实现 die-with-parent
-            os_sandbox::init();
+            // Phase 4a: OS 沙箱 — Job Object 实现 die-with-parent + 捆绑 MSYS2 bash 解析
+            os_sandbox::init(app.handle());
             // 如果 OS 沙箱降级则警告 — 权限引擎作为回退
             let s = os_sandbox::status();
             if !matches!(s, os_sandbox::SandboxStatus::Available) {
