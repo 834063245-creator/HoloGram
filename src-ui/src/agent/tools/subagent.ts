@@ -7,6 +7,13 @@ import { getSubAgentActivity, STUCK_THRESHOLD_S } from '../subagent-activity';
 import type { Tool, ToolExecutor } from '../tool';
 import { agentInvoke } from '../tool';
 import { defineTool } from './define-tool';
+import {
+  assertSupportedSchema,
+  buildOutputSchemaInstruction,
+  extractJsonObject,
+  validateObjectJsonSchema,
+  type JsonSchema,
+} from '../schema-validate';
 
 // ═══════════════════════════════════════════════════════════════
 // Sub-Agent 工具 — 派发子 Agent 执行并行/委派任务
@@ -31,6 +38,7 @@ export type SubAgentSpawner = (
   signal?: AbortSignal, // pool 的中断信号 — 停/超时通过它杀死子Agent
   asyncMode?: boolean, // true = 非阻塞，立即返回 agentId，结果通过 bus 回来
   agentIdOverride?: string, // 显式指定子 Agent ID（异步模式必须，保证 LLM 拿到的 ID 与 board/bus 一致）
+  outputSchema?: Record<string, unknown> | null, // 结构化返回 schema（仅同步模式）
 ) => Promise<{ text: string; err?: string }>;
 
 export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool): Tool {
@@ -41,6 +49,7 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       'Fork mode (default — omit subagent_type) injects your recent context so the sub-agent knows what you already did; set subagent_type="fresh" for a clean-slate agent. ' +
       'In fork mode, file edits run in an isolated git worktree and are auto-merged back on success; on merge conflict the diff is returned to you for manual application. In fresh mode, the sub-agent edits files directly in the working tree — ensure parallel fresh sub-agents have non-overlapping file scopes. ' +
       'Set async=true to spawn non-blocking — returns immediately with the sub-agent ID, and the result arrives via agent_message (type: "result"). Use agent_merge to merge all completed async sub-agents. ' +
+      'Set output_schema to require a structured JSON result: the sub-agent is instructed to reply with a single JSON object matching the schema (supported keywords: type/properties/required/additionalProperties/items/enum/const/oneOf), and the validated JSON is returned as this tool\'s result. output_schema is supported in blocking mode only. ' +
       'Note: async sub-agents still occupy pool slots (max 5 concurrent). If the pool is full, spawn requests are queued (up to 20) and started as slots free up.',
     schema: z.object({
       description: z.string().describe('Short label for the sub-agent task (3-5 words, used in progress display)'),
@@ -72,6 +81,12 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
         .describe(
           'If true, returns immediately with the sub-agent ID. The sub-agent runs in the background; its result arrives via agent_message (type: "result"). If false (default), blocks until the sub-agent finishes. Use agent_merge to merge completed async sub-agents.',
         ),
+      output_schema: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe(
+          'Optional JSON Schema (object-rooted) the sub-agent result must satisfy. Supported keywords: type/properties/required/additionalProperties/items/enum/const/oneOf. Only valid in blocking mode (async=false). The validated JSON object is returned as the tool result.',
+        ),
     }),
     execute: async (args, onProgress) => {
       const description = args.description || '子任务';
@@ -81,7 +96,17 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       const toolAllowlist = args.tool_allowlist;
       const timeoutMinutes = args.timeout_minutes;
       const asyncMode = args.async === true;
+      const outputSchema = args.output_schema;
       if (!prompt) return '(agent_spawn: prompt is required)';
+      // output_schema 仅支持同步模式 — 异步结果经 bus 文本投递，结构化契约无从校验；
+      // 不支持组合在派发前拒绝（fail loud，不静默降级）
+      if (outputSchema && asyncMode) {
+        return '(agent_spawn: output_schema 仅支持阻塞模式（async=false）— 异步结果经消息文本投递，无法保证结构化契约）';
+      }
+      if (outputSchema) {
+        const schemaErr = assertSupportedSchema(outputSchema);
+        if (schemaErr) return `(agent_spawn: output_schema 不受支持 — ${schemaErr})`;
+      }
       // _callId 由 streaming-executor 注入（不进 schema，passthrough 透传）
       const callId = (args as { _callId?: string })._callId || undefined;
       const timeoutMs = timeoutMinutes && timeoutMinutes > 0 ? timeoutMinutes * 60 * 1000 : undefined;
@@ -94,7 +119,18 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       // 然后阻塞等待其完成 — 报告即为此工具的结果。
       const spawned = pool.spawn(
         description,
-        (signal) => spawner(description, prompt, onProgress, mode, toolAllowlist ?? null, signal, asyncMode, agentId),
+        (signal) =>
+          spawner(
+            description,
+            prompt,
+            onProgress,
+            mode,
+            toolAllowlist ?? null,
+            signal,
+            asyncMode,
+            agentId,
+            outputSchema ?? null,
+          ),
         callId,
         timeoutMs,
       );
@@ -117,7 +153,18 @@ export function createSubAgentTool(spawner: SubAgentSpawner, pool: SubAgentPool)
       // 阻塞模式（默认）：等待子 Agent 完成
       const handle = await spawned.done;
       if (handle.status === 'completed') {
-        return handle.result || '(子Agent 没有生成回复)';
+        const raw = handle.result || '(子Agent 没有生成回复)';
+        if (!outputSchema) return raw;
+        // 结构化返回：解析 + 校验。失败不静默 — 原文带回，附明确的校验错误
+        const parsed = extractJsonObject(raw);
+        if (parsed === undefined) {
+          return `(agent_spawn: output_schema 校验失败 — 子 Agent 回复中找不到 JSON 对象。原文：\n${raw})`;
+        }
+        const valErr = validateObjectJsonSchema(parsed, outputSchema as JsonSchema);
+        if (valErr) {
+          return `(agent_spawn: output_schema 校验失败 — ${valErr}。原文：\n${raw})`;
+        }
+        return JSON.stringify(parsed, null, 2);
       }
       const reason = handle.error || handle.result || '(未知错误)';
       return `子Agent ${handle.status === 'stopped' ? '被停止' : '失败'}: ${reason}`;

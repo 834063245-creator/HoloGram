@@ -44,7 +44,7 @@ import { planGateCheck, planRegistry, type PlanGate } from './plan/plan-registry
 import { foldToolResults, nextFoldBoundary, DEFAULT_TOOL_FOLD_BATCH } from './tool-fold';
 import { defineTool } from './tools/define-tool';
 import { resolveGuardToolName, convergeRegistry } from './tools/domains';
-
+import { buildOutputSchemaInstruction } from './schema-validate';
 /** 用自定义 execute 函数包装一个 Tool，返回新的 Tool 对象。
  *  原始 Tool 永远不会被修改 — 这点至关重要，因为父 Agent
  *  与其子 Agent 共享 Tool 引用。 */
@@ -2296,6 +2296,7 @@ ${resumeNote}
     poolSignal?: AbortSignal,
     asyncMode?: boolean,
     agentIdOverride?: string,
+    outputSchema?: Record<string, unknown> | null,
   ): Promise<{ text: string; err?: string }> {
     // 基于深度的递归守卫 — fork 与 fresh 一视同仁：递归爆炸与继承上下文无关，
     // 到达深度上限后两种模式都不许再派生子 Agent。
@@ -2479,6 +2480,11 @@ ${subTools
   .all()
   .map((t) => `- **${t.name()}**: ${t.description().slice(0, 100)}`)
   .join('\n')}`;
+    }
+
+    // 结构化返回：在系统提示末尾追加强制 JSON 输出契约
+    if (outputSchema) {
+      subSystem += buildOutputSchemaInstruction(outputSchema);
     }
 
     // ── 将子 Agent 的事件流交给 UI（workspace 注入的端口构建

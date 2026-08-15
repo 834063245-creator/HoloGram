@@ -620,8 +620,8 @@ export class AgentRuntime implements RuntimePort {
       effR.unregister('agent_spawn');
       effR.register(
         createSubAgentTool(
-          (desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride) =>
-            newAgent.spawnSubAgent(desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride),
+          (desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride, outputSchema) =>
+            newAgent.spawnSubAgent(desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride, outputSchema),
           config.subAgentPool,
         ),
       );
