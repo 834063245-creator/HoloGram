@@ -57,7 +57,7 @@ Rust cdp 栈：cdp.rs（facade，cdp.rs:27-42）
       └ probes.rs      探针单一来源（include_str! 嵌入 content/inspect/report/snapshot 4 个 .js）
 ```
 
-特点：**业务逻辑单点**（一个动作的 CDP 方法、超时、反馈全在 Rust 一侧）；TS 层是纯描述层。代价是 actions.rs 1,955 行仍是事实上的 god module（review-round2 §6 的 2,463 条耦合边只部分消化）。
+特点：**业务逻辑单点**（一个动作的 CDP 方法、超时、反馈全在 Rust 一侧）；TS 层是纯描述层。actions.rs 1,955 行是**单一职责的动作层**——全部 37 个动作的执行语义 + 共享原语（runtime_evaluate / require_target / find_el_expr / world_diff / wait_actionable），行数大但职责不混杂，不是 god module；拆分前的 cdp.rs（1,857 行混传输/会话/动作/探针四职责）才是 god module，已被第四批模块拆分消灭（review-round2 §4.2）。
 
 ### 2.2 harness：三层横切 seam
 
@@ -285,9 +285,7 @@ harness 的 seam 是可插拔架构的正面范例：选择语义（含 `WEB_PRO
 ## 14. 各自弱点（诚实清单）
 
 **HoloGram CDP 套件**：
-- actions.rs 1,955 行单文件仍是 god module（review-round2 §6 的耦合债只消化了一半；session.rs:5-6 头注释已过时）。
 - Windows 真机 e2e 未验证；Linux 8 个历史环境失败未清（非本套件）。
-- 错误全是字符串，无 code，测试只能断言前缀。
 - eval 白名单自认纵深防御；隔离 world 未做。
 - 截图默认只回路径（vision 模型多一跳）；HAR timing 全 -1。
 - 无 URL 域名白名单——安全性押在会话级授权上。
@@ -314,7 +312,7 @@ harness 的 seam 是可插拔架构的正面范例：选择语义（含 `WEB_PRO
 
 - **部署参数与模型参数分离**（§12.1-3）：harness 是部署期政策模型（多租户、产品定配置），HoloGram 是单用户桌面应用，模型自己控制 launch 形态（headless/windowSize/profile/proxy）是产品能力不是风险面。仅有的运维参数 `port` 保留给高级用法，不改。
 - **渲染 memo + presentationMeta 重放契约**（§12.1-4）：HoloGram 的工具结果是字符串、UI 审计面板走事件总线订阅，无"双渲染点打架"问题；harness 的 memo 是为了喂它的 card 重放体系。等 UI 层引入结构化结果卡再引入，现在做是过度设计。
-- **actions.rs 进一步拆分**（§14 弱点）：1955 行仍有 god module 味道，但今天动它违反 review-round2 §6 的"禁止一批同时改传输层和工具面"小步纪律；留给下窗口专项。
+- **actions.rs 进一步拆分**：**不需要，撤回此前的"god module"说法**。第四批模块拆分（transport/session/actions/probes）是已落地的架构；actions.rs 是单一职责的动作层（37 个动作 + 共享原语），行数大 ≠ god module——god module 的诊断标准是职责混杂 + 高耦合，拆分前的 cdp.rs（1,857 行混四职责）符合，拆完后的 actions.rs 不符合。
 - **Windows 真机 E2E-1~5**：无 Windows 环境，保持跳过并记录为已知未验证项。
 - **eval 隔离 world**：维持"可选未做"（ADR 0003 既定结论）。
 
