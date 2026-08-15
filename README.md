@@ -105,7 +105,7 @@ dsh web
 | 风险分析 | `trace_impact` `preflight_check` `fragile_modules` `detect_cycles` `thread_conflicts` |
 | 架构诊断 | `coupling_report` `arch_blindspots` `check_boundaries` `find_unused` |
 | 执行流 | `list_flows` `get_flow` `get_affected_flows` |
-| 数据流 | `trace_dataflow` `async_edges` |
+| 数据流（语法级启发式，非语义污点分析） | `trace_dataflow` `async_edges` |
 | 框架路由 | 24 种框架 URL → handler 映射（Express / Django / Rails / Spring …），动态 import / 反射 / DI 合成边 |
 | LSP 精确 | `resolve_call` `infer_type` `find_implementations` `find_references`（按需启动） |
 | 工程 | `analyze_project` `validate_project` `graph_diff` `rename_symbol` `project_health` `graph_summary` `cluster_report` `project_timeline` `get_community` |

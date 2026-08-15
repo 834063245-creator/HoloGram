@@ -409,7 +409,7 @@ Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外
 | **影响分析** | `trace_impact`, `find_dep_path`, `preflight_check` |
 | **社区** | `get_community`, `cluster_report` |
 | **架构分析** | `fragile_modules`, `detect_cycles`, `thread_conflicts`, `coupling_report`, `arch_blindspots`, `check_boundaries`, `find_unused`, `policy_check` |
-| **数据流** | `trace_dataflow`, `async_edges`, `list_flows`, `get_flow`, `get_affected_flows` |
+| **数据流（语法级启发式）** | `trace_dataflow`, `async_edges`, `list_flows`, `get_flow`, `get_affected_flows` |
 | **语义搜索** | 非独立 MCP 工具——挂在 Tauri `search_code` 的 `vector_hits` 字段（MiniLM 向量 + `vector_backend` 标识） |
 | **LSP** | `resolve_call`, `infer_type`, `find_implementations`, `find_references` |
 | **操作** | `analyze_project`, `graph_diff`, `validate_project`, `project_health`, `rename_symbol`, `engine_status` |
