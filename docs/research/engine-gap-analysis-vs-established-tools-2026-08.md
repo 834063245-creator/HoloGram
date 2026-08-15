@@ -5,6 +5,8 @@
 > - `docs/research/engine-capability-audit-2026-08.md`（引擎内部能力审计，全部 `文件:行号` 证据）
 > - `docs/research/external-deep-analysis-tools-baseline-2026-08.md`（CodeQL / Semgrep / SonarQube / Snyk Code 基线）
 > - `docs/code-graph-tools-gap-report.md`（dependency-cruiser / Sourcetrail / Understand / jQAssistant / Kythe / Glean / stack-graphs 基线）
+> - `docs/research/competitor-landscape-full-2026-08.md`（全量竞品地图：35+ 工具、四十年时间线、巨头威胁模型）
+> - **`docs/research/survival-position-verification-2026-08.md`（生存验证：每条代办对应的竞品验收线与失败后果——做清单前先读它）**
 > - 一手实验脚本与样本：`engine/fixtures/gap_probe/`（对抗性解析探针项目）
 
 ---
@@ -84,6 +86,8 @@
 
 ## 2. 老牌工具的真实水位（外部调研摘要）
 
+> **2026-08-15 第二波扩展**：本节为第一波摘要。竞品池已扩展到 30+（商业 SAST 巨头 / 架构治理老厂 / 学术血统 / 代码智能平台与索引器生态），四十年技术史时间线 + 巨头威胁模型见 **`docs/research/competitor-landscape-full-2026-08.md`**（必读），新增基线报告三份：`external-sast-giants-baseline-2026-08.md`、`architecture-governance-tools-baseline-2026-08.md`、`code-intelligence-indexer-ecosystem-2026-08.md`。
+
 ### 2.1 结构图谱阵营的「共同底线」
 
 | 档位 | 工具 | 提取深度 | 关键机制 |
@@ -101,6 +105,17 @@ Sourcetrail 的教训尤其重要：**只有一个人维护的小团队做 4 门
 四家产出「缺陷列表 + 规则命中」，**没有一家把图暴露给用户或 LLM**。CodeQL 最接近「代码数据库」（extractor → 关系库 → Datalog 家族 QL），但引擎闭源、编译型语言必须构建拦截。Snyk Code（DeepCode）证明了「语义图 + 符号执行 + 免构建」能到商业可用，但图是内部私产。
 
 **结论：HoloGram 与这四家是两个正交坐标轴**——「浅解析 × 显式图 × 给人和 LLM 查询」vs「深语义 × 内部图 × 找缺陷」。不要在缺陷检测上对标它们；但它们的存在定义了一个红线：**只要宣传里出现「数据流」「污点」这类词，用户就会拿 CodeQL 的标准来验收**，而现在的实现会瞬间穿帮。
+
+### 2.3 第二波新增：全量竞品速览（30+，细节见 `competitor-landscape-full-2026-08.md`）
+
+| 阵营 | 新增工具 | 一句话结论 |
+|---|---|---|
+| 商业 SAST 巨头 | Coverity、Fortify、Checkmarx、Klocwork、PVS-Studio | 深语义 + 图全部私有 + 大多需构建；**不卖图，只卖规则命中** |
+| 开源安全图谱 | **Joern**（★头号同赛道对标）、Infer、Mariana Trench、Cppcheck、Frama-C | **Joern 是唯一「开源+多语言+免构建+图完全暴露」的活跃工具**（Apache-2.0，几乎日更，CPG=AST+CFG+PDG）；Infer 未停更（v1.3.0，2026-05） |
+| 学术血统 | Soot、WALA、DOOP+Soufflé | 调用图+points-to 的精确度标杆在 **Datalog 声明式**路线；均 Java 为主、API 级 |
+| 架构治理老厂 | CAST、Axivion、Lattix、Structure101、Sonargraph、Teamscale、**NDepend**、CodeScene | 护城河 = 符号级 xrefs + 声明式规则/质量门（CQLinq 从 2004 卖到今天）；**NDepend v2026 已发 MCP Server，老厂也在涌向 LLM 车道** |
+| 索引器生态 | SCIP（9 个官方 indexer）、ctags/cscope、OpenGrok、Zoekt、clangd/rust-analyzer、importlab、PyCG | **SCIP 是语义层借力的标准格式**；PyCG 给出单语言合格调用图标尺（precision ≈99%、recall ≈70%） |
+| 同车道新竞争者 | colbymchenry/codegraph、CodeGraphContext 等 | **2025-2026 起量的 MCP 图谱拼装品，正在修 HoloGram 的 P0 级问题** |
 
 ---
 
@@ -150,12 +165,20 @@ Sourcetrail 的教训尤其重要：**只有一个人维护的小团队做 4 门
 - README/ARCHITECTURE/工具描述中把 `trace_dataflow` 改名为或明确标注为「语法级变量使用统计（heuristic）」，写清「无跨函数传播、无污点源/汇」。继续沿用「数据流」三字会被拿 CodeQL 标准验收，一验就穿。
 - 同步修复文档滞后：工具数（33/27 → 实际 34+1）、「10 阶段管线」（实际 1 核心 + 9 合成子阶段）。
 
+**P0-5. 合成边/启发式边诚实标记与可过滤（2026-08-15 生存验证补入）**
+
+- 现状：动态调度/框架路由/DI 反射产生的合成边存在 `is_synthesized` 误标（`dynamic_dispatch.rs:141` 置 false），且部分缺 provenance 元数据——解析边修好后，这些启发式边将成为图中「假数据」的最大来源。
+- 要做：① 所有合成通道（react/vue/di/框架路由/动态 import）统一走 `Edge::synthesized()` 并携带 `synthesizedBy` provenance；② 全部 34 个工具支持 `exclude_synthesized` 参数；③ 工具结果里合成边默认可见但明确标记，不冒充解析边。
+- 理由：信任修复完成后，信任崩塌的下一个位置就是「启发式边污染影响面」。
+
 ### 🟡 P1 —— 核心能力级（决定「图谱」还是「星图」的分水岭，建议 1~2 个季度）
 
-**P1-1. 补一层跨文件名称解析（二选一，推荐先 b 后 a）**
+**P1-1. 补一层跨文件名称解析（路线已收敛：SCIP 桥接为主，stack-graphs 为辅）**
 
-- a) **stack-graphs 路线**：GitHub 已证明 tree-sitter + stack-graphs（路径敏感名称解析）能给纯语法层补上符号级引用解析，且逐语言只需写名称解析规则、不需要完整类型系统。与现有技术栈同源，但 crate 官方已停更需自维护。
-- b) **SCIP/LSIF 桥接（更现实）**：引擎已有 LSP 管理基建（9 语言服务器），升级为「索引一次、全图复用」——用 rust-analyzer/gopls/tsserver/pyright 的 SCIP 产出填充符号级引用边。这是 Glean 的路线：**用别人的解析质量换自己的广度**。
+> 2026-08-15 第二波竞品调研（`docs/research/competitor-landscape-full-2026-08.md`）后收敛：四十年行业定律 + 活的 indexer 生态共同指向 SCIP。stack-graphs crate 官方已停更（README 明示不再由 GitHub 维护），只能作技术参考；SCIP（scip-typescript / scip-java / scip-python / rust-analyzer 均有产出）是活的标准格式。**验收线：每个主打语言，HoloGram 的符号解析质量不得差于对应 scip-* indexer；差于就直接桥接该 indexer，不自己写。**
+
+- a) **SCIP 桥接（主线）**：引擎已有 LSP 管理基建（9 语言服务器），升级为「索引一次、全图复用」——用 SCIP 官方 indexer 生态的产出填充符号级引用边（已核实 [SCIP README v0.3.2](https://raw.githubusercontent.com/scip-code/scip/refs/tags/v0.3.2/Readme.md) 列出的 9 个 indexer：**scip-typescript(TS/JS)、scip-python、rust-analyzer(Rust)、scip-java(Java/Scala/Kotlin)、scip-clang(C/C++)、scip-ruby、scip-dotnet(C#/VB)、scip-dart、scip-php**——覆盖 HoloGram 主力语言）。这是 Glean 的路线：**用别人的解析质量换自己的广度**。落地分档：有 indexer 的语言接 SCIP，冷门语言保留 tree-sitter 管线但标注「语法近似」；注意 rust-analyzer 的 SCIP 产出原生可用但偏基础（2022-08 合并），scip-java/scip-typescript 最成熟——分语言设成熟度预期。SCIP 消费器只是给 GraphStore 换上游数据源（Occurrence/SymbolInformation 灌图 + external_symbols 补回库依赖节点），**图存储/图算法/查询层零重写**。
+- b) **stack-graphs 路线（辅线，可选）**：路径敏感名称解析是 tree-sitter 补语义层的学术范本，官方停更后只能作为自研 resolver 升级时的算法参照（作用域栈、shadowing 规则），不建议直接依赖其 crate。
 
 **P1-2. 激活 LSP 入库，消灭 `lsp_resolved` 死字段**
 
@@ -182,13 +205,20 @@ Sourcetrail 的教训尤其重要：**只有一个人维护的小团队做 4 门
 
 ## 5. 不建议做的事（避免把项目做死）
 
-1. **不要自研语义解析器对标 CodeQL/Sonar**——Sourcetrail 一个人做 4 门语言都放弃了；27 门语言自研语义层必死。语义只能借（SCIP/LSIF/stack-graphs）。
+1. **不要自研语义解析器对标 CodeQL/Sonar**——Sourcetrail 一个人做 4 门语言都放弃了；27 门语言自研语义层必死。语义只能借（SCIP 为主、stack-graphs 为辅）。
 2. **不要在现有解析质量上加第 28 种语言**——广度已是独有优势，继续加语言是锦上添花；解析率 44% 的图加什么语言都是废图。先深度后广度。
 3. **不要继续堆「名字唬人」的分析工具**——建立在坏边上的新工具只会放大错误。现有 34 个工具的输入质量（P0）优先级远高于第 35 个工具。
 4. **不要把「缺陷检测」当 KPI 追**——那是 CodeQL/Sonar 的主场，是品类竞争，不是差异化。
+5. **不要现在就自研查询语言对标 CQLinq/Cypher/Angle**——四十年历史证明「可编程查询」是图谱产品标配（NDepend 的 CQLinq 从 2004 卖到今天），但它建立在可信图之上；先让 34 个工具 + YAML 约束规则可信，查询语言可后置。
 
 ---
 
-## 6. 一句话总结
+## 6. 一句话总结（2026-08-15 第二波竞品调研后修正）
 
-HoloGram 不是「差劲的代码图谱分析」，它是**「差一层解析的、产品形态独一无二的代码图谱平台」**：图存储/图算法/查询接口/MCP 集成/可视化这一整层是扎实且没有对手的；但解析层目前是「名字匹配 + 静默丢弃」，实测解析率 24%~44%，把依赖图做成了欠抽样的星图。补齐方向非常明确——**P0 先让 import 级依赖图可信（确定性路径解析 + 不静默），P1 借力 stack-graphs/SCIP 补上符号级解析层**。这两步做完，它就能在「可对话的代码图谱」这个无人占领的品类里立住；做不完，它就只能停留在「好看但不可信」的演示阶段。
+HoloGram 不是「差劲的代码图谱分析」，它是**「差一层解析的、产品形态独一无二的代码图谱平台」**：图存储/图算法/查询接口/MCP 集成/可视化这一整层是扎实的；但解析层目前是「名字匹配 + 静默丢弃」，实测解析率 24%~44%，把依赖图做成了欠抽样的星图。
+
+第二波调研（全量竞品地图见 `docs/research/competitor-landscape-full-2026-08.md`）把这个判断精确化了：
+
+- **差距的准确表述**：HoloGram **站在第五代（LLM 消费 + 平台化），用的却是第一代的解析深度（ctags 式名字索引）**——语法层已被 tree-sitter 商品化，语义层已被 SCIP 标准化，消费层刚被 MCP 打开。四十年历史沉淀出的三条定律（提取必须编译器级、图必须落可查询存储、广度×深度无人兼得）没有一条支持「纯语法 + 名字匹配」能做出可信图谱。
+- **巨头威胁的准确表述**：「LLM 可查询的多语言依赖图」这条车道**没有巨头**（安全巨头卖规则不卖图、架构巨头形态封闭价格高、IDE 索引器锁单语言），但**同赛道开源对标 Joern 活跃且图完全暴露**（Apache-2.0、几乎日更，差距基线应设在这里而不是 CodeQL），**组装替代品已经出现**（codegraph / CodeGraphContext 等 MCP 图谱项目正在 GitHub 上起量），**老牌商业工具也在进场**（NDepend v2026 已发布 MCP Server）——威胁不是巨头，是「tree-sitter + scip-* + SQLite + MCP」的拼装速度和老厂转向。
+- **因此护城河只有一条主线**：**解析信任度**（零配置广度和 Agent 集成已在手）。P0（确定性 import 解析 + 不静默丢边）不是改进项，是存亡前提；P1 收敛为 SCIP 桥接，验收线 = 主打语言解析质量不低于对应 scip-* indexer。做完这两步，HoloGram 才能在这个「巨头不care、拼装者做不到深、学术圈不做产品」的夹缝品类里立住；做不完，它就会在拼装替代品面前快速贬值。
