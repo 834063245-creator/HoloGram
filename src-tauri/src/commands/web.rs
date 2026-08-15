@@ -248,16 +248,12 @@ pub(crate) async fn web_fetch(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_lowercase();
+    let status = resp.status().as_u16();
     let max_size: usize = 1 << 20;
-    let mut body = String::new();
-    let mut reader = resp.into_body().into_reader();
-    let mut limited = (&mut reader).take(max_size as u64);
-    use std::io::Read;
-    limited.read_to_string(&mut body)
+    // 读 cap+1 字节以区分「恰好 1 MiB」与「真截断」——避免假阳性（2026-08-15 收口）。
+    let (buf, truncated) = read_capped(resp.into_body().into_reader(), max_size)
         .map_err(|e| format!("读取失败: {}", e))?;
-
-    let text = body.clone();
-    let truncated = body.len() >= max_size;
+    let text = decode_body(&buf, parse_charset(&content_type).as_deref());
 
     let result = if content_type.contains("html") {
         let mut s = text;
@@ -275,9 +271,79 @@ pub(crate) async fn web_fetch(
         text
     };
 
-    let mut info = String::new();
+    // 输出形态：header（最终 URL + HTTP 状态，重定向后可见）+ 正文 + 截断 footer
+    //（对齐 harness web_fetch 的模型呈现；截断指引给下一步动作而非裸报错）。
+    let mut out = format!("Fetched {current_url} (HTTP {status})\n\n{result}");
     if truncated {
-        info.push_str("[内容已截断至 1 MiB]\n\n");
+        out.push_str("\n\n(内容已截断至 1 MiB —— 换更具体的 URL，或对已打开的页面用 browser(content) 分页读取。)");
     }
-    Ok(format!("{info}{result}"))
+    Ok(out)
+}
+
+/// 从 Content-Type 头解析 charset 标签（小写、去引号）；无则 None。
+fn parse_charset(content_type: &str) -> Option<String> {
+    for part in content_type.split(';').skip(1) {
+        let kv: Vec<&str> = part.trim().splitn(2, '=').collect();
+        if kv.len() == 2 && kv[0].trim().eq_ignore_ascii_case("charset") {
+            return Some(kv[1].trim().trim_matches('"').to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+/// 按声明 charset 解码；未声明或未知标签一律按 UTF-8 宽容解码
+///（坏字节变 � 而非整页报错——能用的正文胜过 mojibake 报错）。
+fn decode_body(bytes: &[u8], charset: Option<&str>) -> String {
+    if let Some(label) = charset {
+        if let Some(enc) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+            let (cow, _) = enc.decode_without_bom_handling(bytes);
+            return cow.into_owned();
+        }
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// 从 reader 按字节 cap 读取：读 cap+1 字节以区分「恰好到 cap」与「真截断」。
+fn read_capped<R: std::io::Read>(mut reader: R, cap: usize) -> std::io::Result<(Vec<u8>, bool)> {
+    use std::io::Read as _;
+    let mut buf = Vec::new();
+    reader.take((cap as u64) + 1).read_to_end(&mut buf)?;
+    let truncated = buf.len() > cap;
+    buf.truncate(cap);
+    Ok((buf, truncated))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_charset_extracts_label() {
+        assert_eq!(parse_charset("text/html; charset=GBK"), Some("gbk".into()));
+        assert_eq!(parse_charset(r#"text/html; charset="utf-8""#), Some("utf-8".into()));
+        assert_eq!(parse_charset("text/plain"), None);
+    }
+
+    #[test]
+    fn decode_body_uses_declared_charset() {
+        // GBK 编码的 "你好"（C4 E3 BA C3）。
+        let gbk = [0xC4u8, 0xE3, 0xBA, 0xC3];
+        assert_eq!(decode_body(&gbk, Some("gbk")), "你好");
+        // 未声明 → UTF-8 宽容回退。
+        assert_eq!(decode_body("hi".as_bytes(), None), "hi");
+        assert!(decode_body(&[0xFF, 0xFE], None).contains('�'));
+    }
+
+    #[test]
+    fn read_capped_distinguishes_exact_cap_from_truncation() {
+        let exact = std::io::Cursor::new(vec![b'a'; 16]);
+        let (buf, truncated) = read_capped(exact, 16).unwrap();
+        assert_eq!(buf.len(), 16);
+        assert!(!truncated, "恰好到 cap 不应判截断");
+
+        let over = std::io::Cursor::new(vec![b'a'; 17]);
+        let (buf, truncated) = read_capped(over, 16).unwrap();
+        assert_eq!(buf.len(), 16);
+        assert!(truncated);
+    }
 }
