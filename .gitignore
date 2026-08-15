@@ -41,6 +41,8 @@ hologram_graph_files.json
 !src-tauri/onnxruntime.dll
 *.exe
 !release-bin/*.exe
+# 捆绑的 MSYS2 工具集（shell-stability，随仓库分发的钉死版 shell）
+!src-tauri/vendor/msys2/bin/**
 *.pdb
 *.so
 *.dylib

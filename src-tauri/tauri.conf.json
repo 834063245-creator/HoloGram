@@ -36,7 +36,8 @@
       "../grammars/*.dll",
       "onnxruntime.dll",
       "models/all-MiniLM-L6-v2/model.onnx",
-      "models/all-MiniLM-L6-v2/vocab.txt"
+      "models/all-MiniLM-L6-v2/vocab.txt",
+      "vendor/msys2/**"
     ],
     "windows": {
       "wix": {
