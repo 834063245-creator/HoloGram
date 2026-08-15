@@ -292,6 +292,51 @@ impl Engine {
         Ok(true)
     }
 
+    /// P1-1：导入 SCIP 索引（index.scip），把编译器级精确的符号引用边
+    /// 合并进图并落库。返回导入统计（含被诚实跳过的引用数）。
+    pub fn import_scip_index(
+        &self,
+        path: &Path,
+    ) -> Result<crate::scip_bridge::ScipImportStats, String> {
+        let index = crate::scip_bridge::parse_index_file(path)?;
+        let root = self.project_root();
+        let mut store_guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("store lock poisoned: {}", e))?;
+        let store = store_guard
+            .as_mut()
+            .ok_or_else(|| "Store not initialized".to_string())?;
+        let stats = {
+            let mut idx = store.index.write();
+            let s = crate::scip_bridge::import_index(&mut idx, &index, Some(&root));
+            idx.flush_pending();
+            // SCIP 导入是一次性离线操作 —— 全量落库换取一致性。
+            idx.to_sqlite(&store.db)?;
+            s
+        };
+        Ok(stats)
+    }
+
+    /// P1-1：分析完成后自动桥接根目录的 index.scip（存在时）。
+    /// 失败只 warn（不阻断分析），成功记录统计 —— 桥接默认开启。
+    pub fn try_auto_import_scip(&self) {
+        let root = self.project_root();
+        let candidate = root.join("index.scip");
+        if !candidate.is_file() {
+            return;
+        }
+        match self.import_scip_index(&candidate) {
+            Ok(stats) => info!(
+                "[engine] auto-imported index.scip: docs={} defs_added={} reused={} ext={} doc_nodes={} edges={} skipped_enclosing={}",
+                stats.documents, stats.definitions_added, stats.definitions_reused,
+                stats.external_nodes_added, stats.document_nodes_added,
+                stats.edges_added, stats.skipped_no_enclosing,
+            ),
+            Err(e) => warn!("[engine] auto-import index.scip failed: {}", e),
+        }
+    }
+
     /// 处理来自 watcher 的文件变更。先尝试增量更新，
     /// 失败则回退到全量重新分析。设为静态方法，以便 watcher 线程
     /// 通过全局 ENGINE 函数调用。

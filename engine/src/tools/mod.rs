@@ -107,6 +107,7 @@ impl ToolRegistry {
         "infer_type",
         "find_implementations",
         "find_references",
+        "import_scip",
     ];
 
     fn get_active_tool_names() -> Vec<String> {
@@ -165,6 +166,7 @@ impl ToolRegistry {
             "infer_type" => handlers::handler_resolve_type(args),
             "find_implementations" => handlers::handler_find_implementations(args),
             "find_references" => handlers::handler_find_references(args),
+            "import_scip" => handlers::handler_import_scip(args),
             _ => return ToolResponse::Degraded {
                 guidance: format!("Tool not found: {}", name),
                 fallback: "Check tools/list for available tools".into(),
@@ -216,6 +218,8 @@ fn suggestions_for(name: &str) -> &'static [&'static str] {
         "infer_type" => &["resolve_call", "find_references", "find_implementations"],
         "find_implementations" => &["resolve_call", "infer_type", "trace_impact"],
         "find_references" => &["trace_impact", "inspect_symbol", "preflight_check"],
+        // ── SCIP ──
+        "import_scip" => &["graph_summary", "search_symbols", "analyze_project"],
         // ── Operations ──
         "graph_summary" => &["cluster_report", "fragile_modules", "detect_cycles"],
         "graph_diff" => &["trace_impact", "inspect_symbol", "engine_status"],
@@ -576,6 +580,14 @@ fn all_schemas() -> &'static [ToolSchema] {
             params: &[p!("beforePath", "string", "Path to the baseline graph JSON file")],
             required: &["beforePath"],
             read_only: true,
+            category: "operations",
+        },
+        ToolSchema {
+            name: "import_scip",
+            description: "Import a SCIP index (index.scip from scip-typescript/scip-python/scip-java/rust-analyzer etc.) and merge its compiler-accurate symbol reference edges into the graph. Adds precise usage/import edges (metadata provenance=scip), definition nodes, and external library symbol nodes. Use to upgrade symbol-level reference quality beyond tree-sitter heuristics. Returns import stats including honestly-skipped references.",
+            params: &[p!("path", "string", "Path to index.scip (absolute or project-relative)")],
+            required: &["path"],
+            read_only: false,
             category: "operations",
         },
         ToolSchema {

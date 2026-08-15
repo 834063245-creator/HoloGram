@@ -56,5 +56,8 @@ serde_yaml = "0.9"
 notify = "8"
 mimalloc = "0.1"
 usearch = "2"
+# SCIP 桥接（P1-1）：官方 protobuf 绑定，解析 index.scip 无需 protoc
+scip = "0.9"
+protobuf = "=3.7.2"
 # ONNX Runtime 绑定（动态加载项目自带 DLL，不下载二进制）
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "api-21"] }

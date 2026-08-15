@@ -397,6 +397,9 @@ impl Engine {
             Ok(Ok(result)) => {
                 // 全量分析成功 → 增量漂移计数归零（社区/聚类结果重新变精确）。
                 self.record_full_analysis();
+                // P1-1：根目录存在 index.scip 时自动桥接 —— 把 scip-* indexer
+                // 的精确引用边合并进图。失败不阻断分析（warn 不静默）。
+                self.try_auto_import_scip();
                 Ok(result)
             }
             Ok(Err(e)) => {
@@ -1035,6 +1038,52 @@ mod tests {
                 .expect("calls edge should be persisted");
             assert!(calls.7, "lsp_resolved 应落库读回");
         }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// P1-1 回归：根目录存在 index.scip 时，try_auto_import_scip
+    /// 把 SCIP 定义节点与引用边合并进图（analyze 成功后自动调用）。
+    #[test]
+    fn test_auto_import_scip_hook() {
+        use protobuf::Message;
+
+        let tmp = std::env::temp_dir().join("hologram_test_scip_auto");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // 构造最小 index.scip：a.ts 定义 foo，b.ts 引用 foo
+        let mut index = scip::types::Index::new();
+        let mut d1 = scip::types::Document::new();
+        d1.relative_path = "src/a.ts".into();
+        let mut o1 = scip::types::Occurrence::new();
+        o1.range = vec![0, 4, 0, 7];
+        o1.symbol = "local 1 `foo`.".into();
+        o1.symbol_roles = 1; // Definition
+        d1.occurrences = vec![o1];
+        let mut d2 = scip::types::Document::new();
+        d2.relative_path = "src/b.ts".into();
+        let mut o2 = scip::types::Occurrence::new();
+        o2.range = vec![0, 4, 0, 7];
+        o2.symbol = "local 1 `foo`.".into();
+        d2.occurrences = vec![o2];
+        index.documents = vec![d1, d2];
+        std::fs::write(tmp.join("index.scip"), index.write_to_bytes().unwrap()).unwrap();
+
+        let mut engine = Engine::new();
+        engine.init(&tmp).unwrap();
+        engine.try_auto_import_scip();
+
+        engine
+            .read(|idx| {
+                assert!(
+                    idx.get_nodes_by_name("foo").len() >= 1,
+                    "SCIP 定义节点应自动并入"
+                );
+                assert!(idx.edge_count() >= 1, "SCIP 引用边应自动并入");
+                idx.edge_count()
+            })
+            .unwrap();
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
