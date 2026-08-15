@@ -199,19 +199,37 @@ pub fn import_index(
                 None => {
                     // 文档内没有任何定义 —— 引用归属到文档级 File 节点
                     //（诚实建模：边不丢，源为文档而非凭空符号）。
-                    let doc_id = format!("scip:doc:{}", doc.relative_path);
-                    if idx.get_node(&doc_id).is_none() {
-                        let basename = doc
-                            .relative_path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(&doc.relative_path);
-                        let mut node = Node::new(doc_id.clone(), basename, NodeKind::File);
-                        node.location = Some(format!("{}:1", doc.relative_path));
-                        idx.insert_node(node);
-                        stats.document_nodes_added += 1;
+                    // 优先复用 tree-sitter 已建的 File 节点（绝对路径匹配），
+                    // 没有才建 scip:doc: 命名空间节点。
+                    let reused_doc = project_root.and_then(|root| {
+                        let abs_file = root
+                            .join(&doc.relative_path)
+                            .to_string_lossy()
+                            .replace('\\', "/");
+                        idx.get_nodes_by_file(&abs_file).into_iter().find(|nid| {
+                            idx.get_node(nid)
+                                .map(|n| n.kind == NodeKind::File)
+                                .unwrap_or(false)
+                        })
+                    });
+                    match reused_doc {
+                        Some(nid) => nid,
+                        None => {
+                            let doc_id = format!("scip:doc:{}", doc.relative_path);
+                            if idx.get_node(&doc_id).is_none() {
+                                let basename = doc
+                                    .relative_path
+                                    .rsplit('/')
+                                    .next()
+                                    .unwrap_or(&doc.relative_path);
+                                let mut node = Node::new(doc_id.clone(), basename, NodeKind::File);
+                                node.location = Some(format!("{}:1", doc.relative_path));
+                                idx.insert_node(node);
+                                stats.document_nodes_added += 1;
+                            }
+                            doc_id
+                        }
                     }
-                    doc_id
                 }
             };
             let target = match symbol_to_node.get(&symbol) {
@@ -340,6 +358,33 @@ mod tests {
         let ext_edge = out.iter().find(|e| e.target.starts_with("ext:")).unwrap();
         let meta = ext_edge.metadata.clone().unwrap();
         assert_eq!(meta["provenance"], "scip");
+    }
+
+    /// 回归：导入前图中已有 tree-sitter 边 —— 导入后必须共存，
+    /// 不得被 SCIP 导入路径冲掉。
+    #[test]
+    fn test_import_preserves_existing_edges() {
+        let mut idx = MemoryIndex::new();
+        // 模拟 tree-sitter 管线已入库的边
+        idx.insert_node(Node::new("ts:a", "fn_a", NodeKind::Symbol));
+        idx.insert_node(Node::new("ts:b", "fn_b", NodeKind::Symbol));
+        idx.upsert_edge("ts:a", "ts:b", EdgeKind::Calls, 1, None);
+        idx.upsert_edge("ts:a", "ts:b", EdgeKind::Imports, 1, None);
+        idx.flush_pending();
+        assert_eq!(idx.edge_count(), 2);
+
+        let index = make_index();
+        let stats = import_index(&mut idx, &index, None);
+        idx.flush_pending();
+
+        assert_eq!(stats.edges_added, 2);
+        assert!(
+            idx.edge_count() >= 4,
+            "导入后原有边必须保留: got {} edges",
+            idx.edge_count()
+        );
+        assert!(idx.get_outgoing_edges("ts:a").iter().any(|e| e.kind == EdgeKind::Calls));
+        assert!(idx.get_outgoing_edges("ts:a").iter().any(|e| e.kind == EdgeKind::Imports));
     }
 
     #[test]

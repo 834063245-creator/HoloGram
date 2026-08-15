@@ -349,6 +349,33 @@ impl MemoryIndex {
     /// 从待处理变更 + 现有 CSR 边重建 CSR。
     /// 使用临时逐节点 Vec 进行排序+去重（flatten 后释放）。
     fn rebuild_csr(&mut self) {
+        // 1) 在重建稠密索引**之前**把旧 CSR 边按句柄对收集起来 ——
+        // out_offsets 的稠密下标只在重建前有效。重建后按新
+        // handle_to_idx 重新入桶：节点增删后旧边不再被静默丢弃
+        //（旧实现用 `out_offsets.len() > n` 守卫，新节点插入使 n
+        // 变大时守卫失效，CSR 旧边整批丢失 —— SCIP 导入是首个
+        // 踩中的调用方：import 插入新节点后 flush 把 tree-sitter
+        // 已入库边全部冲掉）。
+        let mut old_csr: Vec<(u32, u32, u8, u8, f64, u8, u32)> = Vec::new();
+        if !self.out_offsets.is_empty() {
+            let old_n = self.out_offsets.len().saturating_sub(1);
+            for src_idx in 0..old_n.min(self.node_by_idx.len()) {
+                let src_handle = self.node_by_idx[src_idx];
+                let (start, end) = self.out_range(src_idx as u32);
+                for i in start..end {
+                    old_csr.push((
+                        src_handle,
+                        self.out_targets[i],
+                        self.out_kinds[i],
+                        self.out_coupling[i],
+                        self.out_delays[i],
+                        self.out_cross_file[i],
+                        self.out_metadata[i],
+                    ));
+                }
+            }
+        }
+
         self.rebuild_dense_index();
         let n = self.node_by_idx.len();
 
@@ -356,38 +383,17 @@ impl MemoryIndex {
         let mut out_buckets: Vec<Vec<CsrEdge>> = (0..n).map(|_| Vec::new()).collect();
         let mut in_buckets: Vec<Vec<CsrEdge>> = (0..n).map(|_| Vec::new()).collect();
 
-        // 从当前 CSR 复制边（跳过已删除的）
-        let old_has_data = !self.out_offsets.is_empty() && self.out_offsets.len() > n;
-        if old_has_data {
-            for src_idx in 0..n {
-                let src_handle = self.node_by_idx[src_idx];
-                let (start, end) = self.out_range(src_idx as u32);
-                for i in start..end {
-                    let tgt = self.out_targets[i];
-                    let kind_u8 = self.out_kinds[i];
-                    let ek = EdgeKind::from_u8(kind_u8);
-                    if self.pending_removes.contains(&(src_handle, tgt, ek)) {
-                        continue;
-                    }
-                    out_buckets[src_idx].push((
-                        tgt,
-                        kind_u8,
-                        self.out_coupling[i],
-                        self.out_delays[i],
-                        self.out_cross_file[i],
-                        self.out_metadata[i],
-                    ));
-                    if let Some(&tgt_idx) = self.handle_to_idx.get(&tgt) {
-                        in_buckets[tgt_idx as usize].push((
-                            src_handle,
-                            kind_u8,
-                            self.out_coupling[i],
-                            self.out_delays[i],
-                            self.out_cross_file[i],
-                            self.out_metadata[i],
-                        ));
-                    }
-                }
+        // 2) 旧 CSR 边按新稠密索引重新入桶（跳过已删除的）
+        for &(src, tgt, kind_u8, coupling, delay, cross_file, metadata) in &old_csr {
+            let ek = EdgeKind::from_u8(kind_u8);
+            if self.pending_removes.contains(&(src, tgt, ek)) {
+                continue;
+            }
+            if let Some(&src_idx) = self.handle_to_idx.get(&src) {
+                out_buckets[src_idx as usize].push((tgt, kind_u8, coupling, delay, cross_file, metadata));
+            }
+            if let Some(&tgt_idx) = self.handle_to_idx.get(&tgt) {
+                in_buckets[tgt_idx as usize].push((src, kind_u8, coupling, delay, cross_file, metadata));
             }
         }
 

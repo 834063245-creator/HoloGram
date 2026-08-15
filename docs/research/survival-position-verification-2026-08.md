@@ -1,6 +1,6 @@
 # 生存验证：P0/P1 清单凭什么让引擎在竞品格局里站住一块地
 
-> 生成：2026-08-15 · 更新：2026-08-15（P0/P1-3 合入 `2954ecd`；P1-4 增量 stale 治理合入 `86f65d3`；P1-2 LSP 回写合入 `9c58150`）
+> 生成：2026-08-15 · 更新：2026-08-15（P0/P1-3 合入 `2954ecd`；P1-4 增量 stale 治理合入 `86f65d3`；P1-2 LSP 回写合入 `62b492e`；P1-1 SCIP 桥接 + 精度对比合入 `3a5e210`/`12ce13c`）
 > 用途：把「必须补齐清单」从意见变成**可验收的防守方案**。
 > 问题：做完这些代办，HoloGram 到底守住了哪块地？每一条对应哪条竞品验收线？什么情况下这份清单还不够？
 
@@ -44,7 +44,7 @@ P0 落地后，文件级依赖图在 TS 上与 dependency-cruiser 打平、Pytho
 
 **读表结论**：L1/L3 不需要任何新代办（已站稳）；L2 的 9 条里 6 条是 P0、3 条是 P1，**每条都直接对应一个可实测的竞品数字或可观察行为**。这份清单不是「努力方向」，是「L2 腿的修复施工图」。
 
-### 2.1 执行状态（2026-08-15，`main` @ `9c58150`）
+### 2.1 执行状态（2026-08-15，`main` @ `12ce13c`）
 
 | # | 状态 | 实测证据 |
 |---|---|---|
@@ -53,7 +53,7 @@ P0 落地后，文件级依赖图在 TS 上与 dependency-cruiser 打平、Pytho
 | P0-3 | ✅ 已落地 | 未解析边保留为 `unresolved:*` 占位节点；External 节点可见；`graph_summary.resolution` 诚实报解析率 |
 | P0-5 | ✅ 已落地 | 33+3 处合成边 `is_synthesized=true` + provenance；`get_neighbors` 支持 `excludeSynthesized` |
 | P0-4 | ✅ 已落地 | `trace_dataflow` 描述降级为「语法级启发式，非语义数据流」 |
-| P1-1 | 🟡 桥接已通，分档/精度对比未做 | SCIP 桥接落地：`scip` 官方 protobuf 绑定解析 index.scip → 定义节点（优先按 file:line 复用）+ 精确引用边（Usage/Imports/Reads/Writes，metadata provenance=scip）+ 外部符号 `ext:` 节点 + 无定义文档归文档级 File 节点；`import_scip` 工具 + 分析后自动桥接根目录 index.scip；E2E 实测 scip-typescript 产出（24 occurrences → 12 定义 + 12 引用边，零跳过）。**剩余 = 分档接入决策 + 同一标准答案集对比 SCIP vs tree-sitter 精度差（CI 可见）** |
+| P1-1 | 🟡 桥接已通 + 首份精度对比，分档基准扩围未做 | SCIP 桥接落地：官方 protobuf 绑定解析 index.scip → 定义节点（file:line 复用）+ 精确引用边（provenance=scip）+ 外部符号 `ext:` 节点 + 文档级 File 节点；`import_scip` 工具 + 分析后自动桥接；真实 scip-typescript 实测 gap_probe_ts：合并后 gold recall **11/11、0 误报、0 负数边**，SCIP +24 条编译器级 usage 边且 usage gold 2/2。分档决策见 `scip-bridge-tiering-decision-2026-08.md`。**剩余 = 引用边真值集扩围 + CI 精度对比** |
 | P1-2 | ✅ 已落地 | `lsp_resolved` 变活字段：resolve_call 的 LSP 解析命中回写图——图中已存在的 calls 边标记 `lsp_resolved=true`（内存覆盖层 + SQLite 单边 UPDATE + 快照持久化，重启保留）；`graph_summary.lsp_resolution` 报占比（calls 边总数 / lsp_resolved 数 / 占比），边输出带 `lsp_resolved` 逐边可追溯；只标记真实存在的边，不凭空造边 |
 | P1-3 | 🟡 基准已落地，CI 门禁未接 | `scripts/bench_resolution.py --all` 三 fixture p0 100% / p03 100% / precision 100%；尚未接入 CI |
 | P1-4 | ✅ 已落地 | `cross_file`/`metadata` 已贯通 CSR→SQLite→快照→增量并落库可读回（imports 边 100% 落库）；增量后耦合深度全量重算，社区结果带 stale 标注——漂移计数持久化 meta 键 `incr_since_full`（重启保留），`get_community`/`cluster_report` 结果带 `staleness` 结构化标记 + MCP `_stalenessBanner`，全量重分析后归零 |
@@ -82,7 +82,7 @@ P0 落地后，文件级依赖图在 TS 上与 dependency-cruiser 打平、Pytho
 1. ✅ **P1-3 先行（基准先于修复）**：gap_probe 已扩展到 TS/Rust/Python 三语言，`scripts/bench_resolution.py --all` 可复现实测。
 2. ✅ **P0-1 → P0-2 → P0-3 → P0-5**：已合入 `main`；gold p0 100% / p03 100% / precision 100%，TS 99.9%、Rust 100%，均越过目标线。
 3. 🟡 **真实项目回归**：src-ui（TS）与 engine/src（Rust）已实测达标；**剩余 = 把 `bench_resolution.py` 接进 CI 门禁**。
-4. 🟡 **P1-1**：SCIP 桥接已通（解析 + 合并 + `import_scip` + 分析后自动桥接 + 真实 indexer E2E）；**剩余 = 分档接入决策 + 用同一份标准答案集对比「SCIP 桥接边」vs「tree-sitter 边」的精度差，写进决策记录**。
+4. 🟡 **P1-1**：SCIP 桥接已通（解析 + 合并 + `import_scip` + 自动桥接 + 真实 indexer E2E + gap_probe_ts 首份精度对比：合并后 11/11、0 误报）；分档表见 `scip-bridge-tiering-decision-2026-08.md`；**剩余 = 引用边真值集扩围 + 对比基准进 CI**。
 5. ✅ **P1-2**：`lsp_resolved` 从死字段变活字段，resolve_call 结果回写图——calls 边标记 + 落库 + 快照持久化，`graph_summary.lsp_resolution` 占比可统计、逐边可追溯。
 6. ✅ **P1-4**：`cross_file`/`metadata` 落库已修复；增量 stale 治理已落地——增量后耦合深度全量重算、社区结果带持久化 stale 标注（meta `incr_since_full`，重启保留；全量重分析归零）。
 7. ⬜ **产品验证（非工程）**：P0 完成后，用 5 个真实用户 ×「改前问影响面」场景测留存——这一步的结果决定 P1 的投资节奏。
