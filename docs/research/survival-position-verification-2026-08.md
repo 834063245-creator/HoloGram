@@ -1,6 +1,6 @@
 # 生存验证：P0/P1 清单凭什么让引擎在竞品格局里站住一块地
 
-> 生成：2026-08-15 · 更新：2026-08-15（P0/P1-3 已合入 `main`，commit `2954ecd`）
+> 生成：2026-08-15 · 更新：2026-08-15（P0/P1-3 合入 commit `2954ecd`；P1-4 增量 stale 治理合入 commit `f5dc8ca`）
 > 用途：把「必须补齐清单」从意见变成**可验收的防守方案**。
 > 问题：做完这些代办，HoloGram 到底守住了哪块地？每一条对应哪条竞品验收线？什么情况下这份清单还不够？
 
@@ -23,7 +23,7 @@
 | **L2 可信** | 图与工具答案的解析质量不低于同赛道标尺，且失败不静默 | codegraph/CodeGraphContext 等拼装品 + depcruise/SCIP 的解析率标尺。断掉 = Agent 用三次弃用 |
 | **L3 集成** | 桌面端 + Agent 运行时 + 3D 星图 + goal/计划模式的一体化体验 | 拼装品只有 CLI/库，产品化是它们的真实工作量。断掉 = 沦为「又一个 MCP 插件」，跟长尾项目比下载量 |
 
-**现状（2026-08-15 更新）**：L1 ✅（27 语言管线真实工作）、L3 ✅（已建成）、**L2 🟡（P0 已闭环，P1 剩 SCIP/LSP 入库/增量 stale 治理）**。
+**现状（2026-08-15 更新）**：L1 ✅（27 语言管线真实工作）、L3 ✅（已建成）、**L2 🟡（P0 已闭环，P1-4 增量 stale 治理已落地，剩 SCIP/LSP 入库）**。
 P0 落地后，文件级依赖图在 TS 上与 dependency-cruiser 打平、Python/Rust 越过 95% 验收线，失败也不再静默；L2 的「文件级底线」已经站住，下一段风险从「不可信」转为「符号级质量仍落后 SCIP indexer」。
 
 ---
@@ -44,7 +44,7 @@ P0 落地后，文件级依赖图在 TS 上与 dependency-cruiser 打平、Pytho
 
 **读表结论**：L1/L3 不需要任何新代办（已站稳）；L2 的 9 条里 6 条是 P0、3 条是 P1，**每条都直接对应一个可实测的竞品数字或可观察行为**。这份清单不是「努力方向」，是「L2 腿的修复施工图」。
 
-### 2.1 执行状态（2026-08-15，`main` @ `2954ecd`）
+### 2.1 执行状态（2026-08-15，`main` @ `f5dc8ca`）
 
 | # | 状态 | 实测证据 |
 |---|---|---|
@@ -56,7 +56,7 @@ P0 落地后，文件级依赖图在 TS 上与 dependency-cruiser 打平、Pytho
 | P1-1 | ⬜ 未开始 | 仍是 L2 最大剩余缺口：符号级引用质量对标 scip-* indexer |
 | P1-2 | ⬜ 未开始 | `lsp_resolved` 回写仍未做 |
 | P1-3 | 🟡 基准已落地，CI 门禁未接 | `scripts/bench_resolution.py --all` 三 fixture p0 100% / p03 100% / precision 100%；尚未接入 CI |
-| P1-4 | 🟡 一半 | `cross_file`/`metadata` 已贯通 CSR→SQLite→快照→增量并落库可读回（imports 边 100% 落库）；增量 stale 标记/重算治理未做 |
+| P1-4 | ✅ 已落地 | `cross_file`/`metadata` 已贯通 CSR→SQLite→快照→增量并落库可读回（imports 边 100% 落库）；增量后耦合深度全量重算，社区结果带 stale 标注——漂移计数持久化 meta 键 `incr_since_full`（重启保留），`get_community`/`cluster_report` 结果带 `staleness` 结构化标记 + MCP `_stalenessBanner`，全量重分析后归零 |
 
 ---
 
@@ -84,7 +84,7 @@ P0 落地后，文件级依赖图在 TS 上与 dependency-cruiser 打平、Pytho
 3. 🟡 **真实项目回归**：src-ui（TS）与 engine/src（Rust）已实测达标；**剩余 = 把 `bench_resolution.py` 接进 CI 门禁**。
 4. ⬜ **P1-1**：接入 scip-* indexer，用同一份标准答案集对比「SCIP 桥接边」vs「tree-sitter 边」的精度差，写进决策记录（为什么分档）。
 5. ⬜ **P1-2**：`lsp_resolved` 从死字段变活字段，resolve_call 结果回写图。
-6. 🟡 **P1-4**：`cross_file`/`metadata` 落库已修复；**剩余 = 增量全局分析 stale 标记/重算治理**。
+6. ✅ **P1-4**：`cross_file`/`metadata` 落库已修复；增量 stale 治理已落地——增量后耦合深度全量重算、社区结果带持久化 stale 标注（meta `incr_since_full`，重启保留；全量重分析归零）。
 7. ⬜ **产品验证（非工程）**：P0 完成后，用 5 个真实用户 ×「改前问影响面」场景测留存——这一步的结果决定 P1 的投资节奏。
 
 ---

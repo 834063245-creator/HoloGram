@@ -394,7 +394,11 @@ impl Engine {
         *self.cancel_token.write() = None;
 
         match analyze_result {
-            Ok(Ok(result)) => Ok(result),
+            Ok(Ok(result)) => {
+                // 全量分析成功 → 增量漂移计数归零（社区/聚类结果重新变精确）。
+                self.record_full_analysis();
+                Ok(result)
+            }
             Ok(Err(e)) => {
                 *self.state.write() = EngineState::Error(e.clone());
                 Err(e)
@@ -941,6 +945,39 @@ mod tests {
                 panic!("F1 regression: incremental update should succeed, got: {}", e);
             }
         }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// P1-4 回归：增量漂移计数持久化（meta 键 incr_since_full），
+    /// 重启后保留，全量分析成功后归零。
+    #[test]
+    fn test_incremental_drift_tracking_persists_and_resets() {
+        let tmp = std::env::temp_dir().join("hologram_test_incr_drift");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut engine = Engine::new();
+        engine.init(&tmp).unwrap();
+        assert_eq!(engine.incremental_since_full(), 0, "fresh project starts at zero drift");
+
+        engine.record_incremental_success();
+        engine.record_incremental_success();
+        engine.record_incremental_success();
+        assert_eq!(engine.incremental_since_full(), 3);
+
+        // 模拟重启：新 Engine 实例重新 init 同一目录，计数必须保留
+        drop(engine);
+        let mut engine2 = Engine::new();
+        engine2.init(&tmp).unwrap();
+        assert_eq!(
+            engine2.incremental_since_full(),
+            3,
+            "drift counter must survive restart via meta kv"
+        );
+
+        engine2.record_full_analysis();
+        assert_eq!(engine2.incremental_since_full(), 0, "full analysis resets drift");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

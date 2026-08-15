@@ -205,6 +205,67 @@ impl Engine {
         self.pending_changes.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
+    // ── 增量漂移治理（P1-4）──────────────────────────────────
+    // 增量更新跳过部分派生分析：全局聚类只对新节点做邻居投票、
+    // 动态分派/框架路由/片段提取不重跑 —— 社区/聚类结果会随
+    // 增量次数漂移。计数器持久化在 meta 表（键 incr_since_full），
+    // 重启后仍能诚实标注近似结果，而不是静默冒充精确。
+
+    /// 自上次全量分析以来的增量更新次数（持久化，重启后保留）。
+    pub fn incremental_since_full(&self) -> u64 {
+        let store_guard = match self.store.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                warn!("[engine] store lock poisoned reading incr_since_full: {}", e);
+                return 0;
+            }
+        };
+        match store_guard.as_ref() {
+            Some(store) => match store.db.get_meta("incr_since_full") {
+                Ok(Some(v)) => v.parse::<u64>().unwrap_or(0),
+                Ok(None) => 0,
+                Err(e) => {
+                    warn!("[engine] meta read incr_since_full failed: {}", e);
+                    0
+                }
+            },
+            None => 0,
+        }
+    }
+
+    /// 增量更新成功后调用：漂移计数 +1 并持久化。
+    pub fn record_incremental_success(&self) {
+        let next = self.incremental_since_full().saturating_add(1);
+        let store_guard = match self.store.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                warn!("[engine] store lock poisoned recording incremental: {}", e);
+                return;
+            }
+        };
+        if let Some(store) = store_guard.as_ref() {
+            if let Err(e) = store.db.set_meta("incr_since_full", &next.to_string()) {
+                warn!("[engine] persist incr_since_full failed: {}", e);
+            }
+        }
+    }
+
+    /// 全量分析成功后调用：漂移计数归零（社区/聚类结果重新变精确）。
+    pub fn record_full_analysis(&self) {
+        let store_guard = match self.store.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                warn!("[engine] store lock poisoned resetting incremental drift: {}", e);
+                return;
+            }
+        };
+        if let Some(store) = store_guard.as_ref() {
+            if let Err(e) = store.db.set_meta("incr_since_full", "0") {
+                warn!("[engine] reset incr_since_full failed: {}", e);
+            }
+        }
+    }
+
     /// 处理来自 watcher 的文件变更。先尝试增量更新，
     /// 失败则回退到全量重新分析。设为静态方法，以便 watcher 线程
     /// 通过全局 ENGINE 函数调用。
@@ -323,6 +384,8 @@ impl Engine {
                     let engine_guard = super::ENGINE.read();
                     if let Some(engine) = engine_guard.as_ref() {
                         engine.clear_pending_files();
+                        // 漂移计数 +1：社区/聚类等派生结果自此标记为近似（P1-4）。
+                        engine.record_incremental_success();
                     }
                 }
                 return Ok(());

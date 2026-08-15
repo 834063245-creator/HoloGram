@@ -449,11 +449,19 @@ impl McpServer {
         // 通过 ToolRegistry 分发——与 CLI/Tauri 使用同一套注册表
         let mut result = crate::tools::ToolRegistry::dispatch(tool_name, &args, id);
 
-        // 注入过期横幅提示（存在待处理的文件变更时）
+        // 注入过期横幅提示（存在待处理的文件变更时），
+        // 以及增量漂移近似性横幅（社区/聚类结果，P1-4）。
+        let mut banners: Vec<String> = Vec::new();
         if let Some(banner) = crate::tools::staleness::check_staleness(&result) {
+            banners.push(banner);
+        }
+        if let Some(banner) = crate::tools::staleness::check_derived_staleness(tool_name) {
+            banners.push(banner);
+        }
+        if !banners.is_empty() {
             if let Some(obj) = result.as_object_mut() {
                 if let Some(res) = obj.get_mut("result").and_then(|r| r.as_object_mut()) {
-                    res.insert("_stalenessBanner".into(), json!(banner));
+                    res.insert("_stalenessBanner".into(), json!(banners.join("\n")));
                 }
             }
         }

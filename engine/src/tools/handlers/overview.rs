@@ -18,6 +18,8 @@ pub(crate) fn handler_graph_summary(_args: &Value) -> ToolResponse {
 pub(crate) fn handler_clusters(args: &Value) -> ToolResponse {
     let min_size = get_usize(args, "min_size", 3).max(1);
     let max_nodes = get_usize(args, "max_nodes", 20).max(1).min(200);
+    // 增量漂移治理（P1-4）：图经增量维护后聚类结果是近似的，结果带标注。
+    let drift = crate::tools::staleness::incremental_drift();
     ToolResponse::Success(with_store(|idx| {
         let mut comm_map: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
         let mut has_any = false;
@@ -53,12 +55,21 @@ pub(crate) fn handler_clusters(args: &Value) -> ToolResponse {
                 })
             })
             .collect();
-        json!({
+        let mut result = json!({
             "total_communities": filtered.len(),
             "min_size_filter": min_size,
             "max_nodes_per_community": max_nodes,
             "communities": filtered,
-        })
+        });
+        if drift > 0 {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("staleness".into(), json!({
+                    "incremental_updates_since_full": drift,
+                    "note": "社区结果可能近似：新增节点按邻居投票分配，全局聚类未重跑；如需精确结果请运行全量重分析"
+                }));
+            }
+        }
+        result
     }))
 }
 

@@ -190,6 +190,19 @@ pub(crate) fn handler_community(args: &Value) -> ToolResponse {
             details: json!({}),
         };
     }
+    // 增量漂移治理（P1-4）：图经增量维护后聚类结果是近似的，结果带标注。
+    let drift = crate::tools::staleness::incremental_drift();
+    let decorate = |mut v: serde_json::Value| -> serde_json::Value {
+        if drift > 0 {
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("staleness".into(), json!({
+                    "incremental_updates_since_full": drift,
+                    "note": "社区结果可能近似：新增节点按邻居投票分配，全局聚类未重跑；如需精确结果请运行全量重分析"
+                }));
+            }
+        }
+        v
+    };
     ToolResponse::Success(with_store(|idx| {
         let resolved = match resolve_in_index(idx, &node_id) {
             Some(rid) => rid,
@@ -202,7 +215,7 @@ pub(crate) fn handler_community(args: &Value) -> ToolResponse {
                 for (i, comm) in communities.iter().enumerate() {
                     if comm.contains(&resolved) {
                         let siblings: Vec<_> = comm.iter().filter(|nid| *nid != &resolved).cloned().collect();
-                        return json!({
+                        return decorate(json!({
                             "node_id": resolved,
                             "community": {
                                 "id": format!("comm_{}", i),
@@ -212,10 +225,10 @@ pub(crate) fn handler_community(args: &Value) -> ToolResponse {
                                 "node_ids": comm,
                             },
                             "sibling_nodes": siblings,
-                        });
+                        }));
                     }
                 }
-                return json!({"node_id": resolved, "community": null, "message": "Node not in any community"});
+                return decorate(json!({"node_id": resolved, "community": null, "message": "Node not in any community"}));
             }
         };
         let mut comm_node_ids = Vec::new();
@@ -228,7 +241,7 @@ pub(crate) fn handler_community(args: &Value) -> ToolResponse {
                 }
             }
         }
-        json!({
+        decorate(json!({
             "node_id": resolved,
             "community": {
                 "id": format!("comm_{}", cid),
@@ -238,7 +251,7 @@ pub(crate) fn handler_community(args: &Value) -> ToolResponse {
                 "node_ids": comm_node_ids,
             },
             "sibling_nodes": siblings,
-        })
+        }))
     }))
 }
 

@@ -2,11 +2,42 @@
 // SPDX-License-Identifier: MIT
 
 //! 过期警告横幅 —— 当工具响应引用了自上次索引同步后已编辑的文件时，
-//! 向 Agent 发出警告。
+//! 向 Agent 发出警告。另含增量漂移治理（P1-4）：图自上次全量分析以来
+//! 经历增量更新后，社区/聚类结果是近似的，工具响应带近似性横幅。
 
 use serde_json::Value;
 
 use crate::engine;
+
+/// 当前增量漂移计数（自上次全量分析以来的增量更新次数）。
+/// 引擎未初始化时按 0 处理。
+pub fn incremental_drift() -> u64 {
+    engine::with_engine(|eng| eng.incremental_since_full()).unwrap_or(0)
+}
+
+/// 派生结果近似性横幅（P1-4）：图经过增量更新后，全局聚类只对
+/// 新节点做邻居投票、旧分组可能漂移 —— 社区/聚类工具的结果
+/// 必须带近似标注，不能静默冒充精确。
+pub fn check_derived_staleness(tool_name: &str) -> Option<String> {
+    derived_banner_for(tool_name, incremental_drift())
+}
+
+/// 纯函数版本（可单测）：drift == 0 → None；
+/// 社区/聚类工具在 drift > 0 时返回近似性横幅。
+pub(crate) fn derived_banner_for(tool_name: &str, drift: u64) -> Option<String> {
+    if drift == 0 {
+        return None;
+    }
+    if !matches!(tool_name, "get_community" | "cluster_report") {
+        return None;
+    }
+    Some(format!(
+        "⚠️ 图自上次全量分析以来经历了 {} 次增量更新：社区/聚类结果是近似的 \
+         （新增节点按邻居投票分配，全局聚类未重跑，旧分组可能已漂移）。\
+         如需精确的社区结构，请运行全量重分析。",
+        drift
+    ))
+}
 
 /// 检查结果是否引用了待同步文件，并渲染警告横幅。
 pub fn check_staleness(result: &Value) -> Option<String> {
@@ -78,5 +109,35 @@ fn collect_file_paths(value: &Value, paths: &mut Vec<String>) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_derived_banner_no_drift_is_none() {
+        assert!(derived_banner_for("get_community", 0).is_none());
+        assert!(derived_banner_for("cluster_report", 0).is_none());
+    }
+
+    #[test]
+    fn test_derived_banner_community_tools_with_drift() {
+        for tool in ["get_community", "cluster_report"] {
+            let banner = derived_banner_for(tool, 3).expect("community tool with drift must be marked");
+            assert!(banner.contains("3"), "banner should name the drift count: {}", banner);
+            assert!(banner.contains("近似"), "banner should say results are approximate: {}", banner);
+            assert!(banner.contains("全量重分析"), "banner should point at the recompute path: {}", banner);
+        }
+    }
+
+    #[test]
+    fn test_derived_banner_other_tools_unaffected() {
+        // 耦合深度在增量后已全量重算，不需要近似标注；
+        // 其余图查询工具读的是新鲜边结构。
+        assert!(derived_banner_for("coupling_report", 3).is_none());
+        assert!(derived_banner_for("get_neighbors", 3).is_none());
+        assert!(derived_banner_for("graph_summary", 3).is_none());
     }
 }
