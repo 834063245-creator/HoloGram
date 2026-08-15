@@ -89,6 +89,20 @@ pub enum SandboxStatus {
 /// 已分配到 Job Object（Windows）或普通启动（其他平台）。
 pub struct SandboxedChild {
     inner: std::process::Child,
+    /// 每命令独立 Job 句柄（shell-stability P2）。
+    /// Drop 时 CloseHandle 触发 KILL_ON_JOB_CLOSE —— 进程树随句柄关闭灭绝。
+    #[cfg(windows)]
+    job: Option<isize>,
+}
+
+impl Drop for SandboxedChild {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(job) = self.job.take() {
+            // KILL_ON_JOB_CLOSE：句柄关闭 = 进程树灭绝（die-with-parent 语义）。
+            unsafe { imp::close_handle(job) };
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -109,17 +123,23 @@ impl SandboxedChild {
         self.inner.kill()
     }
 
-    /// 终止整个进程树。Windows 用 taskkill /F /T 递归终止
-    /// (bash/cmd → cargo → rustc/test 多层子进程),其他平台 kill 直接子进程。
-    /// 只 kill 直接子进程会留下僵尸孙进程,继续占用 target 锁或管道。
+    /// 终止整个进程树（shell-stability P2）：
+    /// Windows 用每命令独立 Job 的 TerminateJobObject —— 同步、内核级、
+    /// 覆盖 Job 内全部后代（bash → cargo → rustc 多层），不再依赖
+    /// taskkill /F /T（慢、异步、分离进程树会漏杀）。
+    /// 其他平台 kill 直接子进程。
     pub fn kill_tree(&mut self) -> io::Result<()> {
         #[cfg(windows)]
         {
-            let pid = self.inner.id();
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .output();
-            Ok(())
+            if let Some(job) = self.job {
+                let ret = unsafe { imp::terminate_job_object(job) };
+                if ret != 0 {
+                    return Ok(());
+                }
+                // TerminateJobObject 失败（Job 已失效等）→ 兜底直接 kill
+                return self.inner.kill();
+            }
+            self.inner.kill()
         }
         #[cfg(not(windows))]
         {
@@ -354,6 +374,7 @@ pub mod imp {
             job: isize, info_class: i32, info: *const std::ffi::c_void, info_len: u32,
         ) -> i32;
         fn AssignProcessToJobObject(job: isize, process: isize) -> i32;
+        fn TerminateJobObject(job: isize, exit_code: u32) -> i32;
         // 管道创建
         fn CreatePipe(
             read: *mut isize, write: *mut isize,
@@ -375,6 +396,11 @@ pub mod imp {
     const JOB_OBJECT_LIMIT_ACTIVE_PROCESS: u32 = 0x00000008;
     const JOB_OBJECT_LIMIT_JOB_MEMORY: u32 = 0x00000200;
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
+
+    /// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE 的真实值是 0x2000 —— 与上方
+    /// 全局 Job 使用的 DIE_ON_JOB_CLOSE 同名常量值一致（旧命名），
+    /// 每命令 Job 用正确命名的新常量，避免语义混淆。
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x00002000;
 
     // ── FFI 结构体 ──
 
@@ -442,6 +468,8 @@ pub mod imp {
             );
         }
         BUNDLED_BASH.get_or_init(|| resolved.clone());
+        // PATH 归一化（P3）：必须在首个 spawn 前完成
+        init_normalized_path();
         // 版本探针（带超时纪律，与 smoke_test_bash 同款）：
         // bash --version 可能卡住（杀毒/损坏），失败只影响 prompt 注入文本。
         if let Some(path) = resolved {
@@ -476,6 +504,109 @@ pub mod imp {
             }
             Shell::Cmd => Shell::Cmd,
         }
+    }
+
+    // ── PATH 归一化（shell-stability P3）──
+
+    /// 归一化 PATH 缓存。init_normalized_path 在应用启动时构建一次。
+    static NORMALIZED_PATH: OnceLock<Option<String>> = OnceLock::new();
+
+    /// 构建归一化 PATH：进程 PATH + 注册表用户/机器 PATH + 常见工具目录探测。
+    /// GUI 启动（资源管理器/快捷方式）时进程 PATH 常只有系统目录，
+    /// cargo/node/python "command not found" 的根源 —— 这里补齐并缓存。
+    pub fn init_normalized_path() {
+        NORMALIZED_PATH.get_or_init(|| {
+            let mut existing: Vec<String> = std::env::var("PATH")
+                .unwrap_or_default()
+                .split(';')
+                .map(|s| s.to_string())
+                .collect();
+
+            let mut extras: Vec<String> = Vec::new();
+            // 注册表 PATH（reg query 输出 "    Path    REG_EXPAND_SZ    ..."）
+            for key in [
+                r"HKCU\Environment",
+                r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+            ] {
+                if let Some(v) = reg_path_value(key) {
+                    let expanded = expand_env_vars(&v);
+                    extras.extend(expanded.split(';').map(|s| s.to_string()));
+                }
+            }
+            // 常见工具目录（存在才加）
+            let user = std::env::var("USERPROFILE").unwrap_or_default();
+            let appdata = std::env::var("APPDATA").unwrap_or_default();
+            for dir in [
+                format!(r"{user}\.cargo\bin"),
+                format!(r"{appdata}\npm"),
+                format!(r"{user}\scoop\shims"),
+                r"C:\ProgramData\chocolatey\bin".to_string(),
+            ] {
+                if std::path::Path::new(&dir).is_dir() {
+                    extras.push(dir);
+                }
+            }
+
+            let merged = crate::utils::merge_path_entries(&existing, &extras);
+            Some(merged.join(";"))
+        });
+    }
+
+    /// `reg query <key> /v Path` 并提取 REG_SZ/REG_EXPAND_SZ 值。
+    fn reg_path_value(key: &str) -> Option<String> {
+        let out = std::process::Command::new("reg")
+            .args(["query", key, "/v", "Path"])
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            for ty in ["REG_EXPAND_SZ", "REG_SZ"] {
+                if let Some(pos) = line.find(ty) {
+                    let value = line[pos + ty.len()..].trim();
+                    if !value.is_empty() {
+                        return Some(value.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// 展开 %VAR% 形式的注册表 PATH（机器级 PATH 常见 %SystemRoot% 等）。
+    fn expand_env_vars(input: &str) -> String {
+        let mut out = input.to_string();
+        for key in ["SystemRoot", "USERPROFILE", "ProgramFiles", "ProgramFiles(x86)", "APPDATA", "LOCALAPPDATA", "ProgramData"] {
+            if let Ok(val) = std::env::var(key) {
+                out = out.replace(&format!("%{key}%"), &val);
+            }
+        }
+        out
+    }
+
+    /// 完整子进程 PATH：捆绑 bin 目录（MSYS 工具解析）在前，用户工具目录在后。
+    /// bash 内建 + coreutils 走前段，cargo/node/python 走后段。
+    pub fn bash_path_env() -> Option<String> {
+        let user_path = NORMALIZED_PATH.get()?.clone()?;
+        let mut full = String::new();
+        if let Some(bin) = BUNDLED_BASH
+            .get()
+            .and_then(|o| o.as_ref())
+            .and_then(|b| b.parent())
+        {
+            full.push_str(&bin.to_string_lossy());
+            full.push(';');
+        }
+        full.push_str(&user_path);
+        Some(full)
+    }
+
+    /// cmd 回退路径的用户 PATH（不加 MSYS bin —— 避免 shadow 系统 find 等）。
+    pub fn cmd_path_env() -> Option<String> {
+        NORMALIZED_PATH.get().cloned().flatten()
     }
 
     fn detect_shell_inner() -> Shell {
@@ -631,6 +762,42 @@ pub mod imp {
         }
     }
 
+    // ── 每命令独立 Job（shell-stability P2）──
+
+    /// 创建每命令独立 Job：KILL_ON_JOB_CLOSE —— 句柄关闭即杀整树。
+    /// 不设 BREAKAWAY_OK：后代进程不得逃出杀树范围。
+    /// 不设内存/进程数上限（构建命令资源需求不可预测）。
+    fn create_per_command_job() -> Option<isize> {
+        let h = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
+        if h == 0 {
+            return None;
+        }
+        let mut limits: JobObjectExtendedLimitInformationRaw = unsafe { std::mem::zeroed() };
+        limits.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ret = unsafe {
+            SetInformationJobObject(
+                h, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                &limits as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<JobObjectExtendedLimitInformationRaw>() as u32,
+            )
+        };
+        if ret == 0 {
+            unsafe { CloseHandle(h) };
+            return None;
+        }
+        Some(h)
+    }
+
+    /// 关闭 Job 句柄（KILL_ON_JOB_CLOSE 生效）。供 SandboxedChild::Drop 调用。
+    pub fn close_handle(h: isize) {
+        unsafe { CloseHandle(h) };
+    }
+
+    /// 终止 Job 内全部进程（同步内核调用）。返回 FFI 结果。
+    pub fn terminate_job_object(job: isize) -> i32 {
+        unsafe { TerminateJobObject(job, 1) }
+    }
+
     // ── 沙箱化启动（仅 Job Object）──
 
     /// 启动 shell 命令并分配到 Job Object。
@@ -651,7 +818,7 @@ pub mod imp {
         cwd: &str,
         envs: &[(&str, &str)],
     ) -> io::Result<super::SandboxedChild> {
-        use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
         // 创建 stdout/stderr 管道，子端标记为不可继承。
         // 这防止子进程（cargo → test 二进制）持有
         // 管道句柄打开，导致 read_to_end 永久阻塞。
@@ -683,8 +850,24 @@ pub mod imp {
             ))
         });
 
-        job::assign(&child);
-        Ok(super::SandboxedChild { inner: child })
+        // 每命令独立 Job（shell-stability P2）：杀树 = TerminateJobObject(own job)，
+        // 句柄关闭（SandboxedChild Drop）= KILL_ON_JOB_CLOSE 灭绝整树。
+        // 取代原先的全局 Job 分配 —— 全局 Job 的 Terminate 会误杀其他 Agent 的在跑命令。
+        let job = create_per_command_job();
+        let assigned = job.and_then(|h| {
+            let raw = child.as_raw_handle();
+            if raw.is_null() {
+                close_handle(h);
+                None
+            } else if unsafe { AssignProcessToJobObject(h, raw as isize) } != 0 {
+                Some(h)
+            } else {
+                // 分配失败（进程已在别的 Job 等）→ 关闭句柄，退化为无 Job 语义
+                close_handle(h);
+                None
+            }
+        });
+        Ok(super::SandboxedChild { inner: child, job: assigned })
     }
 
     /// Git Bash / 捆绑 MSYS2 bash：`bash -c <command>` — 命令串原样传参，bash 自行解析
@@ -695,18 +878,19 @@ pub mod imp {
     /// LC_ALL=C.UTF-8 钉死输出编码，NO_COLOR/PAGER/GIT_PAGER 消灭彩色转义与 pager 卡管道。
     pub fn spawn_bash(bash_path: &str, command: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
         let arg = command.to_string();
-        spawn_argv(
-            bash_path,
-            &[String::from("-c"), arg],
-            cwd,
-            &[
-                ("MSYS2_ARG_CONV_EXCL", "*"),
-                ("LC_ALL", "C.UTF-8"),
-                ("NO_COLOR", "1"),
-                ("PAGER", "cat"),
-                ("GIT_PAGER", "cat"),
-            ],
-        )
+        let mut envs: Vec<(&str, String)> = vec![
+            ("MSYS2_ARG_CONV_EXCL", "*".into()),
+            ("LC_ALL", "C.UTF-8".into()),
+            ("NO_COLOR", "1".into()),
+            ("PAGER", "cat".into()),
+            ("GIT_PAGER", "cat".into()),
+        ];
+        // PATH 归一化（P3）：捆绑 bin 在前（coreutils 解析），用户工具目录在后
+        if let Some(path) = bash_path_env() {
+            envs.push(("PATH", path));
+        }
+        let envs_ref: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        spawn_argv(bash_path, &[String::from("-c"), arg], cwd, &envs_ref)
     }
 
     /// cmd.exe：命令写入临时 .cmd 批处理文件再执行 —
@@ -727,7 +911,13 @@ pub mod imp {
         std::fs::write(&script_path, script)?;
         let path_arg = script_path.to_string_lossy().to_string();
         // /c 后跟批处理路径；cmd 用 /d 跳过 AutoRun 注册表项，行为更可预期。
-        let child = spawn_argv("cmd.exe", &[String::from("/d"), String::from("/c"), path_arg], cwd, &[])?;
+        let mut envs: Vec<(&str, &str)> = Vec::new();
+        // cmd 回退路径用归一化用户 PATH（不加 MSYS bin，避免 shadow 系统工具）
+        let user_path: Option<String> = cmd_path_env();
+        if let Some(p) = &user_path {
+            envs.push(("PATH", p));
+        }
+        let child = spawn_argv("cmd.exe", &[String::from("/d"), String::from("/c"), path_arg], cwd, &envs)?;
         // 延迟清理：cmd /c 秒级执行完即释放句柄，3 秒后删除足够安全。
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(3));

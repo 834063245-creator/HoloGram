@@ -434,9 +434,42 @@ pub(crate) fn fuzzy_find(content: &str, query: &str) -> Option<(usize, String)> 
     }
     None
 }
+
+/// PATH 合并（shell-stability P3，平台无关纯函数）：
+/// existing 在前（保留顺序），逐个追加 extras 中不重复的条目；
+/// 去重大小写不敏感（Windows PATH 语义），空串/引号清理。
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn merge_path_entries(existing: &[String], extras: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |p: &str, out: &mut Vec<String>| {
+        let p = p.trim().trim_matches('"');
+        if p.is_empty() {
+            return;
+        }
+        if !out.iter().any(|x| x.eq_ignore_ascii_case(p)) {
+            out.push(p.to_string());
+        }
+    };
+    for p in existing {
+        push(p, &mut out);
+    }
+    for p in extras {
+        push(p, &mut out);
+    }
+    out
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_path_entries_dedupes_case_insensitive_and_keeps_order() {
+        let out = merge_path_entries(
+            &["C:\\Windows".into(), "\"C:\\Foo\"".into()],
+            &["c:\\foo".into(), "".into(), "D:\\Bar".into()],
+        );
+        assert_eq!(out, vec!["C:\\Windows", "C:\\Foo", "D:\\Bar"]);
+    }
 
     // ── B1: SSRF 防护必须捕获 ipv6 映射的 ipv4 (::ffff:a.b.c.d) ──
     #[test]
