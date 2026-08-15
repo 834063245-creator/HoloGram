@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tauri::Emitter;
 
-use crate::utils::truncate_output;
+use crate::utils::truncate_output_spill;
 
 /// 当前 shell 环境 — 前端注入 Agent system prompt 用（见 os_sandbox::shell_env）。
 #[tauri::command]
@@ -332,7 +332,7 @@ fn wait_child_blocking(
                 let full_output = if stdout.is_empty() && stderr.is_empty() {
                     "(无输出)".into()
                 } else {
-                    truncate_output(&format!("{}{}", stdout, stderr))
+                    truncate_output_spill(&format!("{}{}", stdout, stderr), &format!("job-{job_id}"))
                 };
 
                 if !status.success() {
@@ -362,12 +362,15 @@ fn wait_child_blocking(
                         .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
                         .map(|v| String::from_utf8_lossy(&v).to_string())
                         .unwrap_or_default();
-                    return Ok(truncate_output(&format!(
-                        "[exit code: -1] 命令超时 ({}ms)，已终止。可拆小命令或增大 timeoutMs 后重试。\n{}{}",
-                        timeout_ms_val,
-                        stdout,
-                        stderr
-                    )));
+                    return Ok(truncate_output_spill(
+                        &format!(
+                            "[exit code: -1] 命令超时 ({}ms)，已终止。可拆小命令或增大 timeoutMs 后重试。\n{}{}",
+                            timeout_ms_val,
+                            stdout,
+                            stderr
+                        ),
+                        &format!("job-{job_id}"),
+                    ));
                 }
                 thread::sleep(Duration::from_millis(50));
             }
@@ -383,7 +386,7 @@ fn wait_child_blocking(
 
 #[tauri::command]
 pub(crate) async fn bash_output(job_id: u32) -> Result<String, String> {
-    crate::utils::read_bg_output(job_id).map(|s| truncate_output(&s))
+    crate::utils::read_bg_output(job_id).map(|s| truncate_output_spill(&s, &format!("bg-job-{job_id}")))
 }
 
 #[tauri::command]
@@ -393,7 +396,7 @@ pub(crate) async fn bash_kill(job_id: u32, agent_id: Option<String>) -> Result<S
 
 #[tauri::command]
 pub(crate) async fn bash_wait(job_id: u32, timeout_ms: Option<u64>) -> Result<String, String> {
-    crate::utils::wait_bg(job_id, timeout_ms.unwrap_or(60_000)).map(|s| truncate_output(&s))
+    crate::utils::wait_bg(job_id, timeout_ms.unwrap_or(60_000)).map(|s| truncate_output_spill(&s, &format!("bg-job-{job_id}")))
 }
 
 #[tauri::command]

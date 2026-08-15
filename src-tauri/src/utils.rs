@@ -471,6 +471,27 @@ mod tests {
         assert_eq!(out, vec!["C:\\Windows", "C:\\Foo", "D:\\Bar"]);
     }
 
+    #[test]
+    fn truncate_output_spill_writes_full_log_and_guides() {
+        let big: String = "x".repeat(MAX_TOOL_OUTPUT_CHARS + 10_000);
+        let out = crate::utils::truncate_output_spill(&big, "test-job");
+        assert!(out.contains("output truncated"), "必须带截断标记: {out}");
+        assert!(out.contains("完整输出已落盘"), "必须给落盘指引: {out}");
+        // 从指引里抠出路径，验证全量内容在盘上
+        let path_part = out
+            .split("完整输出已落盘: ")
+            .nth(1)
+            .and_then(|s| s.split("（用 fs(read)").next())
+            .map(|s| s.trim().to_string())
+            .expect("应含路径");
+        let on_disk = std::fs::read_to_string(&path_part).expect("溢出文件应存在");
+        assert_eq!(on_disk, big, "落盘内容必须与全量输出一致");
+        // 短输出不落盘、原文返回
+        let short = "hello";
+        assert_eq!(crate::utils::truncate_output_spill(short, "test-job"), short);
+        let _ = std::fs::remove_file(&path_part);
+    }
+
     // ── B1: SSRF 防护必须捕获 ipv6 映射的 ipv4 (::ffff:a.b.c.d) ──
     #[test]
     fn test_b1_is_private_ip_ipv6_mapped() {
