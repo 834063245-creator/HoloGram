@@ -1,6 +1,6 @@
 # Shell 稳定性收口：捆绑 MSYS2 bash + dsh 式执行纪律
 
-> 状态：2026-08-15 **P0-P4 已落地**（`0f843f0` / `03468b0` / `1a16ea1` / `e9e62bb`）；P5（`shell(ps)` 副动作）留后续窗口
+> 状态：2026-08-15 **P0-P5 全部落地**（`0f843f0` / `03468b0` / `1a16ea1` / `e9e62bb` / P5 提交见 shell 系列 commit）；P5 形态 = `shell(run, interpreter:"pwsh")` 参数而非新动作
 > **待办：Windows 真机实跑验证（§4 基线命令）——本批代码的 cfg(windows) 路径未在 Windows 编译/实跑过**
 > 动机：shell 能力不稳定（解释器探测分叉 / PATH 继承随机 / 编码无契约 / taskkill 杀树不可靠）
 > 参照：deepseek-harness `packages/shell/`（pwsh 钉死 + 编码前置 + 单 argv + env 归一 + spill）与现有 `os_sandbox.rs`

@@ -25,9 +25,15 @@ pub(crate) async fn exec_command(
     is_agent: Option<bool>,
     stream_tool_id: Option<String>,
     agent_id: Option<String>,
+    interpreter: Option<String>,
     state: tauri::State<'_, crate::WorkspaceState>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    // P5：解释器选择（"pwsh" → PowerShell；其余/缺省 → 捆绑 bash 阶梯）
+    let shell_kind = match interpreter.as_deref() {
+        Some("pwsh") => crate::os_sandbox::ShellInterpreter::Pwsh,
+        _ => crate::os_sandbox::ShellInterpreter::Auto,
+    };
     // 默认 cwd = 当前工作区根（而非应用安装目录 project_root()）——
     // 否则切换工作区后 Agent 省略 cwd 时，命令会在 HoloGram 自身目录执行。
     let dir = match cwd {
@@ -57,7 +63,7 @@ pub(crate) async fn exec_command(
 
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000));
 
-    let mut child = crate::os_sandbox::spawn_shell(&command, &physical_dir_str)
+    let mut child = crate::os_sandbox::spawn_shell_with(&command, &physical_dir_str, shell_kind)
         .map_err(|e| format!("无法执行命令: {e}"))?;
 
     // ── 流式路径：通过 Tauri 事件发送数据块 ──

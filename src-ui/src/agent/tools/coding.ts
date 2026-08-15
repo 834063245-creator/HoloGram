@@ -344,6 +344,12 @@ export function createCodingTools(exec: ToolExecutor, ui?: CodingToolsUI): Tool[
           .describe(
             'Set to true to run in background (returns job ID immediately). Use bash_output(id) to check progress, bash_wait(id) to wait for completion, bash_kill(id) to stop.',
           ),
+        interpreter: z
+          .enum(['bash', 'pwsh'])
+          .optional()
+          .describe(
+            'Optional interpreter. Default/omit = bundled bash (Unix syntax). Set "pwsh" ONLY for Windows-native tasks bash cannot do (registry queries, ACL, MSI, COM, WMI) — PowerShell syntax required.',
+          ),
       }),
       execute: (args, onProgress, signal) => exec('exec_command', args, onProgress, signal),
     }),

@@ -792,7 +792,8 @@ pub(crate) async fn rpc(
             let is_agent = opt_bool(&params, "is_agent");
             let agent_id = opt_str(&params, "_agent_id").or_else(|| opt_str(&params, "agent_id"));
             let stream_tool_id = opt_str(&params, "stream_tool_id");
-            commands::shell::exec_command(command, cwd, timeout_ms, run_in_background, is_agent, stream_tool_id, agent_id, state, app).await
+            let interpreter = opt_str(&params, "interpreter");
+            commands::shell::exec_command(command, cwd, timeout_ms, run_in_background, is_agent, stream_tool_id, agent_id, interpreter, state, app).await
         }
         "bash_output" => {
             let job_id = params.get("job_id").and_then(|v| v.as_u64()).map(|n| n as u32)

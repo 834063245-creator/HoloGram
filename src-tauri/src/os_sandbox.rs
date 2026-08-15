@@ -208,13 +208,53 @@ pub fn status() -> SandboxStatus {
     { SandboxStatus::Unavailable }
 }
 
-/// 在沙箱中启动 shell 命令。在 Windows 上，将进程
-/// 分配到 Job Object 以实现 die-with-parent 生命周期管理。
+/// shell 解释器选择（shell-stability P5）：
+/// Auto = 捆绑 bash 阶梯（默认，保持 P1 行为）；Pwsh = PowerShell（Windows 原生任务）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShellInterpreter {
+    Auto,
+    Bash,
+    Pwsh,
+}
+
+/// pwsh 候选路径（纯函数，供 Windows 实跑与 Linux 单测共用）：
+/// PowerShell 7 安装目录 → PATH 条目 → Windows PowerShell 5.1 兜底
+/// （对齐 dsh `pwsh-local/resolve.ts` 的解析顺序，每台 Windows 必有其一）。
+pub(crate) fn candidate_pwsh_paths(program_files: &str, system_root: &str, path_entries: &str) -> Vec<String> {
+    let mut out: Vec<String> = vec![format!(
+        "{}\\PowerShell\\7\\pwsh.exe",
+        program_files.trim_end_matches('\\')
+    )];
+    for e in path_entries.split(';') {
+        let e = e.trim().trim_matches('"');
+        if !e.is_empty() {
+            out.push(format!("{}\\pwsh.exe", e));
+        }
+    }
+    out.push(format!(
+        "{}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        system_root.trim_end_matches('\\')
+    ));
+    out
+}
+
+/// 在沙箱中启动 shell 命令（默认解释器阶梯，见 spawn_shell_with）。
+pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
+    spawn_shell_with(command, cwd, ShellInterpreter::Auto)
+}
+
+/// 在沙箱中启动 shell 命令，按解释器选择：
+/// - Auto/Bash：捆绑 MSYS2 bash → Git Bash → cmd 阶梯（P1）
+/// - Pwsh：pwsh 7 → PowerShell 5.1 兜底，命令单 argv 传 `-Command`（P5）
+/// 在 Windows 上，将进程分配到每命令独立 Job Object 实现 die-with-parent。
 /// 在 macOS 上使用 sandbox-exec；在 Linux 上使用 bubblewrap。
 /// 当 OS 沙箱工具不可用时回退到普通启动。
-pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
+pub fn spawn_shell_with(command: &str, cwd: &str, interpreter: ShellInterpreter) -> io::Result<SandboxedChild> {
     #[cfg(windows)]
     {
+        if interpreter == ShellInterpreter::Pwsh {
+            return imp::spawn_pwsh(command, cwd);
+        }
         // 固定解释器策略（shell-stability P1，对齐 dsh 钉死思路）：
         // - 捆绑 MSYS2 bash 为主解释器：随 App 分发、版本钉死，用户装没装
         //   Git 都不影响行为——消灭"探测失败静默降级"这个不稳定根源。
@@ -237,6 +277,12 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     }
     #[cfg(target_os = "macos")]
     {
+        if interpreter == ShellInterpreter::Pwsh {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "pwsh 仅 Windows 支持（macOS 用默认 bash）",
+            ));
+        }
         match mac::spawn(command, cwd) {
             Ok(child) => return Ok(child),
             Err(e) => {
@@ -247,6 +293,12 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     }
     #[cfg(target_os = "linux")]
     {
+        if interpreter == ShellInterpreter::Pwsh {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "pwsh 仅 Windows 支持（Linux 用默认 bash）",
+            ));
+        }
         match linux::spawn(command, cwd) {
             Ok(child) => return Ok(child),
             Err(e) => {
@@ -257,6 +309,7 @@ pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     }
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
+        let _ = interpreter;
         spawn_plain(command, cwd)
     }
 }
@@ -893,6 +946,53 @@ pub mod imp {
         spawn_argv(bash_path, &[String::from("-c"), arg], cwd, &envs_ref)
     }
 
+    /// PowerShell 编码钉（shell-stability P5，对齐 dsh ENCODING_PREAMBLE）：
+    /// 管道收集器按 UTF-8 解码，而 Windows PowerShell 5.1 默认写控制台 OEM
+    /// 代码页（GBK 等）——每条命令前置钉死 UTF-8 输出编码。
+    const PS_ENCODING_PREAMBLE: &str =
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [System.Text.UTF8Encoding]::new($false); ";
+
+    /// PowerShell：`pwsh -NoLogo -NoProfile -NonInteractive -Command <cmd>`。
+    /// 命令串作为单 argv 元素——PowerShell 自行解析，无中间 shell 即无引号层
+    /// （dsh pwsh-local 同款理由）；原生 Win32 路径（C:\...）原样传递。
+    pub fn spawn_pwsh(command: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
+        let pwsh = resolve_pwsh_path().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "未找到 PowerShell（PS7/pwsh 或系统 powershell.exe）",
+            )
+        })?;
+        let full = format!("{PS_ENCODING_PREAMBLE}{command}");
+        let mut envs: Vec<(&str, String)> = vec![("NO_COLOR", "1".into())];
+        // PowerShell 用归一化用户 PATH（不加 MSYS bin——避免 shadow 系统工具）
+        if let Some(path) = cmd_path_env() {
+            envs.push(("PATH", path));
+        }
+        let envs_ref: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        spawn_argv(
+            &pwsh,
+            &[
+                "-NoLogo".into(),
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                full,
+            ],
+            cwd,
+            &envs_ref,
+        )
+    }
+
+    /// 解析 pwsh 可执行文件：候选路径逐个存在性检查（candidate_pwsh_paths 顺序）。
+    fn resolve_pwsh_path() -> Option<String> {
+        let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".into());
+        let sr = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let path = std::env::var("PATH").unwrap_or_default();
+        super::candidate_pwsh_paths(&pf, &sr, &path)
+            .into_iter()
+            .find(|p| std::path::Path::new(p).is_file())
+    }
+
     /// cmd.exe：命令写入临时 .cmd 批处理文件再执行 —
     /// cmd /s /c 对内嵌双引号的剥离规则必错乱（如
     /// git commit -m "msg"），批处理文件免疫全部 cmd 引号/展开问题。
@@ -1010,7 +1110,31 @@ pub mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::{detect_shell, spawn_bash, spawn_cmd_script, windows_to_posix_path, Shell};
+        use super::{detect_shell, spawn_bash, spawn_cmd_script, spawn_pwsh, windows_to_posix_path, Shell};
+
+        /// P5 冒烟：spawn_pwsh 单 argv 传 -Command，编码钉前置，
+        /// Write-Output 输出可捕获（PS7 或 PS5.1 均适用）。
+        #[test]
+        fn test_spawn_pwsh_smoke() {
+            match spawn_pwsh("Write-Output 'pwsh-ok'", ".") {
+                Ok(mut child) => {
+                    let mut out = String::new();
+                    if let Some(mut r) = child.take_stdout() {
+                        use std::io::Read;
+                        let _ = r.read_to_string(&mut out);
+                    }
+                    let _ = child.wait();
+                    assert!(
+                        out.contains("pwsh-ok"),
+                        "pwsh 输出应含标记（编码钉不破坏 ASCII）: {out:?}"
+                    );
+                }
+                Err(e) => {
+                    // 无 PowerShell 的极简 Windows 环境：跳过而非失败
+                    eprintln!("[pwsh-smoke] spawn_pwsh failed, skip: {e}");
+                }
+            }
+        }
 
         #[test]
         fn test_windows_to_posix_drive_letter() {
@@ -1536,5 +1660,27 @@ mod linux {
             .filter(|(src, _)| Path::new(src).exists())
             .copied()
             .collect()
+    }
+}
+// ═══════════════════════════════════════════════════════════
+// 平台无关纯函数测试（Linux 可跑）
+// ═══════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod pure_tests {
+    use super::*;
+
+    /// P5：pwsh 候选路径顺序 = PS7 → PATH 条目 → PS5.1 兜底（dsh 同款顺序）。
+    #[test]
+    fn candidate_pwsh_paths_order_and_cleaning() {
+        let paths = candidate_pwsh_paths(
+            r"C:\Program Files",
+            r"C:\Windows",
+            r#""C:\tools";C:\Users\me\bin;"#,
+        );
+        assert_eq!(paths[0], r"C:\Program Files\PowerShell\7\pwsh.exe");
+        assert_eq!(paths[1], r"C:\tools\pwsh.exe");
+        assert_eq!(paths[2], r"C:\Users\me\bin\pwsh.exe");
+        assert_eq!(paths[3], r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
     }
 }

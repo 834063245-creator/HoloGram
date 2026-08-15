@@ -121,7 +121,7 @@ export const DOMAIN_SPECS: DomainSpec[] = [
   {
     name: 'shell',
     description:
-      'Shell execution: run (build/test commands only), plus output / wait / kill for background jobs. ' +
+      'Shell execution: run (build/test commands only, bundled bash by default; interpreter:"pwsh" ONLY for Windows-native tasks like registry/ACL/MSI/COM/WMI), plus output / wait / kill for background jobs. ' +
       'Do NOT use shell(run) for file search, code search, or git — use fs/search/git instead.',
     actions: {
       run: 'run_shell',
