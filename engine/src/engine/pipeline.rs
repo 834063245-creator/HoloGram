@@ -504,6 +504,11 @@ impl Engine {
         lsp_exts.dedup();
         std::thread::spawn(move || {
             let root_str = proj_root.to_string_lossy().to_string();
+            // 换工作区重分析：杀掉旧根的 LSP 服务器，避免旧进程
+            // 继续占用内存（进程回收治理，2026-08-15）。
+            if crate::lsp_manager::LspManager::root_changed(&root_str) {
+                crate::lsp_manager::LspManager::shutdown_all();
+            }
             let ext_filter: Vec<&str> = lsp_exts.iter().map(|s| s.as_str()).collect();
             crate::lsp_manager::LspManager::warm_filtered(&root_str, &ext_filter);
         });

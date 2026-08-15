@@ -19,9 +19,13 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
             proj
         };
         let root_str = root.to_string_lossy().to_string();
-        if !crate::lsp_manager::LspManager::is_initialized()
-            || crate::lsp_manager::LspManager::root_changed(&root_str)
-        {
+        let root_changed = crate::lsp_manager::LspManager::root_changed(&root_str);
+        if !crate::lsp_manager::LspManager::is_initialized() || root_changed {
+            if root_changed {
+                // 工作区切换：先杀旧工作区的 LSP 服务器再预热新池
+                //（旧池进程继续活着 = 浪费内存 + 用旧根解析新查询）。
+                crate::lsp_manager::LspManager::shutdown_all();
+            }
             let mut lsp_exts: Vec<String> = Vec::new();
             let _ = engine::engine_read(|idx| {
                 for node in idx.nodes_iter() {

@@ -584,6 +584,35 @@ impl LspManager {
         }
     }
 
+    /// 杀掉池中全部 LSP 服务器进程并清空状态。
+    ///
+    /// 必须显式调用：LspProcess 的 Drop 只在对象被销毁时 kill，
+    /// 但池是进程级全局静态 —— 进程退出时静态对象不跑析构，
+    /// 子进程会变成孤儿（曾观测 32 jdtls + 24 omnisharp 存活 16 小时）。
+    /// 调用点：工作区切换（杀旧池）、引擎进程退出前。
+    pub fn shutdown_all() {
+        let mgr = Self::global();
+        let drained: Vec<(&'static str, Arc<Mutex<Option<LspProcess>>>)> = {
+            let mut pool = mgr.pool.write().unwrap_or_else(|e| e.into_inner());
+            pool.drain().collect()
+        };
+        let mut killed = 0usize;
+        for (cmd, arc) in &drained {
+            let mut guard = match arc.lock() {
+                Ok(g) => g,
+                Err(_) => continue,
+            };
+            if guard.take().is_some() {
+                killed += 1;
+            }
+            tracing::info!(cmd, "[lsp_manager] shutdown_all killed server");
+        }
+        *mgr.initialized.write().unwrap_or_else(|e| e.into_inner()) = false;
+        *mgr.project_root.write().unwrap_or_else(|e| e.into_inner()) = None;
+        mgr.last_warm_errors.write().unwrap_or_else(|e| e.into_inner()).clear();
+        tracing::info!(killed, "[lsp_manager] shutdown_all done");
+    }
+
     fn new() -> Self {
         Self {
             pool: RwLock::new(HashMap::new()),
@@ -925,6 +954,25 @@ impl LspManager {
             // 控制台窗口（启动时三个语言服务器窗口就是这里漏的，2026-08-13 回归）。
             // CREATE_NO_WINDOW 的隐藏控制台会被孙进程继承，整棵进程树都不可见。
             c.creation_flags(0x08000000);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // die-with-parent：引擎进程死亡（含 SIGKILL）时子进程立即自杀。
+            // 没有它，引擎异常退出后 LSP 服务器变孤儿 —— 实测 32 jdtls +
+            // 24 omnisharp 存活 16 小时。prctl 之后复查 ppid：若父进程在
+            // prctl 前已死（子进程已被 init 收养），补一发自尽。
+            unsafe {
+                c.pre_exec(|| {
+                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::getppid() == 1 {
+                        libc::kill(libc::getpid(), libc::SIGKILL);
+                    }
+                    Ok(())
+                });
+            }
         }
         let mut child = c.spawn()
             .map_err(|e| format!("spawn {}: {}", cfg.command, e))?;
@@ -1372,6 +1420,55 @@ time.sleep(0.2)
         assert!(elapsed < std::time::Duration::from_secs(5),
             "send_request should not block forever, took {:?}, result: {:?}", elapsed, result);
         assert!(result.is_err(), "expected error from hanging process, got {:?}", result);
+    }
+
+    /// 进程回收回归：shutdown_all 必须杀掉池中全部 LSP 子进程
+    ///（静态池退出时不跑析构，曾漏 56 个孤儿 jdtls/omnisharp）。
+    #[cfg(unix)]
+    #[test]
+    fn test_shutdown_all_kills_pooled_processes() {
+        let mgr = LspManager::global();
+        let pid = {
+            let p = spawn_hanging_process();
+            let pid = p.process.id();
+            mgr.pool
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert("__test_shutdown__", Arc::new(Mutex::new(Some(p))));
+            pid
+        };
+
+        LspManager::shutdown_all();
+
+        // 池已清空
+        let pool = mgr.pool.read().unwrap_or_else(|e| e.into_inner());
+        assert!(pool.get("__test_shutdown__").is_none(), "pool entry removed");
+        drop(pool);
+
+        // 子进程已死（给 kill 一点时间）
+        let mut dead = false;
+        for _ in 0..50 {
+            let alive = process_alive(pid);
+            if !alive {
+                dead = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(dead, "shutdown_all 后子进程 {} 必须已退出", pid);
+    }
+
+    #[cfg(unix)]
+    fn process_alive(pid: u32) -> bool {
+        // kill(pid, 0) 对僵尸进程也返回成功 —— 用 waitpid(WNOHANG)
+        // 同时判定死亡并回收僵尸。
+        let mut status: libc::c_int = 0;
+        let r = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
+        match r {
+            0 => true,                      // 仍在运行
+            p if p == pid as i32 => false,  // 僵尸，已被回收 → 死了
+            _ => false,                     // ECHILD：不存在 → 死了
+        }
     }
 
     // ── E2E: 真实 rust-analyzer ──

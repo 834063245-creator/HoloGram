@@ -59,6 +59,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_global()
         .expect("rayon global pool already initialized — move this call earlier");
 
+    // ── LSP 进程回收守卫 ──
+    // 引擎进程退出时杀掉全部 LSP 子进程。LspManager 是进程级静态，
+    // 退出时不跑析构 —— 缺这步子进程变孤儿（实测 32 jdtls +
+    // 24 omnisharp 存活 16 小时）。
+    struct LspShutdownGuard;
+    impl Drop for LspShutdownGuard {
+        fn drop(&mut self) {
+            hologram_engine::lsp_manager::LspManager::shutdown_all();
+        }
+    }
+    let _lsp_guard = LspShutdownGuard;
+
+    // 信号路径（SIGINT/SIGTERM/ctrl-c）不触发 Drop —— 单独挂一个
+    // 处理器，清理 LSP 池后退出。
+    {
+        tokio::spawn(async move {
+            let mut sigterm = tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::terminate(),
+            )
+            .expect("install SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = sigterm.recv() => {},
+            }
+            hologram_engine::lsp_manager::LspManager::shutdown_all();
+            std::process::exit(0);
+        });
+    }
+
     // ── 收集命令行参数 ──
     let args: Vec<String> = std::env::args().collect();
 
