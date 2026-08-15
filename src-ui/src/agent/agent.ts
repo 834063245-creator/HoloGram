@@ -886,7 +886,7 @@ export class Agent {
   async runGoal(
     signal: AbortSignal,
     goal: string,
-  ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
+  ): Promise<{ status: 'completed' | 'failed' | 'blocked' | 'aborted' | 'paused'; summary: string }> {
     if (!this.goalManager) {
       return { status: 'failed', summary: '目标管理器未初始化' };
     }
@@ -900,16 +900,16 @@ export class Agent {
     }
   }
 
-  /** 恢复活跃目标（暂停的，或崩溃遗留的活跃记录）。返回类型与 runGoal 相同。 */
+  /** 恢复活跃目标（暂停/受阻的，或崩溃遗留的活跃记录）。返回类型与 runGoal 相同。 */
   async resumeGoal(
     signal: AbortSignal,
     id?: string,
-  ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
+  ): Promise<{ status: 'completed' | 'failed' | 'blocked' | 'aborted' | 'paused'; summary: string }> {
     if (!this.goalManager) {
       return { status: 'failed', summary: '目标管理器未初始化' };
     }
     const record = id ? await this.goalManager.get(id) : await this.goalManager.getActive();
-    if (!record || (record.status !== 'paused' && record.status !== 'active')) {
+    if (!record || (record.status !== 'paused' && record.status !== 'active' && record.status !== 'blocked')) {
       return { status: 'failed', summary: '没有可恢复的目标。使用 /goal 创建新目标。' };
     }
     // ponytail: 到达这里的 'active' 记录是崩溃残留（活跃循环被
@@ -929,17 +929,24 @@ export class Agent {
   }
 
   /** 为一个 goal 循环注册 goal_report。调用方在 finally 中注销。
-   *  完成判定的主通道：模型显式上报，不再只靠正文正则。普通对话拿不到这个工具。 */
-  private _registerGoalReportTool(): { called: boolean; status: 'completed' | 'failed'; summary: string } {
-    const report = { called: false, status: 'completed' as 'completed' | 'failed', summary: '' };
+   *  完成判定的主通道：模型显式上报，不再只靠正文正则。普通对话拿不到这个工具。
+   *  权威语义：只有目标循环期间注册本工具 — 模型无权在普通聊天里改目标状态；
+   *  edit/pause/resume/cancel 等生命周期动作只由人类 /goal 命令进入。 */
+  private _registerGoalReportTool(): {
+    called: boolean;
+    status: 'completed' | 'failed' | 'blocked';
+    summary: string;
+  } {
+    const report = { called: false, status: 'completed' as 'completed' | 'failed' | 'blocked', summary: '' };
     const goalReportTool: Tool = defineTool({
       name: 'goal_report',
       description:
-        '目标模式专用：确认目标已达成、或确认无法达成时调用，调用后目标循环结束。' +
-        'status=completed 时 summary 写完成摘要；status=failed 时 summary 写阻塞原因。',
+        '目标模式专用：确认目标已达成、确认无法达成、或遇到需要外部（人类/环境）才能解除的障碍时调用，调用后目标循环结束。' +
+        'status=completed 时 summary 写完成摘要；status=failed 时 summary 写失败原因；' +
+        'status=blocked 时 summary 必须写明具体阻塞条件（机器可读的事实：缺什么、谁缺、哪个环境不满足），且该条件在会话内无法由你自行解除。',
       schema: z.object({
-        status: z.enum(['completed', 'failed']),
-        summary: z.string(),
+        status: z.enum(['completed', 'failed', 'blocked']),
+        summary: z.string().min(1, 'blocked/failed 必须说明原因'),
       }),
       readOnly: true,
       execute: async (args) => {
@@ -960,8 +967,8 @@ export class Agent {
     signal: AbortSignal,
     record: GoalRecord,
     isResume: boolean,
-    report: { called: boolean; status: 'completed' | 'failed'; summary: string },
-  ): Promise<{ status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string }> {
+    report: { called: boolean; status: 'completed' | 'failed' | 'blocked'; summary: string },
+  ): Promise<{ status: 'completed' | 'failed' | 'blocked' | 'aborted' | 'paused'; summary: string }> {
     const mgr = this.goalManager;
     if (!mgr) return { status: 'aborted', summary: 'goal manager not initialized' };
     let stallRounds = record.stallRounds;
@@ -1016,6 +1023,10 @@ export class Agent {
       if (report.called) {
         const summary = report.summary || this._lastAssistantContent();
         await mgr.update(record.id, { status: report.status, summary });
+        if (report.status === 'blocked') {
+          this._sink({ kind: EventKind.Notice, level: 'warn', text: `🚧 目标受阻: ${summary.slice(0, 120)}` });
+          return { status: 'blocked', summary };
+        }
         this._sink({
           kind: EventKind.Notice,
           level: report.status === 'completed' ? 'info' : 'warn',
@@ -1073,6 +1084,7 @@ export class Agent {
 如果目标尚未达成: 规划下一步（不重复已完成步骤）→ 执行或 agent_spawn 委派 → 验证结果。
 如果目标已全部达成: 调用 goal_report(status="completed", summary=…) 上报。
 如果遇到无法克服的障碍: 调用 goal_report(status="failed", summary=…) 说明原因。
+如果障碍是外部条件（需要人类决策/外部环境改变才能解除，你在会话内无法自行解决）: 调用 goal_report(status="blocked", summary="具体阻塞条件")，人类可用 /goal resume 在条件解除后继续。
 
 禁止反问用户。禁止只分析不行动。
 </system-reminder>`,
@@ -1113,7 +1125,7 @@ ${resumeNote}
 3. **验证** — 每步完成后检查结果。正确→继续下一步，错误→分析原因→修正指令→重做
 4. **循环** — 持续 规划→执行→验证→下一步，直到目标全部达成
 5. **不要反问** — 不要在中间停下来问用户"要继续吗"。直接继续
-6. **完成信号** — 判定目标已达成时调用 \`goal_report(status="completed", summary="完成摘要")\`；确认无法达成时调用 \`goal_report(status="failed", summary="阻塞原因")\`
+6. **完成信号** — 判定目标已达成时调用 \`goal_report(status="completed", summary="完成摘要")\`；确认无法达成时调用 \`goal_report(status="failed", summary="失败原因")\`；障碍需外部条件解除时调用 \`goal_report(status="blocked", summary="具体阻塞条件")\`（人类可用 /goal resume 继续）
 
 ## 禁止
 - 输出纯文本分析后停止（分析完必须进入下一步行动）

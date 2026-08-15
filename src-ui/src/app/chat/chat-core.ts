@@ -687,18 +687,18 @@ export class ChatCore {
     if (!path) return;
     const mgr = new GoalManager(path, (r) => bus.emit('goal:state', r));
     const active = await mgr.getActive();
-    const history = (await mgr.list()).filter((r) => r.status !== 'active' && r.status !== 'paused');
+    const history = (await mgr.list()).filter((r) => r.status !== 'active' && r.status !== 'paused' && r.status !== 'blocked');
     if (!active && history.length === 0) {
       this.addNotice('当前没有目标。用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info');
       return;
     }
     if (active) {
-      const label = active.status === 'paused' ? '已暂停' : '进行中';
-      const hint = active.status === 'paused' ? ' — /goal resume 继续' : '';
+      const label = active.status === 'paused' ? '已暂停' : active.status === 'blocked' ? '已受阻' : '进行中';
+      const hint = active.status === 'paused' || active.status === 'blocked' ? ' — /goal resume 继续' : '';
       this.addNotice(`🎯 ${active.text.slice(0, 60)} · ${label} · 第 ${active.iteration + 1} 轮${hint}`, 'info');
     }
     for (const r of history.slice(-3).reverse()) {
-      const icon = r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : '🚫';
+      const icon = r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : r.status === 'blocked' ? '🚧' : '🚫';
       this.addNotice(`${icon} ${r.text.slice(0, 50)} — ${(r.summary || r.status).slice(0, 60)}`, 'info');
     }
   }
@@ -785,6 +785,8 @@ export class ChatCore {
       this.addNotice(`✅ 目标达成: ${result.summary.slice(0, 120)}`, 'info');
     } else if (result.status === 'paused') {
       this.addNotice(`⏸️ ${result.summary}`, 'info');
+    } else if (result.status === 'blocked') {
+      this.addNotice(`🚧 目标受阻: ${result.summary.slice(0, 120)}。条件解除后 /goal resume 继续。`, 'warn');
     } else if (result.status === 'failed') {
       this.addNotice(`❌ 目标失败: ${result.summary.slice(0, 120)}`, 'warn');
     } else {
@@ -796,7 +798,7 @@ export class ChatCore {
 
   private _updateGoalRecord(record: GoalRecord): void {
     const p = getChatStore(this.panelId).panel.getState();
-    if (record.status === 'active' || record.status === 'paused') {
+    if (record.status === 'active' || record.status === 'paused' || record.status === 'blocked') {
       p.setGoalRecord(record);
     } else if (p.goalRecord?.id === record.id) {
       p.setGoalRecord(null); // 终态 — 收起状态条

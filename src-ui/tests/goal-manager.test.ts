@@ -71,6 +71,21 @@ describe('GoalManager CRUD', () => {
     mockLiveFs();
   });
 
+  it('blocked is a resumable slot-holder: getActive returns it and cancel clears it', async () => {
+    const gm = new GoalManager('/proj');
+    const rec = await gm.create('deploy release');
+    const blocked = await gm.update(rec.id, { status: 'blocked', summary: '需要人工批准生产发布' });
+
+    expect(blocked?.status).toBe('blocked');
+    // blocked 占用单目标槽 — 仍是可恢复态，不得被当作历史
+    const active = await gm.getActive();
+    expect(active?.id).toBe(rec.id);
+    expect(active?.status).toBe('blocked');
+
+    await gm.cancel(rec.id);
+    expect((await gm.getActive())?.id).not.toBe(rec.id);
+  });
+
   it('create + get round-trip, fires onState with active record', async () => {
     const states: GoalRecord[] = [];
     const gm = new GoalManager('/proj', (r) => states.push(r));

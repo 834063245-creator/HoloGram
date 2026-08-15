@@ -109,14 +109,14 @@ function GoalStrip({ core }: { core: ChatCore }) {
       <span className="goal-strip-icon">🎯</span>
       <span className="goal-strip-text">{rec.text.length > 40 ? `${rec.text.slice(0, 40)}…` : rec.text}</span>
       <span className="goal-strip-meta">
-        {rec.status === 'paused' ? '已暂停' : '进行中'} · 第 {rec.iteration + 1} 轮
+        {rec.status === 'paused' ? '已暂停' : rec.status === 'blocked' ? '已受阻' : '进行中'} · 第 {rec.iteration + 1} 轮
       </span>
       {rec.status === 'active' ? (
         <button type="button" className="goal-strip-btn" onClick={() => core.abort()}>
           暂停
         </button>
       ) : null}
-      {rec.status === 'paused' ? (
+      {rec.status === 'paused' || rec.status === 'blocked' ? (
         <button type="button" className="goal-strip-btn" onClick={() => core.runGoalResume()}>
           恢复
         </button>

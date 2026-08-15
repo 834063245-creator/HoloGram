@@ -10,7 +10,7 @@ import type { StoredThinking } from '../provider/thinking';
 import type { Pricing } from './agent-types';
 
 /** 目标运行结果 — runGoal / resumeGoal 的统一返回 */
-export type GoalRunResult = { status: 'completed' | 'failed' | 'aborted' | 'paused'; summary: string };
+export type GoalRunResult = { status: 'completed' | 'failed' | 'blocked' | 'aborted' | 'paused'; summary: string };
 
 export interface ChatAgentHandle {
   /** 该 Agent 实例的唯一标识 — 会话层按会话登记，UI 据此定位其专属待办等。 */

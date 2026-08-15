@@ -16,7 +16,7 @@ import { stripNums } from './board-persistence';
 
 // ── Types ──
 
-export type GoalStatus = 'active' | 'paused' | 'completed' | 'failed' | 'cancelled';
+export type GoalStatus = 'active' | 'paused' | 'blocked' | 'completed' | 'failed' | 'cancelled';
 
 export interface GoalRecord {
   id: string;
@@ -126,10 +126,11 @@ export class GoalManager {
     }
   }
 
-  /** 当前占用单目标槽的记录(active 或 paused)。多条并存时取最近更新的。 */
+  /** 当前占用单目标槽的记录(active/paused/blocked — 均为可恢复态)。
+   *  多条并存时取最近更新的。 */
   async getActive(): Promise<GoalRecord | null> {
     const all = await this.list();
-    const live = all.filter((r) => r.status === 'active' || r.status === 'paused');
+    const live = all.filter((r) => r.status === 'active' || r.status === 'paused' || r.status === 'blocked');
     if (live.length === 0) return null;
     live.sort((a, b) => b.updatedAt - a.updatedAt);
     return live[0];
