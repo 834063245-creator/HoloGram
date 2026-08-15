@@ -17,7 +17,8 @@
 //   - 会话按 agent 键控 + 空闲租约自动回收（默认 10 分钟，
 //     HOLOGRAM_BROWSER_LEASE_SECS 可调，便于实测）+ Chrome 崩溃检测。
 //   - profile 按端口隔离（hologram-browser-profile-<port>），随会话回收
-//     一并删除；launch 时清扫上次进程强杀遗留的目录。
+//     一并删除；launch 时清扫上次进程强杀遗留的目录。具名 profile
+//     （hologram-browser-profiles-<slot>）持久保留，配合 slot 切换做多账号隔离。
 //   - self 会话：HoloGram 自家 webview 调试端口（9222）上的只读会话，
 //     Agent 自查渲染结果走这里；操作类动作在 rpc 层被拒。
 //   - 审计：全部写操作落盘（临时目录 jsonl），browser(audit) 可查。
@@ -30,14 +31,14 @@ mod actions;
 
 pub(crate) use session::{
     cdp_audit, cdp_close_tab, cdp_connect, cdp_discover, cdp_kill, cdp_launch, cdp_new_tab,
-    is_self, SELF_AGENT_ID,
+    cdp_sessions, cdp_switch_session, is_self, SELF_AGENT_ID,
 };
 pub(crate) use actions::{
-    cdp_attach, cdp_back, cdp_click, cdp_console, cdp_content, cdp_dialogs, cdp_eval, cdp_forward,
-    cdp_handle_dialog, cdp_hover, cdp_inspect, cdp_navigate, cdp_network, cdp_network_detail,
-    cdp_network_har, cdp_press, cdp_reload, cdp_report, cdp_screenshot, cdp_scroll, cdp_select,
-    cdp_set_viewport, cdp_snapshot, cdp_status, cdp_targets, cdp_type, cdp_upload, cdp_wait,
-    check_sensitive,
+    cdp_attach, cdp_back, cdp_click, cdp_console, cdp_content, cdp_cookies, cdp_dialogs, cdp_eval,
+    cdp_forward, cdp_handle_dialog, cdp_hover, cdp_inspect, cdp_navigate, cdp_network,
+    cdp_network_detail, cdp_network_har, cdp_press, cdp_reload, cdp_report, cdp_screenshot,
+    cdp_scroll, cdp_select, cdp_set_viewport, cdp_snapshot, cdp_status, cdp_targets, cdp_type,
+    cdp_upload, cdp_wait, check_sensitive,
 };
 
 // 生产代码已全部拆入子模块；cdp.rs 仅保留 facade re-export 与测试。
@@ -55,11 +56,12 @@ use serde_json::Value;
 use probes::{probe_result_str, CONTENT_PROBE, INSPECT_PROBE, REPORT_PROBE, SNAPSHOT_PROBE};
 #[cfg(test)]
 use session::{
-    audit_log, chrome_candidate_paths, cleanup_old_files_by_age, enforce_lease,
+    active_session_key, audit_log, chrome_candidate_paths, cleanup_old_files_by_age, enforce_lease,
     ensure_observer_started, extract_debug_port_from_args, find_chrome, lock_sessions,
-    network_on_failed, network_on_request, network_on_response, parse_discover_process_lines,
-    profile_dir_for, remove_profile_dir, session_key, is_expired_file_time, session_lease,
-    CdpSession, EventBuffers, NetworkEntry,
+    named_profile_dir, network_on_failed, network_on_request, network_on_response,
+    normalize_slot_name, parse_discover_process_lines, profile_dir_for, remove_profile_dir,
+    session_key, session_key_for, set_active_slot, validate_proxy_arg, is_expired_file_time,
+    session_lease, CdpSession, EventBuffers, NetworkEntry,
 };
 #[cfg(test)]
 use transport::{http_close_tab, http_new_tab, list_targets_raw};
@@ -136,6 +138,56 @@ bash|9222|99
         assert_eq!(super::session_key(Some("")), "default");
         assert_eq!(super::session_key(Some("  ")), "default");
         assert_eq!(super::session_key(Some("agent-7")), "agent-7");
+    }
+
+    /// 第五批多账号：slot 名是 profile 目录名的安全边界，也是 session 隔离边界。
+    #[test]
+    fn slot_names_and_session_keys_are_isolated() {
+        assert_eq!(super::normalize_slot_name("  ").unwrap(), "default");
+        assert_eq!(super::normalize_slot_name("工作账号").unwrap(), "工作账号");
+        assert!(super::normalize_slot_name("../evil").is_err());
+        assert!(super::normalize_slot_name("a/b").is_err());
+        assert!(super::normalize_slot_name("x".repeat(49).as_str()).is_err());
+
+        let agent = Some("slot-test-agent");
+        let work = super::session_key_for(agent, "work");
+        let personal = super::session_key_for(agent, "personal");
+        assert_ne!(work, personal, "不同 slot 必须落在不同 session key");
+        assert_eq!(super::active_session_key(agent), super::session_key_for(agent, "default"));
+
+        super::set_active_slot(agent, "work");
+        assert_eq!(super::active_session_key(agent), work);
+        // 恢复 default，避免污染同一 agent 的其他测试
+        super::set_active_slot(agent, "default");
+        assert_eq!(super::active_session_key(agent), super::session_key_for(agent, "default"));
+
+        let named = super::named_profile_dir("工作账号");
+        assert!(
+            named.to_string_lossy().contains("hologram-browser-profiles-工作账号"),
+            "具名 profile 目录应含前缀与 slot 名: {}",
+            named.display()
+        );
+    }
+
+    /// 第五批 proxy 参数：命令行参数由 std::process 逐 arg 传递，换行是唯一明确拒绝项。
+    #[test]
+    fn proxy_arg_validation_rejects_newlines_only() {
+        assert!(super::validate_proxy_arg("proxy", "socks5://127.0.0.1:1080").is_ok());
+        assert!(super::validate_proxy_arg("proxy", "").is_err());
+        assert!(super::validate_proxy_arg("proxy", "socks5://host\n--remote-debugging-port=9999").is_err());
+    }
+
+    /// 第五批 profile 持久化：磁盘上已有的具名 profile 目录，即使当前进程尚未
+    /// launch，也要出现在 browser(sessions) 里（应用重启后的恢复入口）。
+    #[test]
+    fn sessions_lists_persisted_named_profiles() {
+        let slot = format!("disk-slot-test-{}", std::process::id());
+        let dir = super::named_profile_dir(&slot);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("创建具名 profile 测试目录");
+        let out = super::cdp_sessions(Some("disk-session-agent"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(out.contains(&slot), "持久 profile 应出现在 sessions: {out}");
     }
 
     #[test]
@@ -426,7 +478,7 @@ bash|9222|99
     /// 第三批 launch 参数：windowSize 非法值在找 Chrome 之前就被拒绝。
     #[tokio::test]
     async fn launch_rejects_invalid_window_size_before_cdp() {
-        let e = cdp_launch(None, None, Some(false), Some((0, 600)), None)
+        let e = cdp_launch(None, None, Some(false), Some((0, 600)), None, None, None, None)
             .await
             .unwrap_err();
         assert!(e.contains("windowSize"), "{e}");
@@ -539,8 +591,12 @@ bash|9222|99
                     target_id: None,
                     chrome_child: Some(child),
                     profile_dir: Some(dir.clone()),
+                    profile_ephemeral: true,
+                    slot: "lease-test-slot".into(),
                     headless: None,
                     window_size: None,
+                    proxy: None,
+                    proxy_bypass: None,
                     observer: None,
                     observer_starting: Arc::new(AtomicBool::new(false)),
                     // 活跃时间放到租约之外，强制命中回收分支

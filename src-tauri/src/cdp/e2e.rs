@@ -31,6 +31,8 @@ const E2E_EXTERNAL_PORT: u16 = 9444;
 const E2E_LAUNCH_PORT: u16 = 9445;
 const E2E_NAV_PORT: u16 = 9446;
 const E2E_HEADLESS_PORT: u16 = 9447;
+const E2E_ACCOUNT_A_PORT: u16 = 9448;
+const E2E_ACCOUNT_B_PORT: u16 = 9449;
 const E2E_EXTERNAL_PROFILE: &str = "hologram-browser-profile-e2e-external";
 
 /// 无 Chrome 时跳过（打日志不判失败——CI 无浏览器环境也应绿）。
@@ -161,7 +163,7 @@ async fn e2e_connect_external_full_flow() {
     let agent = "e2e-connect-agent";
 
     // connect
-    let out = cdp_connect(E2E_EXTERNAL_PORT, Some(agent)).expect("connect 应成功");
+    let out = cdp_connect(E2E_EXTERNAL_PORT, None, Some(agent)).expect("connect 应成功");
     assert!(out.contains("\"connected\""), "connect 返回异常: {out}");
 
     // targets：应看到 example.com 页面（页面加载可能滞后，轮询等）
@@ -264,6 +266,9 @@ async fn e2e_launch_controlled_kill_and_profile_cleanup() {
     let out = cdp_launch(
         Some("https://example.com/".into()),
         Some(E2E_LAUNCH_PORT),
+        None,
+        None,
+        None,
         None,
         None,
         Some(agent),
@@ -382,7 +387,7 @@ window.addEventListener('load', () => { document.getElementById('hover-zone').ad
     let page_b_url = url::Url::from_file_path(&page_b).expect("file URL 转换").to_string();
 
     let agent = "e2e-round2-agent";
-    let out = cdp_launch(Some(page_a_url.clone()), Some(E2E_NAV_PORT), None, None, Some(agent))
+    let out = cdp_launch(Some(page_a_url.clone()), Some(E2E_NAV_PORT), None, None, None, None, None, Some(agent))
         .await
         .expect("launch 应成功");
     assert!(out.contains("\"launched\""), "launch 返回异常: {out}");
@@ -650,6 +655,9 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
         Some(E2E_HEADLESS_PORT),
         Some(true),
         Some((800, 600)),
+        None,
+        None,
+        None,
         Some(agent),
     )
     .await
@@ -796,6 +804,123 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
 
     let k = cdp_kill(Some(agent)).expect("kill 应成功");
     assert!(k.contains("已终止"), "受控 Chrome kill 应报终止: {k}");
+    stop.store(true, Ordering::SeqCst);
+    let _ = server.join();
+}
+
+/// E2E-5（第五批）：具名 profile 多账号隔离 + cookie list/set/delete + switch。
+/// 两个账号 slot 各自独立 Chrome profile；A 写入的 cookie 在 B 不可见，
+/// switch 回 A 后仍可见，delete 后消失。无 Chrome 环境自动跳过。
+#[tokio::test]
+async fn e2e_multi_account_profiles_and_cookies() {
+    let _g = crate::utils::lock_or_recover(&E2E_LOCK);
+    if skip_if_no_chrome() {
+        return;
+    }
+    if list_targets_raw(E2E_ACCOUNT_A_PORT).is_ok()
+        || list_targets_raw(E2E_ACCOUNT_B_PORT).is_ok()
+    {
+        eprintln!("[cdp-e2e] 跳过：账号 e2e 端口已被占用（上次崩溃残留？）");
+        return;
+    }
+
+    let (http_port, server, stop) = spawn_local_http_server();
+    let page_url = format!("http://127.0.0.1:{http_port}/");
+    let agent = "e2e-account-agent";
+    let profile_a = "e2e-account-a";
+    let profile_b = "e2e-account-b";
+    let dir_a = named_profile_dir(profile_a);
+    let dir_b = named_profile_dir(profile_b);
+    remove_profile_dir(&dir_a);
+    remove_profile_dir(&dir_b);
+
+    // 账号 A：具名 profile 启动并种 cookie。
+    let out_a = cdp_launch(
+        Some(page_url.clone()),
+        Some(E2E_ACCOUNT_A_PORT),
+        Some(true),
+        None,
+        Some(profile_a.into()),
+        None,
+        None,
+        Some(agent),
+    )
+    .await
+    .expect("账号 A launch 应成功");
+    let va: Value = serde_json::from_str(&out_a).expect("账号 A launch 返回应可解析");
+    assert_eq!(va["slot"].as_str(), Some(profile_a), "账号 A 应回显 slot: {out_a}");
+
+    let target_a = wait_target_with_url(agent, "127.0.0.1", Duration::from_secs(10)).await;
+    cdp_attach(&target_a, Some(agent)).expect("账号 A attach 应成功");
+    wait_page_ready(agent).await;
+
+    let set = cdp_cookies(
+        "set", None, Some(page_url.clone()), Some("acct".into()), Some("A".into()),
+        None, None, None, None, None, None, Some(agent),
+    )
+    .await
+    .expect("账号 A set cookie 应成功");
+    assert!(set.contains(r#""set":true"#), "set cookie 返回异常: {set}");
+
+    // 账号 B：第二个具名 profile 启动后成为活跃 slot。
+    let out_b = cdp_launch(
+        Some(page_url.clone()),
+        Some(E2E_ACCOUNT_B_PORT),
+        Some(true),
+        None,
+        Some(profile_b.into()),
+        None,
+        None,
+        Some(agent),
+    )
+    .await
+    .expect("账号 B launch 应成功");
+    let vb: Value = serde_json::from_str(&out_b).expect("账号 B launch 返回应可解析");
+    assert_eq!(vb["slot"].as_str(), Some(profile_b), "账号 B 应回显 slot: {out_b}");
+
+    let target_b = wait_target_with_url(agent, "127.0.0.1", Duration::from_secs(10)).await;
+    cdp_attach(&target_b, Some(agent)).expect("账号 B attach 应成功");
+    wait_page_ready(agent).await;
+
+    let list_b = cdp_cookies(
+        "list", Some(vec![page_url.clone()]), None, None, None, None, None, None,
+        None, None, None, Some(agent),
+    )
+    .await
+    .expect("账号 B list cookie 应成功");
+    assert!(
+        !list_b.contains(r#""name":"acct""#),
+        "账号 B 不得看到账号 A 的 cookie（profile 隔离失败）: {list_b}"
+    );
+
+    // switch 回 A：cookie 应仍在（具名 profile 持久 + 会话隔离）。
+    let sw = cdp_switch_session(Some(profile_a.into()), Some(agent)).expect("切回账号 A 应成功");
+    assert!(sw.contains(r#""status":"switched""#), "switch 返回异常: {sw}");
+    let list_a = cdp_cookies(
+        "list", Some(vec![page_url.clone()]), None, None, None, None, None, None,
+        None, None, None, Some(agent),
+    )
+    .await
+    .expect("账号 A list cookie 应成功");
+    assert!(
+        list_a.contains(r#""name":"acct""#),
+        "切回账号 A 应看到之前写入的 cookie: {list_a}"
+    );
+
+    let del = cdp_cookies(
+        "delete", None, Some(page_url.clone()), Some("acct".into()), None,
+        None, None, None, None, None, None, Some(agent),
+    )
+    .await
+    .expect("账号 A delete cookie 应成功");
+    assert!(del.contains(r#""deleted":true"#), "delete cookie 返回异常: {del}");
+
+    // 收尾：两个受控 Chrome 都 kill；具名 profile 目录由测试自行清理。
+    cdp_kill(Some(agent)).expect("kill 账号 A 应成功");
+    cdp_switch_session(Some(profile_b.into()), Some(agent)).expect("切到账号 B 应成功");
+    cdp_kill(Some(agent)).expect("kill 账号 B 应成功");
+    remove_profile_dir(&dir_a);
+    remove_profile_dir(&dir_b);
     stop.store(true, Ordering::SeqCst);
     let _ = server.join();
 }

@@ -39,6 +39,9 @@ fn opt_u64(params: &Value, name: &str) -> Option<u64> {
 fn opt_usize(params: &Value, name: &str) -> Option<usize> {
     params.get(name).and_then(|v| v.as_u64()).map(|n| n as usize)
 }
+fn opt_f64(params: &Value, name: &str) -> Option<f64> {
+    params.get(name).and_then(|v| v.as_f64())
+}
 /// browser 命令的 agent 路由：target="self"（或 self=true）走自家 webview 只读会话，
 /// 否则走各 Agent 自己的 CDP 会话（无 _agent_id 共用 default）。
 /// 修复：前端领域工具传的是 target="self" 字符串，旧实现只认 self 布尔参数——
@@ -377,14 +380,14 @@ pub(crate) async fn rpc(
         }
 
         // ═══════════════════════════════════════════════════════
-        // CDP 浏览器控制（34 个命令）
+        // CDP 浏览器控制（37 个命令）
         // 权限：所有 browser_* 分支统一经过 check_browser_permission（BrowserTool）。
-        //       launch/kill/attach/connect/eval 走 BrowserTool Ask（控制浏览器需用户知情）；
+        //       launch/kill/attach/connect/eval/cookies_set/cookies_delete 走 Ask；
         //       inspect/report/targets/snapshot/content/console/network/network_detail/network_har/
-//       screenshot/audit/status/wait
-        //       只读放行；navigate/back/forward/reload/click/hover/type/select/upload/
-        //       dialog/press/scroll/viewport/new_tab/close_tab 依赖 attach 时已获批准的 target，
-        //       不再重复弹窗——但敏感目标
+        //       screenshot/audit/status/wait/sessions/cookies_list 只读放行；
+        //       navigate/back/forward/reload/click/hover/type/select/upload/dialog/press/
+        //       scroll/viewport/new_tab/close_tab/switch_session 依赖 attach/launch 时已获
+        //       批准的 target，不再重复弹窗——但敏感目标
         //       （已填值输入框/提交按钮/下载/高危文本）每次单独 Ask（ADR 0003 D6 L3）。
         //       工具级 Browser=deny 对所有动作生效（含只读与 self 通道）。
         // 会话：所有命令按 _agent_id 键控路由到各 Agent 自己的 CDP 会话；
@@ -396,6 +399,9 @@ pub(crate) async fn rpc(
             let url = opt_str(&params, "url");
             let port = opt_u64(&params, "port").map(|n| n as u16);
             let headless = opt_bool(&params, "headless");
+            let profile = opt_str(&params, "profile");
+            let proxy = opt_str(&params, "proxy");
+            let proxy_bypass = opt_str(&params, "proxy_bypass");
             let window_size = params
                 .get("window_size")
                 .and_then(|v| v.as_object())
@@ -415,7 +421,11 @@ pub(crate) async fn rpc(
                     Ok::<(u32, u32), String>((w, h))
                 })
                 .transpose()?;
-            crate::cdp::cdp_launch(url, port, headless, window_size, agent_id.as_deref()).await
+            crate::cdp::cdp_launch(
+                url, port, headless, window_size, profile, proxy, proxy_bypass,
+                agent_id.as_deref(),
+            )
+            .await
         }
         "browser_connect" => {
             let agent_id = opt_str(&params, "_agent_id");
@@ -425,7 +435,52 @@ pub(crate) async fn rpc(
             if port == 0 || port > 65535 {
                 return Err("browser_connect: 端口必须在 1-65535".into());
             }
-            crate::cdp::cdp_connect(port as u16, agent_id.as_deref())
+            let profile = opt_str(&params, "session").or_else(|| opt_str(&params, "profile"));
+            crate::cdp::cdp_connect(port as u16, profile, agent_id.as_deref())
+        }
+        "browser_sessions" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            check_browser_permission("sessions", agent_id.as_deref(), &state, &app).await?;
+            Ok(crate::cdp::cdp_sessions(agent_id.as_deref()))
+        }
+        "browser_switch_session" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            check_browser_permission("switch_session", agent_id.as_deref(), &state, &app).await?;
+            let profile = opt_str(&params, "session").or_else(|| opt_str(&params, "profile"));
+            crate::cdp::cdp_switch_session(profile, agent_id.as_deref())
+        }
+        "browser_cookies" => {
+            let agent_id = self_or_agent(&params);
+            if crate::cdp::is_self(agent_id.as_deref()) {
+                return Err("browser_cookies: self 会话只读，不暴露/修改自家 webview cookie".into());
+            }
+            let action = req_str(&params, "op", "browser_cookies")?;
+            let perm = match action.as_str() {
+                "list" => "cookies_list",
+                "set" => "cookies_set",
+                "delete" => "cookies_delete",
+                _ => return Err("browser_cookies: action 只支持 list/set/delete".into()),
+            };
+            check_browser_permission(perm, agent_id.as_deref(), &state, &app).await?;
+            let urls = params.get("urls").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<String>>()
+            });
+            let url = opt_str(&params, "url");
+            let name = opt_str(&params, "name");
+            let value = opt_str(&params, "value");
+            let domain = opt_str(&params, "domain");
+            let path = opt_str(&params, "path");
+            let http_only = opt_bool(&params, "http_only");
+            let secure = opt_bool(&params, "secure");
+            let same_site = opt_str(&params, "same_site");
+            let expires = opt_f64(&params, "expires");
+            crate::cdp::cdp_cookies(
+                &action, urls, url, name, value, domain, path, http_only, secure, same_site,
+                expires, agent_id.as_deref(),
+            )
+            .await
         }
         "browser_kill" => {
             let agent_id = opt_str(&params, "_agent_id");

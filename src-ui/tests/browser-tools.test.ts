@@ -36,9 +36,9 @@ describe('browser 领域工具注册', () => {
     const t = registry.get('browser')!;
     const actions = t.actions?.() ?? [];
     for (const a of [
-      'launch', 'kill', 'targets', 'attach', 'new_tab', 'close_tab',
+      'launch', 'kill', 'sessions', 'switch_session', 'targets', 'attach', 'new_tab', 'close_tab',
       'navigate', 'back', 'forward', 'reload',
-      'snapshot', 'content', 'inspect', 'report', 'console', 'network', 'network_detail', 'network_har', 'screenshot', 'audit',
+      'snapshot', 'content', 'inspect', 'report', 'console', 'network', 'network_detail', 'network_har', 'screenshot', 'audit', 'cookies',
       'click', 'hover', 'type', 'select', 'upload', 'dialog', 'press', 'scroll', 'viewport', 'eval', 'status', 'wait',
     ]) {
       expect(actions).toContain(a);
@@ -133,6 +133,25 @@ describe('browser 动作路由（统一走 Rust CDP）', () => {
     expect(invokeMock).toHaveBeenCalledWith('browser_navigate', expect.objectContaining({ url: 'https://example.com' }));
     expect(invokeMock).toHaveBeenCalledWith('browser_content', expect.objectContaining({ scope: '#main', format: 'markdown', maxChars: 2000 }));
     expect(invokeMock).toHaveBeenCalledWith('browser_select', expect.objectContaining({ selector: '42', value: 'option-a' }));
+  });
+
+  it('profile/proxy 与 sessions/switch_session/cookies 路由到第五批 RPC', async () => {
+    const registry = buildBrowserRegistry();
+    const t = registry.get('browser')!;
+    await t.execute({ action: 'launch', profile: 'work', proxy: 'socks5://127.0.0.1:1080', proxyBypass: 'localhost' });
+    await t.execute({ action: 'connect', port: 9223, session: 'work' });
+    await t.execute({ action: 'sessions' });
+    await t.execute({ action: 'switch_session', session: 'personal' });
+    await t.execute({ action: 'cookies', op: 'list', urls: ['https://example.com'] });
+    await t.execute({ action: 'cookies', op: 'set', name: 'sid', value: 'x', domain: '.example.com' });
+    await t.execute({ action: 'cookies', op: 'delete', name: 'sid', url: 'https://example.com' });
+    expect(invokeMock).toHaveBeenCalledWith('browser_launch', expect.objectContaining({ profile: 'work', proxy: 'socks5://127.0.0.1:1080', proxyBypass: 'localhost' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_connect', expect.objectContaining({ port: 9223, session: 'work' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_sessions', expect.any(Object));
+    expect(invokeMock).toHaveBeenCalledWith('browser_switch_session', expect.objectContaining({ session: 'personal' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_cookies', expect.objectContaining({ op: 'list', urls: ['https://example.com'] }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_cookies', expect.objectContaining({ op: 'set', name: 'sid', value: 'x', domain: '.example.com' }));
+    expect(invokeMock).toHaveBeenCalledWith('browser_cookies', expect.objectContaining({ op: 'delete', name: 'sid', url: 'https://example.com' }));
   });
 
   it('launch headless/windowSize 与 network_detail 路由到新增 RPC', async () => {

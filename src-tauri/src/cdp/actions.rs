@@ -13,10 +13,11 @@ use serde_json::{json, Value};
 
 use super::probes::{probe_result_str, CONTENT_PROBE, INSPECT_PROBE, REPORT_PROBE, SNAPSHOT_PROBE};
 use super::session::{
-    audit_log, cleanup_old_files_by_age, ensure_observer_started, har_retain_days, is_self,
-    lock_sessions, session_key, session_mut, shot_retain_days, truncate_str, Observer,
-    ACTIONABILITY_TIMEOUT, EVAL_TIMEOUT_MS, HAR_DIR_NAME, HAR_FILE_PREFIX, NETWORK_BUF_MAX,
-    POST_ACTION_SETTLE, SELF_AGENT_ID, SHOT_DIR_NAME, SHOT_FILE_PREFIX, WEBVIEW_DEBUG_PORT,
+    active_session_key, audit_log, cleanup_old_files_by_age, ensure_observer_started,
+    har_retain_days, is_self, lock_sessions, session_mut, shot_retain_days, truncate_str,
+    Observer, ACTIONABILITY_TIMEOUT, EVAL_TIMEOUT_MS, HAR_DIR_NAME, HAR_FILE_PREFIX,
+    NETWORK_BUF_MAX, POST_ACTION_SETTLE, SELF_AGENT_ID, SHOT_DIR_NAME, SHOT_FILE_PREFIX,
+    WEBVIEW_DEBUG_PORT,
 };
 use super::transport::{list_targets_raw, ws_command, ws_command_batch};
 
@@ -28,7 +29,7 @@ use super::transport::{list_targets_raw, ws_command, ws_command_batch};
 pub(crate) fn cdp_targets(agent_id: Option<&str>) -> Result<String, String> {
     let port = {
         let mut sessions = session_mut(agent_id);
-        sessions.entry(session_key(agent_id)).or_default().port
+        sessions.entry(active_session_key(agent_id)).or_default().port
     };
     let raw = list_targets_raw(port)?;
     let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
@@ -50,7 +51,7 @@ pub(crate) fn cdp_targets(agent_id: Option<&str>) -> Result<String, String> {
 /// attach 时启动事件观察（持久 WS 后台 task）。
 pub(crate) fn cdp_attach(target_id: &str, agent_id: Option<&str>) -> Result<String, String> {
     let mut sessions = session_mut(agent_id);
-    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let sess = sessions.entry(active_session_key(agent_id)).or_default();
     if sess.port == 0 {
         return Err(
             "尚未 launch 浏览器。先调用 browser(launch) 或 browser(targets) 确认端口".into(),
@@ -147,7 +148,7 @@ pub(super) fn observer_of(agent_id: Option<&str>) -> Option<Observer> {
     }
     let mut sessions = lock_sessions();
     sessions
-        .entry(session_key(agent_id))
+        .entry(active_session_key(agent_id))
         .or_default()
         .observer
         .clone()
@@ -159,7 +160,7 @@ pub(super) fn ensure_observer(agent_id: Option<&str>) -> Option<Observer> {
         return None;
     }
     let mut sessions = lock_sessions();
-    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let sess = sessions.entry(active_session_key(agent_id)).or_default();
     let tid = sess.target_id.clone()?;
     let need_start = match &sess.observer {
         Some(o) => !o.alive.load(Ordering::SeqCst),
@@ -177,7 +178,7 @@ pub(super) fn ensure_observer(agent_id: Option<&str>) -> Option<Observer> {
 
 pub(super) fn require_target(agent_id: Option<&str>) -> Result<(u16, String), String> {
     let mut sessions = session_mut(agent_id);
-    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let sess = sessions.entry(active_session_key(agent_id)).or_default();
     if sess.port == 0 {
         return Err("尚未 launch 浏览器".into());
     }
@@ -730,6 +731,209 @@ pub(super) fn entries_count(har: &Value) -> usize {
         .as_array()
         .map(|a| a.len())
         .unwrap_or(0)
+}
+
+// ═══════════════════════════════════════════════════════════
+// cookie 管理（第五批：身份与多账号）
+// ═══════════════════════════════════════════════════════════
+
+/// cookie 查询需要一个 page target。优先用已 attach 的 target；
+/// 尚未 attach 时（例如刚 launch 就要种 cookie 再导航）自动选第一个 page target，
+/// 但不改变会话的 attach 状态。
+fn cookie_target(agent_id: Option<&str>) -> Result<(u16, String), String> {
+    let (port, attached) = {
+        let mut sessions = session_mut(agent_id);
+        let sess = sessions.entry(active_session_key(agent_id)).or_default();
+        if sess.port == 0 {
+            return Err("尚未 launch/connect 浏览器".into());
+        }
+        (sess.port, sess.target_id.clone())
+    };
+    if let Some(tid) = attached {
+        return Ok((port, tid));
+    }
+    let raw = list_targets_raw(port)?;
+    let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
+    let first_page = arr
+        .iter()
+        .find(|t| t["type"] == "page")
+        .and_then(|t| t["id"].as_str().map(String::from))
+        .ok_or("cookie 操作需要一个 page target（当前浏览器没有打开的页面）")?;
+    Ok((port, first_page))
+}
+
+fn cookie_value_display(v: &Value) -> Value {
+    let value = v.as_str().unwrap_or("");
+    json!({
+        "value": truncate_str(value, 300),
+        "valueTruncated": value.len() > 300,
+    })
+}
+
+fn cookie_summary(c: &Value) -> Value {
+    json!({
+        "name": c["name"].as_str().unwrap_or(""),
+        "domain": c["domain"].as_str().unwrap_or(""),
+        "path": c["path"].as_str().unwrap_or("/"),
+        "expires": c["expires"].as_f64(),
+        "httpOnly": c["httpOnly"].as_bool(),
+        "secure": c["secure"].as_bool(),
+        "session": c["session"].as_bool(),
+        "sameSite": c["sameSite"].as_str(),
+        "size": c["size"].as_u64(),
+    })
+}
+
+/// list：Network.getCookies（可按 urls 过滤；缺省返回该浏览器 context 的全部 cookie）。
+/// set/delete：Network.setCookie / Network.deleteCookies。cookie 值只在返回时截断展示，
+/// set 写入的原值不会进审计日志。
+pub(crate) async fn cdp_cookies(
+    action: &str,
+    urls: Option<Vec<String>>,
+    url: Option<String>,
+    name: Option<String>,
+    value: Option<String>,
+    domain: Option<String>,
+    path: Option<String>,
+    http_only: Option<bool>,
+    secure: Option<bool>,
+    same_site: Option<String>,
+    expires: Option<f64>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    let (port, tid) = cookie_target(agent_id)?;
+    match action {
+        "list" => {
+            let mut params = json!({});
+            if let Some(u) = urls {
+                params["urls"] = json!(u);
+            }
+            let resp = ws_command(port, &tid, "Network.getCookies", params).await?;
+            let cookies = resp["result"]["cookies"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let total = cookies.len();
+            const MAX_COOKIE_ROWS: usize = 100;
+            let rows: Vec<Value> = cookies
+                .iter()
+                .take(MAX_COOKIE_ROWS)
+                .map(|c| {
+                    let mut v = cookie_summary(c);
+                    v["value"] = cookie_value_display(c)["value"].clone();
+                    v["valueTruncated"] = cookie_value_display(c)["valueTruncated"].clone();
+                    v
+                })
+                .collect();
+            Ok(json!({
+                "cookies": rows,
+                "count": rows.len(),
+                "total": total,
+                "note": if total > MAX_COOKIE_ROWS {
+                    format!("仅返回前 {MAX_COOKIE_ROWS} 条；用 urls 缩小范围")
+                } else {
+                    "cookie value 超过 300 字符会被截断展示".into()
+                },
+            })
+            .to_string())
+        }
+        "set" => {
+            let name = name.as_deref().unwrap_or("").trim();
+            let value = value.as_deref().unwrap_or("");
+            if name.is_empty() {
+                return Err("cookies set: name 不能为空".into());
+            }
+            let url = url.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let domain = domain.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            if url.is_none() && domain.is_none() {
+                return Err("cookies set: url 与 domain 至少提供一个".into());
+            }
+            let mut params = json!({
+                "name": name,
+                "value": value,
+            });
+            if let Some(u) = url {
+                params["url"] = json!(u);
+            }
+            if let Some(d) = domain {
+                params["domain"] = json!(d);
+            }
+            if let Some(p) = path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                params["path"] = json!(p);
+            }
+            if let Some(v) = http_only {
+                params["httpOnly"] = json!(v);
+            }
+            if let Some(v) = secure {
+                params["secure"] = json!(v);
+            }
+            if let Some(s) = same_site.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                let normalized = match s.to_ascii_lowercase().as_str() {
+                    "strict" => "Strict",
+                    "lax" => "Lax",
+                    "none" => "None",
+                    _ => return Err("cookies set: sameSite 只支持 Strict/Lax/None".into()),
+                };
+                params["sameSite"] = json!(normalized);
+            }
+            if let Some(e) = expires {
+                params["expires"] = json!(e);
+            }
+            let resp = ws_command(port, &tid, "Network.setCookie", params.clone()).await?;
+            if resp["result"]["success"].as_bool() != Some(true) {
+                return Err("Network.setCookie 返回 success=false（域名/路径与当前页面不匹配？）".into());
+            }
+            let target = params["url"]
+                .as_str()
+                .or(params["domain"].as_str())
+                .unwrap_or("");
+            audit_log(agent_id, "cookies_set", target, name);
+            Ok(json!({
+                "set": true,
+                "name": name,
+                "url": params["url"].as_str(),
+                "domain": params["domain"].as_str(),
+                "path": params["path"].as_str(),
+            })
+            .to_string())
+        }
+        "delete" => {
+            let name = name.as_deref().unwrap_or("").trim();
+            if name.is_empty() {
+                return Err("cookies delete: name 不能为空".into());
+            }
+            let url = url.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let domain = domain.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            if url.is_none() && domain.is_none() {
+                return Err("cookies delete: url 与 domain 至少提供一个".into());
+            }
+            let mut params = json!({ "name": name });
+            if let Some(u) = url {
+                params["url"] = json!(u);
+            }
+            if let Some(d) = domain {
+                params["domain"] = json!(d);
+            }
+            if let Some(p) = path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                params["path"] = json!(p);
+            }
+            ws_command(port, &tid, "Network.deleteCookies", params.clone()).await?;
+            let target = params["url"]
+                .as_str()
+                .or(params["domain"].as_str())
+                .unwrap_or("");
+            audit_log(agent_id, "cookies_delete", target, name);
+            Ok(json!({
+                "deleted": true,
+                "name": name,
+                "url": params["url"].as_str(),
+                "domain": params["domain"].as_str(),
+                "path": params["path"].as_str(),
+            })
+            .to_string())
+        }
+        _ => Err(format!("cookies: 不支持 action \"{action}\"（只支持 list/set/delete）")),
+    }
 }
 
 /// 查询 javascript dialog 事件（最新 N 条）+ 当前是否有未处理 dialog。
@@ -1714,7 +1918,7 @@ pub(crate) async fn cdp_eval(expr: &str, agent_id: Option<&str>) -> Result<Strin
 /// （connect 来的），kill 只断开、租约只断连，不会杀进程。
 pub(crate) fn cdp_status(agent_id: Option<&str>) -> String {
     let mut sessions = session_mut(agent_id);
-    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let sess = sessions.entry(active_session_key(agent_id)).or_default();
     let external = sess.chrome_child.is_none() && sess.port != 0;
     let observer_alive = sess
         .observer
@@ -1731,12 +1935,15 @@ pub(crate) fn cdp_status(agent_id: Option<&str>) -> String {
     };
     json!({
         "port": sess.port,
+        "slot": sess.slot,
         "attached": sess.target_id.is_some(),
         "chromeRunning": sess.chrome_child.is_some(),
         "external": external,
         "observerAlive": observer_alive,
         "dialogPending": dialog_open,
         "fileChooserPending": file_chooser_open,
+        "profileEphemeral": sess.profile_ephemeral,
+        "proxy": sess.proxy,
     })
     .to_string()
 }

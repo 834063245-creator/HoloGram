@@ -43,6 +43,8 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     connect: 'browser_connect',
     discover: 'browser_discover',
     kill: 'browser_kill',
+    sessions: 'browser_sessions',
+    switch_session: 'browser_switch_session',
     targets: 'browser_targets',
     attach: 'browser_attach',
     new_tab: 'browser_new_tab',
@@ -61,6 +63,7 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     network_har: 'browser_network_har',
     screenshot: 'browser_screenshot',
     audit: 'browser_audit',
+    cookies: 'browser_cookies',
     click: 'browser_click',
     hover: 'browser_hover',
     type: 'browser_type',
@@ -93,8 +96,11 @@ export function createBrowserTools(): Tool[] {
       description:
         'Launch a controlled Chrome/Edge instance (isolated profile, never touches the user\'s daily browser data). ' +
         'Use before inspecting/operating external pages. Returns the debug port. ' +
-        'If already running, reuses it; changing port/headless/windowSize restarts with the new shape. ' +
-        'Pass url to open a specific page. headless runs without a visible window.',
+        'If already running with the same launch shape, reuses it; changing port/headless/windowSize/profile/proxy restarts with the new shape. ' +
+        'Pass url to open a specific page. headless runs without a visible window. ' +
+        'profile is a NAMED persistent profile (e.g. "work" or "personal"): each name is an isolated account session with its own cookies/logins, ' +
+        'kept across kill/relaunch, and switchable with browser_switch_session. Omit profile for the default temporary profile that is deleted on kill. ' +
+        'proxy uses Chrome --proxy-server (e.g. "socks5://127.0.0.1:1080"); proxyBypass sets --proxy-bypass-list.',
       schema: z.object({
         url: z.string().optional().describe('Optional URL to open in the controlled browser'),
         port: z.number().int().optional().describe('Debug port (default: auto-probe from 9223; 9222 is reserved for HoloGram webview)'),
@@ -106,6 +112,9 @@ export function createBrowserTools(): Tool[] {
           })
           .optional()
           .describe('Launch window size (--window-size=width,height)'),
+        profile: z.string().max(48).optional().describe('Named persistent account profile/session slot (e.g. "work"); omit for temporary default profile'),
+        proxy: z.string().optional().describe('Chrome --proxy-server value (e.g. "socks5://127.0.0.1:1080")'),
+        proxyBypass: z.string().optional().describe('Chrome --proxy-bypass-list value (e.g. "localhost;127.0.0.1")'),
       }),
       execute: (args) => run('launch', args),
     }),
@@ -117,9 +126,11 @@ export function createBrowserTools(): Tool[] {
         'If the user did not provide a port, call browser_discover first to list instances and let the user pick one. ' +
         'Takes over that live instance with its real logins and data — requires user approval. ' +
         'After connect: targets → attach → snapshot/click as usual. ' +
+        'session optionally registers the external instance as a named account slot for browser_switch_session. ' +
         'kill only disconnects (never kills a browser this agent did not launch). 9222 is refused (HoloGram webview, read-only self channel).',
       schema: z.object({
         port: z.number().int().describe('Debug port of the running browser instance (e.g. 9223)'),
+        session: z.string().max(48).optional().describe('Optional account slot name to register this instance under (default: default)'),
       }),
       execute: (args) => run('connect', args),
     }),
@@ -148,10 +159,53 @@ export function createBrowserTools(): Tool[] {
     defineTool({
       name: 'browser_kill',
       description:
-        'Terminate the controlled Chrome instance launched by this agent (isolated profile). ' +
-        'Only kills the Chrome this agent launched.',
+        'Terminate the controlled Chrome instance launched by this agent in the ACTIVE account session. ' +
+        'Only kills the Chrome this agent launched. Named profile directories are kept so the login state can be relaunched/restored.',
       schema: z.object({}),
       execute: () => run('kill', {}),
+    }),
+    defineTool({
+      name: 'browser_sessions',
+      description:
+        'List this agent\'s browser account sessions (slots) and which one is active. ' +
+        'Each named profile launched with browser_launch(profile:...) is an isolated account session with its own cookies/logins. ' +
+        'Returns {active, sessions:[{slot,active,port,chromeRunning,external,attached,headless,windowSize,proxy}]}.',
+      schema: z.object({}),
+      readOnly: true,
+      execute: () => run('sessions', {}),
+    }),
+    defineTool({
+      name: 'browser_switch_session',
+      description:
+        'Switch the active browser account session by slot name (the profile name passed to browser_launch, or session passed to browser_connect). ' +
+        'The previous session keeps running with its own cookies/logins; switch back to resume it. ' +
+        'Use browser_sessions to see available slots first. To create a new account session use browser_launch(profile: "name").',
+      schema: z.object({
+        session: z.string().max(48).describe('Account session slot name to activate'),
+      }),
+      execute: (args) => run('switch_session', args),
+    }),
+    defineTool({
+      name: 'browser_cookies',
+      description:
+        'Inspect or modify cookies in the active browser session. ' +
+        'list: read cookies (all, or filtered by urls). set: write one cookie (url or domain required). ' +
+        'delete: remove one cookie (name + url/domain required). ' +
+        'Cookie values are truncated to 300 chars in list output; writing/deleting cookies changes login state and requires approval.',
+      schema: z.object({
+        op: z.enum(['list', 'set', 'delete']).describe('Cookie operation'),
+        urls: z.array(z.string()).optional().describe('list: only return cookies for these URLs (default all cookies in this browser context)'),
+        url: z.string().optional().describe('set/delete: cookie URL (either url or domain is required)'),
+        name: z.string().optional().describe('set/delete: cookie name'),
+        value: z.string().optional().describe('set: cookie value'),
+        domain: z.string().optional().describe('set/delete: cookie domain (either url or domain is required)'),
+        path: z.string().optional().describe('set/delete: cookie path (default /)'),
+        httpOnly: z.boolean().optional().describe('set: HttpOnly flag'),
+        secure: z.boolean().optional().describe('set: Secure flag'),
+        sameSite: z.enum(['Strict', 'Lax', 'None']).optional().describe('set: SameSite restriction'),
+        expires: z.number().optional().describe('set: expiration time in Unix seconds (default session cookie)'),
+      }),
+      execute: (args) => run('cookies', args),
     }),
     defineTool({
       name: 'browser_attach',

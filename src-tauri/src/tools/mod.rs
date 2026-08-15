@@ -190,7 +190,7 @@ impl Tool for BrowserTool {
     fn is_read_only(&self) -> bool {
         matches!(
             self.action.as_str(),
-            "targets" | "discover" | "inspect" | "report" | "status" | "snapshot" | "console" | "network" | "network_detail" | "network_har" | "screenshot" | "audit" | "content" | "wait" | "dialog_query"
+            "targets" | "discover" | "inspect" | "report" | "status" | "snapshot" | "console" | "network" | "network_detail" | "network_har" | "screenshot" | "audit" | "content" | "wait" | "dialog_query" | "sessions" | "cookies_list"
         )
     }
 
@@ -223,7 +223,7 @@ impl Tool for BrowserTool {
         //    reload/click/type/press/scroll/select 不再重复弹窗；敏感目标与高危动作除外。
         if matches!(
             self.action.as_str(),
-            "navigate" | "back" | "forward" | "reload" | "click" | "type" | "press" | "scroll" | "select" | "hover" | "dialog" | "upload" | "viewport" | "new_tab" | "close_tab"
+            "navigate" | "back" | "forward" | "reload" | "click" | "type" | "press" | "scroll" | "select" | "hover" | "dialog" | "upload" | "viewport" | "new_tab" | "close_tab" | "switch_session"
         ) {
             return PermissionResult::Passthrough;
         }
@@ -241,6 +241,8 @@ impl Tool for BrowserTool {
                 .into(),
             "eval" => "Agent 请求在该页面执行任意 JS（受基础白名单限制）".into(),
             "kill" => "Agent 请求终止其启动的受控浏览器（若为外部连接则仅断开）".into(),
+            "cookies_set" => "Agent 请求写入浏览器 cookie（登录态/会话标识），可能改变当前登录身份".into(),
+            "cookies_delete" => "Agent 请求删除浏览器 cookie（可能使当前账号登出）".into(),
             "click_sensitive" => "Agent 请求点击一个敏感目标（提交按钮 / 下载 / 含确认、支付、删除或 Pay now、Delete、Confirm、Unsubscribe 等文本的元素）".into(),
             "type_sensitive" => "Agent 请求向已填值的输入框（或密码框）输入文字".into(),
             _ => format!("Agent 请求控制浏览器（动作: {}）", self.action),

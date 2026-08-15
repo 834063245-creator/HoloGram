@@ -55,9 +55,41 @@ pub(super) fn session_lease() -> Duration {
 /// 杜绝多 Agent 共用同一 user-data-dir 导致 Chrome 实例委托、端口失效。
 pub(super) const PROFILE_DIR_PREFIX: &str = "hologram-browser-profile";
 
-/// 指定端口的 profile 目录。
+/// 具名账号 profile 目录前缀（临时目录下）。具名 profile 是持久登录态：
+/// kill/租约只停 Chrome、不删目录，供下次 launch 或 switch 恢复。
+pub(super) const NAMED_PROFILE_DIR_PREFIX: &str = "hologram-browser-profiles";
+
+/// 指定端口的 profile 目录（默认无具名账号时的临时 profile）。
 pub(super) fn profile_dir_for(port: u16) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("{PROFILE_DIR_PREFIX}-{port}"))
+}
+
+/// 具名账号的持久 profile 目录。slot 名已由 normalize_slot_name 校验，
+/// 不包含路径分隔符/控制字符，直接拼目录名是安全的。
+pub(super) fn named_profile_dir(slot: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("{NAMED_PROFILE_DIR_PREFIX}-{slot}"))
+}
+
+/// slot/profile 名校验：允许 Unicode（中文账号名可用），但拒绝路径分隔符、
+/// Windows 非法字符、控制字符、纯 `.` / `..`，且长度有上限（目录名可读）。
+pub(super) fn normalize_slot_name(slot: &str) -> Result<String, String> {
+    let slot = slot.trim();
+    if slot.is_empty() {
+        return Ok(DEFAULT_SLOT.to_string());
+    }
+    if slot.len() > 48 {
+        return Err("profile/session 名过长（最多 48 字符）".into());
+    }
+    if slot == "." || slot == ".." {
+        return Err("profile/session 名不能是 . 或 ..".into());
+    }
+    if slot
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+    {
+        return Err("profile/session 名不能包含 / \\ : * ? \" < > | 或控制字符".into());
+    }
+    Ok(slot.to_string())
 }
 
 /// 尽力删除 profile 目录（Chrome 残留句柄可能致失败——静默，清理是尽力而为）。
@@ -108,6 +140,9 @@ pub(super) const AUDIT_MAX: usize = 500;
 
 /// self 会话的 session key / agent_id（与 Agent 会话隔离，见 SELF_AGENT_ID）。
 pub(super) const DEFAULT_SESSION_KEY: &str = "default";
+
+/// 无显式 profile/session 参数时的账号槽位。
+pub(super) const DEFAULT_SLOT: &str = "default";
 
 /// self 模式的读动作路由键：rpc 层 self=true 时以它作为 agent_id 传入，
 /// cdp 内部函数按 agent_id 路由到 self 会话（自家 webview 调试端口上的只读会话）。
@@ -592,12 +627,22 @@ pub(super) struct CdpSession {
     pub(super) target_id: Option<String>,
     /// launch 启动的受控 Chrome 子进程（用于 kill）
     pub(super) chrome_child: Option<std::process::Child>,
-    /// 该 Chrome 的 profile 目录（随 Chrome 终止一并删除）
+    /// 该 Chrome 的 profile 目录。具名 profile 是持久目录（kill/租约不删），
+    /// 默认临时 profile 随 Chrome 终止一并删除（见 profile_ephemeral）。
     pub(super) profile_dir: Option<std::path::PathBuf>,
+    /// profile 是否随会话终止删除。launch 默认临时 profile 为 true；
+    /// 具名 profile 为 false，供多账号切换复用。
+    pub(super) profile_ephemeral: bool,
+    /// 当前账号槽位（default 或具名 profile 名）。
+    pub(super) slot: String,
     /// launch 时的 headless 标记（复用会话时校验参数一致性）
     pub(super) headless: Option<bool>,
     /// launch 时的 window-size（复用会话时校验参数一致性）
     pub(super) window_size: Option<(u32, u32)>,
+    /// launch 时的代理地址（--proxy-server，复用会话时校验参数一致性）
+    pub(super) proxy: Option<String>,
+    /// launch 时的代理绕过列表（--proxy-bypass-list，复用会话时校验参数一致性）
+    pub(super) proxy_bypass: Option<String>,
     /// 事件观察（attach 时启动；self 会话在首次 attach 时启动）
     pub(super) observer: Option<Observer>,
     /// 观察任务在途启动闸——防并发重复启动同一 target 的观察任务（A4 竞态）。
@@ -613,8 +658,12 @@ impl Default for CdpSession {
             target_id: None,
             chrome_child: None,
             profile_dir: None,
+            profile_ephemeral: false,
+            slot: DEFAULT_SLOT.to_string(),
             headless: None,
             window_size: None,
+            proxy: None,
+            proxy_bypass: None,
             observer: None,
             observer_starting: Arc::new(AtomicBool::new(false)),
             last_active: Instant::now(),
@@ -632,6 +681,58 @@ pub(super) fn session_key(agent_id: Option<&str>) -> String {
         .to_string()
 }
 
+/// slot -> 活跃账号的映射（按 agent 基础 key）。锁序约定：先 SESSIONS 后
+/// ACTIVE_SLOTS（session_mut 持 SESSIONS 锁时解析活跃 key）；任何代码不得
+/// 反向持锁，避免与并发 switch/launch 死锁。
+pub(super) static ACTIVE_SLOTS: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const SLOT_SEPARATOR: char = '\u{1f}';
+
+/// 组合 slot key。self 会话不分区（自家 webview 只有一个只读通道）。
+pub(super) fn session_key_for(agent_id: Option<&str>, slot: &str) -> String {
+    let base = session_key(agent_id);
+    if base == SELF_AGENT_ID {
+        return base;
+    }
+    format!("{base}{SLOT_SEPARATOR}{slot}")
+}
+
+/// 当前活跃 slot key。无显式 switch 时使用 DEFAULT_SLOT，行为与旧版一致。
+pub(super) fn active_session_key(agent_id: Option<&str>) -> String {
+    let base = session_key(agent_id);
+    if base == SELF_AGENT_ID {
+        return base;
+    }
+    let slot = crate::utils::lock_or_recover(&ACTIVE_SLOTS)
+        .get(&base)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_SLOT.to_string());
+    session_key_for(agent_id, &slot)
+}
+
+/// 读取当前活跃 slot 名（会话列表/状态展示用）。不修改映射。
+pub(super) fn active_slot_for(agent_id: Option<&str>) -> String {
+    let base = session_key(agent_id);
+    if base == SELF_AGENT_ID {
+        return base;
+    }
+    crate::utils::lock_or_recover(&ACTIVE_SLOTS)
+        .get(&base)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_SLOT.to_string())
+}
+
+/// 切换活跃账号 slot。调用方必须已持有 SESSIONS 锁；本函数再取 ACTIVE_SLOTS 锁，
+/// 保持 SESSIONS → ACTIVE_SLOTS 顺序。
+pub(super) fn set_active_slot(agent_id: Option<&str>, slot: &str) {
+    let base = session_key(agent_id);
+    if base == SELF_AGENT_ID {
+        return;
+    }
+    crate::utils::lock_or_recover(&ACTIVE_SLOTS).insert(base, slot.to_string());
+}
+
 pub(super) fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>> {
     crate::utils::lock_or_recover(&SESSIONS)
 }
@@ -639,7 +740,7 @@ pub(super) fn lock_sessions() -> std::sync::MutexGuard<'static, HashMap<String, 
 /// 租约回收 + 崩溃检测：空闲超时的会话 kill 掉 Chrome 并移除；
 /// Chrome 已退出的会话清掉进程句柄（target/observer 保留，attach 可重来）；
 /// 外部连接（connect，无 chrome_child）空闲超时只断开不杀进程。
-/// profile 目录随 Chrome 终止一并删除。
+/// 默认临时 profile 随 Chrome 终止删除；具名 profile 目录保留（多账号切换用）。
 pub(super) fn enforce_lease() {
     let mut sessions = lock_sessions();
     let mut expired: Vec<String> = Vec::new();
@@ -648,8 +749,10 @@ pub(super) fn enforce_lease() {
             if let Ok(Some(_)) = child.try_wait() {
                 // Chrome 已自行退出
                 sess.chrome_child = None;
-                if let Some(dir) = sess.profile_dir.take() {
-                    remove_profile_dir(&dir);
+                if sess.profile_ephemeral {
+                    if let Some(dir) = sess.profile_dir.take() {
+                        remove_profile_dir(&dir);
+                    }
                 }
             }
         }
@@ -658,8 +761,10 @@ pub(super) fn enforce_lease() {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            if let Some(dir) = sess.profile_dir.take() {
-                remove_profile_dir(&dir);
+            if sess.profile_ephemeral {
+                if let Some(dir) = sess.profile_dir.take() {
+                    remove_profile_dir(&dir);
+                }
             }
             expired.push(key.clone());
         } else if sess.chrome_child.is_none()
@@ -675,16 +780,33 @@ pub(super) fn enforce_lease() {
     }
 }
 
-/// 取会话并刷新活跃时间。
+/// 取会话并刷新活跃时间（按当前活跃账号 slot）。
 pub(super) fn session_mut(
     agent_id: Option<&str>,
 ) -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>> {
     enforce_lease();
     let mut sessions = lock_sessions();
     sessions
-        .entry(session_key(agent_id))
+        .entry(active_session_key(agent_id))
         .or_default()
         .last_active = Instant::now();
+    sessions
+}
+
+/// 取指定 slot 的会话并刷新活跃时间（launch/connect 创建或复用指定账号时用）。
+/// 不改变 ACTIVE_SLOTS；是否把该 slot 设为活跃由调用方决定。
+pub(super) fn session_mut_for(
+    agent_id: Option<&str>,
+    slot: &str,
+) -> std::sync::MutexGuard<'static, HashMap<String, CdpSession>> {
+    enforce_lease();
+    let mut sessions = lock_sessions();
+    let key = session_key_for(agent_id, slot);
+    let sess = sessions.entry(key).or_default();
+    if sess.port == 0 && sess.target_id.is_none() {
+        sess.slot = slot.to_string();
+    }
+    sess.last_active = Instant::now();
     sessions
 }
 
@@ -949,14 +1071,30 @@ pub(super) fn probe_free_port() -> Result<u16, String> {
     ))
 }
 
+/// 校验代理命令行参数：只拒绝换行（避免参数注入的伪影），其余交给 Chrome。
+pub(super) fn validate_proxy_arg(name: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("launch: {name} 不能为空字符串"));
+    }
+    if value.contains(['\r', '\n']) {
+        return Err(format!("launch: {name} 不能包含换行符"));
+    }
+    Ok(())
+}
+
 /// 启动受控 Chrome（独立 profile）。已在运行则复用。返回端口。
-/// headless/windowSize 与端口一样是启动期参数：复用时会校验一致性，
+/// headless/windowSize/profile/proxy 与端口一样是启动期参数：复用时会校验一致性，
 /// 参数不一致则回收旧实例重新启动，避免「要 headless 却复用了一个有头窗口」。
+/// profile 缺省 = 临时 profile（随 kill/租约删除）；指定 profile = 持久登录态，
+/// 目录保留且对应一个可切换的账号 slot（多账号隔离：每 slot 独立端口/profile/cookie）。
 pub(crate) async fn cdp_launch(
     url: Option<String>,
     port: Option<u16>,
     headless: Option<bool>,
     window_size: Option<(u32, u32)>,
+    profile: Option<String>,
+    proxy: Option<String>,
+    proxy_bypass: Option<String>,
     agent_id: Option<&str>,
 ) -> Result<String, String> {
     if let Some((w, h)) = window_size {
@@ -964,13 +1102,25 @@ pub(crate) async fn cdp_launch(
             return Err("launch: windowSize 宽高必须在 1-16384 之间".into());
         }
     }
+    if let Some(p) = &proxy {
+        validate_proxy_arg("proxy", p)?;
+    }
+    if let Some(p) = &proxy_bypass {
+        validate_proxy_arg("proxyBypass", p)?;
+    }
+    let profile_text = profile.as_deref().unwrap_or("").trim().to_string();
+    let named_profile = !profile_text.is_empty();
+    let slot = normalize_slot_name(&profile_text)?;
+
     // 已启动过且 Chrome 还活着 → 复用：
-    //   - 未显式指定端口：直接复用本 agent 的现有端口；
-    //   - 显式指定端口：与本 agent 现有端口一致且活着才复用；
-    //   - headless/windowSize 与启动时不一致：不复用，走重启路径。
+    //   - 未显式指定端口：直接复用本 agent 该 slot 的现有端口；
+    //   - 显式指定端口：与该 slot 现有端口一致且活着才复用；
+    //   - headless/windowSize/profile/proxy 与启动时不一致：不复用，走重启路径。
     {
-        let mut sessions = session_mut(agent_id);
-        let sess = sessions.entry(session_key(agent_id)).or_default();
+        let mut sessions = session_mut_for(agent_id, &slot);
+        let sess = sessions
+            .entry(session_key_for(agent_id, &slot))
+            .or_default();
         if sess.chrome_child.is_some() && sess.port != 0 && list_targets_raw(sess.port).is_ok() {
             let port_matches = match port {
                 None => true,
@@ -978,13 +1128,20 @@ pub(crate) async fn cdp_launch(
             };
             let headless_matches = headless.is_none() || sess.headless == headless;
             let size_matches = window_size.is_none() || sess.window_size == window_size;
-            if port_matches && headless_matches && size_matches {
+            let proxy_matches = proxy.is_none() || sess.proxy == proxy;
+            let bypass_matches = proxy_bypass.is_none() || sess.proxy_bypass == proxy_bypass;
+            if port_matches && headless_matches && size_matches && proxy_matches && bypass_matches {
+                set_active_slot(agent_id, &slot);
                 return Ok(json!({
                     "status": "reused",
                     "port": sess.port,
                     "url": url,
+                    "slot": sess.slot,
+                    "profile": profile,
                     "headless": sess.headless.unwrap_or(false),
                     "windowSize": sess.window_size.map(|(w, h)| json!({ "width": w, "height": h })),
+                    "proxy": sess.proxy,
+                    "proxyBypass": sess.proxy_bypass,
                 })
                 .to_string());
             }
@@ -1006,15 +1163,21 @@ pub(crate) async fn cdp_launch(
 
     let chrome =
         find_chrome().ok_or("未找到 Chrome/Edge。可设置环境变量 HOLOGRAM_CHROME 指定路径")?;
-    // 独立 profile（按端口隔离）— 绝不污染用户日常 Chrome 的 cookie/登录态
-    let profile_dir = profile_dir_for(port);
+    // 缺省 profile 按端口隔离（临时，随会话删除）；具名 profile 持久（多账号切换复用）。
+    let profile_dir = if named_profile {
+        named_profile_dir(&slot)
+    } else {
+        profile_dir_for(port)
+    };
 
     {
-        let mut sessions = session_mut(agent_id);
+        let mut sessions = session_mut_for(agent_id, &slot);
         // 先清扫遗留 profile 再登记本会话目录：目录登记先于 spawn，
         // 并发 launch 的清扫会跳过它，不会互删正在使用的目录。
         sweep_stale_profiles(&sessions);
-        let sess = sessions.entry(session_key(agent_id)).or_default();
+        let sess = sessions
+            .entry(session_key_for(agent_id, &slot))
+            .or_default();
         // 走到这里说明旧 Chrome 已退出或显式指定了不同端口/启动形态——
         // 无论哪种，回收旧句柄并 kill 残留进程，避免双开。
         if let Some(mut old) = sess.chrome_child.take() {
@@ -1024,13 +1187,19 @@ pub(crate) async fn cdp_launch(
                 let _ = old.wait();
             }
         }
-        if let Some(old_dir) = sess.profile_dir.take() {
-            remove_profile_dir(&old_dir);
+        if sess.profile_ephemeral {
+            if let Some(old_dir) = sess.profile_dir.take() {
+                remove_profile_dir(&old_dir);
+            }
         }
         sess.port = port;
         sess.profile_dir = Some(profile_dir.clone());
+        sess.profile_ephemeral = !named_profile;
+        sess.slot = slot.clone();
         sess.headless = headless;
         sess.window_size = window_size;
+        sess.proxy = proxy.clone();
+        sess.proxy_bypass = proxy_bypass.clone();
 
         let mut cmd = std::process::Command::new(&chrome);
         cmd.arg(format!("--remote-debugging-port={port}"))
@@ -1043,6 +1212,12 @@ pub(crate) async fn cdp_launch(
         }
         if let Some((w, h)) = window_size {
             cmd.arg(format!("--window-size={w},{h}"));
+        }
+        if let Some(p) = &proxy {
+            cmd.arg(format!("--proxy-server={p}"));
+        }
+        if let Some(p) = &proxy_bypass {
+            cmd.arg(format!("--proxy-bypass-list={p}"));
         }
         if let Some(u) = url {
             if !u.is_empty() {
@@ -1058,31 +1233,44 @@ pub(crate) async fn cdp_launch(
         sess.chrome_child = Some(child);
     }
 
+    // spawn 与端口就绪全部成功后才切活跃 slot：launch 失败时旧账号仍保持活跃，
+    // 不会把后续 click/type 路由到一个没起来的会话。
     wait_for_port(port, Duration::from_secs(10)).await?;
+    set_active_slot(agent_id, &slot);
     audit_log(agent_id, "launch", &port.to_string(), "ok");
     Ok(json!({
         "status": "launched",
         "port": port,
         "chrome": chrome.to_string_lossy(),
+        "slot": slot,
+        "profile": profile,
         "headless": headless.unwrap_or(false),
         "windowSize": window_size.map(|(w, h)| json!({ "width": w, "height": h })),
+        "proxy": proxy,
+        "proxyBypass": proxy_bypass,
     })
     .to_string())
 }
 
-/// 终止本 agent 的受控 Chrome；若当前是外部连接（connect 来的、非本 agent
-/// 启动的进程），只断开连接，不杀进程。
+/// 终止当前活跃账号 slot 的受控 Chrome；若当前是外部连接（connect 来的、
+/// 非本 agent 启动的进程），只断开连接，不杀进程。
+/// 具名 profile 目录保留，供再次 launch 或 switch 恢复登录态。
 pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
     let mut sessions = session_mut(agent_id);
-    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let sess = sessions.entry(active_session_key(agent_id)).or_default();
     let had_child = sess.chrome_child.is_some();
     let had_conn = sess.port != 0;
+    let kept_profile = had_child && !sess.profile_ephemeral;
     if let Some(mut child) = sess.chrome_child.take() {
         let _ = child.kill();
         let _ = child.wait();
     }
-    if let Some(dir) = sess.profile_dir.take() {
-        remove_profile_dir(&dir);
+    if sess.profile_ephemeral {
+        if let Some(dir) = sess.profile_dir.take() {
+            remove_profile_dir(&dir);
+        }
+    } else {
+        sess.profile_dir = None;
     }
     if had_child || had_conn {
         sess.target_id = None;
@@ -1090,17 +1278,25 @@ pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
         sess.port = 0;
         sess.headless = None;
         sess.window_size = None;
+        sess.proxy = None;
+        sess.proxy_bypass = None;
+        sess.profile_ephemeral = false;
         audit_log(
             agent_id,
             "kill",
             "",
             if had_child { "ok" } else { "disconnected" },
         );
-        Ok(if had_child {
-            "受控 Chrome 已终止".into()
+        let msg = if had_child {
+            if kept_profile {
+                "受控 Chrome 已终止；具名 profile 目录已保留，再次 launch 同 profile 可恢复登录态".to_string()
+            } else {
+                "受控 Chrome 已终止".into()
+            }
         } else {
             "已断开外部浏览器连接（进程未终止——它不是本 agent 启动的）".into()
-        })
+        };
+        Ok(msg)
     } else {
         Err("没有正在运行的受控 Chrome 或外部连接".into())
     }
@@ -1109,7 +1305,12 @@ pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
 /// 连接到用户已启动的、开了调试端口的浏览器实例（Chrome/Edge/Electron 等）。
 /// 与 launch 不同：进程不是本 agent 起的——kill 只断开、租约到期只断连，
 /// 绝不杀用户自己的进程；操作的是用户真实登录态（批准在 rpc 层 Ask）。
-pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, String> {
+/// session/profile 参数把外部实例登记成指定账号 slot，便于多账号切换。
+pub(crate) fn cdp_connect(
+    port: u16,
+    profile: Option<String>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
     if port == 0 {
         return Err("端口必须在 1-65535".into());
     }
@@ -1119,6 +1320,7 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
              webview 只读通道用 target=\"self\""
         ));
     }
+    let slot = normalize_slot_name(profile.as_deref().unwrap_or(""))?;
     // 端口必须真的有调试服务——connect 不猜端口，由用户告诉 Agent
     let raw = list_targets_raw(port).map_err(|e| format!("端口 {port} 没有可用的调试服务: {e}"))?;
     let pages = raw
@@ -1126,8 +1328,8 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
         .map(|arr| arr.iter().filter(|t| t["type"] == "page").count())
         .unwrap_or(0);
 
-    let mut sessions = session_mut(agent_id);
-    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let mut sessions = session_mut_for(agent_id, &slot);
+    let sess = sessions.entry(session_key_for(agent_id, &slot)).or_default();
     // 替换前回收旧状态：受控 Chrome kill 掉（换目标不再需要），外部连接直接覆盖
     if let Some(mut old) = sess.chrome_child.take() {
         let exited = old.try_wait().map(|s| s.is_some()).unwrap_or(false);
@@ -1136,22 +1338,169 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
             let _ = old.wait();
         }
     }
-    if let Some(dir) = sess.profile_dir.take() {
-        remove_profile_dir(&dir);
+    if sess.profile_ephemeral {
+        if let Some(dir) = sess.profile_dir.take() {
+            remove_profile_dir(&dir);
+        }
     }
+    sess.profile_dir = None;
     sess.port = port;
     sess.target_id = None;
     sess.observer = None;
+    sess.slot = slot.clone();
     sess.headless = None;
     sess.window_size = None;
+    sess.proxy = None;
+    sess.proxy_bypass = None;
+    sess.profile_ephemeral = false;
+    set_active_slot(agent_id, &slot);
 
     audit_log(
         agent_id,
         "connect",
         &port.to_string(),
-        &format!("{pages} 个页面 target"),
+        &format!("slot={slot}; {pages} 个页面 target"),
     );
-    Ok(json!({ "status": "connected", "port": port, "pages": pages }).to_string())
+    Ok(json!({
+        "status": "connected",
+        "port": port,
+        "pages": pages,
+        "slot": slot,
+        "profile": profile,
+    })
+    .to_string())
+}
+
+/// 列出本 agent 的全部账号 slot（含未在运行的具名 slot 记录），以及当前活跃项。
+/// 每个 slot 有独立 Chrome 实例/profile/cookie，切换后原有实例继续运行，
+/// 直到租约超时回收——这是多账号会话隔离的边界。
+pub(crate) fn cdp_sessions(agent_id: Option<&str>) -> String {
+    let sessions = lock_sessions();
+    let base = session_key(agent_id);
+    let active = active_slot_for(agent_id);
+    let mut slots: Vec<Value> = Vec::new();
+    for (key, sess) in sessions.iter() {
+        let Some(slot) = key.strip_prefix(&format!("{base}{SLOT_SEPARATOR}")) else {
+            continue;
+        };
+        let observer_alive = sess
+            .observer
+            .as_ref()
+            .map(|o| o.alive.load(Ordering::SeqCst))
+            .unwrap_or(false);
+        slots.push(json!({
+            "slot": if sess.slot.is_empty() { slot } else { sess.slot.as_str() },
+            "active": slot == active,
+            "port": sess.port,
+            "chromeRunning": sess.chrome_child.is_some(),
+            "external": sess.chrome_child.is_none() && sess.port != 0,
+            "attached": sess.target_id.is_some(),
+            "observerAlive": observer_alive,
+            "profile": sess.slot,
+            "profileEphemeral": sess.profile_ephemeral,
+            "headless": sess.headless,
+            "windowSize": sess.window_size.map(|(w, h)| json!({ "width": w, "height": h })),
+            "proxy": sess.proxy,
+        }));
+    }
+    // 当前进程尚未 launch 但磁盘上已存在的具名 profile 也列出（例如应用重启后）；
+    // 这些 slot 可直接 browser(launch, profile: ...) 恢复登录态。
+    if base != SELF_AGENT_ID {
+        let prefix = format!("{NAMED_PROFILE_DIR_PREFIX}-");
+        let listed: Vec<String> = slots
+            .iter()
+            .filter_map(|s| s["slot"].as_str().map(String::from))
+            .collect();
+        if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+            for e in entries.flatten() {
+                let path = e.path();
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let Some(slot) = name.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if slot.is_empty() || listed.iter().any(|s| s == slot) {
+                    continue;
+                }
+                slots.push(json!({
+                    "slot": slot,
+                    "active": false,
+                    "port": 0,
+                    "chromeRunning": false,
+                    "external": false,
+                    "attached": false,
+                    "observerAlive": false,
+                    "profile": slot,
+                    "profileEphemeral": false,
+                    "headless": null,
+                    "windowSize": null,
+                    "proxy": null,
+                }));
+            }
+        }
+    }
+
+    slots.sort_by(|a, b| {
+        let av = a["active"].as_bool().unwrap_or(false);
+        let bv = b["active"].as_bool().unwrap_or(false);
+        bv.cmp(&av).then_with(|| {
+            a["slot"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["slot"].as_str().unwrap_or(""))
+        })
+    });
+    json!({
+        "agent": base,
+        "active": active,
+        "count": slots.len(),
+        "sessions": slots,
+        "note": "切换用 browser_switch_session；未运行的具名 slot 仍会列出（profile 目录已持久化）",
+    })
+    .to_string()
+}
+
+/// 切换当前活跃账号 slot。被切走的受控 Chrome 不会立刻关闭（租约独立计时），
+/// 所以可以来回切换两个已登录账号而不丢登录态。
+pub(crate) fn cdp_switch_session(
+    profile: Option<String>,
+    agent_id: Option<&str>,
+) -> Result<String, String> {
+    let slot = normalize_slot_name(profile.as_deref().unwrap_or(""))?;
+    enforce_lease();
+    let mut sessions = lock_sessions();
+    let key = session_key_for(agent_id, &slot);
+    let sess = sessions
+        .get_mut(&key)
+        .ok_or_else(|| format!("session 不存在: {slot}（先 browser(launch, profile: \"{slot}\") 或 browser(connect, session: \"{slot}\")）"))?;
+    if sess.port == 0 {
+        return Err(format!(
+            "session {slot} 未运行（先 browser(launch, profile: \"{slot}\") 重新启动）"
+        ));
+    }
+    sess.last_active = Instant::now();
+    let current = active_slot_for(agent_id);
+    if current == slot {
+        return Ok(json!({
+            "status": "reused",
+            "active": slot,
+            "port": sess.port,
+            "attached": sess.target_id.is_some(),
+        })
+        .to_string());
+    }
+    set_active_slot(agent_id, &slot);
+    audit_log(agent_id, "switch_session", &slot, "ok");
+    Ok(json!({
+        "status": "switched",
+        "from": current,
+        "active": slot,
+        "port": sess.port,
+        "attached": sess.target_id.is_some(),
+        "note": "后续 browser 动作作用于该 session；旧 session 仍在运行，可再次切换",
+    })
+    .to_string())
 }
 
 /// 新开 tab（Chrome 调试 HTTP /json/new），并自动 attach 到新 tab。
@@ -1159,7 +1508,7 @@ pub(crate) fn cdp_connect(port: u16, agent_id: Option<&str>) -> Result<String, S
 pub(crate) fn cdp_new_tab(url: Option<String>, agent_id: Option<&str>) -> Result<String, String> {
     let url = url.unwrap_or_else(|| "about:blank".into());
     let mut sessions = session_mut(agent_id);
-    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let sess = sessions.entry(active_session_key(agent_id)).or_default();
     if sess.port == 0 {
         return Err("尚未 launch/connect 浏览器".into());
     }
@@ -1188,7 +1537,7 @@ pub(crate) fn cdp_close_tab(target_id: &str, agent_id: Option<&str>) -> Result<S
         return Err("close_tab: targetId 不能为空".into());
     }
     let mut sessions = session_mut(agent_id);
-    let sess = sessions.entry(session_key(agent_id)).or_default();
+    let sess = sessions.entry(active_session_key(agent_id)).or_default();
     if sess.port == 0 {
         return Err("尚未 launch/connect 浏览器".into());
     }
@@ -1318,7 +1667,12 @@ pub(super) fn parse_discover_process_lines(text: &str) -> Vec<(String, u16)> {
             let parts: Vec<&str> = line.split('|').collect();
             if parts.len() >= 2 {
                 if let Ok(port) = parts[1].trim().parse::<u16>() {
-                    out.push((parts[0].trim().to_string(), port));
+                    // 9222 是 HoloGram webview 调试端口，discover 契约明确过滤；
+                    // 在解析层直接跳过，避免 bash/cmd 等启动器行让单测/调用方
+                    // 再各自实现一遍过滤。
+                    if port != WEBVIEW_DEBUG_PORT {
+                        out.push((parts[0].trim().to_string(), port));
+                    }
                 }
             }
             continue;
