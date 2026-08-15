@@ -86,6 +86,14 @@ function setupMemFs(fs: MemFS): void {
         }
         return JSON.stringify(entries)
       }
+      case 'agent_isolation_diff': {
+        // 孤儿 worktree 的 diff 保全 — 只对 iso-orphan 返回有变更
+        const agentId = (args.agent_id ?? '') as string
+        if (agentId === 'iso-orphan') {
+          return JSON.stringify({ has_changes: true, diff: 'partial-diff-from-crash' })
+        }
+        return JSON.stringify({ has_changes: false, diff: '' })
+      }
       case 'agent_isolation_discard': {
         return 'discarded'
       }
@@ -422,11 +430,13 @@ describe("空启动恢复 — 无持久化文件时不报错", () => {
 })
 
 // ═══════════════════════════════════════════════════════
-// 3.5 孤儿检测 — running 条目 → stop + discard
+// 3.5 孤儿检测 — running 条目 → stop + diff 保全（worktree 保留）
+// 2026-08-15 收口：不再 discard — TTL 清理纪律「不销毁无记录的工作」，
+// 先抓 diff 保全到 board，抓不到则保留现场。
 // ═══════════════════════════════════════════════════════
 
-describe("孤儿检测 — running 条目 → stop + discard", () => {
-  it("restore 后 running 条目变 stopped，completed 条目不变", async () => {
+describe("孤儿检测 — running 条目 → stop + diff 保全", () => {
+  it("restore 后 running 条目变 stopped，diff 保全到 board，worktree 不销毁", async () => {
     const fs = createMemFS()
     setupMemFs(fs)
 
@@ -458,19 +468,19 @@ describe("孤儿检测 — running 条目 → stop + discard", () => {
     expect(orphanEntry).toBeDefined()
     expect(orphanEntry!.status).toBe("stopped")
 
+    // 崩溃现场必须保全：diff 抓到后写回 board
+    expect(orphanEntry!.diff).toContain("partial-diff-from-crash")
+
     // 验证 completed 的条目状态保持 completed（不被误改）
     const completedEntry = runtime.getTaskBoard().getEntry("sub-completed")
     expect(completedEntry).toBeDefined()
     expect(completedEntry!.status).toBe("completed")
 
-    // 验证 mockRpc 被调了 agent_isolation_discard（孤儿 worktree 清理）
+    // worktree 保留现场 — 不得调用 agent_isolation_discard（无记录不销毁）
     const discardCalls = mockRpc.mock.calls.filter(
       (c: any[]) => c[0] === 'agent_isolation_discard',
     )
-    expect(discardCalls.length).toBeGreaterThanOrEqual(1)
-    // discard 的 agent_id 应该是孤儿的 isolationId
-    const discardArgs = discardCalls.map((c: any[]) => (c[1] as Record<string, unknown>).agent_id as string)
-    expect(discardArgs).toContain("iso-orphan")
+    expect(discardCalls.length).toBe(0)
   })
 })
 

@@ -394,9 +394,10 @@ export class AgentRuntime implements RuntimePort {
               if (diffText) {
                 try {
                   const parsed = JSON.parse(diffText) as { has_changes?: boolean; diff?: string };
+                  // 只保全可解析的 diff 文本；不可解析的回包不入 board（保留现场即可）
                   if (parsed.has_changes && parsed.diff) defaultTB.attachDiff(orphan.agentId, parsed.diff);
                 } catch {
-                  defaultTB.attachDiff(orphan.agentId, diffText);
+                  /* diff 抓取失败 — worktree 保留现场，不写垃圾进 board */
                 }
               }
             });
