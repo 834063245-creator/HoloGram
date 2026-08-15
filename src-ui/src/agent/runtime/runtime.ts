@@ -486,6 +486,7 @@ export class AgentRuntime implements RuntimePort {
       pricing: config.pricing,
       temperature: config.temperature ?? 0.7,
       contextWindow: config.contextWindow ?? 0,
+      subagentDepth: config.subagentDepth ?? 0,
       toolResultWindow: config.toolResultWindow,
       ui: this._wrapNotifier(agentId),
       messageBus: this._bus,
@@ -717,7 +718,7 @@ export class AgentRuntime implements RuntimePort {
       status: h.status,
       // 会话主 Agent 的 id 是 main-<ts>-<rand>（不再硬编码 'main'），按 parentId 判定
       description: h.parentId === null ? '主Agent' : `Agent (${h.id})`,
-      subagentDepth: 0, // TODO: 从 Agent 暴露
+      subagentDepth: h._getAgent().subagentDepth,
     }));
   }
 

@@ -153,6 +153,11 @@ export class Agent {
   private _subagentDepth = 0;
   private static readonly MAX_SUBAGENT_DEPTH = 3;
 
+  /** 只读深度访问器 — runtime/UI 观测用（agent_status 列表、后台活动过滤） */
+  get subagentDepth(): number {
+    return this._subagentDepth;
+  }
+
   // Agent 身份 — 持久化用于生命周期追踪、会话恢复、谱系
   readonly id: string;
   readonly parentId: string | null;
@@ -2292,8 +2297,9 @@ ${resumeNote}
     asyncMode?: boolean,
     agentIdOverride?: string,
   ): Promise<{ text: string; err?: string }> {
-    // 基于深度的递归守卫
-    if (mode === 'fork' && this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
+    // 基于深度的递归守卫 — fork 与 fresh 一视同仁：递归爆炸与继承上下文无关，
+    // 到达深度上限后两种模式都不许再派生子 Agent。
+    if (this._subagentDepth >= Agent.MAX_SUBAGENT_DEPTH) {
       return { text: '', err: `Exceeded max subagent depth (${Agent.MAX_SUBAGENT_DEPTH})` };
     }
 
