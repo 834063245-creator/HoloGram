@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use super::errors::{codes, err};
 use super::probes::{probe_result_str, CONTENT_PROBE, INSPECT_PROBE, REPORT_PROBE, SNAPSHOT_PROBE};
 use super::session::{
     active_session_key, audit_log, cleanup_old_files_by_age, ensure_observer_started,
@@ -103,8 +104,12 @@ pub(super) fn find_webview_target() -> Result<String, String> {
                     .unwrap_or(false)
         })
         .or_else(|| arr.iter().find(|t| t["type"] == "page"));
-    page.and_then(|t| t["id"].as_str().map(String::from))
-        .ok_or_else(|| "找不到自家 webview 的调试 target（tauri 调试端口未开启？）".to_string())
+    page.and_then(|t| t["id"].as_str().map(String::from)).ok_or_else(|| {
+        err(
+            codes::TARGET_GONE,
+            "找不到自家 webview 的调试 target（tauri 调试端口未开启？）",
+        )
+    })
 }
 
 /// 惰性确保 self 会话已 attach 到自家 webview。返回 (port, target_id)。
@@ -180,12 +185,12 @@ pub(super) fn require_target(agent_id: Option<&str>) -> Result<(u16, String), St
     let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(active_session_key(agent_id)).or_default();
     if sess.port == 0 {
-        return Err("尚未 launch 浏览器".into());
+        return Err(err(codes::SESSION, "尚未 launch 浏览器"));
     }
     let tid = sess
         .target_id
         .clone()
-        .ok_or("未 attach target。先调用 browser(attach) 选择页面")?;
+        .ok_or_else(|| err(codes::SESSION, "未 attach target。先调用 browser(attach) 选择页面"))?;
     Ok((sess.port, tid))
 }
 
@@ -218,8 +223,9 @@ pub(super) async fn runtime_evaluate(expr: &str, agent_id: Option<&str>) -> Resu
             .and_then(|d| d.as_str())
             .unwrap_or("");
         if text.to_lowercase().contains("timeout") {
-            return Err(format!(
-                "页面内 JS 执行超时（{EVAL_TIMEOUT_MS}ms）——表达式可能死循环或页面主线程卡死"
+            return Err(err(
+                codes::TIMEOUT,
+                format!("页面内 JS 执行超时（{EVAL_TIMEOUT_MS}ms）——表达式可能死循环或页面主线程卡死"),
             ));
         }
         return Err(format!("页面内 JS 错误: {text} {desc}"));
@@ -611,20 +617,22 @@ pub(super) fn read_buffer(buf: &VecDeque<String>, limit: usize) -> String {
 /// 查询 console 事件（最新 N 条）。
 pub(crate) fn cdp_console(agent_id: Option<&str>, limit: Option<usize>) -> String {
     let Some(obs) = ensure_observer(agent_id) else {
-        return json!({ "entries": [], "note": "未 attach target" }).to_string();
+        return json!({ "entries": [], "truncated": false, "note": "未 attach target" }).to_string();
     };
     let bufs = crate::utils::lock_or_recover(&obs.buffers);
-    let s = read_buffer(&bufs.console, limit.unwrap_or(30));
-    format!("{{\"entries\":{s}}}")
+    let limit = limit.unwrap_or(30);
+    let s = read_buffer(&bufs.console, limit);
+    format!("{{\"entries\":{s},\"truncated\":{}}}", bufs.console.len() > limit)
 }
 
 /// 查询网络事件（最新 N 条，请求/响应已按 requestId 配对）。
 pub(crate) fn cdp_network(agent_id: Option<&str>, limit: Option<usize>) -> String {
     let Some(obs) = ensure_observer(agent_id) else {
-        return json!({ "entries": [], "paired": true, "note": "未 attach target" }).to_string();
+        return json!({ "entries": [], "paired": true, "truncated": false, "note": "未 attach target" }).to_string();
     };
     let bufs = crate::utils::lock_or_recover(&obs.buffers);
-    let n = limit.unwrap_or(30).min(bufs.network.len());
+    let limit = limit.unwrap_or(30);
+    let n = limit.min(bufs.network.len());
     let entries: Vec<Value> = bufs
         .network
         .iter()
@@ -638,6 +646,7 @@ pub(crate) fn cdp_network(agent_id: Option<&str>, limit: Option<usize>) -> Strin
     json!({
         "entries": entries,
         "paired": true,
+        "truncated": bufs.network.len() > limit,
         "note": "同一条记录含 requestId/method/url/status/error；status 为 null 表示尚无响应，error 非 null 表示加载失败",
     })
     .to_string()
@@ -1240,8 +1249,9 @@ pub(super) async fn wait_actionable(
         );
         let val = runtime_evaluate(&expr, agent_id).await?;
         if val.is_null() {
-            return Err(format!(
-                "{label}: 目标不存在或已失效（{target}）——页面可能已变化，请重新 browser(snapshot)"
+            return Err(err(
+                codes::REF_STALE,
+                format!("{label}: 目标不存在或已失效（{target}）——页面可能已变化，请重新 browser(snapshot)"),
             ));
         }
         if val["reason"].as_str().is_some() {
@@ -1258,8 +1268,9 @@ pub(super) async fn wait_actionable(
             last_center = Some((x, y));
         }
         if Instant::now() >= deadline {
-            return Err(format!(
-                "{label}: 等待可交互超时（{ACTIONABILITY_TIMEOUT:?}）——元素被遮挡或位置持续变化"
+            return Err(err(
+                codes::ACTIONABILITY,
+                format!("{label}: 等待可交互超时（{ACTIONABILITY_TIMEOUT:?}）——元素被遮挡或位置持续变化"),
             ));
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1346,8 +1357,9 @@ pub(crate) async fn cdp_type(
     );
     let ok = runtime_evaluate(&focus_expr, agent_id).await?;
     if !ok["ok"].as_bool().unwrap_or(false) {
-        return Err(format!(
-            "type: 目标不存在或已失效（{target}）——页面可能已变化，请重新 browser(snapshot)"
+        return Err(err(
+            codes::REF_STALE,
+            format!("type: 目标不存在或已失效（{target}）——页面可能已变化，请重新 browser(snapshot)"),
         ));
     }
     let (port, tid) = require_target(agent_id)?;
@@ -1633,8 +1645,9 @@ pub(crate) async fn cdp_scroll(
             );
             let ok = runtime_evaluate(&expr, agent_id).await?;
             if !ok.as_bool().unwrap_or(false) {
-                return Err(format!(
-                    "scroll: 目标不存在或已失效: {sel}（请重新 browser(snapshot)）"
+                return Err(err(
+                    codes::REF_STALE,
+                    format!("scroll: 目标不存在或已失效: {sel}（请重新 browser(snapshot)）"),
                 ));
             }
             audit_log(agent_id, "scroll", &sel, "element");
@@ -1885,7 +1898,10 @@ pub(super) fn check_eval_expr(expr: &str) -> Result<(), String> {
     ];
     for (pat, what) in banned {
         if lower.contains(pat) {
-            return Err(format!("eval 表达式被拒绝：包含 {what}（白名单限制）。需要读 DOM/样式/几何请用 browser(inspect)，需要操作请用 click/type/scroll。"));
+            return Err(err(
+                codes::EVAL_BLOCKED,
+                format!("eval 表达式被拒绝：包含 {what}（白名单限制）。需要读 DOM/样式/几何请用 browser(inspect)，需要操作请用 click/type/scroll。"),
+            ));
         }
     }
     Ok(())

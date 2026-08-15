@@ -28,6 +28,7 @@ mod probes;
 mod transport;
 mod session;
 mod actions;
+mod errors;
 
 pub(crate) use session::{
     cdp_audit, cdp_browser_activity, cdp_close_tab, cdp_connect, cdp_discover, cdp_kill,
@@ -696,6 +697,32 @@ bash|9222|99
         assert!(out.contains(&marker), "审计查询应包含刚写入的条目: {out}");
         let out2 = cdp_audit(Some("no-such-agent"), Some(50));
         assert!(!out2.contains(&marker), "agent 过滤应排除他人条目: {out2}");
+    }
+
+    /// 结构化错误 code（2026-08-15 收口）：关键错误路径必须携带 `[CODE]` 前缀，
+    /// 供 TS 层 parseBrowserError 路由。新增错误点需在此补断言。
+    #[test]
+    fn error_codes_are_routable() {
+        // 参数校验类错误（不依赖 Chrome/网络，可直接触发）。
+        let slot = session::normalize_slot_name("bad/name").unwrap_err();
+        assert!(slot.starts_with("[CDP_SLOT_INVALID]"), "slot 非法应带 code: {slot}");
+        let proxy = session::validate_proxy_arg("proxy", "").unwrap_err();
+        assert!(proxy.starts_with("[CDP_PROXY_INVALID]"), "proxy 非法应带 code: {proxy}");
+        let proxy_nl = session::validate_proxy_arg("proxyBypass", "a\nb").unwrap_err();
+        assert!(proxy_nl.starts_with("[CDP_PROXY_INVALID]"), "proxy 换行应带 code: {proxy_nl}");
+        let eval = actions::check_eval_expr("fetch('https://x')").unwrap_err();
+        assert!(eval.starts_with("[CDP_EVAL_BLOCKED]"), "eval 白名单拦截应带 code: {eval}");
+        // 会话状态类错误：未 launch 即 require_target（port==0 分支）。
+        let no_session = actions::require_target(None).unwrap_err();
+        assert!(
+            no_session.starts_with("[CDP_SESSION]"),
+            "未 launch 的会话错误应带 code: {no_session}"
+        );
+        // 无前缀的旧错误一律走 CDP_INTERNAL 兜底构造（err 函数本身的契约）。
+        assert_eq!(
+            errors::err(errors::codes::INTERNAL, "x"),
+            "[CDP_INTERNAL] x"
+        );
     }
 }
 

@@ -33,7 +33,20 @@ const MAX_RESULT_CHARS = 8000;
 
 function truncate(s: string): string {
   if (s.length <= MAX_RESULT_CHARS) return s;
-  return `${s.slice(0, MAX_RESULT_CHARS)}...[已截断，共 ${s.length} 字符]`;
+  return `${s.slice(0, MAX_RESULT_CHARS)}\n...[已截断，共 ${s.length} 字符；用 offset/maxResults/limit 参数翻页或收窄目标获取更多]`;
+}
+
+/** Rust 侧错误字符串携带的 `[CODE]` 前缀（cdp/errors.rs 构造）。 */
+const ERROR_CODE_RE = /^\[([A-Z][A-Z0-9_]*)\]\s*([\s\S]*)$/;
+
+/**
+ * 解析 Rust 侧结构化错误：`[CODE] message` → `{ code, message }`。
+ * 无前缀（旧错误/权限引擎错误）返回 null，调用方回退原文。
+ */
+export function parseBrowserError(raw: string): { code: string; message: string } | null {
+  const m = ERROR_CODE_RE.exec(raw ?? '');
+  if (!m) return null;
+  return { code: m[1], message: m[2] };
 }
 
 /** 执行 browser 动作。self → webview 只读通道；外部 → 各 Agent CDP 会话。 */
@@ -83,7 +96,12 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
     const result = await agentInvoke<string>(cmd, args);
     return truncate(result ?? '');
   } catch (e: any) {
-    return `[browser] ${action} 失败: ${e?.message || String(e)}`;
+    const raw = e?.message || String(e);
+    const parsed = parseBrowserError(raw);
+    // 结构化错误：模型读人话 message，code 保留在方括号内供测试/路由。
+    return parsed
+      ? `[browser] ${action} 失败 [${parsed.code}]: ${parsed.message}`
+      : `[browser] ${action} 失败: ${raw}`;
   }
 }
 

@@ -9,7 +9,7 @@ vi.mock('../src/agent/tool', async (importOriginal) => {
 
 import { ToolRegistry, agentInvoke } from '../src/agent/tool';
 import { convergeRegistry } from '../src/agent/tools/domains';
-import { createBrowserTools } from '../src/agent/tools/browser';
+import { createBrowserTools, parseBrowserError } from '../src/agent/tools/browser';
 
 function buildBrowserRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
@@ -193,5 +193,32 @@ describe('browser 动作路由（统一走 Rust CDP）', () => {
     expect(invokeMock).toHaveBeenCalledWith('browser_upload', expect.objectContaining({ files: ['C:/tmp/a.txt'], selector: '#file' }));
     expect(invokeMock).toHaveBeenCalledWith('browser_press', expect.objectContaining({ key: 'a', modifiers: ['ctrl'] }));
     expect(invokeMock).toHaveBeenCalledWith('browser_screenshot', expect.objectContaining({ fullPage: true, inline: true }));
+  });
+});
+
+describe('结构化错误 code（2026-08-15 收口）', () => {
+  it('parseBrowserError 解析 [CODE] 前缀，无前缀返回 null', () => {
+    const parsed = parseBrowserError('[CDP_REF_STALE] 目标不存在或已失效（37）——页面可能已变化，请重新 browser(snapshot)');
+    expect(parsed).toEqual({
+      code: 'CDP_REF_STALE',
+      message: '目标不存在或已失效（37）——页面可能已变化，请重新 browser(snapshot)',
+    });
+    expect(parseBrowserError('普通权限错误文案')).toBeNull();
+    expect(parseBrowserError('')).toBeNull();
+  });
+
+  it('Rust 错误经领域工具透传时 code 保留、模型可读', async () => {
+    const registry = buildBrowserRegistry();
+    const t = registry.get('browser')!;
+    invokeMock.mockRejectedValueOnce(
+      new Error('[CDP_REF_STALE] 目标不存在或已失效（37）——页面可能已变化，请重新 browser(snapshot)'),
+    );
+    const result = await t.execute({ action: 'click', selector: '37' });
+    expect(result).toContain('[browser] click 失败 [CDP_REF_STALE]:');
+    expect(result).toContain('请重新 browser(snapshot)');
+    // 无 code 的旧错误回退原文（不丢信息）
+    invokeMock.mockRejectedValueOnce(new Error('legacy error'));
+    const result2 = await t.execute({ action: 'click', selector: '37' });
+    expect(result2).toBe('[browser] click 失败: legacy error');
   });
 });

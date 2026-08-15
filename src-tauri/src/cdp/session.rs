@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 //! CDP 会话状态 + 事件缓冲 + 审计 + Chrome 生命周期。
-//! 从 cdp.rs 拆出（第四批工程债）：actions 仍留在 cdp.rs，
-//! 但会话键控/租约/observer/HAR 事件模型已与单文件解耦。
+//! 从 cdp.rs 拆出（第四批工程债）：会话键控/租约/observer/HAR 事件模型
+//! 已与单文件解耦；页面动作语义在 actions.rs。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,6 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 
+use super::errors::{codes, err};
 use super::transport::{http_close_tab, http_new_tab, list_targets_raw};
 
 // ═══════════════════════════════════════════════════════════
@@ -78,16 +79,19 @@ pub(super) fn normalize_slot_name(slot: &str) -> Result<String, String> {
         return Ok(DEFAULT_SLOT.to_string());
     }
     if slot.len() > 48 {
-        return Err("profile/session 名过长（最多 48 字符）".into());
+        return Err(err(codes::SLOT_INVALID, "profile/session 名过长（最多 48 字符）"));
     }
     if slot == "." || slot == ".." {
-        return Err("profile/session 名不能是 . 或 ..".into());
+        return Err(err(codes::SLOT_INVALID, "profile/session 名不能是 . 或 .."));
     }
     if slot
         .chars()
         .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
     {
-        return Err("profile/session 名不能包含 / \\ : * ? \" < > | 或控制字符".into());
+        return Err(err(
+            codes::SLOT_INVALID,
+            "profile/session 名不能包含 / \\ : * ? \" < > | 或控制字符",
+        ));
     }
     Ok(slot.to_string())
 }
@@ -1047,7 +1051,10 @@ pub(super) async fn wait_for_port(port: u16, timeout: Duration) -> Result<(), St
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(format!("CDP 端口 {port} 在 {timeout:?} 内未就绪"));
+            return Err(err(
+                codes::PORT_CONFLICT,
+                format!("CDP 端口 {port} 在 {timeout:?} 内未就绪"),
+            ));
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -1068,19 +1075,22 @@ pub(super) fn probe_free_port() -> Result<u16, String> {
             return Ok(p);
         }
     }
-    Err(format!(
-        "默认端口 {DEFAULT_PORT_BASE}~{} 全部被占用，请显式指定 port 参数",
-        DEFAULT_PORT_BASE + PORT_PROBE_LIMIT - 1
+    Err(err(
+        codes::PORT_CONFLICT,
+        format!(
+            "默认端口 {DEFAULT_PORT_BASE}~{} 全部被占用，请显式指定 port 参数",
+            DEFAULT_PORT_BASE + PORT_PROBE_LIMIT - 1
+        ),
     ))
 }
 
 /// 校验代理命令行参数：只拒绝换行（避免参数注入的伪影），其余交给 Chrome。
 pub(super) fn validate_proxy_arg(name: &str, value: &str) -> Result<(), String> {
     if value.is_empty() {
-        return Err(format!("launch: {name} 不能为空字符串"));
+        return Err(err(codes::PROXY_INVALID, format!("launch: {name} 不能为空字符串")));
     }
     if value.contains(['\r', '\n']) {
-        return Err(format!("launch: {name} 不能包含换行符"));
+        return Err(err(codes::PROXY_INVALID, format!("launch: {name} 不能包含换行符")));
     }
     Ok(())
 }
@@ -1155,17 +1165,20 @@ pub(crate) async fn cdp_launch(
         // 9222 是自家 webview 的调试端口——受控 Chrome 用它会把自家页面
         // 当外部页面接管（wait_for_port 误判就绪、targets 全是自家页面）。
         Some(p) if p == WEBVIEW_DEBUG_PORT => {
-            return Err(format!(
-                "端口 {WEBVIEW_DEBUG_PORT} 是 HoloGram 自家 webview 的调试端口，不能用于受控浏览器。\
-                 请用默认端口（{DEFAULT_PORT_BASE} 起）或指定其他端口"
+            return Err(err(
+                codes::PORT_CONFLICT,
+                format!(
+                    "端口 {WEBVIEW_DEBUG_PORT} 是 HoloGram 自家 webview 的调试端口，不能用于受控浏览器。\
+                     请用默认端口（{DEFAULT_PORT_BASE} 起）或指定其他端口"
+                ),
             ));
         }
         Some(p) => p,
         None => probe_free_port()?,
     };
 
-    let chrome =
-        find_chrome().ok_or("未找到 Chrome/Edge。可设置环境变量 HOLOGRAM_CHROME 指定路径")?;
+    let chrome = find_chrome()
+        .ok_or_else(|| err(codes::NO_CHROME, "未找到 Chrome/Edge。可设置环境变量 HOLOGRAM_CHROME 指定路径"))?;
     // 缺省 profile 按端口隔离（临时，随会话删除）；具名 profile 持久（多账号切换复用）。
     let profile_dir = if named_profile {
         named_profile_dir(&slot)
@@ -1232,7 +1245,7 @@ pub(crate) async fn cdp_launch(
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(crate::utils::NO_WINDOW);
         }
-        let child = cmd.spawn().map_err(|e| format!("启动 Chrome 失败: {e}"))?;
+        let child = cmd.spawn().map_err(|e| err(codes::INTERNAL, format!("启动 Chrome 失败: {e}")))?;
         sess.chrome_child = Some(child);
     }
 
@@ -1321,17 +1334,21 @@ pub(crate) fn cdp_connect(
     agent_id: Option<&str>,
 ) -> Result<String, String> {
     if port == 0 {
-        return Err("端口必须在 1-65535".into());
+        return Err(err(codes::PORT_CONFLICT, "端口必须在 1-65535"));
     }
     if port == WEBVIEW_DEBUG_PORT {
-        return Err(format!(
-            "端口 {WEBVIEW_DEBUG_PORT} 是 HoloGram 自家 webview 的调试端口，不能作为外部实例连接。\
-             webview 只读通道用 target=\"self\""
+        return Err(err(
+            codes::PORT_CONFLICT,
+            format!(
+                "端口 {WEBVIEW_DEBUG_PORT} 是 HoloGram 自家 webview 的调试端口，不能作为外部实例连接。\
+                 webview 只读通道用 target=\"self\""
+            ),
         ));
     }
     let slot = normalize_slot_name(profile.as_deref().unwrap_or(""))?;
     // 端口必须真的有调试服务——connect 不猜端口，由用户告诉 Agent
-    let raw = list_targets_raw(port).map_err(|e| format!("端口 {port} 没有可用的调试服务: {e}"))?;
+    let raw = list_targets_raw(port)
+        .map_err(|e| err(codes::NETWORK, format!("端口 {port} 没有可用的调试服务: {e}")))?;
     let pages = raw
         .as_array()
         .map(|arr| arr.iter().filter(|t| t["type"] == "page").count())
@@ -1526,12 +1543,16 @@ pub(crate) fn cdp_switch_session(
     enforce_lease();
     let mut sessions = lock_sessions();
     let key = session_key_for(agent_id, &slot);
-    let sess = sessions
-        .get_mut(&key)
-        .ok_or_else(|| format!("session 不存在: {slot}（先 browser(launch, profile: \"{slot}\") 或 browser(connect, session: \"{slot}\")）"))?;
+    let sess = sessions.get_mut(&key).ok_or_else(|| {
+        err(
+            codes::SESSION,
+            format!("session 不存在: {slot}（先 browser(launch, profile: \"{slot}\") 或 browser(connect, session: \"{slot}\")）"),
+        )
+    })?;
     if sess.port == 0 {
-        return Err(format!(
-            "session {slot} 未运行（先 browser(launch, profile: \"{slot}\") 重新启动）"
+        return Err(err(
+            codes::SESSION,
+            format!("session {slot} 未运行（先 browser(launch, profile: \"{slot}\") 重新启动）"),
         ));
     }
     sess.last_active = Instant::now();
@@ -1565,7 +1586,7 @@ pub(crate) fn cdp_new_tab(url: Option<String>, agent_id: Option<&str>) -> Result
     let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(active_session_key(agent_id)).or_default();
     if sess.port == 0 {
-        return Err("尚未 launch/connect 浏览器".into());
+        return Err(err(codes::SESSION, "尚未 launch/connect 浏览器"));
     }
     let port = sess.port;
     let created = http_new_tab(port, &url)?;
@@ -1594,7 +1615,7 @@ pub(crate) fn cdp_close_tab(target_id: &str, agent_id: Option<&str>) -> Result<S
     let mut sessions = session_mut(agent_id);
     let sess = sessions.entry(active_session_key(agent_id)).or_default();
     if sess.port == 0 {
-        return Err("尚未 launch/connect 浏览器".into());
+        return Err(err(codes::SESSION, "尚未 launch/connect 浏览器"));
     }
     http_close_tab(sess.port, target_id)?;
     if sess.target_id.as_deref() == Some(target_id) {
@@ -1697,7 +1718,7 @@ Get-CimInstance Win32_Process | ForEach-Object {
         ps.creation_flags(crate::utils::NO_WINDOW);
         let out = ps
             .output()
-            .map_err(|e| format!("discover: 查询进程表失败: {e}"))?;
+            .map_err(|e| err(codes::NETWORK, format!("discover: 查询进程表失败: {e}")))?;
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
     #[cfg(not(windows))]
@@ -1705,7 +1726,7 @@ Get-CimInstance Win32_Process | ForEach-Object {
         let out = std::process::Command::new("ps")
             .args(["-ax", "-o", "pid=,comm=,args="])
             .output()
-            .map_err(|e| format!("discover: ps 查询进程表失败: {e}"))?;
+            .map_err(|e| err(codes::NETWORK, format!("discover: ps 查询进程表失败: {e}")))?;
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
 }

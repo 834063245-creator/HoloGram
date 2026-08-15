@@ -6,6 +6,8 @@
 
 use serde_json::Value;
 
+use super::errors::{codes, err};
+
 // ═══════════════════════════════════════════════════════════
 // 探针 JS — 独立文件，include_str! 嵌入（单一来源，ADR 0003 D4/D7）
 // 语法由底部 #[cfg(test)] probes_are_valid_javascript 用 node --check 强制验证。
@@ -23,9 +25,12 @@ pub(super) const SNAPSHOT_PROBE: &str = include_str!("probes/snapshot.js");
 /// 在 world_snapshot 静默失效，e1679a0f 修复；这里把同类契约显式锁死）。
 pub(super) fn probe_result_str(val: &Value, label: &str) -> Result<String, String> {
     val.as_str().map(|s| s.to_string()).ok_or_else(|| {
-        format!(
-            "{label}: 探针返回形态异常（期望 stringify 字符串，实际 {:?}）——             页面上下文可能被销毁，或返回契约被破坏",
-            if val.is_object() { "对象" } else { "非字符串" }
+        err(
+            codes::PROBE_FAILED,
+            format!(
+                "{label}: 探针返回形态异常（期望 stringify 字符串，实际 {:?}）——             页面上下文可能被销毁，或返回契约被破坏",
+                if val.is_object() { "对象" } else { "非字符串" }
+            ),
         )
     })
 }
