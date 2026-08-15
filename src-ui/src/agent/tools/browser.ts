@@ -115,7 +115,7 @@ export function createBrowserTools(): Tool[] {
         'Launch a controlled Chrome/Edge instance (isolated profile, never touches the user\'s daily browser data). ' +
         'Use before inspecting/operating external pages. Returns the debug port. ' +
         'If already running with the same launch shape, reuses it; changing port/headless/windowSize/profile/proxy restarts with the new shape. ' +
-        'Pass url to open a specific page. headless runs without a visible window. ' +
+        'Pass url to open a specific page. headless mode runs with no visible UI. ' +
         'profile is a NAMED persistent profile (e.g. "work" or "personal"): each name is an isolated account session with its own cookies/logins, ' +
         'kept across kill/relaunch, and switchable with browser_switch_session. Omit profile for the default temporary profile that is deleted on kill. ' +
         'proxy uses Chrome --proxy-server (e.g. "socks5://127.0.0.1:1080"); proxyBypass sets --proxy-bypass-list.',
@@ -313,8 +313,8 @@ export function createBrowserTools(): Tool[] {
         'Extract page text content from the attached page — always returns {title, url, format}. ' +
         'format "text" (default) returns cleaned innerText; "markdown" returns a lightweight markdown conversion ' +
         '(headings/lists/links/images/tables). scope limits extraction to a CSS selector. ' +
-        'Pagination is character-based: maxChars (default 8000, max 20000) + offset read the next window. ' +
-        'Use instead of browser_eval(document.body.innerText) for readable page body.',
+        'Pagination is character-based: maxChars (default 8000, max 20000) + offset reads the next chunk. ' +
+        'Use instead of browser_eval for readable page body.',
       schema: z.object({
         scope: z.string().optional().describe('Optional CSS selector to limit extraction (default: whole page)'),
         format: z.enum(['text', 'markdown']).optional().describe('Output format: text (default) or markdown'),
