@@ -71,6 +71,29 @@ pub(crate) static COMPLETED_NOTES: std::sync::LazyLock<Mutex<Vec<String>>> =
 
 static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
+/// 后台任务快照（状态栏 HUD 用）：只返回仍在运行的 job。
+/// 已完成但尚未被 bash_output 清理的 job 不进入后台列表（用户需要的是「正在跑什么」）。
+pub(crate) fn bg_jobs_snapshot() -> Vec<serde_json::Value> {
+    let mut jobs = lock_or_recover(&BG_JOBS);
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    for (id, job) in jobs.iter_mut() {
+        match job.child.try_wait() {
+            Ok(None) => {
+                out.push(serde_json::json!({
+                    "jobId": id,
+                    "label": job.label,
+                    "agent": job.owner,
+                    "elapsedSecs": job.start_time.elapsed().as_secs(),
+                    "stalled": job.last_output_time.elapsed() > STALL_THRESHOLD,
+                }));
+            }
+            _ => {}
+        }
+    }
+    out.sort_by_key(|v| v["jobId"].as_u64().unwrap_or(0));
+    out
+}
+
 /// 排空并返回所有待处理的后台通知（同时清空队列）。
 pub(crate) fn drain_bg_notifications() -> String {
     let mut notes = crate::utils::lock_or_recover(&COMPLETED_NOTES);

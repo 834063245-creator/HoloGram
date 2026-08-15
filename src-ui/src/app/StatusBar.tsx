@@ -5,6 +5,7 @@
 // 左：脉点 + 状态文本 + 日志徽标（点击展开日志浮层）；右：星图遥测 + 工作区路径。
 
 import { useEffect, useRef, useState } from 'react';
+import { BackgroundActivity } from '../ui/react/BackgroundActivity';
 import { useShellStore } from './shell-store';
 
 export function StatusBar() {
@@ -30,6 +31,7 @@ export function StatusBar() {
       <span className="sb-left" ref={wrapRef}>
         <span className="sb-pulse" />
         <span className="sb-text">{statusText}</span>
+        <BackgroundActivity />
         {statusLog.length > 0 ? (
           <button type="button" className="sb-log-badge" title="状态日志" onClick={() => setLogOpen((v) => !v)}>
             {statusLog.length}

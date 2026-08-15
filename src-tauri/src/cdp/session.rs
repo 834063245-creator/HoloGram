@@ -649,6 +649,8 @@ pub(super) struct CdpSession {
     pub(super) observer_starting: Arc<AtomicBool>,
     /// 最近一次活动时间（租约依据）
     pub(super) last_active: Instant,
+    /// 当前连接建立时间（launch 成功/connect 成功时更新；状态栏后台活动展示用）
+    pub(super) created_at: Instant,
 }
 
 impl Default for CdpSession {
@@ -667,6 +669,7 @@ impl Default for CdpSession {
             observer: None,
             observer_starting: Arc::new(AtomicBool::new(false)),
             last_active: Instant::now(),
+            created_at: Instant::now(),
         }
     }
 }
@@ -1236,6 +1239,12 @@ pub(crate) async fn cdp_launch(
     // spawn 与端口就绪全部成功后才切活跃 slot：launch 失败时旧账号仍保持活跃，
     // 不会把后续 click/type 路由到一个没起来的会话。
     wait_for_port(port, Duration::from_secs(10)).await?;
+    {
+        let mut sessions = lock_sessions();
+        if let Some(sess) = sessions.get_mut(&session_key_for(agent_id, &slot)) {
+            sess.created_at = Instant::now();
+        }
+    }
     set_active_slot(agent_id, &slot);
     audit_log(agent_id, "launch", &port.to_string(), "ok");
     Ok(json!({
@@ -1348,6 +1357,7 @@ pub(crate) fn cdp_connect(
     sess.target_id = None;
     sess.observer = None;
     sess.slot = slot.clone();
+    sess.created_at = Instant::now();
     sess.headless = None;
     sess.window_size = None;
     sess.proxy = None;
@@ -1459,6 +1469,51 @@ pub(crate) fn cdp_sessions(agent_id: Option<&str>) -> String {
         "note": "切换用 browser_switch_session；未运行的具名 slot 仍会列出（profile 目录已持久化）",
     })
     .to_string()
+}
+
+/// 全局浏览器后台活动快照（状态栏 HUD 用）：跨 agent 汇总所有仍有连接/进程的
+/// 浏览器会话。port=0（已 kill）与 self webview 通道不进入后台列表。
+pub(crate) fn cdp_browser_activity() -> Vec<Value> {
+    enforce_lease();
+    let sessions = lock_sessions();
+    let mut out: Vec<Value> = Vec::new();
+    for (key, sess) in sessions.iter() {
+        if key == SELF_AGENT_ID || sess.port == 0 {
+            continue;
+        }
+        let agent = key
+            .split(SLOT_SEPARATOR)
+            .next()
+            .unwrap_or(DEFAULT_SESSION_KEY)
+            .to_string();
+        let slot = if sess.slot.is_empty() {
+            key.split(SLOT_SEPARATOR)
+                .nth(1)
+                .unwrap_or(DEFAULT_SLOT)
+                .to_string()
+        } else {
+            sess.slot.clone()
+        };
+        out.push(json!({
+            "agent": agent,
+            "slot": slot,
+            "port": sess.port,
+            "chromeRunning": sess.chrome_child.is_some(),
+            "external": sess.chrome_child.is_none(),
+            "attached": sess.target_id.is_some(),
+            "headless": sess.headless,
+            "proxy": sess.proxy,
+            "elapsedSecs": sess.created_at.elapsed().as_secs(),
+        }));
+    }
+    out.sort_by(|a, b| {
+        a["agent"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["agent"].as_str().unwrap_or(""))
+            .then_with(|| a["slot"].as_str().unwrap_or("").cmp(b["slot"].as_str().unwrap_or("")))
+    });
+    out
 }
 
 /// 切换当前活跃账号 slot。被切走的受控 Chrome 不会立刻关闭（租约独立计时），

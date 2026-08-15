@@ -168,6 +168,13 @@
 - 又补：`browser_viewport(width,height,deviceScaleFactor,mobile)` 落地 `Emulation.setDeviceMetricsOverride`（width/height 1-16384，DPR 0.5-3）；E2E-4 增补视口覆盖断言。
 - 未做：`cdp.rs` session/actions 拆分、eval 隔离 world（可选）。
 
+**第五批补（2026-08-15，UI 后台活动观测）**
+
+- 新增底部状态栏「后台活动」胶囊：有 shell 后台任务 / 浏览器会话 / 运行中子 Agent 时显示，无后台活动完全不渲染；点开是玻璃质感 popover，按三类分组显示 label / slot / 端口 / 运行时长 / 停滞标记。
+- Rust 侧新增只读聚合命令 `background_activity`：`bg_jobs_snapshot()`（仅返回仍在运行的 BG_JOBS）+ `cdp_browser_activity()`（跨 agent 汇总 port!=0 的浏览器会话，self webview 不进入列表）；`CdpSession` 增加 `created_at` 用于展示运行时长。
+- 刷新策略：`agent:tool-done` / `agent:status` 事件后 250ms 立即刷新；有活动时 3s 轮询，无活动时 15s 低频兜底。`BrowserActivityPanel` 展开期间改为 5s 刷新 + 工具完成后即时刷新，并补全新增动作的中文标签。
+- 验证：`npx tsc --noEmit`、`npm run build` 通过；`cargo test cdp::` 33/33（新增 `browser_activity_snapshots_running_sessions_only`）；全量 `cargo test` 276 passed / 8 failed（仍是 8 个历史环境失败）。
+
 **第五批（2026-08-15，代码完成待提交）**
 
 - `browser_launch` 新增 `profile`（具名持久 profile/slot）、`proxy`（`--proxy-server`）、`proxyBypass`（`--proxy-bypass-list`）；默认 profile 仍按端口隔离且随 kill/租约删除，具名 profile 目录 `hologram-browser-profiles-<slot>` 保留并可反复 launch 复用登录态。复用会话时 profile/proxy 与端口/headless/windowSize 一并做形状校验。

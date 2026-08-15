@@ -1,0 +1,180 @@
+/* BackgroundActivity — 状态栏后台活动胶囊。视觉语言与 sb-pop / PromptShelf 同源：
+   玻璃底、细边框、mono 小字、绿点正常 / 黄铜 warn。 */
+
+.bg-act-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.bg-act-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  padding: 0 8px 0 7px;
+  border: 1px solid rgba(148, 166, 205, 0.18);
+  border-radius: 999px;
+  background: rgba(148, 166, 205, 0.06);
+  color: var(--obs-text-2);
+  font-family: var(--obs-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color var(--obs-snap),
+    background var(--obs-snap),
+    border-color var(--obs-snap);
+}
+.bg-act-chip:hover {
+  color: var(--obs-text);
+  background: rgba(160, 180, 220, 0.1);
+  border-color: rgba(160, 180, 220, 0.28);
+}
+
+.bg-act-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--obs-pass);
+  box-shadow: 0 0 7px var(--obs-pass);
+  animation: bg-act-breathe 2.4s ease-in-out infinite;
+  flex: none;
+}
+.bg-act-chip.warn .bg-act-dot {
+  background: var(--obs-warn);
+  box-shadow: 0 0 7px var(--obs-warn);
+}
+@keyframes bg-act-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+.bg-act-count {
+  min-width: 14px;
+  text-align: center;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--obs-text-2);
+}
+
+/* 弹层：从状态栏向上生长，和 sb-pop 同层级、同质感。 */
+.bg-act-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(var(--obs-status-h) + 6px);
+  width: min(460px, calc(100vw - 24px));
+  max-height: min(380px, calc(100vh - var(--obs-bar-h) - var(--obs-status-h) - 24px));
+  display: flex;
+  flex-direction: column;
+  background: var(--obs-glass-hi);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border: 1px solid var(--obs-line);
+  border-radius: 9px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.5);
+  z-index: 120;
+  overflow: hidden;
+}
+.bg-act-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 11px 7px;
+  border-bottom: 1px solid var(--obs-line-soft);
+  color: var(--obs-text-2);
+  font-family: var(--obs-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+}
+.bg-act-refresh {
+  color: var(--obs-text-3);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+}
+.bg-act-body {
+  overflow-y: auto;
+  padding: 5px 0 7px;
+}
+.bg-act-body::-webkit-scrollbar {
+  width: 8px;
+}
+.bg-act-body::-webkit-scrollbar-thumb {
+  background: rgba(160, 180, 220, 0.16);
+  border-radius: 4px;
+}
+
+.bg-act-section + .bg-act-section {
+  margin-top: 3px;
+}
+.bg-act-section-title {
+  padding: 6px 11px 4px;
+  color: var(--obs-text-3);
+  font-family: var(--obs-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.bg-act-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 3px 11px;
+  border-left: 2px solid transparent;
+  font-family: var(--obs-font-mono);
+  font-size: 10.5px;
+}
+.bg-act-row:hover {
+  background: rgba(160, 180, 220, 0.05);
+}
+.bg-act-row-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--obs-pass);
+  opacity: 0.85;
+  flex: none;
+}
+.bg-act-row.warn .bg-act-row-dot {
+  background: var(--obs-warn);
+}
+.bg-act-row-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--obs-text-2);
+}
+.bg-act-row-sub {
+  color: var(--obs-text-3);
+}
+.bg-act-row-meta {
+  margin-left: auto;
+  flex: none;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--obs-text-3);
+  font-size: 9.5px;
+}
+.bg-act-tag {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  color: var(--obs-warn);
+  background: rgba(240, 168, 72, 0.1);
+  border: 1px solid rgba(240, 168, 72, 0.24);
+}
+.bg-act-empty {
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--obs-text-3);
+  font-family: var(--obs-font-mono);
+  font-size: 10.5px;
+}

@@ -324,10 +324,15 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   padding: 3px 0;
+  border: none;
+  background: none;
   cursor: pointer;
   color: var(--obs-text-2);
+  font-family: inherit;
   font-size: calc(10px * var(--font-scale));
+  text-align: left;
 }
 
 .ap-browser-activity-row:hover {

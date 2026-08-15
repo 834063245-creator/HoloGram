@@ -30,8 +30,8 @@ mod session;
 mod actions;
 
 pub(crate) use session::{
-    cdp_audit, cdp_close_tab, cdp_connect, cdp_discover, cdp_kill, cdp_launch, cdp_new_tab,
-    cdp_sessions, cdp_switch_session, is_self, SELF_AGENT_ID,
+    cdp_audit, cdp_browser_activity, cdp_close_tab, cdp_connect, cdp_discover, cdp_kill,
+    cdp_launch, cdp_new_tab, cdp_sessions, cdp_switch_session, is_self, SELF_AGENT_ID,
 };
 pub(crate) use actions::{
     cdp_attach, cdp_back, cdp_click, cdp_console, cdp_content, cdp_cookies, cdp_dialogs, cdp_eval,
@@ -175,6 +175,43 @@ bash|9222|99
         assert!(super::validate_proxy_arg("proxy", "socks5://127.0.0.1:1080").is_ok());
         assert!(super::validate_proxy_arg("proxy", "").is_err());
         assert!(super::validate_proxy_arg("proxy", "socks5://host\n--remote-debugging-port=9999").is_err());
+    }
+
+    /// 状态栏后台活动快照：只返回仍有连接的浏览器会话，port=0 的已 kill 槽位
+    /// 不得出现；self webview 通道也不得混入后台列表。
+    #[test]
+    fn browser_activity_snapshots_running_sessions_only() {
+        let agent = Some("activity-snapshot-agent");
+        let key = super::session_key_for(agent, "work");
+        {
+            let mut sessions = lock_sessions();
+            sessions.insert(
+                key.clone(),
+                CdpSession {
+                    port: 9333,
+                    target_id: None,
+                    slot: "work".into(),
+                    created_at: Instant::now(),
+                    ..CdpSession::default()
+                },
+            );
+        }
+        let rows = super::cdp_browser_activity();
+        let hit = rows
+            .iter()
+            .find(|r| r["agent"].as_str() == Some("activity-snapshot-agent") && r["slot"].as_str() == Some("work"));
+        assert!(hit.is_some(), "运行中的浏览器会话应出现在后台活动: {rows:?}");
+        assert_eq!(hit.unwrap()["port"].as_u64(), Some(9333));
+        {
+            let mut sessions = lock_sessions();
+            sessions.remove(&key);
+        }
+        assert!(
+            super::cdp_browser_activity()
+                .iter()
+                .all(|r| r["agent"].as_str() != Some("activity-snapshot-agent")),
+            "测试会话应清理干净"
+        );
     }
 
     /// 第五批 profile 持久化：磁盘上已有的具名 profile 目录，即使当前进程尚未
@@ -601,6 +638,7 @@ bash|9222|99
                     observer_starting: Arc::new(AtomicBool::new(false)),
                     // 活跃时间放到租约之外，强制命中回收分支
                     last_active: Instant::now() - session_lease() - Duration::from_secs(5),
+                    created_at: Instant::now(),
                 },
             );
         }

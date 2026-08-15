@@ -812,6 +812,13 @@ pub(crate) async fn rpc(
             commands::shell::bash_wait(job_id, timeout_ms).await
         }
         "shell_env" => Ok(commands::shell::shell_env()),
+        "background_activity" => {
+            // 状态栏 HUD 只读聚合：正在运行的 shell 后台任务 + 浏览器会话。
+            // 不经过 Agent 权限引擎（本机 UI 查询，不含命令输出/页面内容）。
+            let shells = crate::utils::bg_jobs_snapshot();
+            let browsers = crate::cdp::cdp_browser_activity();
+            Ok(serde_json::json!({ "shells": shells, "browsers": browsers }).to_string())
+        }
         "drain_bg_notifications" => {
             commands::shell::drain_bg_notifications().await
         }
