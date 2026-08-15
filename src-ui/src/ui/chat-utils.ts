@@ -294,10 +294,13 @@ function formatDataflowCard(text: string): string | null {
 /** 工具输出的渲染形态：结构化 HTML（特殊视图）或 markdown 文本（react-markdown 渲染）。 */
 export type ToolResultRender = { kind: 'html'; html: string } | { kind: 'markdown'; text: string };
 
+/** UI 卡片截断角标（单一来源：与 executor 的 truncated 标志同源，文案只此一处）。 */
+export const TRUNCATED_BADGE = '…[截断]…';
+
 /** 格式化工具输出用于显示 — JSON 美化打印，代码高亮。 */
 export function formatToolResult(toolName: string, text: string, truncated: boolean, args?: string): ToolResultRender {
   let body = text;
-  if (truncated) body += '\n…[截断]…';
+  if (truncated) body += '\n' + TRUNCATED_BADGE;
 
   // 工具收敛后模型调用领域工具（fs/shell/search/...）— 归一化回旧语义名匹配特殊渲染
   const name = resolveSemanticToolName(toolName, args);
@@ -318,7 +321,15 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
         count?: number;
         truncated?: boolean;
       };
-      const lines = (data.results || []).map((r) => `<span class="glob-entry">📄 ${escapeHtml(r.path)}</span>`);
+      // 结构校验：字段缺失/类型错 → 大声降级（宪法·错误不静默），
+      // 而不是渲染 "undefined 个文件" 或悄悄回退原文。
+      if (!Array.isArray(data.results) || typeof data.count !== 'number') {
+        return {
+          kind: 'html',
+          html: `<div class="glob-truncated">⚠ glob 结果结构异常（results/count 缺失），显示原文：</div><pre>${escapeHtml(body)}</pre>`,
+        };
+      }
+      const lines = data.results.map((r) => `<span class="glob-entry">📄 ${escapeHtml(r.path)}</span>`);
       const header = `<div class="glob-summary">${data.count} 个文件${data.truncated ? ' (结果已截断)' : ''}</div>`;
       return {
         kind: 'html',
@@ -329,7 +340,10 @@ export function formatToolResult(toolName: string, text: string, truncated: bool
             : lines.join('\n')),
       };
     } catch {
-      return { kind: 'html', html: escapeHtml(body) };
+      return {
+        kind: 'html',
+        html: `<div class="glob-truncated">⚠ glob 结果解析失败，显示原文：</div><pre>${escapeHtml(body)}</pre>`,
+      };
     }
   }
 
