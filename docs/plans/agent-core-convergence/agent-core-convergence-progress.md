@@ -8,8 +8,8 @@
 
 | Phase | 状态 | 说明 |
 |---|---|---|
-| 0 基线冻结 + V0 验证工程 | ✅ 完成 | 6 契约快照 + gate.mjs 落地，全量绿 |
-| 1 Disposer 契约 | ⬜ 未开始 | |
+| 0 基线冻结 + V0 验证工程 | ✅ 完成 | 6 契约快照 + gate.mjs 落地，全量绿；独立审计有条件放行，条件已处置 |
+| 1 Disposer 契约 + V1 | ✅ 完成 | 3 注册 API 返回 Disposer；startOwned/ownedDisposer；T0 门禁 + F8 快照 + F2 workflow |
 | 2 工具管道类型化事件 | ⬜ 未开始 | |
 | 3 AgentContext 抽取 | ⬜ 未开始 | |
 | 4 生命周期所有权统一 | ⬜ 未开始 | |
@@ -36,6 +36,40 @@
 **F8 范围决定（Phase 1/2 开工前条件）**：V1 新增 `tool-schemas.effective` 快照——用确定性 fixture 跑完 `createAgent` 完整注册后的模型可见 schema 面，至少覆盖 enter/exit_plan_mode、通信族（agent_message/inbox/ack/reply/list）、discovery 族（agent_discover/lookup）、子 Agent 管理族（agent_merge/board/kill/request/spawn 替换版）、task 替换版与 compaction 工具。引擎动态工具豁免维持（决策#1）。
 
 审计放行条件核对：F1 已修 ✅；F2 随 V1 ⏳；F8 范围已定 ⏳ → **Phase 1 可以开工**（F2/F8 的实现属 V1 工作包，与 Phase 1 并行推进，不阻塞）。
+
+## Phase 1 / V1 记录（2026-08-16）
+
+### 交付物（4 个实现 commit + 1 个 baseline freeze commit）
+
+| commit | 内容 |
+|---|---|
+| `be5b25e4` | `src/agent/lifecycle.ts`：Disposer / DisposerBag（逆序串行、单次、部分失败聚合）/ once / runInContext + 9 行为测试 |
+| `3c022c3d` | `ToolRegistry.register` / `HookRegistry.register` / `PreflightHookRegistry.register` 返回幂等 Disposer（陈旧 disposer 不误删同名新工具）；`tool-registry-disposer.test.ts`（含 T5 100 次注册/释放归零）；`specs/phase-1.test.ts` T0 结构门禁 + `gate.mjs` T0 静态扫描（负向验证：签名改回 void → check 在 vitest 之前失败关闭） |
+| `53943ced` | `AgentLifecycleManager.startOwned()` / `McpClient.ownedDisposer()` + 测试 |
+| `644b0c39` | F8：`phase-1/tool-schemas.effective.json` baseline（空输入注册表跑真实 createAgent → converge 后 5 个模型可见工具：enter/exit_plan_mode、hologram_compaction_stats、agent、task） |
+| （本 commit） | F2：`.github/workflows/convergence.yml`（独立 workflow，不动 ci.yml；无 CONVERGENCE_PHASE 全量跑；record 永不上 CI）；`docs/agents/REGISTRY_OWNERSHIP.md` 注册点所有权清单 |
+
+### 验收核对（验证计划 §4 Phase 1）
+
+- [x] T0：三个 register 签名返回 Disposer（spec + gate 双层，含豁免表机制）
+- [x] T1：disposer 幂等 / 逆序 / async 等待 / 部分失败不阻断（lifecycle-disposer 9 例）
+- [x] T5：100 次注册/释放 registry 归零
+- [x] T3：Phase 0 全部快照不变（effective 快照通过 verify:convergence + 全量 vitest 双确认）
+- [x] T4：全量 vitest 通过（终态实测 **1055 passed / 1 skipped**；新增测试 = lifecycle-disposer 9 + tool-registry-disposer 7 + lifecycle-owned 3 + phase-1 spec 5）
+- [x] REGISTRY_OWNERSHIP.md 落盘：订阅型注册全部有对称清理；工具型随实例 GC；新增豁免须登记
+- [x] 审计 F2/F4/F8 处置完成（F4 = CI 恒跑全量 specs）
+
+### 决策与偏差记录（Phase 1 追加）
+
+9. **runInContext 签名**：计划原文单参 `runInContext(register)`，落地为 `(bag, register, label)`——单参形式无处安放清理器；Phase 3 的 `AgentContext.effect()` 直接复用此组合。
+10. **T0 双层实现**：spec 内断言（自描述、随 vitest 报告）+ gate.mjs 静态扫描（CI 可不跑 vitest 也拦得住）；两层共享"豁免需登记"纪律。
+11. **现有调用点不强制消费 disposer**：REGISTRY_OWNERSHIP.md 论证订阅型已有对称清理、工具型随实例 GC；Phase 4 才接线 context effect。与计划"只加接口，先不改语义"一致。
+
+### Phase 1 决策检查点（计划 §10）
+
+> Phase 1 结束：若 disposer 契约没有让任何现有 bug 消失，仍继续 Phase 2（价值主要在未来）。
+
+结论：**继续 Phase 2**。符合预期——Phase 1 价值在 Phase 3/4 的所有权接线；T5 泄漏检测与 startOwned 已为 worktree TTL 泄漏类问题提供了修复路径（docs/landmine-map.md 的 lifecycle 条目）。
 
 ### 基线（freeze point：分支自 main 67f21ec2 切出）
 
