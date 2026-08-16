@@ -285,6 +285,8 @@ export class ChatCore {
       // 会话 Agent 句柄 — 否则旧 provider/工厂会继续服务会话（残留 bug）。
       Session.setAgentFactory(this.panelId, null);
       Session.clearPanelAgents(this.panelId);
+      // 中危#5：清会话列表 — 否则无 API Key 切换后旧项目会话面板残留。
+      getChatStore(this.panelId).sess.setState({ sessions: [], activeIdx: -1 });
       return;
     }
     // 替换所有会话 — setAgent 是启动/设置阶段，非会话管理。

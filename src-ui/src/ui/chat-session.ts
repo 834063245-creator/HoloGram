@@ -22,6 +22,7 @@ import {
   resetMsgIdCounter,
 } from './message-model';
 import { isSubagentSpawnTool } from './tool-semantics';
+import { getWorkspaceEpoch, isCurrentEpoch } from '../workspace-scope';
 
 // ── 模块级会话状态 ──
 //
@@ -511,8 +512,11 @@ const AUTO_SAVE_DELAY_MS = 500;
 export function scheduleAutoSave(ctx: SessionContext, projectPath: string): void {
   const existing = _autoSaveTimers.get(ctx.storeId);
   if (existing) clearTimeout(existing);
+  // 代际防护（H5）：延迟触发时若已切换工作区则不写 — 堵「新会话写进旧项目目录」。
+  const epoch = getWorkspaceEpoch();
   const timer = setTimeout(() => {
     _autoSaveTimers.delete(ctx.storeId);
+    if (!isCurrentEpoch(epoch)) return;
     saveActiveSession(ctx, projectPath).catch(() => {});
   }, AUTO_SAVE_DELAY_MS);
   _autoSaveTimers.set(ctx.storeId, timer);
@@ -548,6 +552,9 @@ export async function appendLastMessage(ctx: SessionContext, projectPath: string
  *  优先尝试文件，回退到 localStorage（可在应用崩溃/强制关闭后恢复）。 */
 export async function autoRestoreLastSession(ctx: SessionContext, projectPath: string): Promise<void> {
   if (!getAgentFactory(ctx.storeId) || !projectPath) return;
+  // 代际防护（H5）：恢复在途期间可能切换工作区 — 写入前校验，过期整段放弃，
+  // 防把旧项目的会话状态写进新项目面板。
+  const epoch = getWorkspaceEpoch();
 
   let curNextId = getChatStore(ctx.storeId).sess.getState().nextSessionId;
 
@@ -690,6 +697,8 @@ export async function autoRestoreLastSession(ctx: SessionContext, projectPath: s
     ctx.addNotice('Agent 未就绪（API Key 未配置？），历史会话暂未恢复', 'warn');
     return;
   }
+  // 代际防护（H5）：恢复在途期间已切换工作区 — 丢弃本次恢复，不写任何 store。
+  if (!isCurrentEpoch(epoch)) return;
 
   const freshSys = newAgent.getSession().filter((m: Message) => m.role === 'system');
   const conv = (data.messages as Message[]).filter((m) => m.role !== 'system');
