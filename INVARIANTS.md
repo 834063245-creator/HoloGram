@@ -231,6 +231,6 @@ io: 'input' 视图必须保留：让 defaulted 字段不进 required，
 
 每个 Agent prompt 模板里加一行：
 ```
-在修改任何文件之前，先 grep 该文件里的 ⚠️ INVARIANT 注释，不要违反。
-如果代码库里没有 INVARIANT 标记的文件，也要遵守 D:\HoloGramHG\INVARIANTS.md。
+在修改任何文件之前，先读本仓库根目录 INVARIANTS.md 并 grep 该文件里的 ⚠️ INVARIANT 注释，不要违反。
+CLAUDE.md / AGENTS.md 已强制先加载本文件。
 ```

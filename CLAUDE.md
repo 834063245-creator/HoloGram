@@ -1,37 +1,47 @@
-# CLAUDE.md
+# CLAUDE.md — HoloGram 项目规范
 
-## 用户
+> 本文件由 AgentRuntime 在创建每个会话时读入 system prompt（`src-ui/src/agent/runtime/runtime.ts`），
+> 对 Claude Code 直接生效；Codex 读 `AGENTS.md`，而 `AGENTS.md` 强制加载同一套规则。
 
-外行 vibe coder，不看代码，交互质感对标 Blender。用产品思维理解他的话，别逐字执行。回答简洁，猜比追问好。说"炸了""卡成狗"= 主动排查，别问复现步骤。
+## 规则优先级
 
-## 硬约束（不遵守必出 bug）
+`docs/adr/project-constitution.md` > `INVARIANTS.md` > `CONVENTIONS.md` > 本文件 > 历史 plan/handoff。
+有冲突时以左边为准；无法判断就停下来问用户。
 
-- **构建**：必须 `cargo tauri build`，不能只 `cargo build --release`。前端改完先 `cd src-ui && npm run build`
-- **Rust 改完**：先 `cd engine && cargo build`，再 `cargo tauri build`（`tauri dev` 自动 spawn engine）
-- **Windows 路径**：`location` 用 `\`，提取文件用 `rsplit(":", 1)` 避免吃 drive letter
-- **枚举兼容**：`from_json()` 后 type 变字符串，同时处理 enum 和 str
-- **程序层不做**：不解释、不推断、不声称找到 bug 根源 — 只呈现数据
-- **改代码前先查依赖**：MCP `hologram_*` 工具能直接给答案，别用 grep 猜
-- **先抄再写**：在代码库里找到做类似事情的文件，复制它的模式。不要引入新的通信方式（用 bus.emit，不要 window.dispatchEvent），不要引入新的状态管理方式（用 Zustand store factory + Map registry，不要模块级变量）。不确定怎么写 → `Grep` 现有代码找参考 → 照着抄
-- **改完验证**：前端改完跑 `cd src-ui && npm run build`，Rust 改完跑 `cd engine && cargo build`，过了再 commit
-- **不要改 CI**：`.github/workflows/ci.yml` 只做编译+测试，不动它
+## 开工顺序（不可跳过）
 
-## 项目
+1. **动任何代码前，先读根目录 `CONVENTIONS.md` 和 `INVARIANTS.md`。** 没读不要改文件。
+2. 修改 `src-ui/src/ui/**` 或 `src-ui/src/agent/**` 前，逐条核对 INVARIANTS，并 grep 目标文件的 `⚠️ INVARIANT` 注释。
+3. 改高 fan-in 文件前先查图影响面：内置工具用 `graph(preflight)` / `graph(impact)`；外部 MCP 用 `preflight_check` / `trace_impact`。
+4. 在代码库里找做同类事的文件，复制它的模式。不要发明新的状态、通信、工具定义或错误处理方式。
 
-代码依赖拓扑图生成器。Tauri 2 + Rust 引擎 + Three.js 3D 星图。Python 引擎 `src_python/` 已退役，所有活跃代码走 `engine/`。
+## 硬约束
 
-架构与路线图见 `docs/`（MULTI_AGENT_ROADMAP.md 为多 Agent 工作台）。
+- **四条架构约定**（最高）：类型边界 / 单一权威源 / 异步纪律 / 错误不静默。详见 `docs/adr/project-constitution.md`；新代码违反即返工。
+- **前端**：React 19 + Zustand 5。跨组件业务状态走 zustand store（面板级走 `createScopedStore` 注册表），`src-ui/src/app/**` 不要新增 `import .../ui/events`。聊天消息原地 mutate 后必须 `touchMessage` / `touchMessageContaining`。
+- **RPC**：前端调后端一律 `typedRpc` / `typedListen`（`src-ui/src/rpc-contract.ts`）；参数键 snake_case。新增后端方法同步 `src-tauri/src/rpc.rs` + `RpcContract`，生成文档用 `scripts/gen-rpc-contract-md.cjs`。受权文件之外裸 `rpc` 会被 biome 拦截。
+- **工具**：模型工具必须 `defineTool` + zod v4；领域动作变更同步 `DOMAIN_SPECS` / `collectHiddenToolNames()` / 测试。禁止手写 schema、execute 里 `as` 强拆、用 `.strict()`。
+- **Rust**：生产代码零裸 `.unwrap()`（测试模块除外）。锁中毒用 `lock_or_recover` / `read_or_recover` / `write_or_recover`（src-tauri），engine 用 `unwrap_or_else(|e| e.into_inner())`。失败必须可见，写入/持久化错误不得静默吞。
+- **Windows 路径**：拆 `location` 的 `文件:行` 只拆最后一个冒号（`rsplit_once(':')`），不要吃掉 drive letter。
+- **不改的**：`graph-layout.ts` / `gpu-layout.ts` 的布局参数、`.github/workflows/ci.yml`、Python 引擎路径（已退役，不要恢复）。
+- **产品输出纪律**：应用的程序层只呈现图数据，不替用户推断 bug 根因/解释因果。这条限制的是你写进产品 UI/工具输出的内容；你排查问题时照常推理，结论写在回复/计划/代码注释里。
 
-## Agent skills
+## 验证门禁（不过不交付、不 commit）
 
-### Issue tracker
+| 改动 | 命令 |
+|---|---|
+| 前端 | `cd src-ui && npm run build`（tsc --noEmit + vite build） |
+| 前端逻辑 | `cd src-ui && npx vitest run` |
+| 前端格式 | `cd src-ui && npx biome check --write <改动文件>`（全仓 501 errors/338 warnings 是存量基线，只保证自己零新增） |
+| 引擎 | `cd engine && cargo test`（快验 `cargo build`） |
+| 壳 | `cd src-tauri && cargo check`；权限/锁/IPC/命令改动跑 `cargo test` |
+| 桌面打包 | `cd src-tauri && cargo tauri build`（会自动先跑前端构建；根目录 `build.cmd` 是 Windows 包装） |
 
-GitHub Issues on `834063245-creator/HoloGram`，外部 PRs 纳入 triage 队列。详见 `docs/agents/issue-tracker.md`。
+禁止用 `cargo build --release` 代替桌面发布验证。当前实测基线：engine 698 tests · src-tauri 309 tests · 前端 1014 passed / 4 skipped（2026-08-16）。
 
-### Triage labels
+## 项目快照
 
-默认标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。详见 `docs/agents/triage-labels.md`。
-
-### Domain docs
-
-Single-context — 根目录 `CONTEXT.md` + `docs/adr/`。详见 `docs/agents/domain.md`。
+- **定位**：把代码库解析成可对话的依赖星图，并内置多 Agent 编码工作台。桌面应用 = Tauri 2 + Rust 引擎 + TypeScript/React 19 + Three.js + Monaco。
+- **工具层**：内置 Agent 可见领域工具 `fs / shell / git / search / web / agent / task / memory / browser / desktop / graph / ops / lsp` + `ask_user / Skill / wait / plan`。旧工具名（`run_shell`、`write_file`、`git_*`、`search_symbols` 等）已淘汰，模型调用会被重定向。
+- **图优先**：`graph(symbols/impact/preflight/...)` 是改代码前的工作流入口，grep 只做兜底。
+- **现状文档**：先查 `docs/README.md`（文档索引）；项目手册 `AGENTS.md`、架构 `ARCHITECTURE.md`、词汇 `CONTEXT.md`、多 Agent 工作台 `docs/MULTI_AGENT_ROADMAP.md`。`docs/archive/` 是历史，勿作现状。

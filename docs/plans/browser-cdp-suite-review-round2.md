@@ -1,7 +1,7 @@
 # Browser CDP 套件二轮评审 + 改进计划
 
-> 状态：第一批（`e0b9086`）+ 第二批（`fec19fe`）+ 第三批（`2c8376a`）+ 第四批（`9a9d810`/`54cea67`/`2d25279`/`60aaac2`/`1593973`）+ 交接文档（`5ec03b8`/`cb87eaf`）已提交，均未 push；**第四批完成**（跨平台 + 轮转清理 + HAR + viewport + cdp.rs 四模块拆分 + 可行 e2e 补齐）；**第五批代码已完成待提交**（cookie 管理 + profile/proxy 配置 + 多账号 slot 隔离/切换 + E2E-5），eval 隔离 world 保持可选不做
-> 下一接手窗口任务：有 Windows 环境则补跑 E2E-1/2/3/4/5（重点 E2E-5 多账号 cookie 隔离）；随后 review 本批 diff、commit；eval 隔离 world 仍为可选项
+> 状态：第一至第五批均已提交并入 main（第五批 `534faba` 起；是否 push 以 `git status` 为准）。代码侧全部完成：cookies/profile/proxy/多账号 slot 切换 + E2E-5；eval 隔离 world 保持可选不做
+> 剩余任务：有 Windows 环境则补跑 E2E-1/2/3/4/5（重点 E2E-5 多账号 cookie 隔离）；eval 隔离 world 仍为可选项
 > 关联实验：[`v4-pro-minimal-ab-test-plan.md`](./v4-pro-minimal-ab-test-plan.md)（同目录）
 > 评审范围：`src-tauri/src/cdp.rs`、`src-tauri/src/rpc.rs`、`src-tauri/src/tools/mod.rs`、
 > `src-ui/src/agent/tools/browser.ts`、`src-tauri/src/cdp/probes/*.js`、`src-tauri/src/cdp/e2e.rs`

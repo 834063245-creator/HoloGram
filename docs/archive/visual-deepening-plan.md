@@ -1,7 +1,7 @@
 # HoloGram 前端视觉深化方案（P7 系列 · 全面视觉重构）
 
 > 制定：2026-07-19 · 状态：待施工 · 施工分支：`feature/observatory-visual`
-> **本方案是此 feature 的唯一事实来源。** 前置阅读：`docs/agents/frontend-refactor-handoff.md`（架构与契约）+ `prototype/observatory-concept.html`（视觉标准，gitignored 本地文件）。
+> **本方案是此 feature 的唯一事实来源。** 前置阅读：`docs/archive/frontend-refactor-handoff.md`（架构与契约）+ `prototype/observatory-concept.html`（视觉标准，gitignored 本地文件）。
 > 交接惯例：每阶段一个干净 commit（中文 conventional commits），门禁全绿才入库。
 
 ## 〇、现状基线（截至 `5a93920`）

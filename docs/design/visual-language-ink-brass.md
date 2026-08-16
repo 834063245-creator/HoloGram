@@ -1,8 +1,8 @@
 # 视觉语言规格：墨与黄铜（Ink & Brass）
 
-> 制定：2026-08-09 · 状态：**定调已锁定，待实施** · 适用范围：src-ui 全表面（换皮）
+> 制定：2026-08-09 · 状态：**已实施（P7 视觉深化全系列竣工）** · 后续 UI 决策仍以本文气质词表为准 · 适用范围：src-ui 全表面
 > 性质：设计宪法。本文档是视觉的唯一事实来源；任何 UI 决策回到本文档的「气质词表」打勾。
-> 前置阅读：`docs/agents/frontend-refactor-handoff.md`（架构契约）、`docs/archive/visual-deepening-plan.md`（旧视觉，已退役）
+> 前置阅读：`src-ui/src/app/README.md`（当前前端约定）、根目录 `CONVENTIONS.md`；`docs/archive/visual-deepening-plan.md` 为旧视觉施工稿（已退役）
 
 ---
 

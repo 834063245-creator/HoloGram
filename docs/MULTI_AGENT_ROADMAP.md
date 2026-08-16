@@ -1,6 +1,6 @@
 # 多 Agent 编排推进路线图
 
-> 最后更新：2026-08-04
+> 最后更新：2026-08-16（shell 队列退役段校准；其余里程碑保持原记录）
 > 用途：多 Agent 协调机制的持续推进工作台——目标、已落地、待推进、红线。
 > 配套文档：`docs/archive/MULTI_AGENT_STATUS.md`（多 Agent 系统实现状态，Phase 1-4 通信/持久化/UI）
 
@@ -21,17 +21,14 @@
 
 ## 2. 已落地（2026-08-03，全部构建通过并提交）
 
-### 2.1 资源租约层 v1 — shell 排队可观察化
+### 2.1 Shell 并发：前端队列已退役，Rust BuildLock 接管（2026-08-10）
 
 | 文件 | 内容 |
 |------|------|
-| `src-ui/src/agent/runtime/shell-queue.ts` | FIFO 可观察队列：队列长度/位置/预计等待/头部超时保护（超预期 1.5x 提示"可能卡住"） |
-| `src-ui/src/agent/runtime/cmd-class.ts` | 命令分类（read/write/heavy + wrapper 解包 `bash -c "..."` + 静态表抄 BUILD_TEST_RE / git.rs 安全清单；unknown→write 保守默认） |
-| `agent-builder.ts` 流式分支 | 排队期间 3s 间隔 onProgress 反馈 + 等待 >500ms 结果前缀（模型可见） |
+| `src-ui/src/agent/runtime/queued-shell.ts` | 前台 shell 直连流式执行：`shell:output`/`shell:done` 事件 + 600s 兜底 + abort→`bash_kill` |
+| `src-tauri/src/commands/shell.rs` + `src-tauri/src/utils/build_lock.rs` | BuildLock：构建类命令的资源级原子检查+注册，冲突直接带路径打回（不再排队） |
 
-**验证** ✅ A1 实测：两个子 Agent 并发跑 `ping`，第二个收到 `[shell 队列] ⏱ 排队 29.8s 后执行`，排队期间持续弹反馈。
-
-**v1 决策**：保留全串行（cargo target 锁是资源级共享，串行是安全默认），分类只影响估算。**v2 按资源类型分队列**（见 §4）。
+**演进**：v1 的 `shell-queue.ts` / `cmd-class.ts` 前端 FIFO 队列已于 2026-08-10 删除。串行互斥下沉到 Rust 侧 BuildLock——前端不替 OS/工具做调度，冲突交给 LLM 决策。**v2 按资源类型分队列**仍是未来触发器（见 §4），当前规模不提前支付。
 
 ### 2.2 wait 工具 — 事件驱动等待
 
@@ -94,7 +91,7 @@ ea44dd7 feat(agent): 资源租约层 + wait 工具 + merge 门禁信息报告化
 
 | N 规模 | 触发信号 | 要建的东西 |
 |--------|---------|-----------|
-| 5-8 | 排队成瓶颈 | **租约层 v2**：按资源类型分队列（cmd-class 分类表已备好；只读命令可并行，写/重型串行；unknown 必须串行） |
+| 5-8 | 排队成瓶颈 | **租约层 v2**：按资源类型分队列（旧的 `cmd-class.ts` 已删；届时先重建命令分类表：只读并行、写/重型串行、unknown 串行） |
 | 8-15 | 主 Agent 上下文爆 | **任务 DAG + 调度器**：显式任务依赖（B 需要 A 的输出），只并行无依赖子任务；图引擎辅助拆解（任务依赖图 = 代码依赖图同构） |
 | 15-20 | 通信量失控 | **层级编排 + 可观测性**：谁在等什么、为什么等（一行日志级起步） |
 | 随时 | 静态表不够 | **命令清单动态化**：`git help -a` / `cargo --list` / shell 补全文件解析（zsh/fish），替换静态 50 条 |

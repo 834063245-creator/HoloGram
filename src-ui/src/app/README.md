@@ -1,6 +1,7 @@
-# src/app — 观测台壳（重构进行中）
+# src/app — 观测台壳（P0–P7 已竣工，旧 `ui/` 层逐步退休中）
 
-> **唯一事实来源：`docs/agents/frontend-refactor-handoff.md`**（阶段进度、铁律、下一步清单、契约速查）。
+> **当前约定以本 README 与根目录 `CONVENTIONS.md` / `INVARIANTS.md` 为准；**
+> `docs/archive/frontend-refactor-handoff.md` 是阶段施工史（数字已过期，按下方实测门禁走）。
 
 ## 分期落点与状态
 
@@ -21,4 +22,5 @@
 - 本目录新代码**不 import** `ui/events.ts`（bus 冻结，仅作引擎/图事件传输；chat-core 是编排层，豁免）；UI 状态一律走 zustand store。
 - 样式只使用 `tokens.css` 的 `--obs-*` 变量；`base.css`/`chat.css`/`panels.css` 已删除（P5），样式现分布：`foundation.css` / `shell.css` / `graph-chrome.css` / `chat/chat.css` / `panels/dock-panels/*.css`（按面板拆分，main.ts 按原级联顺序导入）。
 - 不碰 `ui/graph-layout.ts` 的任何布局参数。
-- 门禁：`npm run build` + `npx vitest run`（330）+ `npx biome ci src/app`（零问题）。
+- 门禁：`npm run build` + `npx vitest run`（2026-08-16 实测 1014 passed / 4 skipped）。
+- 格式：改动文件跑 `npx biome check --write <改动文件>`；全仓 501 errors / 338 warnings、`src/app` 14 errors 是当前存量基线，只保证改动文件零新增，不要顺手清历史问题。

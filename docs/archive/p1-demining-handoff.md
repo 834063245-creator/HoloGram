@@ -1,7 +1,7 @@
 # P1 拆弹交接 — 第三批四颗已拆（2026-08-08）
 
 > 读者：下一个接手会话 / Agent。事实来源 = `docs/landmine-map.md`（P1 表护栏列）+ 本文。
-> 上一批：`docs/agents/p0-demining-handoff.md`（P0 十二颗全拆）· `docs/agents/p1-demining-handoff.md`（第二批八颗）。
+> 上一批：`docs/archive/p0-demining-handoff.md`（P0 十二颗全拆）· `docs/archive/p1-demining-handoff.md`（第二批八颗）。
 
 ## 现状一句话
 

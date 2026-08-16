@@ -1,7 +1,7 @@
 # HoloGram — 核心能力与技术架构
 
 > © 2026 Wenbing Jing. MIT License.
-> 最后更新：2026-08-03（对齐 v9.4.4 代码库状态）
+> 最后更新：2026-08-16（按当前 HEAD 与实测基线校准）
 
 HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一个 **Harness Engineering 平台**——将多种成熟软件工程模式（依赖分析、约束治理、变更预演、沙箱隔离、Agent 自主执行等）编排为统一 Harness，并通过内置 Agent 与对外 MCP 服务将这些能力开放给人和 AI。
 
@@ -16,7 +16,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 | **代码图谱分析引擎** | 多语言 AST 解析 → 依赖拓扑图 → 耦合/社区/数据流分析 + 语义向量索引 | ★★★★★ 最完整 |
 | **Agent 自主执行系统** | LLM 驱动的多轮工具调用循环，含多 Agent 协作、上下文压缩、Plan 模式、目标管理 | ★★★★☆ |
 | **Harness Engineering 模式** | 约束治理、变更预演、沙箱隔离、权限引擎、审计日志 | ★★★★☆ |
-| **MCP 对外服务** | 35 个工具通过 JSON-RPC 暴露给任意 MCP 客户端 | ★★★★★ |
+| **MCP 对外服务** | 35 个 schema、默认暴露 34 个工具，通过 JSON-RPC 服务任意 MCP 客户端 | ★★★★★ |
 | **3D 图谱可视化** | GPU 加速的交互式依赖星图（Three.js / WebGL） | ★★★★☆ |
 
 ---
@@ -32,7 +32,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 ┌──────────────────────┴──────────────────────────────┐
 │              Engine (Rust 库 + CLI 二进制)             │
 │  ┌──────────┐  ┌──────────┐  ┌───────────────────┐  │
-│  │ 统一 API  │  │ MCP 服务  │  │  34 工具注册表      │  │
+│  │ 统一 API  │  │ MCP 服务  │  │ 35 schema/34 默认    │  │
 │  │ Engine.rs │  │ JSON-RPC │  │  ToolRegistry     │  │
 │  └────┬─────┘  └────┬─────┘  └────────┬──────────┘  │
 │       └─────────────┴─────────────────┘              │
@@ -45,7 +45,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 │  │ 权限引擎  │ │ 沙箱    │ │ 隔离   │ │ 生命周期   │  │
 │  │Permission│ │ 双层沙箱 │ │worktree │ │Ledger     │  │
 │  └──────────┘ └─────────┘ └────────┘ └───────────┘  │
-│         单一 RPC 入口 (rpc.rs ~101 个方法)             │
+│         单一 RPC 入口 (rpc.rs 133 个方法)              │
 └──────────────────────┬──────────────────────────────┘
                        │ Tauri IPC (invoke)
 ┌──────────────────────┴──────────────────────────────┐
@@ -61,7 +61,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 三层各自独立编译，通过明确边界通信：
 - **Engine** 是纯 Rust 库 + CLI 二进制，零外部运行时进程，可独立 `serve` 作为 MCP 服务器
 - **Tauri Shell** 是进程管理者和权限守卫，不做分析逻辑
-- **前端** 是 Agent 运行时和用户界面，通过单一 `rpc()` 函数与后端通信
+- **前端** 是 Agent 运行时和用户界面，通过 `typedRpc()` / `typedListen()`（`rpc-contract.ts`）与后端通信
 
 ### 2.1 关键运行时事实
 
@@ -257,23 +257,13 @@ NetBenefit = |R|·c_in·(T-1) − |S|·c_out − L·avg_turn_cost
 
 ### 4.9 Agent 工具体系
 
-Agent 可调用的工具分为四大类：
+模型可见工具已收敛为领域工具（`src-ui/src/agent/tools/domains.ts` 的 `DOMAIN_SPECS`）：
 
-**图谱工具**（35 个 schema，默认 MCP 暴露 34 个，`HOLOGRAM_MCP_TOOLS=*` 全量；从 Engine MCP 动态加载）：
-`explore_deps`, `search_symbols`, `get_neighbors`, `trace_impact`, `find_dep_path`, `inspect_symbol`, `get_community`, `cluster_report`, `fragile_modules`, `detect_cycles`, `thread_conflicts`, `coupling_report`, `arch_blindspots`, `preflight_check`, `trace_dataflow`, `list_flows`, `get_flow`, `get_affected_flows`, `resolve_call`, `infer_type`, `find_implementations`, `find_references`, `analyze_project`, `project_health`, `rename_symbol`, `graph_diff`, `validate_project`, `engine_status`, `project_timeline`, `graph_summary`, `check_boundaries`, `find_unused`, `async_edges` 等（另含已弃用的 `symbol_history`，被 `inspect_symbol` 取代）
-
-**编码工具**（前端定义，`tools/coding.ts` + 子目录）：
-- 文件操作：`read_file_content`, `write_file`, `edit_file`, `delete_file`, `move_file`, `glob`, `search_content`
-- Shell：`run_shell`, `bash_output`, `bash_kill`
-- Git：`git_status`, `git_diff`, `git_stage`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_create_branch`, `git_discard`, `git_stash_push/pop`
-- 隔离：`agent_isolation_create/diff/merge/discard/status`
-- 多 Agent：`agent_spawn`, `agent_message/reply/ack/inbox/list`, `agent_merge`, `agent_kill`, `agent_status`
-- 任务：`task_create/update/list`
-- 其他：`web_fetch`, `ask_user`, `read_constraints`, `exit_plan_mode`
-
-**记忆工具**：`memory_store / memory_search / memory_summarize` 等（MemoryManager）
-
-**编排工具**：`agent_spawn`（派发子 Agent）、`skill`（加载执行技能）
+- **领域工具**：`fs / shell / git / search / web / agent / task / memory / browser / desktop / graph / ops / lsp`，加常驻 `ask_user / Skill / wait / enter_plan_mode / exit_plan_mode`。
+- **图谱三域**：`graph`（24 个只读动作：symbols/neighbors/impact/preflight/cycles/…）、`ops`（analyze/validate/health/status/timeline/rename/import_scip）、`lsp`（resolve_call/infer_type/implementations/references）。底层仍是引擎 35 schema / 默认 34 的 MCP 工具。
+- **旧细粒度名**（`search_symbols`、`run_shell`、`write_file`、`git_*`、`agent_spawn` 等）保留在 `ToolRegistry` 但 `hide()`；模型调用由 `retireRedirect` 拦截并返回 `[已淘汰] → 领域动作` 重定向。内部代码/测试仍可直调。
+- **新工具必须 `defineTool` + zod v4**：一个 schema 同时产出 JSON Schema、运行时校验和 `z.infer` 类型化参数；meta key（`_forceGate` / `_callId` / `_agent_id`）经 `.passthrough()` 透传。
+- 新增领域动作须同步 `DOMAIN_SPECS` + `collectHiddenToolNames()` + 测试 + `AGENTS.md`。
 
 ---
 
@@ -355,7 +345,7 @@ Agent 可调用的工具分为四大类：
 
 通过 `LanguageAdapter` trait 抽象，支持动态语法加载：
 
-26+ 种语言通过 tree-sitter 静态链接：Python, TypeScript, JavaScript, Go, Rust, Java, C, C++, Ruby, Lua, C#, PHP, Swift, Dart, Scala, OCaml, Haskell, R, Nix, Bash, JSON, HTML, CSS, YAML, Zig, Elixir, Erlang
+27 种语言通过 tree-sitter 静态链接（其中 18 种有专用 .scm 结构查询）：Python, TypeScript, JavaScript, Go, Rust, Java, C, C++, Ruby, Lua, C#, PHP, Swift, Dart, Scala, OCaml, Haskell, R, Nix, Bash, JSON, HTML, CSS, YAML, Zig, Elixir, Erlang
 
 动态语法通过 `grammar_loader.rs`（`engine::GRAMMAR_LOADER`）+ `libloading` 加载 DLL，无需重新编译即可扩展语言。`engine_supported_extensions()` 始终与已装 DLL 同步。
 
@@ -405,16 +395,13 @@ Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外
 
 | 分类 | 工具 |
 |------|------|
-| **图导航** | `explore_deps`（NL 聚合查询，首选项）, `search_symbols`, `get_neighbors`, `inspect_symbol`, `graph_summary` |
-| **影响分析** | `trace_impact`, `find_dep_path`, `preflight_check` |
-| **社区** | `get_community`, `cluster_report` |
-| **架构分析** | `fragile_modules`, `detect_cycles`, `thread_conflicts`, `coupling_report`, `arch_blindspots`, `check_boundaries`, `find_unused`, `policy_check` |
+| **图导航** | `explore_deps`（NL 聚合查询，首选项）, `search_symbols`, `get_neighbors`, `inspect_symbol`, `find_dep_path`, `graph_summary` |
+| **社区/结构** | `get_community`, `cluster_report`, `grpc_services` |
+| **影响分析** | `trace_impact`, `preflight_check`, `graph_diff` |
+| **架构分析** | `fragile_modules`, `detect_cycles`, `thread_conflicts`, `coupling_report`, `arch_blindspots`, `check_boundaries`, `find_unused` |
 | **数据流（语法级启发式）** | `trace_dataflow`, `async_edges`, `list_flows`, `get_flow`, `get_affected_flows` |
-| **语义搜索** | 非独立 MCP 工具——挂在 Tauri `search_code` 的 `vector_hits` 字段（MiniLM 向量 + `vector_backend` 标识） |
 | **LSP** | `resolve_call`, `infer_type`, `find_implementations`, `find_references` |
-| **操作** | `analyze_project`, `graph_diff`, `validate_project`, `project_health`, `rename_symbol`, `engine_status` |
-| **时序** | `project_timeline` |
-| **检查** | `run_check`, `run_health` |
+| **操作/时序** | `analyze_project`, `validate_project`, `project_health`, `rename_symbol`, `import_scip`, `project_timeline`, `engine_status` |
 
 ### 6.3 降级策略
 
@@ -431,11 +418,11 @@ Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外
 
 ### 7.1 RPC 单一入口
 
-`rpc.rs` 一个 `#[tauri::command] rpc(method, params)` + 101 臂 match 替代了 103 个独立 command。分类：Engine 转发(2)、图(5)、Git(16)、文件系统(11)、搜索(2)、Web(2)、浏览器(12)、Shell(6)、编辑器(1)、身份/凭证(5)、Agent 隔离(6)、外部进程(6)、遗留 hologram(3)、工作区(3)、会话(2)、约束(2)、数据流(3)、Aura 记忆(7)、PTY(4)、LSP(3)。
+`rpc.rs` 一个 `#[tauri::command] rpc(method, params)` + 133 臂 match 是全部前端能力的单一 IPC 入口。分类（由 `scripts/gen-rpc-contract-md.cjs` 实测生成）：Engine 调度(2)、Graph(5)、Git(16)、文件系统(12)、搜索(2)、Web(2)、CDP 浏览器控制(39，含 desktop 2)、Shell(10，含协议桥 3)、编辑器(1)、身份认证/权限(5)、Agent 隔离(6)、外部服务(6)、Hologram 遗留(3)、工作区(3)、会话持久化(2)、约束(2)、数据流(3)、Aura 记忆(7)、PTY(4)、LSP(3)。
 
 ### 7.2 ResourceLedger（统一生命周期）
 
-`lifecycle.rs`：`LifecycleService` trait + `ResourceLedger` 中央注册表。注册的服务：UnityEvent、BgJobs、Mcp、Unity、Pty、Lsp、Aura、MemoryBundle、Logging 等 10 个。退出时按注册顺序 drain，每服务带截止时间（Clean / Forced / Failed / NotApplicable 状态）。替代 main.rs Destroyed 里分散的清理逻辑 + `process::exit(0)`。
+`lifecycle.rs`：`LifecycleService` trait + `ResourceLedger` 中央注册表。注册的服务：UnityEvent、BgJobs、Mcp、Unity、Pty、Lsp、Aura、MemoryBundle、Logging 共 9 个。退出时按注册顺序 drain，每服务带截止时间（Clean / Forced / Failed / NotApplicable 状态）。替代 main.rs Destroyed 里分散的清理逻辑 + `process::exit(0)`。
 
 ### 7.3 凭证与外部进程
 
@@ -452,7 +439,7 @@ Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外
 
 | 依赖 | 用途 |
 |------|------|
-| `tree-sitter` + 26 语言语法 | 多语言 AST 解析 |
+| `tree-sitter` + 27 语言语法 | 多语言 AST 解析（18 种专用结构查询 + 通用兜底） |
 | `libloading` | 动态语法 DLL + Aura SDK FFI 加载 |
 | `rusqlite` (bundled) | SQLite 持久化 + FTS5 全文搜索 |
 | `parking_lot` | 高性能 RwLock |
@@ -488,10 +475,10 @@ Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外
 | `three` / `@types/three` | 3D 图谱渲染（WebGL） |
 | `@webgpu/types` | WebGPU 类型定义（布局计算） |
 | `monaco-editor` | 代码编辑器（lazy-loaded） |
-| `@xterm/xterm` + addons | 内嵌终端 |
-| `marked` / `react-markdown` / `remark-gfm` | Markdown 渲染 |
-| `highlight.js` / `dompurify` | 代码高亮 / XSS 防护 |
-| `gsap` | 动画 |
+| `@fontsource/*` | 自托管字体（Fraunces / JetBrains Mono / Noto / LXGW） |
+| `react-markdown` + `remark-gfm` | Markdown 渲染（marked/DOMPurify 路径已删除） |
+| `highlight.js` | 代码高亮 |
+| `zod` 4.x | 工具 schema 单一事实源（`defineTool`） |
 | `gpt-tokenizer` | token 计数（压缩成本模型） |
 | `@tanstack/react-virtual` | 虚拟列表（消息长列表） |
 | `vite` 6.x | 构建工具 |
@@ -522,12 +509,12 @@ Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外
 ## 9. 项目结构
 
 ```
-HoloGramHG/
+HoloGram/
 ├── engine/                      # 代码图谱分析引擎 (Rust 库 + CLI)
 │   ├── src/
 │   │   ├── engine/              # 统一 API (Engine 结构体 + 状态机 + GRAMMAR_LOADER + watcher + pipeline)
 │   │   ├── graph/               # 图数据模型 (Node, Edge, Graph, merge, query)
-│   │   ├── adapter/             # 语言适配器 (LanguageAdapter trait + 26 语言)
+│   │   ├── adapter/             # 语言适配器 (LanguageAdapter trait + 27 静态语法 + 动态加载)
 │   │   ├── analysis/            # 分析模块 (coupling, cycles, dataflow, fragility, blindspots, flows, explore)
 │   │   │   ├── framework_routes/frameworks/  # 24 个框架路由检测
 │   │   │   ├── di_reflection/   # DI/反射检测 (多语言)
@@ -539,7 +526,7 @@ HoloGramHG/
 │   │   ├── storage/             # 存储层 (MemoryIndex CSR + SQLite)
 │   │   │   └── incremental.rs   # 增量更新器
 │   │   ├── vector/              # 语义向量索引 (minilm ONNX + ngram + wordpiece + usearch)
-│   │   ├── tools/               # MCP 工具注册表 + 处理器 (34 工具 + response/staleness)
+│   │   ├── tools/               # MCP 工具注册表 + 处理器 (35 schema / 默认暴露 34)
 │   │   ├── mcp.rs               # MCP JSON-RPC 服务端
 │   │   ├── lsp_manager.rs       # 原生 LSP 管理 (手写帧协议)
 │   │   ├── stress.rs            # 压力测试合成项目生成器
@@ -563,7 +550,7 @@ HoloGramHG/
 │   │   ├── pty_manager.rs       # PTY 终端管理
 │   │   ├── unity_manager.rs     # Unity 集成
 │   │   ├── audit.rs             # 审计日志
-│   │   ├── rpc.rs               # 单一 RPC 入口 (101 个方法)
+│   │   ├── rpc.rs               # 单一 RPC 入口 (133 个方法)
 │   │   └── main.rs              # Tauri 应用入口 (模块声明权威清单)
 │   └── Cargo.toml
 │
@@ -591,15 +578,15 @@ HoloGramHG/
 │   │   │   ├── react/           # React 组件 (16 文件: AgentsPanel/ChatMessages/…)
 │   │   │   ├── graph*.ts        # Three.js 星图渲染管线 (scene/renderers/shaders/layout)
 │   │   │   ├── events.ts        # EventBus (冻结——新 app 代码禁 import)
-│   │   │   └── *-store.ts       # Zustand stores (per-panel Map registry 模式)
+│   │   │   └── *-store.ts       # Zustand stores (createScopedStore 注册表模式)
 │   │   ├── workspace.ts        # Workspace 统一状态容器 (替代 18+ 全局变量)
 │   │   ├── bridge.ts           # Tauri IPC 桥接
 │   │   ├── lifecycle/          # WorkspaceStateMachine + timeout
 │   │   └── settings.ts         # 设置与凭证
 │   └── package.json
 │
-├── docs/                        # 活动文档 (agents/ 规则 + adr/ + 设计文档)
-├── docs_archive/                # 已归档 (ARCHITECTURE_PLAN.md, SPEC_V4.md 等)
+├── docs/                        # 活动文档（入口 docs/README.md；agents/adr/design/plans/research）
+├── docs/archive/                # 已竣工施工稿与历史设计，勿作现状依据
 ├── hologram.constraints.yaml   # 约束配置
 ├── ARCHITECTURE.md             # 本文档
 ├── INVARIANTS.md               # 踩碎必炸的规则 (改 ui/agent 前必读)
@@ -620,7 +607,7 @@ Engine 编译为独立的 `hologram-engine.exe`，既可作为 Tauri 的子进�
 
 ### 10.2 为什么 Tauri 只做转发
 
-Tauri Shell 的 `rpc.rs` 有 101 个方法但几乎不含分析逻辑。所有图谱操作转发给 Engine，Shell 专注于进程管理、权限削决、沙箱隔离。这种分离使得：
+Tauri Shell 的 `rpc.rs` 有 133 个方法但几乎不含分析逻辑。所有图谱操作转发给 Engine，Shell 专注于进程管理、权限削决、沙箱隔离。这种分离使得：
 - 权限引擎在 Engine 不可用时仍然生效
 - Engine 的测试可以完全不涉及 Tauri
 - 非 Tauri 的 Engine 消费者（纯 MCP 客户端）也能获得完整图谱能力
@@ -632,7 +619,7 @@ Agent 循环在 TypeScript 中运行（而非 Rust），因为：
 - UI 更新与 Agent 循环同线程，避免跨语言状态同步
 - 工具调用的 UI 反馈（权限卡片、进度条）天然低延迟
 
-后端通过 `rpc()` 单入口提供所有能力，前端通过 `ToolRegistry` 动态组装工具列表（图谱工具从 MCP `tools/list` 动态加载，编码工具静态注册）。
+后端通过 `typedRpc()` 单一契约入口提供所有能力，前端通过 `ToolRegistry` 动态组装工具列表（图谱工具从 MCP `tools/list` 动态加载，编码/领域工具静态注册）。
 
 ### 10.4 为什么用 git worktree 做 Agent 隔离
 
@@ -642,16 +629,16 @@ Agent 循环在 TypeScript 中运行（而非 Rust），因为：
 - 可审计：worktree 的每个 commit 都是审计点
 - 冲突安全：合并失败时返回 diff，不破坏主仓库状态
 
-### 10.5 为什么状态全部走 Zustand store + Map registry
+### 10.5 为什么状态全部走 Zustand store + createScopedStore 注册表
 
-（INVARIANTS.md #1）模块顶层全局变量 = 跨面板串流。每个 store 文件遵循固定模式：
+（INVARIANTS.md #1）模块顶层全局变量 = 跨面板串流。面板级 store（messages/session/panel/input）统一走 `createScopedStore`（`src-ui/src/ui/scoped-store.ts`）：
 
 ```
-const stores = new Map<string, StoreApi>()
-export function getXxxStore(id?: string): StoreApi
+const scoped = createScopedStore('__hologram_xxx_stores__', createImpl);
+export const getXxxStore = scoped.getStore; // 按 storeId 取实例
 ```
 
-新状态必须走 Map registry，否则多面板/多会话共享全局状态必出 bug（已炸 6 次）。
+app 级单例（shell/dock/overlay）用普通 `create()`。新状态必须走注册表或单例 store，否则多面板/多会话共享全局状态必出 bug（已炸 6 次）。
 
 ### 10.6 为什么 ui/events.ts 冻结
 
@@ -667,11 +654,11 @@ EventBus 只覆盖不到一半通信，存在 5 个孤儿 emit、三层通信混
 
 | 层 | 命令 | 规模 |
 |----|------|------|
-| Engine | `cd engine && cargo test` | 658 用例（lib 630 + bin 27 + 集成 1；状态机/取消/增量/向量/盲点合成/图合并） |
-| Tauri Shell | `cd src-tauri && cargo test` | 259 用例（245 主测试 + 14 集成；权限/生命周期/隔离） |
-| 前端 | `cd src-ui && npm test` | 921 用例（vitest + jsdom：生命周期/多 Agent/压缩管线/消息渲染） |
-| 前端构建 | `cd src-ui && npm run build` | tsc --noEmit 零错误 |
-| 引擎构建 | `cd engine && cargo build` | 零警告（CI -D warnings 铁律） |
-| 全量 | `cargo tauri build` | 发布构建 |
+| Engine | `cd engine && cargo test` | 698 用例（lib 670 + bin 27 + doc 1；状态机/取消/增量/向量/盲点合成/图合并） |
+| Tauri Shell | `cd src-tauri && cargo test` | 309 用例（bin 295 + 集成 14；权限/生命周期/隔离） |
+| 前端 | `cd src-ui && npx vitest run` | 1018 用例（92 文件；1014 passed / 4 skipped） |
+| 前端构建 | `cd src-ui && npm run build` | tsc --noEmit + vite build 零错误 |
+| 引擎构建 | `cd engine && cargo build` | CI 强制 -D warnings 零警告 |
+| 全量 | `cd src-tauri && cargo tauri build` | 发布构建 |
 
 CI（`.github/workflows/ci.yml`）只做编译+测试，不可修改。

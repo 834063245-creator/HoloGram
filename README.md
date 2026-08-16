@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" /></a>
   <a href="https://whyihaveyou.github.io/dsh-suite/"><img src="https://img.shields.io/badge/featured%20on-dsh--suite-4d6bfe" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange&style=flat-square" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-1600%2B-brightgreen?style=flat-square" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-2000%2B-brightgreen?style=flat-square" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20Linux-blue?style=flat-square" /></a>
 </p>
 
@@ -18,7 +18,7 @@
 
 ## 定位
 
-HoloGram 把代码库编译成一张统一 IR 依赖图（节点=符号/函数/类/模块，边=调用/继承/读写/时序），并通过 MCP 协议向 AI Agent 暴露 34 个图查询工具。
+HoloGram 把代码库编译成一张统一 IR 依赖图（节点=符号/函数/类/模块，边=调用/继承/读写/时序），并通过 MCP 协议向 AI Agent 暴露 34 个图查询工具（注册表 35 个 schema，`symbol_history` 为 legacy 不默认暴露）。
 
 **核心主张：依赖推理应当是确定性的，而不是猜的。**
 
@@ -115,7 +115,7 @@ dsh web
 
 ### Agent 运行时（桌面应用内置）
 
-- **领域工具收敛**：`fs` `shell` `git` `search` `web` `agent` `task` `memory` 八个领域动作，旧工具名在模型调用路径直接淘汰
+- **领域工具收敛**：`fs` `shell` `git` `search` `web` `agent` `task` `memory` `browser` `desktop` `graph` `ops` `lsp` 十二个领域工具，旧工具名在模型调用路径直接淘汰
 - **每轮 schema 注入全量**：tools 段逐字节稳定，DeepSeek 前缀缓存跨消息命中（可选 `visibleToolsLimit > 0` 回退打分子集）
 - **计划模式**：探索 → 计划 → 审批 → 执行，图引擎自动注入影响面
 - **Goal 模式**：持久化目标状态，跨会话恢复，普通对话与目标现场完全隔离
@@ -130,7 +130,7 @@ dsh web
   <img src="assets/screenshots/03.png" width="32%" />
 </p>
 
-3D 星图（Three.js + WebGPU）· Monaco 编辑器（点节点即开源码）· 数据流面板 · 时间轴面板 · 虚拟列表聊天（万条消息流畅）· 多厂商 LLM（Anthropic / OpenAI 兼容 / DeepSeek / GLM，含 reasoning_effort 适配）
+3D 星图（Three.js WebGL）· Monaco 编辑器（点节点即开源码）· 数据流面板 · 时间轴面板 · 虚拟列表聊天（万条消息流畅）· 多厂商 LLM（Anthropic / OpenAI 兼容 / DeepSeek / GLM，含 reasoning_effort 适配）
 
 ## 架构
 
@@ -147,7 +147,7 @@ dsh web
 │  engine (Rust，单二进制)                          │
 │  tree-sitter AST → 并行合并管线 → GraphStore      │
 │  MemoryIndex (CSR) + SQLite + FTS5 + 语义向量     │
-│  33 MCP 工具 · stdio / CLI 双入口                  │
+│  34 默认 MCP 工具（35 schema）· stdio / CLI 双入口 │
 └───────────────────────────────────────────────────┘
 ```
 
@@ -157,17 +157,17 @@ dsh web
 | 壳 | `src-tauri/` | Tauri 2 · 权限 · 沙箱 · 隔离 · 凭据加密 |
 | 前端 | `src-ui/` | 星图渲染 · Agent 运行时 · 多 Agent 编排 |
 
-引擎自举验证：HoloGram 用自己的引擎分析自己的代码库（3965 节点 / 5328 边）。
+引擎自举验证：HoloGram 用自己的引擎分析自己的代码库（当前图快照 4963 节点 / 9741 边）。
 
 ## 语言支持
 
-18 种语言经手工调校的查询式结构抽取（深度建模）：Python · TypeScript/JavaScript · Rust · Go · Java · C/C++ · C# · Ruby · PHP · Swift · Dart · Scala · Zig · Elixir · Lua · Bash · R
+27 种 tree-sitter 语法静态链接；其中 18 种经手工调校的查询式结构抽取（深度建模）：Python · TypeScript/JavaScript · Rust · Go · Java · C/C++ · C# · Ruby · PHP · Swift · Dart · Scala · Zig · Elixir · Lua · Bash · R
 
 其余语言（OCaml · Haskell · Nix · JSON · HTML · CSS · YAML · Erlang 等）经 tree-sitter grammar 兜底；Kotlin · Markdown · TOML 动态加载。跨语言调用（子进程 / HTTP / FFI）以合成边标记为运行时桥接点。
 
 ## 工程事实
 
-- 测试：1640+（engine 643 · 壳 240 · 前端 757），三端独立验证
+- 测试：2025 用例（engine 698 · 壳 309 · 前端 1018，其中 4 skip），三端独立验证（2026-08-16 实测）
 - 实测（Linux kernel，R10 后）：全量分析 1,770s 全程跑完，RSS 646MB；快照写入 2.44GB / 56.3s
 - 并行解析 200 文件/批，边去重 625×，增量更新由 watcher 驱动（保存即刷新）
 - 已知盲区以"诚实标记"处理：eval / 动态代码标记为不可达，动态 import 标记动态站点，不假装知道运行时才知道的事
@@ -185,12 +185,12 @@ cd src-tauri && cargo tauri build
 ## 开发
 
 ```bash
-cd engine && cargo test        # 643 引擎测试
-cd src-tauri && cargo test     # 240 壳测试
-cd src-ui && npx vitest run    # 757 前端测试
+cd engine && cargo test        # 698 引擎测试
+cd src-tauri && cargo test     # 309 壳测试
+cd src-ui && npx vitest run    # 1018 前端测试（1014 passed / 4 skipped）
 ```
 
-项目理解与工作纪律见 [`AGENTS.md`](AGENTS.md)；架构与交接文档见 [`docs/`](docs/)（`docs/archive/` 为已竣工施工稿，勿作现状依据）。
+项目理解与工作纪律见 [`AGENTS.md`](AGENTS.md)；文档总索引见 [`docs/README.md`](docs/README.md)（`docs/archive/` 为已竣工施工稿，勿作现状依据）。
 
 ## 许可
 

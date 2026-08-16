@@ -1,122 +1,157 @@
-# Agent 项目理解 — HoloGram
+# HoloGram — Agent 项目手册
 
-> 生成：2026-06-18 · 更新：2026-08-15 · 供 Cursor/Claude 等 Agent 快速上手
-> 架构与现状见 `docs/`（agents/frontend-refactor-handoff.md = 前端重构唯一事实来源；architecture-refactor-spec.md 为历史 spec，已被前者接管）；多 Agent 路线图见 docs/MULTI_AGENT_ROADMAP.md
-> **最高纪律：`docs/adr/project-constitution.md` 四条架构约定（类型边界/单一权威源/异步纪律/错误不静默）——新代码违反即打回；已知违例见 `docs/landmine-map.md`**
-> 🧭 接续任务：Browser CDP 套件 HEAD `1593973` + 第五批改动未提交；下一窗口先读 `docs/plans/browser-cdp-suite-review-round2.md` §8（第五批已落地：cookies/profile/proxy/多账号 slot 切换）。
+> 生成：2026-06-18 · 更新：2026-08-16（按当前 HEAD 5bb3bd7 与实测基线校准）
+> 本文件是项目级静态注入文档：Codex 读 `AGENTS.md`，Claude Code 读 `CLAUDE.md`，内置 HoloGram Agent 把 `CLAUDE.md` 注入 system prompt。
+> **编码规则不是本文件的正文，而是 `CONVENTIONS.md` + `INVARIANTS.md`；本文件负责让规则真正被执行。**
 
-## 一句话
+## 0. 开工前强制加载（不可跳过）
 
-把代码库变成可对话的 3D 依赖星图——27 语言统一 IR（20 种带专用 .scm 查询），33 个 MCP 工具直查图，不是让 LLM 猜源码。
+1. 先读根目录 `CONVENTIONS.md`（当前编码约定，以代码现状为准）。
+2. 涉及 `src-ui/src/ui/**`、`src-ui/src/agent/**` 或 Rust 接缝时，读 `INVARIANTS.md`（已炸过的雷）。
+3. 规则优先级：`docs/adr/project-constitution.md`（四条架构约定）> `INVARIANTS.md` > `CONVENTIONS.md` > 本文件 > 历史 plan/handoff。
+4. 改高 fan-in 文件前先问图（内置 Agent：`graph(preflight|impact)`；外部 MCP：`preflight_check` / `trace_impact`）。
+5. 规则与代码现状冲突时：以代码为准，更新规则文档，不要盲改；无法判断就停下来问用户。
 
-## 目录结构
+## 1. 一句话
+
+把代码库变成可对话的 3D 依赖星图，并内置多 Agent 编码工作台——用确定性的图查询替代 LLM 逐文件猜源码。
+
+## 2. 目录结构（当前实际）
 
 ```
-HoloGramHG/
-├── engine/          Rust 分析引擎（33 MCP 工具）
-├── src-tauri/       Tauri 2 壳（命令桥接 + 安全沙箱）
-├── src-ui/          TypeScript 前端（Three.js + Agent + Monaco；观测台重构 P0–P6 + 视觉深化 P7 全系列已竣工）
-├── tests/           遗留 Python 测试（引擎已 Rust 化，部分仍可用）
-├── assets/          图标、UI 原型
-├── docs/            架构与交接文档（agents/frontend-refactor-handoff.md = 前端重构事实来源；archive/ = 已竣工施工稿与历史设计，勿作现状依据）
-├── CLAUDE.md        Agent 工作指令
+HoloGram/
+├── engine/            Rust 分析引擎（27 静态 tree-sitter 语法；34 默认 MCP 工具）
+├── src-tauri/         Tauri 2 桌面壳（rpc.rs 单一 IPC 入口 + 权限沙箱 + 命令实现）
+├── src-ui/            TypeScript 前端（React 19 + Three.js + Monaco + Zustand 5）
+│   ├── src/app/       新观测台壳（单 React 根；新 UI 落这里）
+│   ├── src/ui/        星图 scene + 领域 stores + 旧 React 岛
+│   └── src/agent/     Agent 运行时、工具层、多 Agent、goal/plan
+├── docs/              架构/ADR/交接/研究；archive/ 是历史，勿作现状依据
+├── assets/            图标、UI 原型
+├── grammars/          tree-sitter 动态语法产物（Kotlin/Markdown/TOML）
+├── CLAUDE.md          内置 Agent 系统提示 + Claude Code 项目指令
+├── AGENTS.md          本文件（Codex/OpenAI 静态注入）
+├── CONVENTIONS.md     编码约定（开工前必读）
+├── INVARIANTS.md      踩碎必炸的雷（改动前必读）
+├── CONTEXT.md         应用级统一词汇（kind/status 重载字段带簇前缀）
+└── ARCHITECTURE.md    系统架构总览
 ```
 
-> 注：PROJECT.md / BUGS.md 已移除（2026-07 归档删除），现状以 docs/ 与 docs/MULTI_AGENT_ROADMAP.md 为准；已竣工的执行方案、窗口交接稿、历史设计统一归档在 `docs/archive/`（2026-08-09 整理）。
+> `tests/` 根目录已不存在（旧 Python 测试已随引擎 Rust 化移除），不要以旧文档里的 `tests/` 路径为准。
 
-### `.hologram/` 运行时目录结构
+### `.hologram/` 运行时目录
 
 ```
 .hologram/
-├── agents/{agentId}/inbox.json   跨 Agent 消息持久化（JsonMessageStore）
-├── taskboard/{sessionId}.json     会话级 TaskBoard（每个会话独立）
-├── discoveries/{sessionId}.json   会话级 DiscoveryBoard（每个会话独立）
-├── goals/{id}/                    Goal 管理器状态
-├── permissions.json               权限规则（项目级）
-└── memory/                        Agent 记忆
+├── agents/{agentId}/             Agent 会话槽 + inbox.json（JsonMessageStore）
+├── taskboard/{sessionId}.json    会话级 TaskBoard
+├── discoveries/{sessionId}.json  会话级 DiscoveryBoard
+├── goals/{id}/                   Goal 状态（goal.json/session.json/index.json）
+├── permissions.json              项目级权限规则
+├── hologram.db + FTS5            图存储/全文索引
+├── baseline.json                 约束基线
+├── audit.jsonl                   审计日志
+├── vectors.slots.json / vectors.usearch   语义向量索引
+└── logs/                         运行日志
 ```
 
-## 数据流
+## 3. 数据流
 
 ```mermaid
 flowchart LR
-  UI[src-ui Three.js + Agent] -->|invoke| Tauri[src-tauri]
-  Tauri -->|TCP :9777| Engine[engine/]
+  UI[src-ui React + Agent] -->|typedRpc invoke| Tauri[src-tauri rpc.rs]
+  Tauri -->|TCP 127.0.0.1:9777| Engine[engine/]
   Engine -->|tree-sitter| AST[27 语言 AST]
-  Engine -->|GraphStore| DB[(hologram.db + FTS5)]
-  MCP[Cursor MCP] -->|stdio serve| Engine
+  Engine -->|GraphStore| DB[(.hologram/hologram.db + FTS5)]
+  MCP[Cursor / Claude Code] -->|stdio serve| Engine
 ```
 
-## 分析能力栈
+## 4. 引擎能力与工具面（2026-08-16 实测）
 
-| 版本 | 能力 | 关键模块 |
-|------|------|----------|
-| V1 | 节点/边/社区/BFS/路径/diff | `graph/`, `community/` |
-| V2 | L1-L4 耦合、数据流环、线程冲突、盲点 | `analysis/` |
-| V3 | L5-L1 破坏信号、YAML 约束、变更简报 | `routing/` |
-| v4+ | 框架路由(24)、动态调度合成、NL explore | `framework_routes`, `dynamic_dispatch`, `explore` |
+- **语言**：27 种 tree-sitter 语法静态链接；18 种有专用结构查询（`.scm`，`engine/queries/` 共 38 个查询文件），其余走通用兜底；Kotlin / Markdown / TOML 动态加载。
+- **引擎 MCP 工具**：35 个 schema，默认激活 34 个（`symbol_history` 为 legacy 不默认激活）。外部 MCP 客户端（Cursor/Claude Code）仍见细粒度工具名。
+- **内置 Agent 领域工具**（模型可见）：`fs / shell / git / search / web / agent / task / memory / browser / desktop / graph / ops / lsp` + 常驻 `ask_user / Skill / wait / enter_plan_mode / exit_plan_mode`。
+  - `graph`：symbols / neighbors / impact / preflight / cycles / coupling / fragile / flows / dataflow 等 24 个只读动作——**改代码前先问图**。
+  - `ops`：analyze / validate / health / status / timeline / rename / import_scip。
+  - `lsp`：resolve_call / infer_type / implementations / references。
+  - 旧细粒度名（`search_symbols`、`run_shell`、`write_file`、`git_*`、`agent_spawn` 等）保留但 `hide()`；模型调用会被 `retireRedirect` 拦截并给 `[已淘汰]` 重定向。内部代码/测试仍可直接用旧名。
 
-## Agent 操作手册
+## 5. 快速操作（Agent 视角）
 
-1. **探索代码：** 优先 MCP `hologram_explore`（自然语言 query）
-2. **高风险模块：** `hologram_fragile` · `hologram_cycle`
-3. **改引擎：** `cd engine && cargo test --lib`
-4. **改前端：** `cd src-ui && npx tsc --noEmit`
-5. **打包：** `cargo tauri build`（前端改动需先 `npm run build`）
+| 任务 | 命令/工具 |
+|---|---|
+| 探索代码结构 | 内置 `graph(symbols|explore|neighbors)`；外部 MCP `explore_deps` / `search_symbols` |
+| 改文件前影响面 | 内置 `graph(action:'preflight', path:[...])`；外部 MCP `preflight_check` |
+| 高风险模块 | `graph(fragile)` / `graph(cycles)` / `graph(blindspots)` |
+| 改引擎 | `cd engine && cargo test`（快验 `cargo build`） |
+| 改前端 | `cd src-ui && npm run build` + `npx vitest run` |
+| 改壳 | `cd src-tauri && cargo test`（快验 `cargo check`） |
+| 桌面打包 | `cd src-tauri && cargo tauri build`（自动先跑前端构建） |
+| 前端格式 | `cd src-ui && npx biome check --write <改动文件>` |
 
-### 子 Agent 工具集（A2）
+## 6. 前端分层铁律（详情见 CONVENTIONS.md）
 
-| 工具 | 用途 |
-|------|------|
-| `agent_spawn` | 派发子 Agent（fork/fresh 模式，支持异步） |
-| `agent_kill` | 停止运行中的子 Agent（幂等） |
-| `agent_status` | 运行中子 Agent 可观测状态（当前工具/等待时长/最后事件，>120s 标疑似卡死） |
-| `agent_merge` | 合并异步子 Agent 的 worktree |
-| `agent_isolation_create` | 创建隔离 worktree |
-| `agent_isolation_diff` | 查看隔离 worktree 的 diff |
-| `agent_isolation_merge` | 合并隔离 worktree |
-| `agent_isolation_discard` | 丢弃隔离 worktree |
+- `src/app/` 新代码**不新增** `import .../ui/events`；UI 状态走 zustand store。`ui/events.ts` 是冻结的旧总线（存量 ~20 个 import），不再新增 BusEvents 事件。
+- 面板级状态用 `createScopedStore` 注册表（`messages/session/panel/input` 四件套 + `chat-store` 聚合）；app 级单例用 `shell-store / dock-store / overlay-store`。
+- 聊天消息原地 mutate 后必须 `touchMessage / touchMessageContaining`——裸 `bump()` 或展开数组会静默卡 UI（`INVARIANTS #1/#2/#3`）。
+- 冻结文件：`ui/chat-session.ts`、`ui/chat-stream.ts`、`ui/part-mutator.ts`、`agent/execution-state.ts`。
+- 样式只写 `--obs-*` token；不引入新 CSS 方案；DOM 所有权按层划分（React UI 不自建游离 DOM，星图 scene / Monaco 宿主是既有 imperative-DOM 所有者）。
 
-子 Agent ID 命名空间：
-- 模型可见 ID：`sub-{timestamp}-{random}` — 用于 board/bus/UI
-- 池内部 ID：`subagent-{timestamp}-{random}` — 不暴露给模型
-- 隔离 worktree ID：`agent-{timestamp}-{random}` — 用于 worktree 路径映射
+## 7. RPC 与工具契约（详情见 CONVENTIONS.md + INVARIANTS #7-#10）
 
-### 多 Agent 并发纪律（2026-08-13 加固，事故报告 docs/agents/platform-bugs-2026-08-13.md）
+- 前端一律 `typedRpc / typedListen`（`src-ui/src/rpc-contract.ts`），参数键 snake_case，返回 string（JSON 用 `parseJson`）。裸 `rpc` 只允许两个受权出口：`rpc-contract.ts` 与 `agent/tool.ts`，biome 禁新增。
+- 新增模型工具必须 `defineTool` + zod v4：一个 schema 产出 JSON Schema / 运行时校验 / 类型化参数。内部 `.passthrough()` 透传 meta key；`_forceGate` 要声明、`_callId/_agent_id` 不声明。
+- 工具 execute 必须全量透传 args——重建参数对象会丢掉 `_agent_id`，fork 子 Agent 会直写主仓（2026-08-13 事故）。
+- 新增领域动作同步 `tools/domains.ts` 的 `DOMAIN_SPECS` + `collectHiddenToolNames()` + 对应测试 + 本文件。
+- 新增 RPC：`src-tauri/src/rpc.rs` 分支 + 前端 `RpcContract`；`docs/agents/frontend-rpc-contract.md` 由 `scripts/gen-rpc-contract-md.cjs` 生成，勿手改。
 
-- **`_agent_id` 是 fork 子 Agent 的 worktree 路由命根子**：executor 注入后，工具 execute 必须全量透传 args（`edit_file`/`rename_file` 曾因重建参数对象丢掉它 → fork 的 edit 直写主仓）。新增写类工具禁止重建参数对象。
-- **子 Agent 注册表必须 `convergeRegistry(subTools)` 重建领域工具**：克隆来的 `fs`/`shell` 闭包绑父注册表，不重建则所有权包装、构建禁令、plan 只读全部被领域工具路径绕过。
-- **文件所有权**（file-ownership.ts）覆盖 fresh 与隔离降级的 fork；claim 键做斜杠归一。fork 正常有 worktree 时不启用（不同 worktree 改同路径文件是合法并行）。
-- **merge 据实三原则**：无产出（「没有变更需要合并」）不报 ✅；清理失败 ≠ 合并失败（commit 已落主仓时返回 Ok+告警）；冲突保留 worktree（diff 有 32KB 截断，worktree 是全量现场）。`agent_merge` 进程内串行。
-- **edit_file 并发安全在 Rust 临界区**（`editor.rs checked_write_atomic`，进程级锁 + fail-closed 重读校验）——TS 侧不得假设「工具返回成功 = 落盘」之外的时序语义。
-- **TTL 清理不得销毁无记录的工作**：discard 前抓 diff 回 board，抓不到则保留现场并通知父 Agent 模型上下文（bus notification），不只发 UI Notice。
+## 8. 多 Agent 并发纪律（事故报告：docs/agents/platform-bugs-2026-08-13.md）
 
-## 目标模式（/goal）
+- 子 Agent 注册表必须 `convergeRegistry(subTools)` 重建领域工具；克隆来的 `fs/shell` 闭包绑父注册表，不重建会绕过所有权包装、构建禁令、plan 只读。
+- 文件所有权（`file-ownership.ts`）覆盖 fresh 与隔离降级的 fork；claim 键斜杠归一。
+- merge 据实三原则：无产出不报 ✅；清理失败 ≠ 合并失败；冲突保留 worktree（diff 有 32KB 截断，worktree 是全量现场）。`agent(merge)` 进程内串行。
+- `edit_file` 并发安全在 Rust 临界区（`editor.rs checked_write_atomic`：进程级锁 + fail-closed 重读校验）；TS 侧不得假设「返回成功 = 落盘」之外的时序。
+- TTL 清理不得销毁无记录的工作：discard 前抓 diff 回 board，抓不到保留现场并通知父 Agent。
+- 模型可见子 Agent ID `sub-{timestamp}-{random}`；worktree ID `agent-{timestamp}-{random}`；池内部 ID 不暴露给模型。
 
-- **用法：** `/goal 描述` 新建 · `/goal resume` 恢复 · `/goal status` 查看 · `/goal cancel` 取消
-- **架构：** `src-ui/src/agent/goal-manager.ts`(GoalManager 一等状态对象)驱动 `Agent._goalLoop`;状态存 `.hologram/goals/{id}/`(goal.json + session.json + index.json),与普通聊天的 `agents/main/` 槽**完全隔离**——普通对话的 saveState 不会踩 goal 现场
-- **完成判定：** 模型调用 `goal_report(status, summary)` 工具上报(仅 goal 循环期间注册);`[GOAL_COMPLETE]` 文本标记仅为旧会话 fallback
-- **崩溃接管：** 启动时 `migrateLegacy()`(旧 `agents/main/goal.json` 导入)+ `adoptOrphans()`(遗留 active 记录转 paused)
-- **UI:** 聊天区上方状态条订阅 `goal:state` 事件;测试见 `tests/goal-manager.test.ts` 与 `tests/goal-persistence.test.ts`(含暂停→闲聊→恢复回归)
+## 9. Goal / Plan 模式要点
 
-## 工具层收敛（2026-08-08）
+- `/goal`：`goal-manager.ts` 驱动 `Agent._goalLoop`；状态在 `.hologram/goals/{id}/`，与普通聊天槽隔离；完成靠 `goal_report` 工具，`[GOAL_COMPLETE]` 只是旧会话 fallback。
+- Plan 模式：工具 schema 跨模式恒定（保护 DeepSeek 前缀缓存）；写约束由 `planGate` 在执行层拦截。只读动作放行，fs write/edit 计划文件豁免，agent spawn 豁免；plan 中 spawn 的子 Agent 静态只读（`planRegistry()`）。
 
-- 模型可见工具收敛为领域工具：`fs` / `shell` / `git` / `search` / `web` / `agent` / `task` / `memory` / `browser` / `desktop`，加常驻 `ask_user` / `Skill` / `wait` / `enter_plan_mode` / `exit_plan_mode`；**engine MCP 工具同样收敛（2026-08-15）**：35 个图工具折叠为 `graph`（24 个只读动作：symbols/neighbors/impact/preflight/coupling/cycles/…）/ `ops`（analyze/validate/health/status/timeline/rename/import_scip）/ `lsp`（resolve_call/infer_type/implementations/references）三个领域。旧名（`search_symbols`、`preflight_check`、`analyze_project` 等）保留但 hide，模型调用被 `retireRedirect` 拦截重定向到领域动作。UI/typedRpc 直调旧名不受影响；外部 MCP 客户端（Cursor）仍见细粒度工具。
-- 旧工具名（`run_shell`、`write_file`、`agent_spawn`、`git_*` 等）保留在 `ToolRegistry` 中但被 `hide()`：内部代码与测试仍可直接调用，但不再出现在 `schemas()`；**模型调用隐藏旧名会被 executor 拦截并返回 `[已淘汰]` 重定向**（见 `tools/domains.ts` 的 `retireRedirect`），不再静默执行。
-- 每轮注入：默认发**全量**可见工具 schema（`visibleToolsLimit` 默认 0，2026-08-10 起）——DeepSeek 前缀缓存对 tools 段敏感，按用户消息重打分选子集会导致 tools 段漂移、整段历史缓存 miss 按全价计费（实测单次 ~10 万 tokens）；全量约 15 个领域/常驻工具 ≈ 数 k tokens（收敛前 ~46 工具 ≈ 10k tokens），稳定后常驻缓存按命中价计费。设 `visibleToolsLimit > 0` 回退 `tool-select.ts` 打分 + 常驻集子集模式。工具目录见 `ToolRegistry.catalog()`。
-- Plan 模式不再切换工具注册表（2026-08-10 起）：schema 跨模式恒定，enter/exit 不击穿前缀缓存；写约束在执行层按 `planState` 运行时拦截（`streaming-executor` 的 `planGate`，规则见 `plan/plan-registry.ts` 的 `planGateCheck`：只读动作放行、fs write/edit 计划文件豁免、agent spawn 豁免）。plan 中 spawn 的子 Agent 仍静态降级为只读克隆（`planRegistry()`），不依赖父 Agent 运行时状态。
-- 领域动作通过 `resolveGuardToolName()` 映射回旧工具名，preflight 架构门禁、图增强 hooks、子 Agent `_callId` 关联均不失效；文件所有权包装的是内层旧工具，天然生效。
-- 新增工具/动作必须同步：`tools/domains.ts` 的 `DOMAIN_SPECS`（动作→旧工具名）+ `collectHiddenToolNames()`（需隐藏的旧名）+ 本文件。
+## 10. 验证基线（2026-08-16 实测，数字会漂移，以重新实测为准）
 
-## RPC 契约纪律（2026-08-12）
+| 层 | 命令 | 基线 |
+|---|---|---|
+| 引擎 | `cd engine && cargo test` | 698 tests（lib 670 + bin 27 + doc 1） |
+| 壳 | `cd src-tauri && cargo test` | 309 tests（bin 295 + 集成 14） |
+| 前端 | `cd src-ui && npx vitest run` | 1014 passed / 4 skipped（92 文件） |
+| 前端构建 | `cd src-ui && npm run build` | tsc --noEmit + vite build 全绿 |
+| 前端格式 | `cd src-ui && npx biome ci .` | 501 errors / 338 warnings 是存量基线，不要顺手清；改动文件零新增 |
+| 打包 | `cd src-tauri && cargo tauri build` | 发布构建；不要用 `cargo build --release` 代替 |
 
-- 前端调后端一律 `typedRpc`（`src-ui/src/rpc-contract.ts`，方法名/参数键/结果类型受 `RpcContract` 编译期约束；参数键 snake_case）。biome `style/noRestrictedImports` 禁 `./bridge` 的 `rpc` 具名导入——**新增裸 `rpc('...')` 调用会被 lint 拦截**；唯二受权出口：`rpc-contract.ts`（typedRpc 实现）与 `agent/tool.ts`（agentInvoke 动态分发），均带 biome-ignore。
-- `bridge.ts` 的 `invoke<T>` / `listen<T>` / `rpc<T>` 泛型必填（无默认 any）；`listen` 用 `typedListen`（事件契约在 `EventContract`）。
-- Rust 侧生产代码零裸 `.unwrap()`（2026-08-12 达成）：锁解锁 `unwrap_or_else(|e| e.into_inner())`（std PoisonError，先例 `engine/src/graph/id.rs`；src-tauri 域另有 utils.rs 的 `lock_or_err` helper），静态正则 `expect("静态正则")`，捕获组 `expect("捕获组 n 必命中")`。新代码不得引入裸 unwrap（测试模块除外）。
+CI 只做编译 + 测试；`.github/workflows/ci.yml` 不可修改。
 
-## 不要做的事
+## 11. 不要做的事
 
-- 不要恢复 Python 引擎路径
-- 不要改 `graph-layout.ts` / `gpu-layout.ts` 的布局参数（除非用户明确要求）
-- 不要在程序层「推断 bug 根源」或「解释因果」——只呈现图数据
-- 不要用 `cargo build --release` 代替 `cargo tauri build`
+- 不要恢复 Python 引擎路径（`src_python/` 已退役，`tests/` 已移除）。
+- 不要改 `graph-layout.ts` / `gpu-layout.ts` 的布局参数（除非用户明确要求）。
+- 不要在应用程序层「推断 bug 根源 / 解释因果」——产品只呈现图数据；编码 Agent 的排查推理不受此限制。
+- 不要用 `cargo build --release` 代替 `cargo tauri build`。
+- 不要动 `.github/workflows/ci.yml`。
+- 不要把与任务无关的未提交改动混进 commit；用户工作区改动要单独确认。
+
+## 12. 文档地图（只信这些是现状）
+
+| 文档 | 作用 |
+|---|---|
+| `CONVENTIONS.md` / `INVARIANTS.md` | 编码规则 + 雷区（开工前必读） |
+| `docs/adr/project-constitution.md` | 四条最高架构约定 |
+| `docs/landmine-map.md` | 已知技术债/雷区拆弹状态 |
+| `docs/README.md` | 文档总索引（先看这个） |
+| `ARCHITECTURE.md` / `README.md` | 架构总览 / 使用与构建 |
+| `CONTEXT.md` | 应用级词汇（`kind`/`status` 带簇前缀） |
+| `docs/MULTI_AGENT_ROADMAP.md` | 多 Agent 路线图与已落地能力 |
+| `docs/plans/README.md` | 进行中的计划/实验（状态表） |
+| `docs/agents/frontend-rpc-contract.md` | RPC 契约生成物（勿手改） |
+| `docs/archive/README.md` | 归档说明与历史目录 |

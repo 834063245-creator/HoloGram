@@ -27,7 +27,7 @@ Context、Effect/Disposer、类型化事件、事件溯源会话日志。
 
 | 证据 | 位置 | 影响 |
 |---|---|---|
-| `agent.ts` 2963 行，拆分已搁置 | `src-ui/src/agent/agent.ts`；`docs/ARCH_ACTION_PLAN.md` 任务 11c | 状态与循环耦合，单文件变更风险高 |
+| `agent.ts` 2963 行，拆分已搁置 | `src-ui/src/agent/agent.ts`；`docs/plans/arch-action-plan.md` 任务 11c | 状态与循环耦合，单文件变更风险高 |
 | `AgentConfig` 约 30 个可选字段 | `src-ui/src/agent/runtime/types.ts` | 组装靠 `createAgent` 手工接线，依赖关系不可静态检查 |
 | 注册 API 不返回 disposer | `ToolRegistry.register`、`HookRegistry.register`、`PreflightHookRegistry.register` | 生命周期清理靠调用方自觉，泄漏容易回归 |
 | 工具执行只有“preflight + post enrich”两个 hook 阶段 | `streaming-executor.ts` | 没有统一裁决语义；planGate、guard、hook、spill 各自硬编码 |

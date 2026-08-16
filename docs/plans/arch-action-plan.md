@@ -60,7 +60,7 @@
 ## 通用执行规则
 
 1. 每批一个独立 commit，commit message 注明批次与任务号（如 `chore(cleanup): batch-1 remove dead demo prototypes`）。
-2. 每项完成后立即跑验证：Rust 侧 `cargo test`（927 个）+ `cargo build -D warnings`；UI 侧 `vitest`（821 个）+ `tsc` + `biome check`。
+2. 每项完成后立即跑验证（2026-08-16 基线）：Rust 侧 `cd engine && cargo test`（698）与 `cd src-tauri && cargo test`（309）；UI 侧 `cd src-ui && npm run build` + `npx vitest run`（1018）+ 改动文件 `npx biome check --write`。
 3. 任何一项发现"搬不动"（有隐藏调用点/行为依赖），停下记录到本文件的"阻塞项"小节，不要绕过。
 4. 改动前先 `git status` 确认工作区干净；每批独立提交，便于单独回滚。
 

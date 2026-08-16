@@ -4,7 +4,7 @@
 
 - 2026-08-12 `e6fa9d2` 落地 browser 领域工具初版：CDP 双通道（target=self 走 webview 内直读探针 / 外部页面走 Rust CDP），12 个动作。
 - 评审（2026-08-13）结论：方向正确，但存在端口冲突、调用无超时、全局单例会话、探针代码分叉等结构问题。
-- 本文档定调套件的**目标形态**，并记录每条决策的理由。落地分期见 `docs/plans/browser-cdp-suite-plan-2026-08-13.md`。
+- 本文档定调套件的**目标形态**，并记录每条决策的理由。落地分期史见 `docs/archive/browser-cdp-suite-plan-2026-08-13.md`；后续批次与剩余 Windows 真机 E2E 见 `docs/plans/browser-cdp-suite-review-round2.md`。
 
 ## 落地状态（2026-08-13 同日完成，08-14 二批收尾）
 

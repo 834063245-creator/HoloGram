@@ -77,7 +77,7 @@ $BIN --stress-suite                     # small→large 缩放对比
 
 ## 第三轮优化(2026-08-06 晚,Phase M 已提交:M1/M2/M3)
 
-按 `docs/plans/graph-id-refactor-plan.md` 执行内存救场,全部一批一 commit:
+按 `docs/archive/graph-id-refactor-plan.md` 执行内存救场,全部一批一 commit:
 
 | 批 | 内容 | commit |
 |---|---|---|
@@ -110,7 +110,7 @@ fs 子树验收:图数字 155518/426199/28284 三轮不变,总计 91.0s → **38
 
 ## 下一步(优先级重排:M4+ 算法瓶颈 > R 阶段架构重构)
 
-**R 阶段实现规格已定稿,见 `docs/plans/graph-id-refactor-plan.md`(2026-08-06 v2)** —
+**R 阶段实现规格已定稿,见 `docs/archive/graph-id-refactor-plan.md`(2026-08-06 v2)** —
 设计决策全部钉死(NodeId 永为字符串句柄、serde transparent、快照阈值 5M 边、
 FTS 惰性重建折中、R10 目标 全内核<15min),接手模型按规格机械施工即可。
 
@@ -150,7 +150,7 @@ FTS 惰性重建折中、R10 目标 全内核<15min),接手模型按规格机械
 
 ## R 阶段进度(2026-08-06,R0~R9 竣工,全部逐批提交)
 
-按 `docs/plans/graph-id-refactor-plan.md` v2 施工。R0~R8 每批 `cargo test --lib` 579 passed
+按 `docs/archive/graph-id-refactor-plan.md` v2 施工。R0~R8 每批 `cargo test --lib` 579 passed
 (R0 净增 9 个访问器边界用例后只增不减),R9 后 594 passed(净增 15)。
 R1~R7 后与 R8 后各跑一次 fs 数字契约,两次全绿:**155518 nodes / 426199 edges /
 28284 communities,resolved 271321,总耗时 ~35-36.5s(基线 ~48s,无劣化)**;

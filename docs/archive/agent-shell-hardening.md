@@ -1,7 +1,8 @@
 # HoloGram Agent Shell 层加固方案
 
-> 依据：精读 DeepSeek-Reasonix / kimi-code / hermes-agent 三家源码 + Claude Code 官方工具规范  
-> 日期：2026-08-06 · 状态：待痞老板确认后实施  
+> ⚠️ 已归档（2026-08-16）：本方案已被 `docs/plans/shell-stability-bundled-bash-plan.md` 取代，后者 P0–P5 已落地。
+> 依据：精读 DeepSeek-Reasonix / kimi-code / hermes-agent 三家源码 + Claude Code 官方工具规范
+> 日期：2026-08-06 · 原始状态：待确认后实施
 > 目标：让 HoloGram 的 Agent「无论如何都不会反复遭遇 shell 语法错误」，语法类错误归零、语义类错误最小化
 
 

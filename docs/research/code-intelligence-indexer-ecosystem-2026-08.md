@@ -5,7 +5,7 @@
 > 前两块拼图：
 > - `docs/research/engine-capability-audit-2026-08.md`（引擎内部能力审计）
 > - `docs/research/external-deep-analysis-tools-baseline-2026-08.md`（CodeQL / Semgrep / SonarQube / Snyk 基线）
-> - 关联：`docs/code-graph-tools-gap-report.md`（Kythe / Glean / stack-graphs / OpenGrok 等已覆盖）
+> - 关联：`docs/research/code-graph-tools-gap-report.md`（Kythe / Glean / stack-graphs / OpenGrok 等已覆盖）
 > 每条结论对齐主报告的核心命题：**HoloGram 缺的不是图算法，是「符号级解析 + 引用图」这一整层语义**。本报告回答的问题是：这层语义，行业里几十年是怎么做的、现在用什么标准交换、对 27 语言 breadth-first 的 HoloGram 意味着什么。
 
 ---
@@ -142,7 +142,7 @@
 
 ## 5. OpenGrok —— Oracle 的代码搜索 + xrefs 平台（一句话带过）
 
-Oracle（原 Sun）维护的 Java Web 代码搜索 + 交叉引用引擎，`oracle/opengrok`，Lucene 做全文索引、ctags 做 xrefs，CDDL-1.0 许可证。**已在 `docs/code-graph-tools-gap-report.md` 覆盖，此处不展开**（重点放下一节的 Zoekt）。截至 2026-08 仍活跃（push 2026-08-10）。
+Oracle（原 Sun）维护的 Java Web 代码搜索 + 交叉引用引擎，`oracle/opengrok`，Lucene 做全文索引、ctags 做 xrefs，CDDL-1.0 许可证。**已在 `docs/research/code-graph-tools-gap-report.md` 覆盖，此处不展开**（重点放下一节的 Zoekt）。截至 2026-08 仍活跃（push 2026-08-10）。
 
 ---
 
@@ -293,7 +293,7 @@ Oracle（原 Sun）维护的 Java Web 代码搜索 + 交叉引用引擎，`oracl
 
 ## 13. GitHub Code Navigation / stack graphs —— 已覆盖，跳过
 
-（见 `docs/code-graph-tools-gap-report.md` 中 stack-graphs 基线。）
+（见 `docs/research/code-graph-tools-gap-report.md` 中 stack-graphs 基线。）
 
 ---
 
@@ -331,6 +331,6 @@ IntelliJ 是「一个索引引擎吃几十种语言」的唯一规模化范例�
 
 ### 4. 标准格式带来的架构红利：SCIP 是「解析层」与「图存储层」的解耦点
 
-HoloGram 最强的一层（GraphStore、Tarjan/Leiden、33 个 MCP 查询、可视化）**完全不需要重写**——SCIP 恰好提供了「语义解析」和「图存储」之间的干净接口。**做 SCIP 消费者不是推倒重来，而是给现有引擎换一个更可靠的「上游数据源」**：同样的 `Index` 既喂 Sourcegraph，也喂 HoloGram 的 GraphStore，还能借 `external_symbols` 把 node_modules 那类「外部依赖节点」补回图里（主报告 §1.2 的「依赖星图不显示库依赖」问题直接可解）。
+HoloGram 最强的一层（GraphStore、Tarjan/Leiden、34 个默认 MCP 查询（35 schema）、可视化）**完全不需要重写**——SCIP 恰好提供了「语义解析」和「图存储」之间的干净接口。**做 SCIP 消费者不是推倒重来，而是给现有引擎换一个更可靠的「上游数据源」**：同样的 `Index` 既喂 Sourcegraph，也喂 HoloGram 的 GraphStore，还能借 `external_symbols` 把 node_modules 那类「外部依赖节点」补回图里（主报告 §1.2 的「依赖星图不显示库依赖」问题直接可解）。
 
 **一句话收束**：这个生态证明的不是「自研引擎没希望」，而是「**自研引擎该自研的部分从来不是解析器**」。HoloGram 的差异化在「把代码库变成可对话的 3D 依赖星图」这一层，而语义解析这一层，行业的、标准的、现成的答案叫 **SCIP + 编译器 indexer**——把它接进来，是 27 语言 breadth-first 引擎补上「符号级解析 + 引用图」最现实、也是唯一可规模化的路线。

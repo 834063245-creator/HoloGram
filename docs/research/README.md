@@ -11,6 +11,7 @@
 ## 竞品调研系列（survival 的证据底座，2026-08-15 采集）
 
 - **competitor-landscape-full-2026-08.md** — 全量竞品地图（四十年技术史 + 巨头威胁模型），系列总结篇，其余各篇的细节来源。
+- **code-graph-tools-gap-report.md** — 结构图谱/依赖图工具外部事实调研（dependency-cruiser / Sourcetrail / Kythe / Glean / stack-graphs 等）。
 - code-intelligence-indexer-ecosystem-2026-08.md — SCIP/索引器生态一手调研（P1-1 分档依据）。
 - engine-capability-audit-2026-08.md — 引擎内部能力审计。
 - engine-gap-analysis-vs-established-tools-2026-08.md — 第一波 12 工具差距分析。

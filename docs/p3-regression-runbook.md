@@ -1,6 +1,6 @@
 # P3 真机回归 Runbook（需要真实 API Key）
 
-> 状态：待执行（2026-08-08 收尾待办最后一项）。脚本只做 API 级预检；UI 级检查需要打开 App + 真实 Key。
+> 状态：API 级预检已实跑 6/6（DeepSeek/GLM，`ef65d07`）；UI 级检查仍需打开 App + 真实 Key。脚本只做 API 级预检。
 
 ## 前置条件
 

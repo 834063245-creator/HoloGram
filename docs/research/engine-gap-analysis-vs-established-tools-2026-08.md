@@ -4,7 +4,7 @@
 > 本报告是主报告。支撑材料：
 > - `docs/research/engine-capability-audit-2026-08.md`（引擎内部能力审计，全部 `文件:行号` 证据）
 > - `docs/research/external-deep-analysis-tools-baseline-2026-08.md`（CodeQL / Semgrep / SonarQube / Snyk Code 基线）
-> - `docs/code-graph-tools-gap-report.md`（dependency-cruiser / Sourcetrail / Understand / jQAssistant / Kythe / Glean / stack-graphs 基线）
+> - `docs/research/code-graph-tools-gap-report.md`（dependency-cruiser / Sourcetrail / Understand / jQAssistant / Kythe / Glean / stack-graphs 基线）
 > - `docs/research/competitor-landscape-full-2026-08.md`（全量竞品地图：35+ 工具、四十年时间线、巨头威胁模型）
 > - **`docs/research/survival-position-verification-2026-08.md`（生存验证：每条代办对应的竞品验收线与失败后果——做清单前先读它）**
 > - 一手实验脚本与样本：`engine/fixtures/gap_probe/`（对抗性解析探针项目）
