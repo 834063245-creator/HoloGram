@@ -1,7 +1,12 @@
 # Baseline 变更申请 — phase-0/create-agent.wiring.txt（Phase 4：dispose 段）
 
+> ⚠️ 状态：**已批准并执行完毕**（2026-08-16）——freeze commit `45f328a2`。
+> 本文件同时是 Phase 3 申请（wiring 0/0/0 段，freeze `828679fc`）的执行记录与后续
+> 申请的模板：既有快照漂移时，按本格式重写此文件（对象/理由/证据/拟议内容/
+> 落地步骤），停工等用户审批。
+
 > 申请日期：2026-08-16 · 申请人：Phase 4 实现 Agent（agent-core-convergence）
-> 状态：**待用户审批** — 审批前不执行 record，runtime 侧重写保持未提交。
+> ~~状态：待用户审批~~ 已批准执行（见顶部墓碑）。原文如下存档：
 > 前例：Phase 3 的同类申请已获批执行（freeze commit `828679fc`）；本申请只涉及
 > 同一文件的 `dispose_cleanup_steps` 段。**模型可见表面零变化**（其余全部快照
 > 逐字节一致，含 tool-schemas.* 与 system-prompt.fixture）。
