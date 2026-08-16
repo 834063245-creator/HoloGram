@@ -30,6 +30,19 @@ export interface ToolEvent {
   truncated?: boolean;
 }
 
+/** 工具管道上下文 — Phase 2 类型化事件的载荷（agent-core-convergence）。
+ *  guard 阶段 args 为原始 JSON 解析结果（非法 JSON 时 null）；guardName 为
+ *  领域名解析后的工具名（dispatch 阶段未解析，等于 call.name）。 */
+export interface ToolPipelineContext {
+  call: import('../provider/types').ToolCall;
+  tool: import('./tool').Tool | null;
+  args: Record<string, unknown> | null;
+  agentId: string | null;
+  signal: AbortSignal | null;
+  /** 领域名解析后的工具名（resolveGuardToolName 结果） */
+  guardName: string;
+}
+
 export interface PlanReviewEvent {
   planFilePath: string;
   planContent: string;
