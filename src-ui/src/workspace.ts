@@ -19,6 +19,7 @@ import { resetAgentCaches } from './agent/cache-store';
 import { SubAgentPool } from './agent/coordinator';
 import { GoalManager } from './agent/goal-manager';
 import type { GraphContext } from './agent/hooks';
+import { DisposerBag } from './agent/lifecycle';
 import { initLogger } from './agent/logger';
 import { MemoryManager } from './agent/memory';
 import { memoryBundleIngest } from './agent/memory-bundle-client';
@@ -55,6 +56,7 @@ import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
 import { createBuilderDeps, createRuntimeAdapter } from './ui/runtime-adapter';
 import { resolveSemanticToolName } from './ui/tool-semantics';
+import { bumpWorkspaceEpoch } from './workspace-scope';
 
 // ═══════════════════════════════════════════════════════
 // 从引擎注册表动态加载工具
@@ -149,6 +151,9 @@ export class Workspace {
   // ── 内部状态 ──
   private _active: boolean = false;
   private _unlisteners: Array<() => void> = [];
+  /** 工作区级清理器 — 获取点必须登记进 bag（deactivate/forceClearState 统一释放）。
+   *  逆序、单次执行、sync 快通道（agent/lifecycle.ts DisposerBag）。 */
+  private readonly _bag = new DisposerBag();
 
   /** 冷启动后台分析的健康状态。 */
   _health: 'unknown' | 'ready' | 'degraded' = 'unknown';
@@ -510,6 +515,16 @@ export class Workspace {
       clearTimeout(this.checkTimer);
       this.checkTimer = null;
     }
+
+    // 结构收口：统一释放 bag 内登记的全部工作区级清理器（逆序、async 串行等待）。
+    // 失败必须可见（不静默）— 聚合错误记 warn，但不阻断工作区切换。
+    try {
+      await this._bag.dispose();
+    } catch (err) {
+      console.warn('[Workspace.deactivate] bag.dispose 部分清理失败:', err);
+    }
+    // 推进工作区代际 — 使在途的旧项目 fire-and-forget 写共享态过期丢弃。
+    bumpWorkspaceEpoch();
   }
 
   /** 强制清除所有状态，不等待异步清理。
@@ -546,6 +561,11 @@ export class Workspace {
       clearTimeout(this.checkTimer);
       this.checkTimer = null;
     }
+    // 同步快通道释放 bag 内登记的清理器（sync 清理器立即执行；
+    // async 清理器 fire-and-forget — 紧急路径不等）。
+    void this._bag.dispose();
+    // 推进工作区代际 — 使在途的旧项目 fire-and-forget 写共享态过期丢弃。
+    bumpWorkspaceEpoch();
   }
 
   // ── Agent 配置变更统一入口 ──
@@ -586,6 +606,10 @@ export class Workspace {
       this.agent = null;
       this.prov = null;
       chatPanel.setAgent(null);
+      // ⚡ 2026-08-16 断链修复：拆除后必须清空重建键——否则用户随后重新填入
+      // 相同 name/kind/key/baseUrl/model 时，_agentRebuildKey 与残留的
+      // _lastAgentCfgKey 相同，重建被跳过，provider/agent 永远起不来。
+      this._lastAgentCfgKey = null;
       bus.emit('agent:diag', { text: `❌ API Key 已清空 — provider="${act.name}"。`, ready: false });
       return;
     }
