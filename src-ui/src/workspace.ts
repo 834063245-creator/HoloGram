@@ -902,7 +902,9 @@ export class Workspace {
   // ═══════════════════════════════════════════════════════════════
 
   async runCheck(): Promise<void> {
-    if (!this.path) return;
+    // 工作区已停用（切换中/后）不跑 — 否则在途 RPC resolve 会把旧项目
+    // 结果写进新项目的 dock store 并弹开 check 面板（landmine-map H4）
+    if (!this._active || !this.path) return;
     if (this.checkRunning) {
       this.checkPending = true;
       return;
@@ -916,6 +918,8 @@ export class Workspace {
     this.checkPending = false;
     try {
       const json = await typedRpc('hologram_run_check', { path: this.path });
+      // 在途期间工作区已停用 — 结果是旧项目的，直接丢弃不写共享 store
+      if (!this._active) return;
       try {
         const result: CheckResult = JSON.parse(json);
         const dock = useDockStore.getState();
@@ -943,7 +947,8 @@ export class Workspace {
       this.onStatusChange?.('简报请求失败');
     } finally {
       this.checkRunning = false;
-      if (this.checkPending) {
+      // 在途期间工作区已停用 — 不重武装 timer，旧项目的 pending 检查就此丢下
+      if (this._active && this.checkPending) {
         this.checkPending = false;
         if (this.checkTimer) clearTimeout(this.checkTimer);
         this.checkTimer = setTimeout(() => {
@@ -956,7 +961,9 @@ export class Workspace {
 
   /** 防抖检查 — Agent 写入文件时调用。3 秒延迟批量处理多次写入。 */
   scheduleCheck(): void {
-    if (!this.path) return;
+    // 工作区已停用（切换中/后）不再排程 — 否则 timer 触发会走 runCheck 把
+    // 旧项目结果写进新项目面板（landmine-map H4）
+    if (!this._active || !this.path) return;
     if (this.checkTimer) clearTimeout(this.checkTimer);
     this.checkTimer = setTimeout(() => {
       this.checkTimer = null;
