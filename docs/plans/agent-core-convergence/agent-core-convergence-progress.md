@@ -11,7 +11,7 @@
 | 0 基线冻结 + V0 验证工程 | ✅ 完成 | 6 契约快照 + gate.mjs 落地，全量绿；独立审计有条件放行，条件已处置 |
 | 1 Disposer 契约 + V1 | ✅ 完成 | 3 注册 API 返回 Disposer；startOwned/ownedDisposer；T0 门禁 + F8 快照 + F2 workflow |
 | 2 工具管道类型化事件 + V2 | ✅ 完成 | AgentEventBus 双路径；12 场景差分 + pipeline 对拍 phase-0 冻结 baseline 逐字节一致 |
-| 3 AgentContext 抽取 | ⬜ 未开始 | |
+| 3 AgentContext 抽取 | ✅ 完成 | 三层收敛 26/11/12→0/0/0；wiring baseline 经审批冻结（828679fc）；决策 16-19 |
 | 4 生命周期所有权统一 | ⬜ 未开始 | |
 | 5 会话事件溯源日志 | ⬜ 未开始 | |
 | 6 组合层收尾（可选） | ⬜ 未开始 | |
@@ -104,6 +104,57 @@
 
 结论：**非换皮**——eventBus 已把 guard/preflight/around 三类裁决从 executor 硬编码中分离为可组合监听器（T1 证明可排序/短路/聚合），Phase 3 起 AgentContext 可将 planGate、guard、hook 以 effect() 声明式接入。按计划推进 Phase 3。
 
+## Phase 3 / V3 记录（2026-08-16）
+
+> 状态：**✅ 完成并冻结**（2026-08-16）。wiring baseline 变更经用户批准后落地
+> （`baseline-change-request.md` → record → freeze commit `828679fc`）。
+
+### 交付物
+
+| commit | 内容 |
+|---|---|
+| `a0ad55b6` | `src/agent/context.ts`（AgentServices 14 服务 + AgentContext：身份只读 / get+resolve / set / effect=runInContext / child 白名单派生 / dispose 预留 Phase 4）+ agent.ts ctx 构造重载（legacy 逐字节不变；setBus/setSubAgentPool/setGoalManager write-through；spawnSubAgent 优先父 ctx.child() 派生）+ `tests/agent-context.test.ts` T1 规约 12 例。四门全绿（1091+1skip） |
+| `aad8a9ce` | runtime.ts 三层重构：`createAgent`=翻译层适配器（config 直读 26→0）/ `_contextFromConfig`=唯一 config 消费点（26 字段全量翻译）/ `_materializeSessionServices`（board proxies / planState / execState 缺啥补啥写回 ctx）/ `_assembleAgent`=config-free 装配本体；`runtime/types.ts` 新增 `AgentAssemblyInputs` + `RuntimePort.createAgentFromContext`；wiring helper 按方法名提取（`extractRuntimeMethodWiring`）；`specs/phase-3.test.ts` 6 例 |
+| `828679fc` | baseline freeze：`phase-0/create-agent.wiring.txt` 重写为收敛后事实（26/11/12→0/0/0，dispose 21 不变）。record 触碰的其余 6 快照内容逐字节未变（git diff 为空，status M 为 autocrlf stat 噪声——决策 #7） |
+
+### 验收核对（验证计划 §4 Phase 3）
+
+- [x] T0：createAgent config.* 直读 26→**0**（验收线 ≤15）；装配本体 `_assembleAgent` 零 config 直读；翻译层 26 字段完整性断言；AgentContext 公共成员 JSDoc（AST 检查）
+- [x] T1：服务解析 / 缺依赖报错（报出服务名+agentId）/ effect 逆序+单项释放+dispose 幂等 / child 白名单继承与所有权独立（12 例）
+- [x] T2：旧 AgentConfig 入口 vs 新 AgentContext 入口（ctx 手工构造不经翻译层）生成同一 AgentSummary / 同一工具 schema 面 / 同一 system prompt
+- [x] T3：tool-schemas.full/plan/effective、system-prompt.fixture、plan-gate.decisions、hook-pipeline.trace **全部逐字节不变**；create-agent.wiring.txt 漂移经审批冻结（`828679fc`）
+- [x] T4：全量 vitest 终态 **1097 passed / 1 skipped / 0 failed（101 文件）**（冻结前 1096+1failed=预期红；一次 translator-cache 偶发失败复跑即过，该测试零 agent 依赖，与本工程无关）；tsc 干净；触碰文件 biome 零新增（runtime.ts noExplicitAny 7→5 净减 2）
+- [x] 主计划验收附加项：setter 接线 12→7（5 个入 Agent 构造，7 个留装配本体且其中 spawnSubAgent/applyAutoTuneConfig 非注入型）；`_disposeAgent` 21 步未动（Phase 4 对象）
+- [x] wiring baseline freeze（审批 → record → freeze commit `828679fc`；record 后 git diff 仅 wiring.txt 一处内容变化）
+
+### 决策与偏差记录（Phase 3 追加）
+
+16. **AgentServices 字段名以代码现实为准**：计划的 `events` 落地为 `eventSink`（本仓领域词），`sessionLog` 留 Phase 5 不占位；另按实际依赖补 `subAgentPool`/`execState`/`memoryManager`/`preflightHooks` 服务（共 14）。`AgentContext` 在计划 5 个身份字段外增 `sessionId`（会话板路由键，物化层需要）与 `set`（setter write-through 目标）、`dispose`（Phase 4 前置契约）。
+17. **三层结构而非把 config 读数挪进私有方法刷数字**：`createAgent` 是 3 行适配器（度量归零是结构事实）；防回潮由 phase-3 spec 三断言接管——createAgent ≤15 直读 + 零注册零 setter、`_assembleAgent` config-free、翻译层 26 字段完整性。度量语义（决策 #4 口径）不变，仍指向 createAgent 方法本体。
+18. **两次真回归被门禁/断言拦截**：① 首版把 ctx.tools（输入注册表）装配给 Agent 而非克隆件 effR → phase-1 effective 快照报 count 5→0（T2 差分两路径同错未抓到——F8 快照价值实证）；② 翻译层漏 `config.execState`（workspace.ts:825 实际在传）→ 人工复核发现，修复后落地 26 字段完整性断言防同类回归。
+19. **ctx 入口签名 `createAgentFromContext(ctx, inputs?)`**：inputs 承载非服务装配输入（提示词素材 graphData/graphContext/hooksEnabled/subAgentSpawner + 调优参数），Phase 6 blueprint 再收敛；会话级基础设施（proxies/planState/execState）由 `_materializeSessionServices` 缺啥补啥写回 ctx——子 Agent child() 与差分手工 ctx 都走同一物化路径。
+
+### Phase 3 决策检查点（计划 §10）
+
+> Phase 3 结束：评审 AgentContext 是否真的减少了装配复杂度；若 createAgent 复杂度没有下降，暂停 Phase 4。
+
+结论：**复杂度实质下降，进入 Phase 4**（baseline 已批准冻结，判定生效）。证据：
+- createAgent 26 个 config 直读、11 个注册点、12 个 setter 接线 → 0/0/0（装配迁入单一 config-free 本体）；
+- spawnSubAgent 不再手工复制 7 项 opts + 3 个条件 setter，child() 白名单派生；
+- Agent 构造从"opts 大杂烩 + 后置 setter 补线"变为 ctx 单一来源（bus 注册/隔离/store/pool 入构造）；
+- 防回归代价：phase-3 spec 6 例（含 26 字段翻译完整性——比原 wiring 快照更强的定向断言）。
+
+### 度量基线（Phase 3 后，freeze `828679fc` 已生效）
+
+| 度量 | Phase 0 基线 | Phase 3 实测 | 变化 |
+|---|---|---|---|
+| `agent.ts` 行数 | 3059 | 3110 | +51（ctx 重载 + child 派生 + 注释；未拆分，符合禁令） |
+| `createAgent` config.* 直读 | 26 | **0** | -100%（验收线 -40%） |
+| `createAgent` 注册点 | 11 | 0（11 原序迁入 _assembleAgent） | 结构迁移 |
+| `createAgent` setter 接线 | 12 | 0（5 入构造 / 7 留装配本体） | 结构迁移 |
+| `_disposeAgent` 清理步骤 | 21 | 21 | 不变（Phase 4 对象） |
+
+
 ### 基线（freeze point：分支自 main 67f21ec2 切出）
 
 | 项 | 结果 |
@@ -154,6 +205,6 @@
 
 - Phase 1 结束：＿
 - Phase 2 结束：＿
-- Phase 3 结束：＿
+- Phase 3 结束：复杂度实质下降（26/11/12→0/0/0），进入 Phase 4（2026-08-16）
 - Phase 4 结束：＿
 - Phase 5 结束：＿
