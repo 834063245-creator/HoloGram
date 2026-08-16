@@ -27,6 +27,7 @@ import {
   type BuilderDeps,
   buildGraphContextFromData,
   buildToolRegistry,
+  cancelEngineSnapshotRefresh,
   extractGraphNodeNames,
   scheduleEngineSnapshotRefresh,
 } from './agent/runtime/agent-builder';
@@ -150,9 +151,9 @@ export class Workspace {
 
   // ── 内部状态 ──
   private _active: boolean = false;
-  private _unlisteners: Array<() => void> = [];
   /** 工作区级清理器 — 获取点必须登记进 bag（deactivate/forceClearState 统一释放）。
-   *  逆序、单次执行、sync 快通道（agent/lifecycle.ts DisposerBag）。 */
+   *  逆序、单次执行、sync 快通道（agent/lifecycle.ts DisposerBag）。
+   *  事件监听器（graph-updated / tool-done / runtime-msg）也登记于此 — 不再有独立数组。 */
   private readonly _bag = new DisposerBag();
 
   /** 冷启动后台分析的健康状态。 */
@@ -179,6 +180,17 @@ export class Workspace {
 
   private constructor(path: string) {
     this.path = path;
+    // 构造即登记"恒在的清理器"（无获取点、工作区一建就存在）：
+    // - checkTimer：停用时清掉防抖 timer；
+    // - cancelEngineSnapshotRefresh：停用时取消在途引擎快照刷新。
+    //   （DisposerBag 逆序释放：注册在前的后释放，timers/快照最后清，与旧 deactivate 顺序一致。）
+    this._bag.add(() => {
+      if (this.checkTimer) {
+        clearTimeout(this.checkTimer);
+        this.checkTimer = null;
+      }
+    }, 'checkTimer-clear');
+    this._bag.add(() => cancelEngineSnapshotRefresh(), 'engine-snapshot-refresh-cancel');
   }
 
   /** 创建仅 Agent 模式的占位工作区（未加载项目）。永不激活。 */
@@ -401,7 +413,7 @@ export class Workspace {
           /* 忽略 */
         }
       });
-      ws._unlisteners.push(unlistenGraphUpdated);
+      ws._bag.add(unlistenGraphUpdated, 'listener:graph-updated');
 
       // Agent 工具完成 → 文件可能变更时自动触发简报
       const FILE_MODIFY_TOOLS = new Set([
@@ -428,7 +440,7 @@ export class Workspace {
         }
       };
       bus.on('agent:tool-done', onToolDone);
-      ws._unlisteners.push(() => bus.off('agent:tool-done', onToolDone));
+      ws._bag.add(() => bus.off('agent:tool-done', onToolDone), 'listener:tool-done');
 
       // 清理进度监听器（仅在初始分析期间存活）
       unlistenProgress();
@@ -469,54 +481,8 @@ export class Workspace {
       /* 忽略 */
     }
 
-    // 移除所有事件监听器
-    for (const unlisten of this._unlisteners) {
-      try {
-        unlisten();
-      } catch {
-        /* 忽略 */
-      }
-    }
-    this._unlisteners = [];
-
-    // 清除 Agent 与记忆
-    // 清除前停止所有运行中的子 Agent
-    this.subAgentPool.stopAll();
-    // 销毁运行时前刷新会话级看板 — 等待完成，确保看板数据
-    // 在运行时 Agent 被拆除前已持久化。
-    if (this.runtime) {
-      await this.runtime.flushAllBoards();
-    }
-    // 销毁运行时 Agent — disposeAll 逐句柄走完整清理
-    // （flush + saveState('done') + LifecycleManager 停止 + bus 注销）
-    if (this.runtime) {
-      this.runtime.disposeAll();
-      this.runtime = null;
-    }
-    // 清除 Agent 面板数据
-    useAgentPanelStore.getState().setAgents([]);
-    useAgentPanelStore.getState().setTaskBoard([]);
-    useAgentPanelStore.getState().setDiscoveries([]);
-    // this.agent 是借用引用 — disposeAll 已完成 saveState，这里只需断开
-    this.agent = null;
-    // 清空 agent 状态注入缓存（git/blame/check/build/timeline）并推进代际 —
-    // 否则旧工作区的缓存会注入下一个工作区的 turn-start，
-    // 在途的 fire-and-forget 刷新 resolve 后也会回填旧项目数据
-    resetAgentCaches();
-    try {
-      await auraShutdown();
-    } catch {
-      /* 忽略 */
-    }
-    this.memoryManager = null;
-
-    // 清除计时器
-    if (this.checkTimer) {
-      clearTimeout(this.checkTimer);
-      this.checkTimer = null;
-    }
-
-    // 结构收口：统一释放 bag 内登记的全部工作区级清理器（逆序、async 串行等待）。
+    // 统一释放 bag 内登记的全部工作区级清理器（逆序、async 串行等待）。
+    // 所有获取点（open/setupAgent）在获取时就地登记，deactivate 不靠人肉枚举。
     // 失败必须可见（不静默）— 聚合错误记 warn，但不阻断工作区切换。
     try {
       await this._bag.dispose();
@@ -532,37 +498,17 @@ export class Workspace {
    *  阻塞下一次 switchWorkspace。 */
   forceClearState(): void {
     this._active = false;
-    for (const unlisten of this._unlisteners) {
-      try {
-        unlisten();
-      } catch {
-        /* 忽略 */
-      }
-    }
-    this._unlisteners = [];
-    this.subAgentPool.stopAll();
-    // 分离运行时前尽力刷新 — 设计为 fire-and-forget
-    // （这是同步紧急路径；deactivate() 会 await 刷新）。
+    // 紧急路径：runtime 必须同步 disposeAll（H3）— 不等 flush，防 60s TTL timer
+    // 继续对共享后端发 agent_isolation_discard（真实删 worktree）。
+    // flushAllBoards 设计为 fire-and-forget。
     if (this.runtime) {
       void this.runtime.flushAllBoards();
-      // 必须 disposeAll：不 dispose 的话每个存活 Agent 的 60s 巡检 timer 永久存活，
-      // _enforceTTL 会继续对共享后端发 agent_isolation_discard（真实删 worktree）。
-      // disposeAll 是同步方法（effects 走同步快通道），紧急路径可直接调用。
       this.runtime.disposeAll();
+      this.runtime = null;
     }
-    this.runtime = null;
-    this.agent = null;
-    this.memoryManager = null;
-    // 同 deactivate() — 紧急路径也要清注入缓存，防旧工作区状态串味
-    resetAgentCaches();
-    // 同 deactivate() — aura 单例也要释放，否则旧项目 brain 句柄驻留
-    void auraShutdown();
-    if (this.checkTimer) {
-      clearTimeout(this.checkTimer);
-      this.checkTimer = null;
-    }
-    // 同步快通道释放 bag 内登记的清理器（sync 清理器立即执行；
-    // async 清理器 fire-and-forget — 紧急路径不等）。
+    // 同步快通道释放 bag 内登记的清理器（sync 清理器立即执行；async 清理器
+    // fire-and-forget — 紧急路径不等）。runtime 已在上面同步 disposeAll，
+    // bag 内 runtime disposer 因 this.runtime === null 而 no-op。
     void this._bag.dispose();
     // 推进工作区代际 — 使在途的旧项目 fire-and-forget 写共享态过期丢弃。
     bumpWorkspaceEpoch();
@@ -728,6 +674,17 @@ export class Workspace {
       /* 忽略 */
     }
     this.memoryManager = new MemoryManager(this.path, globalDir);
+    // 获取即登记：停用时释放记忆 + 关闭 Aura 全局单例（逆序释放时晚于 runtime disposeAll）。
+    this._bag.add(() => {
+      this.memoryManager = null;
+    }, 'memory-manager-null');
+    this._bag.add(async () => {
+      try {
+        await auraShutdown();
+      } catch {
+        /* 未初始化无妨 */
+      }
+    }, 'aura-shutdown');
     this.memoryManager.onSaved = (info) => {
       this.agent?.notifyMemorySaved(
         `记忆已更新: **${info.description || info.name}** (${info.confidence || 'reference'})`,
@@ -781,19 +738,52 @@ export class Workspace {
       this.runtime.disposeAll();
       this.runtime = null;
     }
+    // 清注入缓存登记在 runtime 之前 → 逆序释放时晚于 runtime.disposeAll（先拆 Agent 再清缓存）。
+    this._bag.add(() => resetAgentCaches(), 'reset-agent-caches');
     const runtime = new AgentRuntime(this.path);
     const adapter = createRuntimeAdapter(this._storeId);
     runtime.setNotifier(adapter);
     runtime.setDiagnosticsSource(getDiagnosticsForFile);
     this.runtime = runtime;
+    // 获取即登记：runtime 销毁（flush 看板 → disposeAll → 解引用）。
+    // async 清理器在 deactivate（await bag.dispose）串行等待；forceClearState 走
+    // 同步快通道 — runtime 已在 forceClear 顶部同步 disposeAll，此处因 this.runtime
+    // 已为 null 而 no-op。
+    this._bag.add(async () => {
+      if (!this.runtime) return;
+      try {
+        await this.runtime.flushAllBoards();
+      } catch (e) {
+        console.warn('[workspace] runtime flushAllBoards 失败:', e);
+      }
+      this.runtime.disposeAll();
+      this.runtime = null;
+    }, 'runtime-dispose');
+    this._bag.add(() => { this.subAgentPool.stopAll(); }, 'subagent-pool-stop');
+    this._bag.add(() => {
+      this.agent = null;
+    }, 'agent-null');
+    // agentSessionState 解除本面板的全部会话句柄（dispose + 清表）— 拆 audit 中危：
+    // 清理不再挂在下一个 setupAgent 上。
+    this._bag.add(() => agentSessionState.clearPanelState(this._storeId), 'session-state-clear');
 
     // ── 初始化 Agent 面板数据 + 订阅消息流 ──
     useAgentPanelStore.getState().setRuntime(runtime);
     useAgentPanelStore.getState().refresh(runtime);
+    // 获取即登记：停用时清面板 runtime 引用 + currentSessionId（拆 audit 中危#3：
+    // 2s 轮询打旧 runtime 建错位 board）+ 清看板列表。
+    this._bag.add(() => {
+      const p = useAgentPanelStore.getState();
+      p.setAgents([]);
+      p.setTaskBoard([]);
+      p.setDiscoveries([]);
+      p.setCurrentSessionId('default');
+      p.setRuntime(null);
+    }, 'agent-panel-store-clear');
     const unsubMsg = runtime.getBus().subscribe({}, (msg) => {
       useAgentPanelStore.getState().pushMessage(msg);
     });
-    this._unlisteners.push(unsubMsg);
+    this._bag.add(unsubMsg, 'listener:runtime-msg');
 
     // ── 构建图谱上下文 ──
     const graphCtx = buildGraphContextFromData(this.graphData);

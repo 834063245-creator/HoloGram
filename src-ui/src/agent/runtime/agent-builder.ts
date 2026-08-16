@@ -12,13 +12,11 @@
 //
 // UI 回调通过 BuilderDeps 注入，不直接 import ui/ 模块。
 
-import type { Tool, ToolExecutor } from '../tool';
-import { ToolRegistry, agentInvoke } from '../tool';
-import { typedRpc } from '../../rpc-contract';
 import { z } from 'zod';
+import { typedRpc } from '../../rpc-contract';
+import type { Agent } from '../agent';
 import { createCompactionTools } from '../compaction-model';
 import type { GraphContext } from '../hooks';
-import { defineTool } from '../tools/define-tool';
 import {
   buildFileNodeIndex,
   buildGraphSnapshot,
@@ -30,15 +28,17 @@ import {
   HookRegistry,
   PreflightHookRegistry,
 } from '../hooks';
-import type { Agent } from '../agent';
-import { createCodingTools } from '../tools/coding';
-import { createSubAgentTool, createAgentKillTool, createAgentStatusTool } from '../tools/subagent';
+import { type McpClient, registerMcpTools } from '../mcp';
 import { createSkillTool } from '../skills';
 import { createTaskTools } from '../task';
-import { execStreamedShell } from './queued-shell';
-import { createWaitTool } from '../tools/wait';
+import type { Tool, ToolExecutor } from '../tool';
+import { agentInvoke, ToolRegistry } from '../tool';
+import { createCodingTools } from '../tools/coding';
+import { defineTool } from '../tools/define-tool';
 import { convergeRegistry } from '../tools/domains';
-import { registerMcpTools, type McpClient } from '../mcp';
+import { createAgentKillTool, createAgentStatusTool, createSubAgentTool } from '../tools/subagent';
+import { createWaitTool } from '../tools/wait';
+import { execStreamedShell } from './queued-shell';
 
 // ── Types ──
 
@@ -61,7 +61,9 @@ export interface BuilderDeps {
   onDataflowSaved?: () => void;
   /** LSP 诊断数据源（用于 state hooks） */
   diagnosticsSource?: {
-    getDiagnosticsForFile(filePath: string): Promise<Array<{ line: number; severity: string; message: string; source: string }>>;
+    getDiagnosticsForFile(
+      filePath: string,
+    ): Promise<Array<{ line: number; severity: string; message: string; source: string }>>;
   };
   /** Shell 流式输出监听（由 UI 层提供 Tauri event listener） */
   shellStream?: {
@@ -152,12 +154,14 @@ export function buildSystemPrompt(
   providerName?: string,
   shellEnvSection = '',
 ): string {
-  const modelIdentity = providerName === 'anthropic'
-    ? '你的后端 API 是 Anthropic (Claude)。任何关于模型品牌的问题，回答"Claude（由 HoloGram 调度）"。'
-    : `你的后端 API 是 ${providerName || 'DeepSeek'}。任何关于模型品牌的问题，回答"${providerName || 'DeepSeek'}（由 HoloGram 调度）"。`;
-  const modelNegation = providerName === 'anthropic'
-    ? '你可以承认自己是 Claude，但需说明你运行在 HoloGram 调度框架中。'
-    : '你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。';
+  const modelIdentity =
+    providerName === 'anthropic'
+      ? '你的后端 API 是 Anthropic (Claude)。任何关于模型品牌的问题，回答"Claude（由 HoloGram 调度）"。'
+      : `你的后端 API 是 ${providerName || 'DeepSeek'}。任何关于模型品牌的问题，回答"${providerName || 'DeepSeek'}（由 HoloGram 调度）"。`;
+  const modelNegation =
+    providerName === 'anthropic'
+      ? '你可以承认自己是 Claude，但需说明你运行在 HoloGram 调度框架中。'
+      : '你不是 Claude、不是 Anthropic 模型，不要声称自己是 Claude 或 Anthropic 的产品。';
 
   if (!graphData) {
     let prompt = `你是 HoloGram 的 AI 编码助手。当前没有加载项目。
@@ -308,14 +312,23 @@ export interface ToolRegistryOptions {
   mcpClients?: McpClient[];
 }
 
+import type { SubAgentPool } from '../coordinator';
 import type { MemoryManager } from '../memory';
 import type { SkillRegistry } from '../skills';
-import type { SubAgentPool } from '../coordinator';
 import type { TaskManager } from '../task';
 import type { SubAgentSpawner } from '../tools/subagent';
 
 export async function buildToolRegistry(opts: ToolRegistryOptions): Promise<ToolRegistry> {
-  const { graphData, deps, memoryManager: mm, skillRegistry, taskManager, subAgentPool, subAgentSpawner, mcpClients } = opts;
+  const {
+    graphData,
+    deps,
+    memoryManager: mm,
+    skillRegistry,
+    taskManager,
+    subAgentPool,
+    subAgentSpawner,
+    mcpClients,
+  } = opts;
   const registry = new ToolRegistry();
 
   // ── Hologram tools ──
@@ -503,7 +516,8 @@ export async function loadEngineSnapshot(ctx: GraphContext, projectPath: string,
     const fragilityRanks: Array<{ file: string; score: number }> = [];
     if (fragileData.fragile_modules || fragileData.modules) {
       const list = fragileData.fragile_modules || fragileData.modules;
-      for (const m of list) fragilityRanks.push({ file: m.file || m.module || '', score: m.fragility_score || m.score || 0 });
+      for (const m of list)
+        fragilityRanks.push({ file: m.file || m.module || '', score: m.fragility_score || m.score || 0 });
     }
     const cycleData = JSON.parse(cycleRaw);
     const cycleCount = cycleData.total_cycles || cycleData.cycles?.length || 0;
@@ -513,32 +527,65 @@ export async function loadEngineSnapshot(ctx: GraphContext, projectPath: string,
     const synthesisAlerts: Array<{ type: string; count: number; detail: string }> = [];
     const rawBlindspots = blindspotsData.blindspots || blindspotsData.alerts || [];
     const typeCounts = new Map<string, number>();
-    for (const b of rawBlindspots) { const t = b.type || b.kind || 'unknown'; typeCounts.set(t, (typeCounts.get(t) || 0) + 1); }
-    for (const [type, count] of typeCounts) synthesisAlerts.push({ type, count, detail: `${count} detected in project` });
+    for (const b of rawBlindspots) {
+      const t = b.type || b.kind || 'unknown';
+      typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+    }
+    for (const [type, count] of typeCounts)
+      synthesisAlerts.push({ type, count, detail: `${count} detected in project` });
     const lspHotspots: Array<{ file: string; symbol: string; callers: number }> = [];
-    for (const r of fragilityRanks.slice(0, 5)) { if (r.score > 100) lspHotspots.push({ file: r.file, symbol: r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '', callers: Math.round(r.score / 10) }); }
+    for (const r of fragilityRanks.slice(0, 5)) {
+      if (r.score > 100)
+        lspHotspots.push({
+          file: r.file,
+          symbol:
+            r.file
+              .split('/')
+              .pop()
+              ?.replace(/\.[^.]+$/, '') || '',
+          callers: Math.round(r.score / 10),
+        });
+    }
     const lspCallers = new Map<string, Array<{ symbol: string; count: number }>>();
     for (const r of fragilityRanks.slice(0, 3)) {
       try {
-        const resolveRaw = await typedRpc('hologram_call', { tool: 'resolve_call', args: { file: r.file } }).catch(() => '{}');
+        const resolveRaw = await typedRpc('hologram_call', { tool: 'resolve_call', args: { file: r.file } }).catch(
+          () => '{}',
+        );
         const resolveData = JSON.parse(resolveRaw);
         if (resolveData.calls && Array.isArray(resolveData.calls)) {
           const fc = new Map<string, number>();
-          for (const c of resolveData.calls) { const fn = c.callee || c.function || c.name || ''; if (fn) fc.set(fn, (fc.get(fn) || 0) + 1); }
-          const sorted = [...fc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([symbol, count]) => ({ symbol, count }));
+          for (const c of resolveData.calls) {
+            const fn = c.callee || c.function || c.name || '';
+            if (fn) fc.set(fn, (fc.get(fn) || 0) + 1);
+          }
+          const sorted = [...fc.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([symbol, count]) => ({ symbol, count }));
           if (sorted.length > 0) lspCallers.set(r.file, sorted);
         }
       } catch {}
     }
     const semanticNeighbors = new Map<string, Array<{ name: string; file: string }>>();
     for (const r of fragilityRanks.slice(0, 3)) {
-      const symbol = r.file.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+      const symbol =
+        r.file
+          .split('/')
+          .pop()
+          ?.replace(/\.[^.]+$/, '') || '';
       if (!symbol) continue;
       try {
-        const searchRaw = await typedRpc('hologram_call', { tool: 'search_symbols', args: { query: symbol, limit: 5 } }).catch(() => '{"results":[]}');
+        const searchRaw = await typedRpc('hologram_call', {
+          tool: 'search_symbols',
+          args: { query: symbol, limit: 5 },
+        }).catch(() => '{"results":[]}');
         const searchData = JSON.parse(searchRaw);
         const results = searchData.results || [];
-        const neighbors = results.filter((s: any) => (s.name || '').toLowerCase() !== symbol.toLowerCase()).slice(0, 3).map((s: any) => ({ name: s.name || '', file: s.location || s.file || '' }));
+        const neighbors = results
+          .filter((s: any) => (s.name || '').toLowerCase() !== symbol.toLowerCase())
+          .slice(0, 3)
+          .map((s: any) => ({ name: s.name || '', file: s.location || s.file || '' }));
         if (neighbors.length > 0) semanticNeighbors.set(r.file, neighbors);
       } catch {}
     }
@@ -549,10 +596,28 @@ export async function loadEngineSnapshot(ctx: GraphContext, projectPath: string,
       for (const r of fragilityRanks) baselineFragility.set(r.file, r.score);
     } else {
       const prev = ctx.engine?.baselineFragility;
-      if (prev && prev.size > 0) { let delta = 0; for (const r of fragilityRanks) { const before = prev.get(r.file) ?? 0; if (r.score > before) delta += (r.score - before) / Math.max(before, 1); } sessionDrift = delta; }
+      if (prev && prev.size > 0) {
+        let delta = 0;
+        for (const r of fragilityRanks) {
+          const before = prev.get(r.file) ?? 0;
+          if (r.score > before) delta += (r.score - before) / Math.max(before, 1);
+        }
+        sessionDrift = delta;
+      }
       baselineFragility = ctx.engine?.baselineFragility ?? new Map();
     }
-    ctx.engine = { fragilityRanks, cycleCount, healthScore, baselineFragility, sessionDrift, lspHotspots, lspCallers, synthesisAlerts, semanticNeighbors, vectorReady: semanticNeighbors.size > 0 };
+    ctx.engine = {
+      fragilityRanks,
+      cycleCount,
+      healthScore,
+      baselineFragility,
+      sessionDrift,
+      lspHotspots,
+      lspCallers,
+      synthesisAlerts,
+      semanticNeighbors,
+      vectorReady: semanticNeighbors.size > 0,
+    };
   } catch (e) {
     console.warn('[loadEngineSnapshot] engine data unavailable:', e);
   }
@@ -565,4 +630,12 @@ export function scheduleEngineSnapshotRefresh(ctx: GraphContext, projectPath: st
     _snapshotRefreshTimer = null;
     loadEngineSnapshot(ctx, projectPath, true).catch(() => {});
   }, 3000);
+}
+
+/** 取消在途的引擎快照刷新 timer — Workspace 停用/强清时登记进 bag（无泄漏）。 */
+export function cancelEngineSnapshotRefresh(): void {
+  if (_snapshotRefreshTimer) {
+    clearTimeout(_snapshotRefreshTimer);
+    _snapshotRefreshTimer = null;
+  }
 }

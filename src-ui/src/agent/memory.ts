@@ -13,8 +13,9 @@
 //   suppressed — 不给 LLM 看到
 //   Agent 自己主动存的记忆最高只能给 reference。fact 级别只有用户通过 /remember 明确要求时才能使用。
 
-import { typedRpc } from '../rpc-contract';
 import { z } from 'zod';
+import { typedRpc } from '../rpc-contract';
+import { getWorkspaceEpoch, isCurrentEpoch } from '../workspace-scope';
 import type { AuraRecord } from './aura-memory';
 import { auraCount, auraInit, auraRecall, auraShutdown, auraStore } from './aura-memory';
 import type { Tool } from './tool';
@@ -100,7 +101,14 @@ export class MemoryManager {
           /* 尚未初始化，无妨 */
         }
         const brainPath = this.projectPath.replace(/\\/g, '/') + '/.hologram/aura-brain';
+        // 代际防护：initAura 在途期间可能已切换工作区 —
+        // 过期后这个 brain 属于旧项目，初始化结果直接丢弃并关闭，防跨项目串味。
+        const epoch = getWorkspaceEpoch();
         const result = await auraInit(brainPath);
+        if (!isCurrentEpoch(epoch)) {
+          await auraShutdown();
+          return;
+        }
         this._auraReady = true;
         console.log(`[aura] initialized — ${result.record_count} records at ${result.path}`);
       } catch (e) {
@@ -129,11 +137,13 @@ export class MemoryManager {
    *  在启动阶段调用以避免首条用户消息的冷启动延迟。
    *  若 initAura() 仍在进行中则先等待完成，再预热。 */
   prewarmAura(): void {
-    this.initAura().then(() => {
-      if (this._auraReady) {
-        this.auraSemanticRecall('warmup', 1).catch(() => {});
-      }
-    }).catch(() => {});
+    this.initAura()
+      .then(() => {
+        if (this._auraReady) {
+          this.auraSemanticRecall('warmup', 1).catch(() => {});
+        }
+      })
+      .catch(() => {});
   }
 
   /** 过滤掉源记忆文件已不存在的 Aura 记录。
@@ -663,8 +673,7 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
     }),
     defineTool({
       name: 'hologram_memory_read',
-      description:
-        '读取一条已保存记忆的完整内容。需要回忆具体事实、用户偏好或过往决策时使用。每次读取会记录回想次数。',
+      description: '读取一条已保存记忆的完整内容。需要回忆具体事实、用户偏好或过往决策时使用。每次读取会记录回想次数。',
       schema: z.object({
         name: z.string().describe('记忆名称（不含 .md 扩展名），从 hologram_memory_list 获取'),
         scope: z
@@ -702,9 +711,11 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         '适合：不确定是否有相关记忆时先搜一下、需要跨记忆关联信息、当前问题需要历史决策上下文。\n' +
         '注意：搜索结果基于语义相似度，不一定精确匹配关键词。空结果 = 确实没有相关记忆。',
       schema: z.object({
-        query: z.string().describe(
-          '自然语言查询，描述你需要什么信息。例如："用户之前对 UI 布局的偏好"、"为什么选了 React 而不是 Vue"',
-        ),
+        query: z
+          .string()
+          .describe(
+            '自然语言查询，描述你需要什么信息。例如："用户之前对 UI 布局的偏好"、"为什么选了 React 而不是 Vue"',
+          ),
         topK: z.coerce.number().optional().describe('返回条数上限（默认 10）。'),
       }),
       readOnly: true,
@@ -745,7 +756,7 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         type: z
           .enum(['user', 'feedback', 'project', 'reference'])
           .describe('记忆类型: user=用户画像, feedback=用户反馈/要求, project=项目决策/进展, reference=外部参考'),
-                confidence: z
+        confidence: z
           .enum(['fact', 'reference', 'background', 'suppressed'])
           .optional()
           .describe('置信度。Agent 自己最高只能给 reference。fact 只有用户明确要求时才能用。默认: reference'),

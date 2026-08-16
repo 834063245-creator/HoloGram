@@ -24,20 +24,25 @@ function windowOf(anchor: string, span = 4000): string {
 describe('forceClearState 紧急路径清理（H3）', () => {
   const body = windowOf('forceClearState(): void {');
 
-  it('disposeAll 在 runtime = null 之前调用', () => {
+  it('disposeAll 在 runtime = null 之前调用（同步），且委托 bag 统一释放', () => {
     const dispose = body.indexOf('.disposeAll()');
     const detach = body.indexOf('this.runtime = null');
     expect(dispose, 'forceClearState 必须调 disposeAll').toBeGreaterThan(-1);
     expect(detach).toBeGreaterThan(-1);
     expect(dispose, 'disposeAll 必须先于 runtime 解绑').toBeLessThan(detach);
+    // 其余清理（aura/cache）走 bag 单一机制 — forceClearState 委托 _bag.dispose()
+    expect(body).toContain('void this._bag.dispose()');
+    expect(body).toContain('bumpWorkspaceEpoch()');
   });
 
-  it('紧急路径也释放 aura 单例', () => {
-    expect(body).toContain('auraShutdown');
+  it('aura 单例释放登记进 bag（aura-shutdown 清理器）', () => {
+    expect(src).toContain("'aura-shutdown'");
+    expect(src).toContain('auraShutdown');
   });
 
-  it('紧急路径也清 agent 注入缓存', () => {
-    expect(body).toContain('resetAgentCaches()');
+  it('agent 注入缓存清理登记进 bag（reset-agent-caches 清理器）', () => {
+    expect(src).toContain("'reset-agent-caches'");
+    expect(src).toContain('resetAgentCaches()');
   });
 });
 

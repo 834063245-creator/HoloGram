@@ -61,4 +61,23 @@ describe('Workspace bag 接线（T0 静态断言）', () => {
   it('Workspace 类声明 _bag（DisposerBag 单一 owner）', () => {
     expect(src).toContain('private readonly _bag = new DisposerBag()');
   });
+
+  it('deactivate 不再人肉枚举清理 — 只委托 bag + bump（无 _unlisteners 数组）', () => {
+    const body = windowOf('async deactivate(');
+    expect(src).not.toContain('_unlisteners');
+    expect(body).toContain('await this._bag.dispose()');
+    // 关键资源清理都是 bag 登记的标签（获取点登记制 — review 可见）
+    for (const label of [
+      "'listener:graph-updated'",
+      "'listener:tool-done'",
+      "'runtime-dispose'",
+      "'reset-agent-caches'",
+      "'aura-shutdown'",
+      "'agent-panel-store-clear'",
+      "'checkTimer-clear'",
+      "'engine-snapshot-refresh-cancel'",
+    ]) {
+      expect(src, `缺少 bag 登记: ${label}`).toContain(label);
+    }
+  });
 });
