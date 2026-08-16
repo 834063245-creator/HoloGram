@@ -52,7 +52,10 @@ export class DisposerBag {
     };
   }
 
-  /** 逆序串行释放全部清理器。单次执行；单个失败不阻断后续，全部跑完后聚合抛出。 */
+  /** 逆序串行释放全部清理器。单次执行；单个失败不阻断后续，全部跑完后聚合抛出。
+   *  同步快通道（Phase 4）：清理器返回非 Promise 时不产生微任务边界——全 sync
+   *  链在 dispose() 返回 promise 之前同步执行完毕（调用方无需 await 即可观测
+   *  副作用，`_disposeAgent` 的同步语义依赖此点）；async 清理器仍串行等待。 */
   async dispose(): Promise<void> {
     if (this._disposed) return;
     this._disposed = true;
@@ -62,7 +65,10 @@ export class DisposerBag {
     const errors: Array<{ label: string; error: unknown }> = [];
     for (const e of remaining) {
       try {
-        await e.disposer();
+        const r = e.disposer();
+        if (r && typeof (r as PromiseLike<void>).then === 'function') {
+          await r;
+        }
       } catch (err) {
         errors.push({ label: e.label, error: err });
       }

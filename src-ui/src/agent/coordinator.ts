@@ -14,6 +14,8 @@
 //      不存在"先跑起来再补 signal"的时序窗）
 //   4. 状态查询（getHandle / summary，供 UI 与日志使用）
 
+import { type Disposer, once } from './lifecycle';
+
 export enum SubAgentStatus {
   Running = 'running',
   Completed = 'completed',
@@ -189,7 +191,12 @@ export class SubAgentPool {
 
   /** pool 满时将生成请求入队。返回一个"排队中"的 SpawnedAgent。
    *  实际生成在 _drainQueue() 触发时进行。 */
-  private _enqueue(description: string, runFn: SubAgentRunFn, callId?: string, timeoutMs?: number): SpawnedAgent | null {
+  private _enqueue(
+    description: string,
+    runFn: SubAgentRunFn,
+    callId?: string,
+    timeoutMs?: number,
+  ): SpawnedAgent | null {
     if (this.queue.length >= MAX_QUEUE_SIZE) {
       return null; // 队列已满 — 模型需重试
     }
@@ -320,6 +327,20 @@ export class SubAgentPool {
       stopped.push(id);
     }
     return stopped;
+  }
+
+  /** 所有权清理器（agent-core-convergence Phase 4 disposer 契约）：
+   *  停止全部子 Agent、清空超时 timer 与限流队列，幂等。
+   *  池是会话级共享资源——owner 是 workspace/会话层，**不挂单个 Agent 的
+   *  context**（挂上会在一个 Agent dispose 时误杀兄弟 Agent 的在跑任务）；
+   *  本原语供 owner 在会话停用时一次性收口（REGISTRY_OWNERSHIP.md）。 */
+  ownedDisposer(): Disposer {
+    return once(() => {
+      this.stopAll();
+      // stopAll 经 finish 已清各 timer——此处兜底扫尾，防未来新增路径漏清
+      for (const t of this.timeouts.values()) clearTimeout(t);
+      this.timeouts.clear();
+    });
   }
 
   /** 将排队中（从未生成）的 Agent 结算为已停止：记录到已完成

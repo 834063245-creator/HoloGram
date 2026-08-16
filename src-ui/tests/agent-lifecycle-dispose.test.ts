@@ -71,6 +71,18 @@ describe('Agent 句柄所有权 — dispose 生命周期', () => {
     expect(runtime.listAgents()).toHaveLength(0);
   });
 
+  it('重复 dispose 只触发一次 bus 注销（Phase 4 ctx 所有权——单次释放）', async () => {
+    const runtime = new AgentRuntime();
+    const h1 = await createSessionAgent(runtime, 'main-1');
+    const unreg = vi.spyOn(runtime.getBus(), 'unregister');
+
+    h1.dispose();
+    h1.dispose();
+
+    expect(unreg).toHaveBeenCalledTimes(1);
+    expect(runtime.listAgents()).toHaveLength(0);
+  });
+
   it('disposeAll() 销毁所有 Agent — Workspace 停用路径', async () => {
     const runtime = new AgentRuntime();
     await createSessionAgent(runtime, 'main-1');

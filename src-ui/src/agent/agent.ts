@@ -347,7 +347,13 @@ export class Agent {
     // setBus/_isolationId 接线之间无 await，时序等价；bus.register 为 Map.set
     // 覆盖式，即使重复接线也无害（此处只接一次）。
     if (ctx) {
-      if (this._bus) this.setBus(this._bus);
+      if (this._bus) {
+        const bus = this._bus;
+        this.setBus(bus);
+        // Phase 4：bus 注册的对称清理归 ctx 所有权——runtime _disposeAgent 经
+        // ctx.dispose() 逆序统一释放（flush 前置顺序在 _disposeAgent 内保持）。
+        ctx.effect(() => () => bus.unregister(this.id), 'bus-unregister');
+      }
       if (ctx.isolationId) this._isolationId = ctx.isolationId;
     }
   }

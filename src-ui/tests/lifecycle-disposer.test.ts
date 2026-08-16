@@ -1,7 +1,7 @@
 // Disposer 契约行为测试（agent-core-convergence Phase 1 / 验证计划 T1）。
 // 钉住 lifecycle.ts 头注释里的五条行为规约。
 import { describe, expect, it } from 'vitest';
-import { DisposerBag, once, runInContext, type Disposer } from '../src/agent/lifecycle';
+import { type Disposer, DisposerBag, once, runInContext } from '../src/agent/lifecycle';
 
 describe('DisposerBag — 逆序清理', () => {
   it('后注册的先释放（依赖建的反方向拆）', async () => {
@@ -65,15 +65,38 @@ describe('DisposerBag — async 串行等待', () => {
   it('dispose 返回的 promise 等待全部清理完成', async () => {
     let flag = false;
     const bag = new DisposerBag();
-    bag.add(
-      async () => {
-        await new Promise((r) => setTimeout(r, 5));
-        flag = true;
-      },
-      'slow',
-    );
+    bag.add(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      flag = true;
+    }, 'slow');
     await bag.dispose();
     expect(flag).toBe(true);
+  });
+});
+
+describe('DisposerBag — 同步快通道（Phase 4）', () => {
+  it('全 sync 链在 dispose() 返回前同步执行完毕（无需 await）', () => {
+    const order: string[] = [];
+    const bag = new DisposerBag();
+    bag.add(() => order.push('a'), 'a');
+    bag.add(() => order.push('b'), 'b');
+    bag.dispose(); // 不 await
+    expect(order).toEqual(['b', 'a']);
+  });
+
+  it('sync→async 混合链：sync 立即生效，async 仍被串行等待', async () => {
+    const order: string[] = [];
+    const bag = new DisposerBag();
+    // 释放序：async-early（后注册）→ sync-late（先释放的是 async，之后是 sync）
+    bag.add(() => order.push('sync-late'), 'sync-late');
+    bag.add(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      order.push('async-early');
+    }, 'async-early');
+    const p = bag.dispose();
+    expect(order).toEqual([]); // async 未完成前不得继续
+    await p;
+    expect(order).toEqual(['async-early', 'sync-late']);
   });
 });
 
@@ -82,19 +105,13 @@ describe('DisposerBag — 部分失败不阻断后续', () => {
     const order: string[] = [];
     const bag = new DisposerBag();
     bag.add(() => order.push('a'), 'a');
-    bag.add(
-      () => {
-        throw new Error('boom');
-      },
-      'boom-label',
-    );
-    bag.add(
-      async () => {
-        order.push('c');
-        throw new Error('boom-async');
-      },
-      'c-label',
-    );
+    bag.add(() => {
+      throw new Error('boom');
+    }, 'boom-label');
+    bag.add(async () => {
+      order.push('c');
+      throw new Error('boom-async');
+    }, 'c-label');
     // 错误按释放序（注册的逆序）收集：c-label 先释放先入列
     await expect(bag.dispose()).rejects.toThrow(/2 个清理器失败.*c-label.*boom-label/s);
     expect(order).toEqual(['c', 'a']); // 逆序 + 失败者之后的照常执行
@@ -113,11 +130,7 @@ describe('once / runInContext', () => {
   it('runInContext 立即注册并纳入 bag；返回的释放器单独生效', async () => {
     const order: string[] = [];
     const bag = new DisposerBag();
-    const release = runInContext(
-      bag,
-      () => () => order.push('registered-cleanup'),
-      'via-run',
-    );
+    const release = runInContext(bag, () => () => order.push('registered-cleanup'), 'via-run');
     expect(bag.size).toBe(1);
     release();
     expect(order).toEqual(['registered-cleanup']);
