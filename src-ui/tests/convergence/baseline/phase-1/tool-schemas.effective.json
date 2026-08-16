@@ -1,0 +1,247 @@
+{
+  "count": 5,
+  "note": "空输入注册表跑真实 createAgent 后的 schemas()——钉 runtime 侧注册的工具面；引擎动态工具豁免同 phase-0 决策#1；不含 _schemaSelector 限额裁剪",
+  "schemas": [
+    {
+      "description": "进入规划模式。切换后写操作会在执行层被拦截（写计划文件除外），你只保有只读能力。适合：新功能实现、多文件改动、架构决策、需求不明确的任务。不适合：单行修复、明确的指令、纯探索任务。进入后按流程操作：探索 → 设计 → 写计划文件 → exit_plan_mode 提交审批。",
+      "name": "enter_plan_mode",
+      "parameters": {
+        "additionalProperties": {},
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "description": "提交计划给用户审批。调用前必须先写好计划文件。如果计划包含多个方案，用 options 参数列出（2-3个），用户会选择一个。用户可以：批准 / 修改（带反馈，留在规划模式）/ 拒绝。批准后自动切换到执行模式，所有工具恢复可用。",
+      "name": "exit_plan_mode",
+      "parameters": {
+        "additionalProperties": {},
+        "properties": {
+          "options": {
+            "description": "可选：2-3个备选方案，用户审批时选择一个。每个方案有 label 和 description。",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "方案概述和权衡",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "方案名称（1-8 个词）",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "description"
+              ],
+              "type": "object"
+            },
+            "minItems": 2,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "description": "查看上下文压缩的运行状态和数据。包括：已记录的压缩次数、压缩比、信息丢失估计、自动调优状态、当前参数 vs 推荐参数。用户问\"压缩调得怎么样\"或\"压缩数据够不够\"时调用。",
+      "name": "hologram_compaction_stats",
+      "parameters": {
+        "additionalProperties": {},
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "description": "Sub-agent and inter-agent coordination: spawn / status / kill / message / request / reply / inbox / ack / list / merge / discover / lookup / isolation.",
+      "name": "agent",
+      "parameters": {
+        "properties": {
+          "action": {
+            "description": "Which operation to perform.",
+            "enum": [
+              "spawn",
+              "kill",
+              "message",
+              "request",
+              "reply",
+              "inbox",
+              "ack",
+              "list",
+              "merge",
+              "discover",
+              "lookup"
+            ],
+            "type": "string"
+          },
+          "agent_id": {
+            "description": "The sub-agent ID to kill (returned by agent_spawn with async=true)",
+            "type": "string"
+          },
+          "agent_ids": {
+            "description": "Sub-agent IDs to merge. If omitted, merges all completed sub-agents.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "async": {
+            "description": "If true, returns immediately with the sub-agent ID. The sub-agent runs in the background; its result arrives via agent_message (type: \"result\"). If false (default), blocks until the sub-agent finishes. Use agent_merge to merge completed async sub-agents.",
+            "type": "boolean"
+          },
+          "category": {
+            "description": "Category: \"architecture\" / \"bug\" / \"pattern\" / \"config\" / \"other\" (action: discover); Filter by category (optional): \"architecture\" / \"bug\" / \"pattern\" / \"config\" / \"other\" (action: lookup)",
+            "type": "string"
+          },
+          "content": {
+            "description": "Message content (action: message); Request content — what you want the other agent to do or answer (action: request); Reply content (action: reply)",
+            "type": "string"
+          },
+          "description": {
+            "description": "Short label for the sub-agent task (3-5 words, used in progress display)",
+            "type": "string"
+          },
+          "from": {
+            "description": "Filter by sender agent ID.",
+            "type": "string"
+          },
+          "include_archived": {
+            "description": "Include archived discoveries (default false)",
+            "type": "boolean"
+          },
+          "key": {
+            "description": "Short label for this discovery (e.g. \"auth-location\", \"config-entry-point\") (action: discover); Filter by discovery key (optional, partial match) (action: lookup)",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max messages to return (newest first). Default: all. (action: inbox); Max number of results (default 20) (action: lookup)",
+            "type": "number"
+          },
+          "message_id": {
+            "description": "ID of the message to reply to (from inbox notification) (action: reply); Read a specific message by ID. Returns full content. (action: inbox); ID of the message to acknowledge (action: ack)",
+            "type": "string"
+          },
+          "output_schema": {
+            "additionalProperties": {},
+            "description": "Optional JSON Schema (object-rooted) the sub-agent result must satisfy. Supported keywords: type/properties/required/additionalProperties/items/enum/const/oneOf. Only valid in blocking mode (async=false). The validated JSON object is returned as the tool result.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "prompt": {
+            "description": "Complete, self-contained task directive for the sub-agent. Must include: what to do, which files to modify, and the expected outcome. Do NOT instruct the sub-agent to run builds or tests — it cannot do so (parallel build tools cause file-lock deadlocks). Verification is the parent agent's responsibility after all sub-agents finish. When spawning multiple sub-agents in parallel, give each a distinct, non-overlapping set of files to avoid write conflicts.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Optional reason for killing the agent (for logging)",
+            "type": "string"
+          },
+          "since": {
+            "description": "Only return discoveries with ts >= since (Unix ms, optional)",
+            "type": "number"
+          },
+          "subagent_type": {
+            "description": "Omit to fork (inherits your recent context — DEFAULT). Set to \"fresh\" for a clean-slate sub-agent.",
+            "enum": [
+              "fresh",
+              "fork"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "description": "Target agent ID (action: message); Target agent ID to send the request to (action: request)",
+            "type": "string"
+          },
+          "timeout_minutes": {
+            "description": "Optional timeout override (default 30 minutes). The sub-agent is aborted when it exceeds this.",
+            "maximum": 60,
+            "type": "number"
+          },
+          "timeout_seconds": {
+            "default": 30,
+            "description": "Timeout in seconds (default 30, max 120)",
+            "maximum": 120,
+            "type": "number"
+          },
+          "tool_allowlist": {
+            "description": "Optional list of tool names the sub-agent is allowed to use. If omitted, all tools are available. Example: [\"read_file\", \"search_content\", \"inspect_symbol\"] for a read-only research agent.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "description": "Message type (e.g. \"question\", \"status\", \"handoff\") (action: message); Request type (e.g. \"question\", \"lookup\", \"verify\") (action: request); Filter by message type (e.g. \"request\", \"status\", \"handoff\"). (action: inbox)",
+            "type": "string"
+          },
+          "value": {
+            "description": "The discovery content — be specific (file paths, line numbers, findings)",
+            "type": "string"
+          },
+          "worktree": {
+            "default": "keep",
+            "description": "\"keep\" (default) — leave the worktree intact for manual merge. \"discard\" — clean up the worktree.",
+            "enum": [
+              "keep",
+              "discard"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "description": "Task board: create / get / list / update / stop / board.",
+      "name": "task",
+      "parameters": {
+        "properties": {
+          "action": {
+            "description": "Which operation to perform.",
+            "enum": [
+              "create",
+              "get",
+              "list",
+              "update",
+              "stop",
+              "board"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "description": "What needs to be done, in one sentence (action: create); Updated detail text (optional) (action: update)",
+            "type": "string"
+          },
+          "id": {
+            "description": "Task ID to fetch (action: get); Task ID to update (action: update); Task ID to stop (action: stop)",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "status": {
+            "description": "Optional status filter. Omit to list all. (action: list); New status for the task (action: update)",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "Short task title (3-8 words) (action: create); New title (optional) (action: update)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}
