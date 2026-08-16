@@ -20,6 +20,6 @@ dispose_cleanup_steps (14):
   - void this._bus.flush();
   - void taskBoard?.flush();
   - void discoveryBoard?.flush();
-  - handle 
-  - handle 
+  - handle
+  - handle
   - log.info('runtime', `agent destroyed: ${id}`);
