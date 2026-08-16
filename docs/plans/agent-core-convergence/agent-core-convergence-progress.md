@@ -12,7 +12,7 @@
 | 1 Disposer 契约 + V1 | ✅ 完成 | 3 注册 API 返回 Disposer；startOwned/ownedDisposer；T0 门禁 + F8 快照 + F2 workflow |
 | 2 工具管道类型化事件 + V2 | ✅ 完成 | AgentEventBus 双路径；12 场景差分 + pipeline 对拍 phase-0 冻结 baseline 逐字节一致 |
 | 3 AgentContext 抽取 | ✅ 完成 | 三层收敛 26/11/12→0/0/0；wiring baseline 经审批冻结（828679fc）；决策 16-19 |
-| 4 生命周期所有权统一 | 🔄 实现+验证完毕 | dispose 21→14 步收敛为 ctx 所有权；wiring baseline 变更待审批；决策 20-23 |
+| 4 生命周期所有权统一 | ✅ 完成 | dispose 21→14 步收敛为 ctx 所有权；wiring baseline 经审批冻结（45f328a2）；决策 20-23 |
 | 5 会话事件溯源日志 | ⬜ 未开始 | |
 | 6 组合层收尾（可选） | ⬜ 未开始 | |
 
@@ -156,15 +156,16 @@
 
 ## Phase 4 / V4 记录（2026-08-16）
 
-> 状态：实现与验证完毕，**停工待用户审批 wiring baseline 变更**
-> （`baseline-change-request.md`——仅 dispose_cleanup_steps 段 21→14；模型可见表面零变化）。
+> 状态：**✅ 完成并冻结**（2026-08-16）。wiring dispose 段变更经用户批准后落地
+> （`baseline-change-request.md` → record → freeze commit `45f328a2`）。
 
 ### 交付物
 
 | commit | 内容 |
 |---|---|
 | `8c6279a8` | 生命周期原语备齐（行为中性）：`lifecycle.ts` DisposerBag **同步快通道**（非 Promise 清理器不产生微任务边界，全 sync 链在 dispose() 返回前完成；async 仍串行等待）；`coordinator.ts` `SubAgentPool.ownedDisposer()`（stopAll + 兜底清 timer，幂等）；`agent.ts` ctx 构造路径登记 `bus-unregister` effect；`tests/agent-context-dispose.test.ts` 6 例（幂等/并发单次/错误聚合可观测/后注册抛错/同步排空/终态只读）+ lifecycle-disposer 2 例 + agent-lifecycle-dispose 1 例 + coordinator 1 例。四门全绿（1107+1skip） |
-| （待审批后提交） | `runtime.ts`：装配期 effects 接线（board-unregister / lifecycle-manager 持有 startOwned / runtime-maps）+ `_disposeAgent` 重写（flush 前置序保持 → saveState → `ctx.dispose()` 逆序释放，聚合错误 log.warn）；`specs/phase-4.test.ts` 5 例（T0 静态×3 + T1 顺序 trace + T5 百次循环）；REGISTRY_OWNERSHIP.md 终态 |
+| `aea5f905` | `runtime.ts`：装配期 effects 接线（board-unregister / lifecycle-manager 持有 startOwned / runtime-maps）+ `_disposeAgent` 重写（flush 前置序保持 → saveState → `ctx.dispose()` 逆序释放，聚合错误 log.warn）；`specs/phase-4.test.ts` 5 例（T0 静态×3 + T1 顺序 trace + T5 百次循环）；REGISTRY_OWNERSHIP.md 终态 |
+| `45f328a2` | baseline freeze：wiring dispose 段 21→14（record 后 git diff 仅此一处内容变化，其余 6 快照 diff 为空——决策 #7 autocrlf 口径） |
 
 ### 验收核对（验证计划 §4 Phase 4）
 
@@ -174,7 +175,7 @@
 - [x] T5：fake timers 百次 create/dispose——每轮 +1 巡检 timer、dispose 归零，注册表/总线终态全空
 - [x] T3：其余全部快照逐字节不变；wiring dispose 段漂移 = 本申请对象
 - [x] T4：全量 vitest 1111 passed / 1 skipped / 1 failed（唯一 failed 即 wiring 比对，预期红）；tsc 干净；触碰文件 biome 零新增
-- [ ] wiring baseline freeze（待审批 → record → freeze commit）
+- [x] wiring baseline freeze（审批 → record → freeze commit `45f328a2`）；冻结后终态：verify:convergence exit 0，全量 vitest **1112 passed / 1 skipped / 0 failed（103 文件）**
 
 ### 决策与偏差记录（Phase 4 追加）
 
@@ -187,7 +188,7 @@
 
 > Phase 4 结束：确认生命周期统一是否带来可测的泄漏减少；否则不进入 Phase 5。
 
-结论：**可测泄漏减少成立，建议进入 Phase 5**（待 baseline 审批后生效）。证据：
+结论：**可测泄漏减少成立，进入 Phase 5**（baseline 已批准冻结，判定生效）。证据：
 - T5：百次循环 timer 数严格归零（旧路径依赖 7 个手工清理步骤的"都记得调"，新路径所有权随构造登记、释放不可绕过）；
 - 防回归代价：phase-4 T0 禁止片段——任何把分散清理写回 _disposeAgent 的尝试在 gate 即失败；
 - REGISTRY_OWNERSHIP 清单闭环：runtime 侧订阅型注册 100% ctx 所有权，共享资源（MCP/pool）显式豁免并备好原语。
@@ -244,6 +245,6 @@
 - Phase 1 结束：＿
 - Phase 2 结束：＿
 - Phase 3 结束：复杂度实质下降（26/11/12→0/0/0），进入 Phase 4（2026-08-16）
-- Phase 4 结束：可测泄漏减少成立（T5 百次归零 + T0 禁止片段），建议进入 Phase 5（2026-08-16，待 baseline 审批）
+- Phase 4 结束：可测泄漏减少成立（T5 百次归零 + T0 禁止片段），进入 Phase 5（2026-08-16）
 - Phase 4 结束：＿
 - Phase 5 结束：＿
