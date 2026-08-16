@@ -45,6 +45,31 @@ const T0_RULES = [
       return failures;
     },
   },
+  {
+    phase: 5,
+    label: 'phase-5 T0: agent.ts 禁止绕过双写入口直改 session 数组',
+    check: () => {
+      const src = readFileSync(path.resolve(pkgRoot, 'src/agent/agent.ts'), 'utf8');
+      const failures = [];
+      if (T0_EXEMPTIONS.has('agent.ts:session-direct-write')) return failures;
+      // 唯一合法直改：双写入口内部（_appendMessage 的 push / _retractSessionRange 的 splice）
+      const pushCount = (src.match(/this\.session\.push\(/g) || []).length;
+      const spliceCount = (src.match(/this\.session\.splice\(/g) || []).length;
+      if (pushCount !== 1) {
+        failures.push(
+          `agent.ts this.session.push 出现 ${pushCount} 次（应恰 1 次 — 仅 _appendMessage 入口内）；` +
+            '模型可见消息必须经双写入口先入事件日志',
+        );
+      }
+      if (spliceCount !== 1) {
+        failures.push(
+          `agent.ts this.session.splice 出现 ${spliceCount} 次（应恰 1 次 — 仅 _retractSessionRange 入口内）；` +
+            '区间撤回必须经双写入口',
+        );
+      }
+      return failures;
+    },
+  },
 ];
 
 function runT0StaticChecks() {
@@ -61,7 +86,6 @@ function runT0StaticChecks() {
   }
   return failures;
 }
-
 
 function runSpecs(record) {
   const env = { ...process.env };

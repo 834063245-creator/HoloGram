@@ -70,6 +70,7 @@ import { PlanStateManager } from '../plan/plan-state';
 import { createEnterPlanModeTool, createExitPlanModeTool } from '../plan/plan-tools';
 import { createPlanExploreHook, createPlanWriteHook } from '../plan/plan-graph-hook';
 import { AgentContext } from '../context';
+import { SessionLog } from '../session-log';
 
 import type {
   AgentAssemblyInputs,
@@ -555,6 +556,8 @@ export class AgentRuntime implements RuntimePort {
     }
     if (!ctx.get('planState')) ctx.set('planState', new PlanStateManager());
     if (!ctx.get('execState')) ctx.set('execState', createExecState());
+    // Phase 5：会话事件溯源日志 — 每 Agent 独立物化（Agent 构造从 ctx 读取并双写）
+    if (!ctx.get('sessionLog')) ctx.set('sessionLog', new SessionLog());
   }
 
   /** 装配本体 — 只消费 AgentContext + AgentAssemblyInputs（config-free）。

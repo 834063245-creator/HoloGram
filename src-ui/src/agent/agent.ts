@@ -35,6 +35,7 @@ import { loadSettingsWithSecrets } from '../settings';
 import type { GoalManager, GoalRecord } from './goal-manager';
 import { HookRegistry, type PreflightHookRegistry } from './hooks';
 import { AgentContext } from './context';
+import { buildCompactedSummaryMessage, type SessionResetReason, SessionLog } from './session-log';
 import { log } from './logger';
 import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
 import { StreamingToolExecutor } from './streaming-executor';
@@ -151,6 +152,8 @@ export class Agent {
   private prov: Provider;
   private tools: ToolRegistry;
   private session: Message[];
+  /** Phase 5：会话事件溯源日志 — 模型可见事实先入日志，this.session 为投影。 */
+  private _sessionLog: SessionLog;
   private temperature: number;
   private _visibleToolsLimit: number;
   private _toolResultWindow: number;
@@ -282,6 +285,13 @@ export class Agent {
   private _onSessionPersisted: ((sessionId: string, messages: Message[]) => void) | undefined;
   /** 已持久化到 NDJSON 的消息数（P1-15 增量游标）。saveState 只追加此下标之后的消息。 */
   private _persistedMsgCount = 0;
+  /** 已持久化到 session-log.ndjson 的最大事件 seq（Phase 5 双写游标）。
+   *  事件只增不减（reset/retract 也是事件）—— 与消息游标不同，永不重置。 */
+  private _persistedEventSeq = 0;
+  /** 事件日志写链 — run() 结尾的 fire-and-forget saveState 与显式/dispose saveState
+   *  并发时，同游标重复追加的事件会让 ndjson 出现重复 seq（回放即拒绝）。按调用序
+   *  串行化（模式参照 AgentStore._indexChain / BoardPersistence._writeChain，P1-13）。 */
+  private _eventAppendChain: Promise<void> = Promise.resolve();
 
   // 压缩成本模型追踪器
   private compactionTracker = new CompactionTracker();
@@ -338,9 +348,12 @@ export class Agent {
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
     this._onSessionPersisted = opts.onSessionPersisted;
 
+    // Phase 5 双写：日志先于 session 初始化（构造期的 system prompt 也走事件入口）。
+    // ctx 路径从服务表取（runtime 物化，每 Agent 独立）；legacy 路径就地新建。
+    this._sessionLog = ctx?.get('sessionLog') ?? new SessionLog();
     this.session = [];
     if (systemPrompt) {
-      this.session.push({ role: 'system', content: systemPrompt });
+      this._replaceSession([{ role: 'system', content: systemPrompt }], 'init');
     }
 
     // ctx 路径：bus 注册与隔离接线在构造内完成。旧路径中构造与 runtime 的
@@ -445,8 +458,41 @@ export class Agent {
     return this.session;
   }
 
+  /** Phase 5：本 Agent 的事件溯源日志（观测/差分/回放入口）。
+   *  append 只发生在运行时边界（下方三个双写入口），外部不得直写。 */
+  getSessionLog(): SessionLog {
+    return this._sessionLog;
+  }
+
+  // ── Phase 5 双写入口：模型可见事实先 append 事件，同一消息对象进 session 投影 ──
+  // 旧数组路径保留为真源（restore/UI/持久化读它）；等价性由 tests/session-differential.test.ts
+  // 差分矩阵与 baseline/phase-5 契约快照钉住。agent.ts 内禁止绕过这三个入口直改 session。
+
+  /** 追加一条模型可见消息（user / assistant / tool）。 */
+  private _appendMessage(kind: 'user/message' | 'assistant/text' | 'tool/result', message: Message): void {
+    this._sessionLog.append(kind, { message });
+    this.session.push(message);
+  }
+
+  /** 会话整体替换（构造 init / setSession 恢复 / newSession / goal 恢复与清场）。
+   *  事件内携带深拷贝快照（调用方后续改动不得回写历史）；折叠失效与游标重置
+   *  语义留在调用点，与替换来源一一对应。 */
+  private _replaceSession(messages: Message[], reason: SessionResetReason): void {
+    this._sessionLog.append('session/reset', {
+      messages: messages.map((m) => JSON.parse(JSON.stringify(m)) as Message),
+      reason,
+    });
+    this.session = messages;
+  }
+
+  /** 区间撤回（[fromIndex, toIndex) splice 语义 — retractTurnAt / goal 暂停裁剪）。 */
+  private _retractSessionRange(fromIndex: number, toIndex: number): void {
+    this._sessionLog.append('session/retract', { fromIndex, toIndex });
+    this.session.splice(fromIndex, toIndex - fromIndex);
+  }
+
   setSession(msgs: Message[]): void {
-    this.session = msgs;
+    this._replaceSession(msgs, 'restore');
     // 会话被替换（恢复/加载）→ 折叠状态失效，从完整历史重新开始
     this._compactSummary = null;
     this._compactTailStart = -1;
@@ -609,7 +655,7 @@ export class Agent {
     while (end < this.session.length && this.session[end].role !== 'user') {
       end++;
     }
-    this.session.splice(sessionIndex, end - sessionIndex);
+    this._retractSessionRange(sessionIndex, end);
     this._execState.bumpVersion();
     this._sink({ kind: EventKind.SessionChanged });
     this._ui.sessionReplaced?.(this.session);
@@ -736,6 +782,18 @@ export class Agent {
         await this.agentStore.appendMessages(this.id, this.session.slice(this._persistedMsgCount));
       }
       this._persistedMsgCount = this.session.length;
+      // Phase 5 双写：事件日志增量追加（append-only —— reset/retract 也是事件，
+      // 无 rewrite 路径；事件游标与消息游标独立，永不重置）。经写链串行化 —
+      // 并发 saveState（run 结尾 fire-and-forget + 显式/dispose）不得重复追加。
+      const store = this.agentStore;
+      const persistEvents = async (): Promise<void> => {
+        const pendingEvents = this._sessionLog.eventsAfter(this._persistedEventSeq);
+        if (pendingEvents.length === 0) return;
+        await store.appendSessionEvents(this.id, pendingEvents);
+        this._persistedEventSeq = pendingEvents[pendingEvents.length - 1].seq;
+      };
+      this._eventAppendChain = this._eventAppendChain.then(persistEvents, persistEvents);
+      await this._eventAppendChain;
     } catch {
       /* 持久化是尽力而为 — 绝不阻塞 agent 循环 */
     }
@@ -745,7 +803,7 @@ export class Agent {
   private _applyPendingInserts(): void {
     if (this._pendingInserts.length === 0) return;
     for (const text of this._pendingInserts) {
-      this.session.push({ role: 'user', content: text });
+      this._appendMessage('user/message', { role: 'user', content: text });
     }
     this._pendingInserts = [];
     // 通知 chat.ts 在新响应开始前完成当前轮次
@@ -810,7 +868,7 @@ export class Agent {
       durableParts.push(`📬 请求 (${newRequests.length} 条，用 agent_reply 回复):\n${formatted}`);
     }
     if (durableParts.length > 0) {
-      this.session.push({
+      this._appendMessage('user/message', {
         role: 'user',
         content: `<system-reminder>\n${durableParts.join('\n\n')}\n</system-reminder>`,
       });
@@ -865,7 +923,7 @@ export class Agent {
   /** 开启全新对话 — 保留 system prompt，清除其他所有内容。 */
   newSession(): void {
     const sys = this.session.length > 0 && this.session[0].role === 'system' ? this.session[0] : null;
-    this.session = sys ? [sys] : [];
+    this._replaceSession(sys ? [sys] : [], 'new-session');
     // 新会话 → 折叠状态失效
     this._compactSummary = null;
     this._compactTailStart = -1;
@@ -920,7 +978,7 @@ export class Agent {
       }
     }
     if (input) {
-      this.session.push({ role: 'user', content: input });
+      this._appendMessage('user/message', { role: 'user', content: input });
       // 用户发新消息 → 重置 plan 提醒计数（下一轮注入全量提醒）
       this._planInjector?.resetOnUserInput();
     }
@@ -979,7 +1037,7 @@ export class Agent {
     // UI 的 isRunning 守卫阻塞）— 像暂停的一样接管它。
     const snapshot = await this.goalManager.loadSession(record.id);
     if (snapshot && snapshot.length > 0) {
-      this.session = snapshot;
+      this._replaceSession(snapshot, 'goal-resume');
       this._execState.bumpVersion();
     }
     this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 恢复: ${record.text.slice(0, 60)}…` });
@@ -1038,7 +1096,7 @@ export class Agent {
 
     // 重注完整目标提示词 — 新建与恢复都走这里。恢复时不能指望快照里
     // 还留着原文（可能已被压缩），重复出现的 <goal> 块是可接受的代价。
-    this.session.push({ role: 'user', content: this._goalPrompt(record, isResume) });
+    this._appendMessage('user/message', { role: 'user', content: this._goalPrompt(record, isResume) });
     if (isResume) {
       this._sink({ kind: EventKind.Notice, level: 'info', text: `[目标] 从第 ${record.iteration + 1} 轮恢复…` });
     }
@@ -1060,13 +1118,16 @@ export class Agent {
         // 用户意图是暂停,以 signal 为准,不认错误消息文本。
         if (signal.aborted || e?.message === 'aborted') {
           // ── 暂停:裁剪未完成轮次,快照进 goal 槽,记录转 paused ──
-          this.session = this.session.slice(0, sessionBefore);
+          this._retractSessionRange(sessionBefore, this.session.length);
           this._execState.bumpVersion();
           await mgr.update(record.id, { status: 'paused', iteration: iter, stallRounds });
           await mgr.saveSession(record.id, this.session);
           // 从内存会话中清除目标上下文，使普通聊天不自动继续。
           // 完整上下文存在 goal 槽中；/goal resume 从那里恢复。
-          this.session = this.session.length > 0 && this.session[0].role === 'system' ? [this.session[0]] : [];
+          this._replaceSession(
+            this.session.length > 0 && this.session[0].role === 'system' ? [this.session[0]] : [],
+            'goal-parked',
+          );
           this._execState.bumpVersion();
           this._sink({
             kind: EventKind.Notice,
@@ -1139,7 +1200,7 @@ export class Agent {
         stallRounds > 0
           ? `\n⚠️ 已连续 ${stallRounds}/${Agent.MAX_STALL_ROUNDS} 轮无实际行动。必须调用工具或委派子Agent，禁止只输出文字分析。`
           : '';
-      this.session.push({
+      this._appendMessage('user/message', {
         role: 'user',
         content: `<system-reminder>
 目标未完成。已完成 ${iter + 1} 轮。${stallHint}
@@ -1230,6 +1291,8 @@ ${resumeNote}
     this._isRunning = true;
     this._currentRunSignal = signal; // 子 Agent 派生时合并此 signal 用于级联中止
     this._sink({ kind: EventKind.TurnStarted });
+    // Phase 5：轮次边界事件（无消息投影 — 回放/审计用）
+    this._sessionLog.append('turn/start', { model: this.prov.name() });
 
     for (let step = 0; ; step++) {
       // 清除上一步的临时提醒 — 仅当前步骤的
@@ -1403,13 +1466,17 @@ ${resumeNote}
       }
 
       // 存储 assistant 轮次（reasoning 保留用于显示，不重新上传）
-      this.session.push({
+      this._appendMessage('assistant/text', {
         role: 'assistant',
         content: text,
         reasoning_content: reasoning,
         reasoning_signature: signature,
         tool_calls: calls,
       });
+      // 工具调用审计事件（每调用一条；消息投影取自上方事件内嵌的 tool_calls — 单一事实源）
+      for (const call of calls) {
+        this._sessionLog.append('tool/call', { call });
+      }
 
       if (calls.length === 0 && this._pendingInserts.length === 0) {
         return;
@@ -1455,7 +1522,7 @@ ${resumeNote}
           ? r.output || `(工具 ${call.name} 执行成功，无输出)`
           : `error: tool "${call.name}" did not produce a result`;
         if (stormNudge && i === 0) content += stormNudge;
-        this.session.push({
+        this._appendMessage('tool/result', {
           role: 'tool',
           content,
           tool_call_id: call.id,
@@ -1891,13 +1958,8 @@ ${resumeNote}
     } else {
       const head = this._foldHead();
       const tailStart = Math.min(Math.max(this._compactTailStart, head), this.session.length);
-      const summaryMsg: Message = {
-        role: 'user',
-        content:
-          '<compacted-context>\n以下是对前面讨论的总结（原始消息仍完整保留在会话历史中）:\n\n' +
-          this._compactSummary +
-          '\n</compacted-context>',
-      };
+      // Phase 5 来源替换：摘要消息构造与 session-log.ts derivePayload 共用单一实现（字节级一致）
+      const summaryMsg: Message = buildCompactedSummaryMessage(this._compactSummary);
       msgs = [...this.session.slice(0, head), summaryMsg, ...this.session.slice(tailStart)];
     }
     // 窗口外的旧工具结果折叠为占位符 — 保留 tool_call_id 配对，模型需细节时可重新调用工具。
@@ -1935,6 +1997,11 @@ ${resumeNote}
     const head = this._foldHead();
     if (this._compactTailStart < head) this._compactTailStart = head;
     if (this._compactTailStart > this.session.length) this._compactTailStart = this.session.length;
+    // Phase 5：压缩折叠事件（记录钳制后的最终边界 — 与投影侧二次钳制幂等）
+    this._sessionLog.append('session/compaction', {
+      summary,
+      tailStart: this._compactTailStart,
+    });
   }
 
   /** 手动压缩触发器（来自 /compact 命令）。返回摘要文本或错误。

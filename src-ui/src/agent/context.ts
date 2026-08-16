@@ -27,6 +27,7 @@ import { type Disposer, DisposerBag, runInContext } from './lifecycle';
 import type { MemoryManager } from './memory';
 import type { MessageBus } from './message-bus';
 import type { PlanStateManager } from './plan/plan-state';
+import type { SessionLog } from './session-log';
 import type { TaskBoard } from './task-board';
 import type { ToolRegistry } from './tool';
 
@@ -63,7 +64,10 @@ export interface AgentServices {
   execState?: ExecStateInstance;
   /** 记忆管理器 — system prompt 记忆段来源 */
   memoryManager?: MemoryManager;
-  // sessionLog — Phase 5 事件溯源日志接入时新增（主计划 §6 Phase 5），现在不占位。
+  /** 会话事件溯源日志 — Phase 5 双写：模型可见事实 append 为事件，Message[] 成为投影
+   *  （deriveMessages/derivePayload 见 session-log.ts）。缺省由 runtime 物化（每 Agent
+   *  独立实例）；child() 白名单不继承 — 子 Agent 各自持有。 */
+  sessionLog?: SessionLog;
 }
 
 /** 服务名 — AgentServices 的 key 全集。 */
