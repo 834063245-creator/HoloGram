@@ -167,6 +167,27 @@ DOM 所有权按层划分，不要跨层抢 DOM：
 ❌ 不要改 tsconfig.json 的 strict: true
 ```
 
+### 1.10 工作区级资源两原语（2026-08-17 立规，工作区生命周期/状态管理家族）
+
+工作区「存活期」没有结构体是病根：状态散在 Workspace 实例 / 进程级单例 / scoped store
+三处，切换时靠人肉枚举清理，枚举必然漂移。两条铁律（原语在 `workspace-scope.ts` + `agent/lifecycle.ts`）：
+
+```
+✅ 获取必须登记进 Workspace._bag（DisposerBag 单一 owner）：
+   凡 Workspace 在 open/setupAgent 里获取的资源（事件监听器 / 计时器 / runtime /
+   subAgentPool / agentSessionState / useAgentPanelStore / 引擎快照刷新 …）
+   一律 _bag.add(disposer, 'label') 就地登记；deactivate/forceClearState 只调
+   _bag.dispose() + bumpWorkspaceEpoch()，不再人肉枚举。
+   没登记 = review 可见的错。new 一个全局状态却没有 bag 登记，就是漏网的雷。
+
+❌ 禁止：新增工作区级全局状态却不登记进 bag（切换后必泄漏/串味）。
+
+✅ 跨工作区的 fire-and-forget 写共享态必须 epoch 校验：
+   入口记 getWorkspaceEpoch()，async resolve 后 isCurrentEpoch(epoch) 校验，
+   过期立即丢弃（LSP 在途 / autoRestore / autoSave / initAura / runCheck 同族）。
+   Workspace 停用/强清时 bumpWorkspaceEpoch() 让所有在途回调生效过期。
+```
+
 ## 2. 后端 Rust（`engine/` + `src-tauri/`）
 
 ### 2.1 模块组织

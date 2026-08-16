@@ -87,26 +87,26 @@
 
 | # | 位置 | 雷 | 触发 → 后果 | 状态 |
 |---|------|----|------------|------|
-| H1 | `ui/lsp-client.ts:36` + `:47` | `diagnosticsCache` 永不清、无界、`stopAllLsp()` 不清；`getDiagnosticsForFile` 有 basename 尾匹配 | 旧项目诊断注入新项目 Agent 上下文（经 setDiagnosticsSource → state hooks）；同项目同名不同目录文件互串 | 🔧 拆除中（Phase 1） |
-| H2 | `ui/file-viewer.tsx:47` + `lsp-client.ts:167` | 第二份私有 `lspSessions`（stopAllLsp 清不到）+ `startLsp` 在途 resolve 无代际 | 切换后 LSP 永久假死且状态栏显示已连接；在途 resolve 把 B 项目文件内容发进 A 的 tsserver | 📋 计划 Phase 3 |
-| H3 | `workspace.ts` `forceClearState()` | deactivate 超时走紧急路径时恰恰不调 `disposeAll()` | 60s 巡检 timer 永久存活，`_enforceTTL` 继续发 `agent_isolation_discard`（真实删 worktree）；saveState 不落盘留 'running' 死账 | 🔧 拆除中（Phase 1） |
-| H4 | `workspace.ts:898` `runCheck` | 在途 RPC resolve 后无 `_active` 守卫；finally 在清理后重新武装 checkTimer | 旧项目检查结果写进新项目 dock store + 自动弹面板；与新项目自身 runCheck 竞争 | 🔧 拆除中（Phase 1） |
-| H5 | `ui/chat-session.ts:549`（冻结文件） | `autoRestoreLastSession` fire-and-forget 跨 await 不校验项目；`_autoSaveTimers` 捕获旧 projectPath | A 的会话列表覆盖 B 的面板（拿 B 的 factory 灌 A 的消息）；新会话可被写进旧项目目录 | 📋 计划 Phase 3（epoch 外科手术） |
+| H1 | `ui/lsp-client.ts:36` + `:47` | `diagnosticsCache` 永不清、无界、`stopAllLsp()` 不清；`getDiagnosticsForFile` 有 basename 尾匹配 | 旧项目诊断注入新项目 Agent 上下文（经 setDiagnosticsSource → state hooks）；同项目同名不同目录文件互串 | ✅ 已拆（Commit `f0f38731`：stopAllLsp 清 cache+warned、全路径精确比较、listen 幂等化） |
+| H2 | `ui/file-viewer.tsx:47` + `lsp-client.ts:167` | 第二份私有 `lspSessions`（stopAllLsp 清不到）+ `startLsp` 在途 resolve 无代际 | 切换后 LSP 永久假死且状态栏显示已连接；在途 resolve 把 B 项目文件内容发进 A 的 tsserver | ✅ 已拆（Commit `ede255d1`：会话表单一事实源 `getLspSession` + startLsp epoch 防护） |
+| H3 | `workspace.ts` `forceClearState()` | deactivate 超时走紧急路径时恰恰不调 `disposeAll()` | 60s 巡检 timer 永久存活，`_enforceTTL` 继续发 `agent_isolation_discard`（真实删 worktree）；saveState 不落盘留 'running' 死账 | ✅ 已拆（Commit `d4a800e6`：forceClearState 补 disposeAll+auraShutdown+resetAgentCaches） |
+| H4 | `workspace.ts:898` `runCheck` | 在途 RPC resolve 后无 `_active` 守卫；finally 在清理后重新武装 checkTimer | 旧项目检查结果写进新项目 dock store + 自动弹面板；与新项目自身 runCheck 竞争 | ✅ 已拆（Commit `1926cf73`：runCheck/scheduleCheck/finally 三处 `_active` 守卫） |
+| H5 | `ui/chat-session.ts:549`（冻结文件） | `autoRestoreLastSession` fire-and-forget 跨 await 不校验项目；`_autoSaveTimers` 捕获旧 projectPath | A 的会话列表覆盖 B 的面板（拿 B 的 factory 灌 A 的消息）；新会话可被写进旧项目目录 | ✅ 已拆（Commit `462b2ea1`：最小外科手术 — 三处 epoch 校验） |
 
 ### P1 — 中危
 
 | # | 位置 | 雷 | 状态 |
 |---|------|----|------|
-| M1 | `ui/agent-panel-store.ts` + `workspace.ts:492` | `runtimeRef`/`currentSessionId`/`messageFlow`/`alerts` 切换不重置 → 2s 轮询拿旧会话 id 在新 runtime 建错位 board | 📋 计划 Phase 2 |
-| M2 | `agent/agent-session-state.ts:233` | 清理挂在下一个 setupAgent 而非 deactivate；setupAgent 失败路径死引用残留 | 📋 计划 Phase 2 |
-| M3 | `agent/memory.ts:91` | `initAura` 在途晚于 deactivate 的 `auraShutdown` 落地 → 新项目语义召回静默禁用 | 📋 计划 Phase 2 |
-| M4 | `ui/chat-store.ts:91` | `disposePanelStores` 零调用 → 每会话 messages store 只增不减，无界内存 | 📋 计划 Phase 3 |
-| M5 | `app/chat/chat-core.ts:282` | 无 API key 时切换工作区，旧项目会话列表/消息面板原样残留 | 📋 计划 Phase 3 |
-| M6 | `main.ts:250` `resetCheckPanelState` | deactivate 清完缓存后又回填人造「✅ 通过」进 checkCache → 未检过的项目注入假简报 | 📋 计划 Phase 2 |
+| M1 | `ui/agent-panel-store.ts` + `workspace.ts:492` | `runtimeRef`/`currentSessionId`/`messageFlow`/`alerts` 切换不重置 → 2s 轮询拿旧会话 id 在新 runtime 建错位 board | ✅ 已拆（Commit `e4abde23`：bag 登记 setRuntime(null)+currentSessionId+清看板） |
+| M2 | `agent/agent-session-state.ts:233` | 清理挂在下一个 setupAgent 而非 deactivate；setupAgent 失败路径死引用残留 | ✅ 已拆（Commit `e4abde23`：deactivate bag 内 clearPanelState(storeId)） |
+| M3 | `agent/memory.ts:91` | `initAura` 在途晚于 deactivate 的 `auraShutdown` 落地 → 新项目语义召回静默禁用 | ✅ 已拆（Commit `e4abde23`：initAura resolve 后 isCurrentEpoch 校验，过期即 auraShutdown 丢弃） |
+| M4 | `ui/chat-store.ts:91` | `disposePanelStores` 零调用 → 每会话 messages store 只增不减，无界内存 | 📋 计划 Phase 3（不在本计划范围） |
+| M5 | `app/chat/chat-core.ts:282` | 无 API key 时切换工作区，旧项目会话列表/消息面板原样残留 | ✅ 已拆（Commit `462b2ea1`：setAgent(null) 清会话列表+activeIdx） |
+| M6 | `main.ts:250` `resetCheckPanelState` | deactivate 清完缓存后又回填人造「✅ 通过」进 checkCache → 未检过的项目注入假简报 | 📋 计划 Phase 2（不在本计划范围） |
 
 ### P2 — 低危（记录在案，暂不拆）
 
-- `agent/runtime/agent-builder.ts:561`：`_snapshotRefreshTimer` 模块级单槽，切换后白打一轮引擎查询（写孤儿 ctx，无污染）
+- ~~`agent/runtime/agent-builder.ts:561`：`_snapshotRefreshTimer` 模块级单槽，切换后白打一轮引擎查询（写孤儿 ctx，无污染）~~ ✅ 已拆（Commit `e4abde23`：`cancelEngineSnapshotRefresh()` 导出并登记进 Workspace bag）
 - `agent/logger.ts:23`：`initLogger` 未 await，交错时漏一个 2s interval
 - `main.ts:302` vs `shell-store`：`_diffActive` 双份标志切换不重置，首次 toggleDiff 语义反转
 - `lib/pretext/measurement.js:3,13`：测量缓存无界缓增（清理函数零调用）
