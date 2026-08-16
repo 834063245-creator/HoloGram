@@ -47,9 +47,7 @@ HoloGram 自有 Agent 运行时已完成向 Cordis 四原语的收敛——Conte
 
 ## 4. 下一步（按优先级）
 
-1. **（用户决定）phase-5 baseline 过目**：`src-ui/tests/convergence/baseline/phase-5/
-   session-projection.trace.json`——15 事件 + 6 载荷步的固定场景契约。有异议 → revert
-   `5e42c995` 重录；无异议 → 归档确认。
+1. **（已归档 ✅）phase-5 baseline 过目**：`session-projection.trace.json` 已于 2026-08-16 经用户授权的代理审评确认归档（无异议）。
 2. **（可选）Phase 6 组合层收尾**（主计划 §6）：
    - `agent/blueprint.ts` 声明式 service/factory 构建 AgentContext；
    - `runtime/agent-builder.ts` 工具/hook 工厂迁 context factory；
