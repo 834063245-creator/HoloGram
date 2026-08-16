@@ -100,7 +100,7 @@ impl Drop for SandboxedChild {
         #[cfg(windows)]
         if let Some(job) = self.job.take() {
             // KILL_ON_JOB_CLOSE：句柄关闭 = 进程树灭绝（die-with-parent 语义）。
-            unsafe { imp::close_handle(job) };
+            imp::close_handle(job);
         }
     }
 }
@@ -132,7 +132,7 @@ impl SandboxedChild {
         #[cfg(windows)]
         {
             if let Some(job) = self.job {
-                let ret = unsafe { imp::terminate_job_object(job) };
+                let ret = imp::terminate_job_object(job);
                 if ret != 0 {
                     return Ok(());
                 }
@@ -176,7 +176,7 @@ pub fn init(app: &tauri::AppHandle) {
     #[cfg(windows)]
     {
         imp::job::init();
-        imp::shell::init_bundled(app);
+        imp::init_bundled(app);
     }
     #[cfg(target_os = "linux")]
     {
@@ -497,10 +497,10 @@ pub mod imp {
 
     /// 捆绑 MSYS2 bash 的绝对路径（shell-stability P1）。
     /// init_bundled 在应用启动时解析一次；None = 资源缺失（回退探测）。
-    static BUNDLED_BASH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    pub(crate) static BUNDLED_BASH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
 
     /// 捆绑 bash 的版本串（`bash --version` 首行），供 shell_env 注入 Agent。
-    static BUNDLED_BASH_VERSION: OnceLock<Option<String>> = OnceLock::new();
+    pub(crate) static BUNDLED_BASH_VERSION: OnceLock<Option<String>> = OnceLock::new();
 
     /// 捆绑资源内 bash.exe 的相对路径（tauri bundle.resources 带出）。
     const BUNDLED_BASH_REL: &str = "vendor/msys2/bin/bash.exe";
@@ -568,7 +568,7 @@ pub mod imp {
     /// cargo/node/python "command not found" 的根源 —— 这里补齐并缓存。
     pub fn init_normalized_path() {
         NORMALIZED_PATH.get_or_init(|| {
-            let mut existing: Vec<String> = std::env::var("PATH")
+            let existing: Vec<String> = std::env::var("PATH")
                 .unwrap_or_default()
                 .split(';')
                 .map(|s| s.to_string())

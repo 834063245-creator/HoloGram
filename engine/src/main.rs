@@ -73,6 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 信号路径（SIGINT/SIGTERM/ctrl-c）不触发 Drop —— 单独挂一个
     // 处理器，清理 LSP 池后退出。
+    #[cfg(unix)]
     {
         tokio::spawn(async move {
             let mut sigterm = tokio::signal::unix::signal(
