@@ -1,82 +1,68 @@
-# Baseline 变更申请 — phase-0/create-agent.wiring.txt（Phase 4：dispose 段）
+# Baseline 变更申请 — phase-0/create-agent.wiring.txt（行尾归一 + 提取器修复）
 
-> ⚠️ 状态：**已批准并执行完毕**（2026-08-16）——freeze commit `45f328a2`。
-> 本文件同时是 Phase 3 申请（wiring 0/0/0 段，freeze `828679fc`）的执行记录与后续
-> 申请的模板：既有快照漂移时，按本格式重写此文件（对象/理由/证据/拟议内容/
-> 落地步骤），停工等用户审批。
+> ⚠️ 状态：**已批准并执行完毕**（2026-08-16）——用户在对话中批准（"那就整"）。
+> 本文件同时是后续申请的模板：既有快照漂移时，按本格式重写此文件（对象/理由/
+> 证据/拟议内容/落地步骤），停工等用户审批。
+> 前例：Phase 4 申请（freeze `45f328a2`）原文见 git 历史。
 
-> 申请日期：2026-08-16 · 申请人：Phase 4 实现 Agent（agent-core-convergence）
-> ~~状态：待用户审批~~ 已批准执行（见顶部墓碑）。原文如下存档：
-> 前例：Phase 3 的同类申请已获批执行（freeze commit `828679fc`）；本申请只涉及
-> 同一文件的 `dispose_cleanup_steps` 段。**模型可见表面零变化**（其余全部快照
-> 逐字节一致，含 tool-schemas.* 与 system-prompt.fixture）。
+> 申请日期：2026-08-16 · 申请人：Kimi Code CLI（状态注入缓存生命周期修复期间发现）
 
 ## 1. 变更对象
 
-仅 `src-ui/tests/convergence/baseline/phase-0/create-agent.wiring.txt` 的
-**dispose_cleanup_steps 段**：21 → **14**。同一次 gate check 其余快照零漂移。
+- `src-ui/tests/convergence/baseline/phase-0/create-agent.wiring.txt`：
+  dispose 段第 23-24 行 `- handle ` → `- handle`（去掉尾空格），仅此 2 行。
+- `src-ui/tests/convergence/helpers/wiring.ts`：提取器读取 runtime.ts 时归一
+  `\r\n` → `\n`（1 处，见 §2）。
+- **模型可见表面零变化**：同一次 record 其余全部快照逐字节一致（git diff
+  仅本文件 2 行）。
 
 ## 2. 为什么必须变
 
-Phase 4 把 `_disposeAgent` 的分散清理收敛为 ctx 所有权（主计划 §6 Phase 4 验收：
-"`_disposeAgent` 不再包含分散的 timer/board/bus 清理分支"）。被移除的 7 个顶层步骤
-全部转为装配期登记的 `AgentContext.effect()`，由 `ctx.dispose()` 逆序释放：
+提取器（wiring.ts `extractWiringFromSource`）对 `_disposeAgent` 语句做
+`st.getText(sf).split('\n')[0].replace(/\s+/g, ' ')`。对跨行语句
+（`handle\n._getAgent()...`），CRLF 源码的首行末尾带 `\r`，被 `\s+→' '`
+压成**尾空格**写进快照——快照内容随工作区行尾漂移：
 
-| 旧步骤（21 中的 7 步） | 去向 |
-|---|---|
-| `_lifecycleManagers.get(id)?.stop()` | `ctx.effect` 持有 `lifecycle.startOwned()`（Phase 1 原语） |
-| `_lifecycleManagers.delete(id)` | 同上 effect 内 |
-| `this._bus.unregister(id)` | Agent ctor 登记的 `bus-unregister` effect |
-| `taskBoard?.unregister(id)` | `_assembleAgent` 顶部登记的 `board-unregister` effect（经 proxy 转发） |
-| `_agentProxies/_agentSessions/_agentTaskManagers.delete(id)` | 末端登记的 `runtime-maps` effect |
-| `agents.delete(id)` | 同上 |
+- Phase 4 freeze（`45f328a2`）在 CRLF 工作区（Windows + `core.autocrlf=true`）
+  录制，尾空格 artifact 被冻进 baseline；
+- LF 工作区（编辑器/biome 落盘未重归一化）下提取结果无尾空格 → 比对必挂；
+- 单行语句文本内部不含换行符，天然免疫——所以只有 2 行漂移。
 
-保留的 14 步：幂等早退 + 会话板查找 + flush 前置序（clearFlushTimer×3 → flush×3）
-+ saveState('done') + `ctx.dispose()`（聚合错误 log.warn 可观测）+ 日志——
-**顺序铁律 bus/board flush → saveState → effects 与 Phase 4 前一致**（trace 测试钉住）。
+**该测试在纯 HEAD 上就失败**（与任何未提交改动无关），且 CI 不跑 src-ui
+vitest（ci.yml 前端只有 build），漂移长期未暴露。
 
-## 3. 行为等价证据（V4 验证规格）
+## 3. 证据
 
-- **T1 顺序 trace**（specs/phase-4）：flush 计时器清 → bus/board flush → saveState →
-  逆序 effects（bus 注销 → board 注销——与旧代码相对顺序一致）；dispose() 返回后
-  listAgents/bus 状态同步可观测（依赖本次为 DisposerBag 加的同步快通道）；
-- **T5 泄漏**：fake timers 下 create/dispose 百次循环，每轮恰好 +1 巡检 timer、
-  dispose 归零，注册表/总线终态全空；
-- **T0 静态**：_disposeAgent 禁止片段（`_lifecycleManagers`/`unregister(`/`.stop(`/
-  maps `.delete`）；`_assembleAgent` 必须 ≥3 处 `ctx.effect`；dispose 步骤 ≤16；
-- 现有栅栏全绿：agent-lifecycle-dispose（含新增双 dispose 单次注销观测）、
-  taskboard-session-routing、lifecycle-disposer、agent-context、coordinator；
-- 全量 vitest：**1111 passed / 1 skipped / 1 failed（唯一 failed 即本比对，预期红）**；
-  tsc 干净；触碰文件 biome 零新增（coordinator.test.ts 存量 19 条 nonNull 持平）。
+- 纯 HEAD runtime.ts（LF）跑 phase-0：1 failed（wiring 第 23 行 `handle ` vs `handle`）；
+- 同一份 HEAD 内容转 CRLF 再跑：**9 passed 全绿**——结果是行尾的纯函数；
+- 修复提取器后 `npm run record:convergence`：`git diff` 仅 create-agent.wiring.txt
+  2 行尾空格删除，其余 6 个 baseline 文件零变化。
 
-## 4. 拟议新 dispose 段（record 将生成的内容）
+## 4. 拟议变更（record 已生成的内容）
 
 ```text
-dispose_cleanup_steps (14):
-  - const handle = this.agents.get(id);
-  - if (!handle) return;
-  - const sessionId = this._agentSessions.get(id) ?? 'default';
-  - const taskBoard = this._taskBoards.get(sessionId);
-  - const discoveryBoard = this._discoveryBoards.get(sessionId);
-  - this._bus.clearFlushTimer();
-  - taskBoard?.clearFlushTimer();
-  - discoveryBoard?.clearFlushTimer();
-  - void this._bus.flush();
-  - void taskBoard?.flush();
-  - void discoveryBoard?.flush();
-  - handle 
-  - handle 
-  - log.info('runtime', `agent destroyed: ${id}`);
+  - handle        （原：`- handle ` 带尾空格 ×2 行）
 ```
 
-（config_reads/register_calls/setter_wiring 三段维持 Phase 3 冻结值 0/0/0 不变。）
+提取器修复（wiring.ts）：
 
-## 5. 获批后的落地步骤
+```ts
+return extractWiringFromSource(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'), methodNames);
+```
 
-1. 提交实现 commit（runtime.ts effects 接线 + _disposeAgent 重写 + specs/phase-4 +
-   REGISTRY_OWNERSHIP.md 终态 + 本文件 + progress.md）；
-2. `npm run record:convergence` → 独立 freeze commit
-   `test(convergence): freeze phase-4 wiring baseline`；
-3. record 后 `git diff` 应仅本文件 dispose 段变化（autocrlf stat 噪声以 diff 为准，
-   决策 #7）；
-4. 复跑 verify:convergence + 全量 vitest → 全绿（预期 1112 passed / 1 skipped / 0 failed）。
+修复后快照对 LF/CRLF 工作区均确定，同类漂移不会复发。
+
+## 5. 落地步骤（已执行）
+
+1. 提取器归一修复（wiring.ts）+ 本文件重写 —— 随实现改动提交；
+2. `npm run record:convergence` 重录 baseline（diff 仅 2 行）；
+3. `npm run verify:convergence` + 全量 vitest 复跑全绿；
+4. CRLF 鲁棒性验证：runtime.ts 转 CRLF 后 gate check 仍全绿（确定性证明）。
+
+## 6. 遗留观察（不在本次范围）
+
+- `gate.mjs` T0 与各 phase spec 的静态断言也用 `readFileSync` 读源码做子串/正则
+  匹配（gate.mjs:34/52/80/95、specs/phase-{1,3,4,5,6}）。子串匹配对行尾不敏感，
+  目前两种行尾下均绿，未动；若未来引入跨行 `\n` 字面量断言需同样归一。
+- 根治可选项：`.gitattributes` 给 `*.ts` 钉 `text eol=lf`——全仓级影响，需单独评估，
+  本次不动。

@@ -106,7 +106,10 @@ export function extractRuntimeMethodWiring(methodNames: string[]): WiringFacts {
   if (!file) {
     throw new Error(`[convergence] 找不到 runtime.ts（候选: ${candidates.join(' | ')}）— 请从 src-ui 目录运行 vitest`);
   }
-  return extractWiringFromSource(readFileSync(file, 'utf8'), methodNames);
+  // 归一 CRLF：getText 按 '\n' 切首行，CRLF 源码会把 \r 带进提取结果
+  // （随后 \s+→' ' 压成尾空格），快照内容随工作区行尾漂移 ——
+  // phase-0 wiring baseline 曾因此在 LF 工作区误报漂移（详见 baseline-change-request.md）
+  return extractWiringFromSource(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'), methodNames);
 }
 
 /** 人类可读的 wiring 报告（create-agent.wiring.txt 快照的格式）。 */
