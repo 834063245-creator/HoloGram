@@ -97,6 +97,8 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
                 "is_watching": is_watching,
                 "vector_index": { "exists": vi_exists, "vectors": vi_count, "backend": crate::vector::backend_id() },
                 "lsp": lsp_data,
+                // 图工具使用率观测：Agent 是否真的在用图（装饰品检测）
+                "tool_call_counts": crate::tools::tool_call_counts(),
             }))
         }
         Err(_) => ToolResponse::Success(json!({
@@ -105,6 +107,7 @@ pub(crate) fn handler_status(_args: &Value) -> ToolResponse {
             "nodes": 0,
             "edges": 0,
             "lsp": lsp_data,
+            "tool_call_counts": crate::tools::tool_call_counts(),
         })),
     }
 }

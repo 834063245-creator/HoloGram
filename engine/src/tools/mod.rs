@@ -4,9 +4,9 @@
 // 工具注册表 —— 所有 27 个 hologram_* 工具的 schema 定义 + 处理器分发。
 // 与 MCP 传输层分离，使 Tauri / TCP / CLI 能共享同一套工具层。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
 use serde_json::{json, Value};
 
@@ -131,6 +131,11 @@ impl ToolRegistry {
     }
 
     pub fn dispatch(name: &str, args: &Value, id: &Value) -> Value {
+        // 调用计数（进程内）：engine_status 可观测 Agent 对各工具的真实
+        // 使用率 —— 图工具被挂起却没人调，从数字上立刻可见。
+        if let Ok(mut counts) = TOOL_CALL_COUNTS.lock() {
+            *counts.entry(name.to_string()).or_default() += 1;
+        }
         let resp = match name {
             "get_neighbors" => handlers::handler_neighbors(args),
             "trace_impact" => handlers::handler_impact(args),
@@ -289,6 +294,20 @@ pub(crate) fn snake_to_camel(s: &str) -> String {
 
 pub(crate) fn project_root() -> PathBuf {
     engine::with_engine(|eng| eng.project_root()).unwrap_or_default()
+}
+
+/// 每工具调用计数（进程内）：Agent 图工具使用率观测。
+/// 图形工具是产品核心却可能「挂而不用」——这个计数让
+/// engine_status 直接暴露真实使用分布。
+static TOOL_CALL_COUNTS: LazyLock<Mutex<HashMap<String, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 当前进程内各工具的调用计数快照。
+pub fn tool_call_counts() -> HashMap<String, u64> {
+    TOOL_CALL_COUNTS
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_default()
 }
 
 pub(crate) fn with_store<F>(f: F) -> Value

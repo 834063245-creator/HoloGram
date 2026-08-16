@@ -736,6 +736,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
         }
       }
 
+      lines.push(`│  精确影响面 → preflight_check([\"${fp.replace(/\\/g, '/')}\"])`);
       return lines.join('\n');
     },
   };
