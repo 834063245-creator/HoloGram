@@ -13,7 +13,11 @@
     "lint": "biome check --fix .",
     "check": "biome ci .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:convergence": "vitest run tests/convergence",
+    "verify:convergence": "node tests/convergence/gate.mjs check",
+    "record:convergence": "cross-env CONVERGENCE_RECORD=1 node tests/convergence/gate.mjs record",
+    "report:convergence": "node tests/convergence/gate.mjs report"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.2.9",

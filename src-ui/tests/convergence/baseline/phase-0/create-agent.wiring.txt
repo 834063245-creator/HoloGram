@@ -1,0 +1,81 @@
+# createAgent / _disposeAgent 装配清单（AST 静态提取）
+# 来源: src/agent/runtime/runtime.ts
+# 用途: Phase 3/4 收敛度量基线 — config.* 直读数、注册点数、setter 接线数、清理步骤数
+
+config_reads (26):
+  - agentId
+  - sessionId
+  - parentId
+  - systemPrompt
+  - memoryManager
+  - graphData
+  - projectPath
+  - provider
+  - tools
+  - collaborationMode
+  - eventSink
+  - execState
+  - onSessionPersisted
+  - pricing
+  - temperature
+  - contextWindow
+  - subagentDepth
+  - toolResultWindow
+  - isolationId
+  - agentStore
+  - goalManager
+  - subAgentPool
+  - subAgentSpawner
+  - graphContext
+  - hooksEnabled
+  - preRunHook
+
+register_calls (11):
+  - loop:t
+  - createEnterPlanModeTool(...)
+  - createExitPlanModeTool(...)
+  - loop:tool
+  - loop:tool
+  - createMergeTool(...)
+  - createBoardStatusTool(...)
+  - createAgentKillTool(...)
+  - createRequestTool(...)
+  - createSubAgentTool(...)
+  - loop:taskTool
+
+setter_wiring (12):
+  - setCompactionConfigPath
+  - setAgentStore
+  - setGoalManager
+  - setSubAgentPool
+  - setBus
+  - setDiscoveryBoard
+  - spawnSubAgent
+  - setHooks
+  - setPreflightHooks
+  - setPlanState
+  - setPreRunHook
+  - applyAutoTuneConfig
+
+dispose_cleanup_steps (21):
+  - const handle = this.agents.get(id);
+  - if (!handle) return;
+  - const sessionId = this._agentSessions.get(id) ?? 'default';
+  - const taskBoard = this._taskBoards.get(sessionId);
+  - const discoveryBoard = this._discoveryBoards.get(sessionId);
+  - this._bus.clearFlushTimer();
+  - taskBoard?.clearFlushTimer();
+  - discoveryBoard?.clearFlushTimer();
+  - void this._bus.flush();
+  - void taskBoard?.flush();
+  - void discoveryBoard?.flush();
+  - handle 
+  - this._lifecycleManagers.get(id)?.stop();
+  - this._lifecycleManagers.delete(id);
+  - this._bus.unregister(id);
+  - taskBoard?.unregister(id);
+  - this._agentProxies.delete(id);
+  - this._agentSessions.delete(id);
+  - this._agentTaskManagers.delete(id);
+  - this.agents.delete(id);
+  - log.info('runtime', `agent destroyed: ${id}`);
