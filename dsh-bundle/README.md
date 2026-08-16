@@ -57,9 +57,19 @@ DSH 的 profile 插件机制：npm 包在 `package.json` 声明 `"dsh": { "bundl
     projectRoot: D:/some/project
 ```
 
+## 维护边界（重要）
+
+dsh-bundle 是 HoloGram 的**薄发布适配层**，不拥有产品资产：
+
+- 引擎二进制：来自主仓 `engine/` 构建产物（GitHub Release 附件，install.mjs 下载）
+- 3D viewer：直接构建 `src-ui/src/ui` 的渲染内核（vite alias），**不维护内核副本**
+- 本包自有代码：`src/index.ts`（host glue）、`src/client/index.tsx`（sidebar entry）、`viewer/main.ts` + stubs、`cordis.patch.yml`、`scripts/install.mjs`
+
+因此主仓改了 graph 内核，dsh-bundle 下一次构建自动拿到新内核；不需要跑 vendor 同步脚本。
+
 ## 发布流程（维护者）
 
-1. 本地构建：`cd engine && cargo build --release` → `npm run pack:bin` → `npm run build && npm run build:client` → `cd viewer && vite build`
+1. 本地构建：`cd engine && cargo build --release` → `npm run pack:bin` → `npm run build && npm run build:client` → `cd viewer && node ../../src-ui/node_modules/vite/bin/vite.js build`
 2. 打 tag `v<version>` 并 push → GitHub Actions `dsh-bundle` job 构建引擎二进制并传到 Release 附件 `hologram-engine-win32-x64.exe`
 3. `npm publish`（壳包 ~200KB；postinstall 按版本号从 Release 下载二进制）
 
@@ -69,10 +79,10 @@ npm 包：`@a834063245/hologram-dsh`（公开）
 ## 本地开发（file: 安装）
 
 ```sh
-# 1. 构建引擎 + 插件 + viewer
+# 1. 构建引擎 + 插件 + viewer（先装依赖：dsh-bundle 用 --ignore-scripts，避免 postinstall 拉二进制）
 cd engine && cargo build --release
-cd ../dsh-bundle && npm run pack:bin && npm run build && npm run build:client
-cd viewer && vite build
+cd ../dsh-bundle && npm install --ignore-scripts && npm run pack:bin && npm run build && npm run build:client
+cd viewer && node ../../src-ui/node_modules/vite/bin/vite.js build
 
 # 2. 从 DSH checkout 用 file: 装到测试 profile
 node --import tsx/esm apps/cli/src/bin.ts plugin --profile hologram-test add file:D:/HoloGramHG/dsh-bundle

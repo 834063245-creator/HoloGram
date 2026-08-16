@@ -1,13 +1,13 @@
 // HoloGram · 深空星图 — DSH web 独立 3D viewer（阶段2，完整 StarGraph 渲染）
 //
-// 直接使用 vendor 进 viewer/kernel 的 HoloGram StarGraph facade 及其全部渲染子模块
-// （graph-node-renderer / graph-edge-renderer / graph-layout / gpu-layout / graph-shaders /
+// 直接构建 src-ui/src/ui 的 HoloGram StarGraph facade 及其全部渲染子模块
+//（graph-node-renderer / graph-edge-renderer / graph-layout / gpu-layout / graph-shaders /
 //  graph-glow-instanced / graph-fold / graph-focus-controller / graph-interaction …）。
-// 渲染逻辑是原件的字节级复制，只把 HoloGram app 耦合（shell-store / events / i18n）
-// 换成 kernel/stubs 的轻量替代。观感即原版。
+// 渲染内核与主应用同源，不维护副本；仅通过 vite alias 把 HoloGram app 耦合
+//（shell-store / events / debug / app-shell）换成 kernel/stubs 的轻量替代。观感即原版。
 
-import { StarGraph } from './kernel/graph'
-import type { GraphJSON } from './kernel/graph-types'
+import { StarGraph } from '@hologram-kernel/graph'
+import type { GraphJSON } from '@hologram-kernel/graph-types'
 
 // 带超时的 fetch：大项目分析可长达数十秒，要给用户明确的进度与超时反馈。
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
