@@ -27,6 +27,43 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
+  dsh-bundle:
+    # hologram-dsh npm 包（薄发布适配层）：
+    # 装依赖必须 --ignore-scripts —— postinstall 会按版本从 GitHub Release 拉
+    # 引擎二进制，普通 push 时该附件还不存在。
+    # viewer 直接构建 src-ui 的 graph 内核（不维护副本），所以借用 src-ui 的 vite。
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - name: Install plugin build deps
+        working-directory: dsh-bundle
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build host plugin
+        working-directory: dsh-bundle
+        run: npm run build
+
+      - name: Build client plugin
+        working-directory: dsh-bundle
+        run: npm run build:client
+
+      - name: Install viewer build deps (src-ui)
+        working-directory: src-ui
+        run: npm ci --no-audit --no-fund
+
+      - name: Build viewer (src-ui graph kernel, no vendored copy)
+        shell: bash
+        working-directory: dsh-bundle/viewer
+        run: node ../../src-ui/node_modules/vite/bin/vite.js build
+
+      - name: Verify npm pack payload
+        working-directory: dsh-bundle
+        run: node scripts/ci-verify.mjs
+
   engine:
     strategy:
       fail-fast: false
