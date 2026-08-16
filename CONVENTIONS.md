@@ -106,7 +106,33 @@ React 靠引用比较观察变化。store 是唯一提交口：
 ✅ 旧工具名只允许 hide + retireRedirect，模型路径不得重新暴露旧名
 ```
 
-### 1.7 文件命名与 import
+### 1.7 Agent 运行时：装配组合与会话事件（agent-core-convergence 立规）
+
+```
+装配组合（blueprint）：
+✅ 新增模型可见工具/hook：在 agent/blueprint.ts 的 standard() capability 表加一项
+   （或 createAgentFromContext 第 3 参注入扩展蓝图）——不改 AgentConfig
+   （字段面冻结 31：specs/phase-6 AST 断言 + gate.mjs 计数扫描双层门禁）
+✅ 注册顺序 = capability 表声明顺序：表序是工具面字节契约
+   （DeepSeek 前缀缓存 + phase-1 effective 快照依赖此序），插入必须显式选位置
+✅ capability 只做组合不做 teardown：生命周期所有权走 ctx.effect；
+   register 返回的 Disposer 归 owner 管理（清单 docs/agents/REGISTRY_OWNERSHIP.md）
+❌ 禁止在 runtime.ts 装配本体直调工具/hook 工厂（T0 门禁 26 禁止片段，失败关闭）
+
+session 事件溯源（双写期，this.session 是真源 + SessionLog 逐字节等价）：
+✅ session 变异只走三入口：_appendMessage / _replaceSession / _retractSessionRange
+   （phase-5 spec AST 白名单 + gate 计数扫描；豁免须登记 progress.md）
+✅ 新增变异路径 = 新事件 kind + 差分矩阵补场景 + phase-5 快照零漂移；
+   改工具折叠逻辑必须同步 session-log.ts derivePayload
+✅ 新增持久化路径沿用 _eventAppendChain 写链（防并发 saveState 重复追加）
+
+工具管道裁决：guard/preflight/around 经 agent/events.ts 的 AgentEventBus 组合，
+bus 事件与 legacy EventSink 双发（UI 零改动依赖此）。
+守护：改 src/agent/** 必过 npm run verify:convergence（T0 静态 + 8 baseline 对拍）；
+record 永不上 CI；baseline 变更走 docs/plans/agent-core-convergence/baseline-change-request.md 审批。
+```
+
+### 1.8 文件命名与 import
 
 ```
 ✅ 模块/类型文件：kebab-case.ts   （chat-store.ts、message-model.ts、rpc-contract.ts）
@@ -120,7 +146,7 @@ React 靠引用比较观察变化。store 是唯一提交口：
    编辑后跑 npx biome check --write <改动文件>
 ```
 
-### 1.8 组件、DOM 与样式
+### 1.9 组件、DOM 与样式
 
 ```
 ✅ 函数组件 + hooks（React 19）；性能敏感组件用 React.memo
@@ -187,8 +213,9 @@ DOM 所有权按层划分，不要跨层抢 DOM：
 | 改了什么 | 必须过 | 实测基线 |
 |---|---|---|
 | 前端 | `cd src-ui && npm run build` | tsc --noEmit + vite build 全绿 |
-| 前端逻辑 | `cd src-ui && npx vitest run` | 1014 passed / 4 skipped（92 文件） |
-| 前端格式 | `npx biome check --write <改动文件>` | 全仓 501 errors/338 warnings 是存量基线，只保证不新增 |
+| 前端逻辑 | `cd src-ui && npx vitest run` | 1162 passed / 1 skipped（109 文件） |
+| `src-ui/src/agent/**` | `cd src-ui && npm run verify:convergence` | exit 0（T0 静态 + 全部 phase specs 对拍 8 baseline；record 永不上 CI，baseline 变更走 change request 审批） |
+| 前端格式 | `npx biome check --write <改动文件>` | 全仓 588 errors/335 warnings 是存量基线（会漂移），只保证不新增 |
 | 引擎 | `cd engine && cargo test` | 698 tests（lib 670 + bin 27 + doc 1） |
 | 壳 | `cd src-tauri && cargo test` | 309 tests（bin 295 + 集成 14） |
 | 桌面打包 | `cd src-tauri && cargo tauri build` | 会先跑前端构建；禁止用 `cargo build --release` 代替 |

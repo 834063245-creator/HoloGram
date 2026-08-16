@@ -1,6 +1,6 @@
 # HoloGram — Agent 项目手册
 
-> 生成：2026-06-18 · 更新：2026-08-16（按当前 HEAD 5bb3bd7 与实测基线校准）
+> 生成：2026-06-18 · 更新：2026-08-16（按 main HEAD 9702140d 与实测基线校准；agent-core-convergence Phase 0-6 已并入 main）
 > 本文件是项目级静态注入文档：Codex 读 `AGENTS.md`，Claude Code 读 `CLAUDE.md`，内置 HoloGram Agent 把 `CLAUDE.md` 注入 system prompt。
 > **编码规则不是本文件的正文，而是 `CONVENTIONS.md` + `INVARIANTS.md`；本文件负责让规则真正被执行。**
 
@@ -103,6 +103,9 @@ flowchart LR
 - 新增模型工具必须 `defineTool` + zod v4：一个 schema 产出 JSON Schema / 运行时校验 / 类型化参数。内部 `.passthrough()` 透传 meta key；`_forceGate` 要声明、`_callId/_agent_id` 不声明。
 - 工具 execute 必须全量透传 args——重建参数对象会丢掉 `_agent_id`，fork 子 Agent 会直写主仓（2026-08-13 事故）。
 - 新增领域动作同步 `tools/domains.ts` 的 `DOMAIN_SPECS` + `collectHiddenToolNames()` + 对应测试 + 本文件。
+- Agent 装配（Phase 6 立规）：新增模型工具/hook 走 `agent/blueprint.ts` 的 capability 表，不改 `AgentConfig`（冻结 31 字段）；capability 表序 = 工具面字节契约（前缀缓存 + effective 快照依赖此序）；capability 只做组合，teardown 走 `ctx.effect`。
+- session 变异（Phase 5 立规）：只走 `_appendMessage / _replaceSession / _retractSessionRange` 三入口（spec AST 白名单 + gate 计数双层门禁）；改工具折叠逻辑必须同步 `session-log.ts` 的 `derivePayload`。
+- 改 `src-ui/src/agent/**` 必过 `npm run verify:convergence`（T0 静态 + 8 baseline 对拍）；record 永不上 CI，baseline 变更走 `docs/plans/agent-core-convergence/baseline-change-request.md` 审批。
 - 新增 RPC：`src-tauri/src/rpc.rs` 分支 + 前端 `RpcContract`；`docs/agents/frontend-rpc-contract.md` 由 `scripts/gen-rpc-contract-md.cjs` 生成，勿手改。
 
 ## 8. 多 Agent 并发纪律（事故报告：docs/agents/platform-bugs-2026-08-13.md）
@@ -125,9 +128,10 @@ flowchart LR
 |---|---|---|
 | 引擎 | `cd engine && cargo test` | 698 tests（lib 670 + bin 27 + doc 1） |
 | 壳 | `cd src-tauri && cargo test` | 309 tests（bin 295 + 集成 14） |
-| 前端 | `cd src-ui && npx vitest run` | 1014 passed / 4 skipped（92 文件） |
+| 前端 | `cd src-ui && npx vitest run` | 1162 passed / 1 skipped（109 文件） |
 | 前端构建 | `cd src-ui && npm run build` | tsc --noEmit + vite build 全绿 |
-| 前端格式 | `cd src-ui && npx biome ci .` | 501 errors / 338 warnings 是存量基线，不要顺手清；改动文件零新增 |
+| Agent 运行时 | `cd src-ui && npm run verify:convergence` | exit 0（T0 静态 + 全部 phase specs 对拍 8 baseline） |
+| 前端格式 | `cd src-ui && npx biome ci .` | 588 errors / 335 warnings 是存量基线，不要顺手清；改动文件零新增 |
 | 打包 | `cd src-tauri && cargo tauri build` | 发布构建；不要用 `cargo build --release` 代替 |
 
 CI 只做编译 + 测试；`.github/workflows/ci.yml` 不可修改。
