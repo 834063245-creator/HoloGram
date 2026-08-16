@@ -23,6 +23,7 @@ const SECTIONS = [
   '文件系统',
   '搜索',
   'Web',
+  'CDP 浏览器控制',
   'Shell',
   '编辑器',
   '身份认证 / 权限',
@@ -153,15 +154,15 @@ function appendEvents(md, root) {
 function main() {
   const lines = readLines(RPC_RS);
   const src = fs.readFileSync(RPC_RS, 'utf8');
-  const branchBlocks = [];
+  let branchBlocks = [];
   // 分支闭合行要求 `}` 后紧跟行尾（CRLF 容忍），避免被分支内 `};` 提前截断
-  const branchRe = /^\s*"([a-z_]+)"\s*=>\s*\{([\s\S]*?)\n\s*\}\r?\n/gm;
+  const branchRe = /^\s*"([a-z0-9_]+)"\s*=>\s*\{([\s\S]*?)\n\s*\}\r?\n/gm;
   let bm;
   while ((bm = branchRe.exec(src)) !== null) {
     branchBlocks.push({ name: bm[1], body: bm[2], pos: bm.index });
   }
   // 单行分支（如 "stop_mcp_server" => commands::external::stop_mcp_server().await,）
-  const singleRe = /^\s*"([a-z_]+)"\s*=>\s*([^\n]+),\s*$/gm;
+  const singleRe = /^\s*"([a-z0-9_]+)"\s*=>\s*([^\n]+),\s*$/gm;
   singleRe.lastIndex = 0;
   let sm;
   while ((sm = singleRe.exec(src)) !== null) {
@@ -169,6 +170,26 @@ function main() {
       branchBlocks.push({ name: sm[1], body: sm[2], pos: sm.index });
     }
   }
+  // 只保留外层 match method.as_str() 的直接分支：按大括号深度解析。
+  // 内层 match（如 browser_cookies 的 "list"/"set"/"delete"）不是 RPC 方法，
+  // 误缩进的顶层分支（如 "bash_kill" 16 空格）也按深度正确识别。
+  const matchLine = lines.findIndex((l) => l.includes('match method.as_str() {'));
+  if (matchLine >= 0) {
+    let depth = 0;
+    const topLevelNames = new Set();
+    for (let i = matchLine; i < lines.length; i++) {
+      const arm = lines[i].match(/^\s*"([a-z0-9_]+)"\s*=>/);
+      if (arm && depth === 1) topLevelNames.add(arm[1]);
+      const code = lines[i].replace(/\/\/.*$/, '');
+      for (const ch of code) {
+        if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+      }
+      if (depth <= 0) break;
+    }
+    branchBlocks = branchBlocks.filter((b) => topLevelNames.has(b.name));
+  }
+
   // 用 match 位置排序（indexOf 会被 rpc.rs 头注释中的同名示例串干扰）
   branchBlocks.sort((a, b) => a.pos - b.pos);
 
@@ -179,16 +200,28 @@ function main() {
   for (let i = 0; i < lines.length; i++) {
     if (isBoxLine(lines[i])) sepIdx.push(i);
   }
+  // 箱线成对判定：开口线后紧跟分区标题注释（非箱线），闭合线后紧跟方法代码。
+  // 不能用固定行距合并——CDP 分区注释有 13 行，而相邻分区开口线只隔 8 行。
   const sepBlocks = [];
+  let open = null;
   for (const i of sepIdx) {
-    const last = sepBlocks[sepBlocks.length - 1];
-    if (last && i - last[last.length - 1] <= 5) last.push(i);
-    else sepBlocks.push([i]);
+    const next = (lines[i + 1] ?? '').trim();
+    const isOpening = next.startsWith('//') && !isBoxLine(next);
+    if (isOpening) {
+      if (open !== null) sepBlocks.push([open]); // 容错：保留未闭合开口
+      open = i;
+    } else if (open !== null) {
+      sepBlocks.push([open, i]);
+      open = null;
+    } else {
+      sepBlocks.push([i]); // 容错：孤立闭合线
+    }
   }
+  if (open !== null) sepBlocks.push([open]);
   let md = '';  md += '# 前端 RPC 契约（生成物）\n\n';
   md += '> 由 `scripts/gen-rpc-contract-md.cjs` 从 `src-tauri/src/rpc.rs` 生成 — 勿手改。\n';
   md += '> 生成时间：' + new Date().toISOString() + '\n';
-  md += '> 方法总数：' + branchBlocks.length + '（rpc.rs 头注释声称 103 为过期数字，以此表为准）\n\n';
+  md += '> 方法总数：' + branchBlocks.length + '（rpc.rs 头注释为历史数字，以此表为准）\n\n';
   md += '前端类型化入口：`src-ui/src/rpc-contract.ts`（`typedRpc` / `typedListen`，编译期接线检查）。\n\n';
   md += '约定：参数键一律 snake_case；返回均为字符串，`JSON 字符串` 类需 `JSON.parse`（`null` 为 unit 返回）。\n\n';
 

@@ -1,8 +1,8 @@
 # 前端 RPC 契约（生成物）
 
 > 由 `scripts/gen-rpc-contract-md.cjs` 从 `src-tauri/src/rpc.rs` 生成 — 勿手改。
-> 生成时间：2026-08-13T00:44:45.017Z
-> 方法总数：106（rpc.rs 头注释声称 103 为过期数字，以此表为准）
+> 生成时间：2026-08-16T02:51:31.572Z
+> 方法总数：133（rpc.rs 头注释为历史数字，以此表为准）
 
 前端类型化入口：`src-ui/src/rpc-contract.ts`（`typedRpc` / `typedListen`，编译期接线检查）。
 
@@ -54,6 +54,7 @@
 | `list_directory_flat` | path | is_agent, _agent_id | JSON 字符串 |
 | `read_file_content` | file_path | offset, limit, is_agent, _agent_id | 字符串 |
 | `read_memory_batch` | — | paths | 字符串 |
+| `read_file_base64` | file_path | is_agent, _agent_id | 字符串 |
 | `write_file_content` | file_path, content | is_agent, _agent_id | 字符串 |
 | `log_append` | path, content | _agent_id | `null`（unit） |
 | `create_directory` | path | is_agent, _agent_id | `null`（unit） |
@@ -76,48 +77,72 @@
 | `web_search` | query | _agent_id | 字符串 |
 | `web_fetch` | url | _agent_id | 字符串 |
 
-## 编辑器
+## CDP 浏览器控制
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
-| `browser_launch` | — | _agent_id | 字符串 |
+| `browser_launch` | — | _agent_id, url, port, headless, profile, proxy, proxy_bypass | 字符串 |
 | `browser_connect` | port | _agent_id | 字符串 |
-| `browser_discover` | — | — | 字符串 |
+| `browser_sessions` | — | _agent_id | 字符串 |
+| `browser_switch_session` | — | _agent_id, session, profile | 字符串 |
+| `browser_cookies` | — | — | 字符串 |
 | `browser_kill` | — | _agent_id | 字符串 |
 | `browser_targets` | — | _agent_id | 字符串 |
-| `browser_attach` | — | _agent_id | 字符串 |
+| `browser_discover` | — | — | 字符串 |
+| `desktop_probe` | — | _agent_id | 字符串 |
+| `desktop_screenshot` | — | _agent_id | 字符串 |
+| `browser_attach` | target_id | _agent_id, target | 字符串 |
 | `browser_inspect` | selector | max_results, props | 字符串 |
 | `browser_report` | — | scope | 字符串 |
-| `browser_snapshot` | — | scope, max_results | 字符串 |
+| `browser_snapshot` | — | scope, max_results, offset | 字符串 |
+| `browser_content` | — | scope, format, max_chars, offset | 字符串 |
 | `browser_console` | — | limit | 字符串 |
 | `browser_network` | — | limit | 字符串 |
-| `browser_screenshot` | — | — | 字符串 |
+| `browser_network_detail` | request_id | — | 字符串 |
+| `browser_network_har` | — | limit | 字符串 |
+| `browser_screenshot` | — | full_page, inline | 字符串 |
+| `browser_viewport` | — | — | 字符串 |
 | `browser_audit` | — | agent, limit | 字符串 |
 | `browser_click` | — | — | 字符串 |
 | `browser_type` | — | — | 字符串 |
 | `browser_press` | — | — | 字符串 |
+| `browser_hover` | — | — | 字符串 |
+| `browser_dialog` | — | accept | 字符串 |
+| `browser_upload` | — | — | 字符串 |
+| `browser_new_tab` | — | — | 字符串 |
+| `browser_close_tab` | — | — | 字符串 |
 | `browser_scroll` | — | — | 字符串 |
-| `browser_eval` | — | _agent_id | 字符串 |
+| `browser_navigate` | — | — | 字符串 |
+| `browser_back` | — | — | 字符串 |
+| `browser_forward` | — | — | 字符串 |
+| `browser_reload` | — | — | 字符串 |
+| `browser_select` | — | — | 字符串 |
+| `browser_wait` | — | selector, ms | 字符串 |
+| `browser_eval` | expr | _agent_id | 字符串 |
 | `browser_status` | — | — | 字符串 |
 
-## 身份认证 / 权限
+## Shell
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
-| `exec_command` | command | cwd, timeout_ms, run_in_background, is_agent, _agent_id, agent_id, stream_tool_id | 字符串 |
+| `exec_command` | command | cwd, timeout_ms, run_in_background, is_agent, _agent_id, agent_id, stream_tool_id, interpreter | 字符串 |
 | `bash_output` | job_id | — | 字符串 |
 | `bash_kill` | job_id | agent_id | 字符串 |
 | `bash_wait` | job_id | timeout_ms | 字符串 |
 | `shell_env` | — | — | 字符串 |
+| `background_activity` | — | — | 字符串 |
 | `drain_bg_notifications` | — | — | 字符串 |
+| `protocol_bridge_spawn` | id, command, args | — | 字符串 |
+| `protocol_bridge_write` | id, line | — | 字符串 |
+| `protocol_bridge_kill` | id | — | 字符串 |
 
-## Agent 隔离（worktree）
+## 编辑器
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
 | `edit_file` | file_path, old_string, new_string | replace_all, is_agent, _agent_id | 字符串 |
 
-## 外部服务
+## 身份认证 / 权限
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
@@ -127,7 +152,7 @@
 | `credential_get` | provider | — | JSON 字符串 |
 | `credential_delete` | provider | — | `null`（unit） |
 
-## Hologram 遗留命令
+## Agent 隔离（worktree）
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
@@ -138,7 +163,7 @@
 | `agent_isolation_status` | — | — | 字符串 |
 | `agent_isolation_force_purge` | agent_id | — | 字符串 |
 
-## 工作区
+## 外部服务
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
@@ -149,7 +174,7 @@
 | `unity_status` | — | — | 字符串 |
 | `sandbox_status` | — | — | 字符串 |
 
-## 会话持久化
+## Hologram 遗留命令
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
@@ -157,7 +182,7 @@
 | `hologram_record_event` | event_type, summary | file | `null`（unit） |
 | `get_full_graph` | — | — | 字符串 |
 
-## 约束
+## 工作区
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
@@ -165,21 +190,21 @@
 | `workspace_deactivate` | — | — | `null`（unit） |
 | `workspace_start_watcher` | — | — | `null`（unit） |
 
-## 数据流
+## 会话持久化
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
 | `session_append` | path, session_id, message | — | 字符串 |
 | `agent_session_append` | project_path, agent_id, messages | rewrite | 字符串 |
 
-## Aura 记忆
+## 约束
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
 | `read_constraints` | project_path | — | 字符串 |
 | `write_constraints` | project_path, content | — | `null`（unit） |
 
-## PTY
+## 数据流
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
@@ -187,7 +212,7 @@
 | `dataflow_query` | — | trace_id, list | 字符串 |
 | `dataflow_delete` | trace_id | — | 字符串 |
 
-## LSP
+## Aura 记忆
 
 | 方法 | 必选参数 | 可选参数 | 返回 |
 |------|----------|----------|------|
@@ -198,6 +223,23 @@
 | `aura_count` | — | — | 字符串 |
 | `aura_maintenance` | — | — | `null`（unit） |
 | `aura_shutdown` | — | — | `null`（unit） |
+
+## PTY
+
+| 方法 | 必选参数 | 可选参数 | 返回 |
+|------|----------|----------|------|
+| `pty_spawn` | cwd, cols, rows | shell | 字符串 |
+| `pty_write` | data, session_id | — | `null`（unit） |
+| `pty_resize` | cols, rows, session_id | — | `null`（unit） |
+| `pty_kill` | session_id | — | `null`（unit） |
+
+## LSP
+
+| 方法 | 必选参数 | 可选参数 | 返回 |
+|------|----------|----------|------|
+| `lsp_start` | language, root_uri | — | 字符串 |
+| `lsp_request` | method, session_id | params | JSON 字符串 |
+| `lsp_stop` | session_id | — | `null`（unit） |
 
 ## 事件（Rust 侧 emit → 前端 listen）
 
@@ -211,6 +253,7 @@ payload 类型见 `src-ui/src/rpc-contract.ts` 的 `EventContract`（前端类�
 | `graph-updated` | src-tauri/src/workspace.rs |
 | `lsp-message` | src-tauri/src/lsp_manager.rs |
 | `permission-ask` | src-tauri/src/utils/path_resolve.rs |
+| `protocol-bridge:exit` | src-tauri/src/commands/protocol_bridge.rs |
 | `pty-output` | src-tauri/src/pty_manager.rs |
 | `shell:done` | src-tauri/src/commands/shell.rs |
 | `shell:output` | src-tauri/src/commands/shell.rs |

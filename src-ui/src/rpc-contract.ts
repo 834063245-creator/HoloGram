@@ -3,7 +3,9 @@
 //
 // RPC 契约 — 前后端 IPC 的单一类型事实源（前端侧投影）。
 //
-// 后端唯一权威源：src-tauri/src/rpc.rs（90 个 match 分支）。
+// 后端唯一权威源：src-tauri/src/rpc.rs（当前 133 个 RPC 方法，由
+// scripts/gen-rpc-contract-md.cjs 生成目录）。本文件的 RpcContract 是
+// typedRpc 可见的 UI 子集；Agent 工具调用走 agent/tool.ts 的 agentInvoke 动态分发。
 // 维护纪律：后端加/改方法 → 同步更新本文件 RpcContract；
 // docs/agents/frontend-rpc-contract.md 由 scripts/gen-rpc-contract-md.cjs
 // 从 rpc.rs 生成，勿手改。
