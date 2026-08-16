@@ -8,8 +8,9 @@
 //   - seq 严格递增由运行检查保证（appendEvent 重复/乱序拒绝）。
 // T0 接线：createAgentFromContext 物化 sessionLog 服务，Agent.getSessionLog 与
 //   ctx 持有同一实例（Phase 3 服务表语义）。
-// T2 差分矩阵在 tests/session-differential.test.ts（全量 vitest 覆盖）；
-// T3 契约快照 session-projection.trace.json 由 freeze commit 落地（本文件追加）。
+// T2 差分矩阵在 tests/session-differential.test.ts（全量 vitest 覆盖）。
+// T3 契约快照：session-projection.trace.json — 固定场景（文本轮 + 工具轮 +
+//   compaction + retract）的事件流与逐步派生载荷，冻结双写等价的字节契约。
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import * as ts from 'typescript';
@@ -152,5 +153,98 @@ describe('phase-5 T0 接线 — sessionLog 服务物化', () => {
     // 构造期的 system prompt 已按 reset 事件入日志，投影等价
     expect(agent.getSessionLog().deriveMessages()).toEqual(agent.getSession());
     h.dispose();
+  });
+});
+
+// ── T3：session-projection 契约快照（freeze commit 落 baseline/phase-5/）──
+
+describe('phase-5 T3 — session-projection 契约快照', () => {
+  it('固定场景的事件流与逐步派生载荷冻结为 session-projection.trace.json', async () => {
+    const { Agent } = await import('../../../src/agent/agent');
+    const { ChunkType } = await import('../../../src/provider/types');
+    type Chunk = import('../../../src/provider/types').Chunk;
+    type Message = import('../../../src/provider/types').Message;
+
+    const requests: Array<{ request: Message[]; derivedPayload: Message[] }> = [];
+    let agentBox: import('../../../src/agent/agent').Agent | null = null;
+    let callIdx = 0;
+    const scripts: Chunk[][] = [
+      [{ type: ChunkType.Text, text: '回复一' }, { type: ChunkType.Done }],
+      [{ type: ChunkType.ToolCall, tool_call: { id: 't1', name: 'echo_tool', arguments: '{"v":"v1"}' } }, { type: ChunkType.Done }],
+      [{ type: ChunkType.Text, text: '工具完成' }, { type: ChunkType.Done }],
+      [{ type: ChunkType.Text, text: 'trace-summary' }, { type: ChunkType.Done }],
+      [{ type: ChunkType.Text, text: '压缩后回复' }, { type: ChunkType.Done }],
+    ];
+    const prov = {
+      name: () => 'mock',
+      async *stream(_signal: AbortSignal, req: { messages: Message[] }) {
+        const log = agentBox?.getSessionLog();
+        const internals = agentBox as unknown as { _toolResultWindow: number; _toolFoldBoundary: number } | null;
+        requests.push({
+          request: JSON.parse(JSON.stringify(req.messages)) as Message[],
+          derivedPayload: log
+            ? (JSON.parse(
+                JSON.stringify(
+                  log.derivePayload({
+                    toolResultWindow: internals?._toolResultWindow ?? 0,
+                    toolFoldBoundary: internals?._toolFoldBoundary ?? 0,
+                  }),
+                ),
+              ) as Message[])
+            : [],
+        });
+        for (const c of scripts[Math.min(callIdx++, scripts.length - 1)]) yield c;
+      },
+    };
+    const { ToolRegistry } = await import('../../../src/agent/tool');
+    const tools = new ToolRegistry();
+    tools.register({
+      name: () => 'echo_tool',
+      description: () => 'echo fixture',
+      parameters: () => ({ type: 'object', properties: { v: { type: 'string' } }, required: ['v'] }),
+      readOnly: () => true,
+      execute: async (args) => `ok:${String((args as { v?: unknown }).v ?? '')}`,
+    });
+    const agent = new Agent(prov as unknown as ConstructorParameters<typeof Agent>[1], tools, 'trace-sys', {
+      agentId: 'trace-agent',
+      contextWindow: 10_000_000,
+    });
+    agentBox = agent;
+    const SIG = new AbortController().signal;
+
+    await agent.run(SIG, '指令一');
+    await agent.run(SIG, '指令二');
+    const summary = await agent.compactNow(SIG);
+    await agent.run(SIG, '指令三');
+    // 撤回第三轮（其 user 消息在 index = sys + 2轮×3条 = 7）
+    agent.retractTurnAt(7);
+
+    const log = agent.getSessionLog();
+    const a = agent as unknown as { payloadMessages(): Message[]; _toolFoldBoundary: number; _toolResultWindow: number };
+    expect(summary).not.toBe('stuck');
+    // 快照前自证等价（差分矩阵的收敛级复检）
+    expect(JSON.stringify(log.deriveMessages())).toBe(JSON.stringify(agent.getSession()));
+    expect(
+      JSON.stringify(log.derivePayload({ toolResultWindow: a._toolResultWindow, toolFoldBoundary: a._toolFoldBoundary })),
+    ).toBe(JSON.stringify(a.payloadMessages()));
+
+    const trace = {
+      scenario: 'text-tool-compaction-retract',
+      events: log.events().map((e) => ({ seq: e.seq, ts: 0, kind: e.kind, data: e.data })),
+      steps: [
+        { at: 'request-1', payload: requests[0]?.derivedPayload ?? [] },
+        { at: 'request-2', payload: requests[1]?.derivedPayload ?? [] },
+        { at: 'request-3-tool-loop', payload: requests[2]?.derivedPayload ?? [] },
+        { at: 'post-compaction', payload: JSON.parse(JSON.stringify(log.derivePayload({ toolResultWindow: 0 }))) },
+        { at: 'request-4-post-compaction', payload: requests[4]?.derivedPayload ?? [] },
+        {
+          at: 'post-retract',
+          payload: JSON.parse(JSON.stringify(log.derivePayload({ toolResultWindow: 0 }))),
+          derivedCount: log.deriveMessages().length,
+        },
+      ],
+    };
+    const { snapshot } = await import('../helpers/snapshot');
+    snapshot('phase-5/session-projection.trace.json', trace);
   });
 });

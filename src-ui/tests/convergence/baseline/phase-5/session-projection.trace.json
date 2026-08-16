@@ -1,0 +1,397 @@
+{
+  "events": [
+    {
+      "data": {
+        "messages": [
+          {
+            "content": "trace-sys",
+            "role": "system"
+          }
+        ],
+        "reason": "init"
+      },
+      "kind": "session/reset",
+      "seq": 1,
+      "ts": 0
+    },
+    {
+      "data": {
+        "message": {
+          "content": "指令一",
+          "role": "user"
+        }
+      },
+      "kind": "user/message",
+      "seq": 2,
+      "ts": 0
+    },
+    {
+      "data": {
+        "model": "mock"
+      },
+      "kind": "turn/start",
+      "seq": 3,
+      "ts": 0
+    },
+    {
+      "data": {
+        "message": {
+          "content": "回复一",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": []
+        }
+      },
+      "kind": "assistant/text",
+      "seq": 4,
+      "ts": 0
+    },
+    {
+      "data": {
+        "message": {
+          "content": "指令二",
+          "role": "user"
+        }
+      },
+      "kind": "user/message",
+      "seq": 5,
+      "ts": 0
+    },
+    {
+      "data": {
+        "model": "mock"
+      },
+      "kind": "turn/start",
+      "seq": 6,
+      "ts": 0
+    },
+    {
+      "data": {
+        "message": {
+          "content": "",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "arguments": "{\"v\":\"v1\"}",
+              "id": "t1",
+              "name": "echo_tool"
+            }
+          ]
+        }
+      },
+      "kind": "assistant/text",
+      "seq": 7,
+      "ts": 0
+    },
+    {
+      "data": {
+        "call": {
+          "arguments": "{\"v\":\"v1\"}",
+          "id": "t1",
+          "name": "echo_tool"
+        }
+      },
+      "kind": "tool/call",
+      "seq": 8,
+      "ts": 0
+    },
+    {
+      "data": {
+        "message": {
+          "content": "ok:v1",
+          "name": "echo_tool",
+          "role": "tool",
+          "tool_call_id": "t1"
+        }
+      },
+      "kind": "tool/result",
+      "seq": 9,
+      "ts": 0
+    },
+    {
+      "data": {
+        "message": {
+          "content": "工具完成",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": []
+        }
+      },
+      "kind": "assistant/text",
+      "seq": 10,
+      "ts": 0
+    },
+    {
+      "data": {
+        "summary": "trace-summary",
+        "tailStart": 3
+      },
+      "kind": "session/compaction",
+      "seq": 11,
+      "ts": 0
+    },
+    {
+      "data": {
+        "message": {
+          "content": "指令三",
+          "role": "user"
+        }
+      },
+      "kind": "user/message",
+      "seq": 12,
+      "ts": 0
+    },
+    {
+      "data": {
+        "model": "mock"
+      },
+      "kind": "turn/start",
+      "seq": 13,
+      "ts": 0
+    },
+    {
+      "data": {
+        "message": {
+          "content": "压缩后回复",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": []
+        }
+      },
+      "kind": "assistant/text",
+      "seq": 14,
+      "ts": 0
+    },
+    {
+      "data": {
+        "fromIndex": 7,
+        "toIndex": 9
+      },
+      "kind": "session/retract",
+      "seq": 15,
+      "ts": 0
+    }
+  ],
+  "scenario": "text-tool-compaction-retract",
+  "steps": [
+    {
+      "at": "request-1",
+      "payload": [
+        {
+          "content": "trace-sys",
+          "role": "system"
+        },
+        {
+          "content": "指令一",
+          "role": "user"
+        }
+      ]
+    },
+    {
+      "at": "request-2",
+      "payload": [
+        {
+          "content": "trace-sys",
+          "role": "system"
+        },
+        {
+          "content": "指令一",
+          "role": "user"
+        },
+        {
+          "content": "回复一",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": []
+        },
+        {
+          "content": "指令二",
+          "role": "user"
+        }
+      ]
+    },
+    {
+      "at": "request-3-tool-loop",
+      "payload": [
+        {
+          "content": "trace-sys",
+          "role": "system"
+        },
+        {
+          "content": "指令一",
+          "role": "user"
+        },
+        {
+          "content": "回复一",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": []
+        },
+        {
+          "content": "指令二",
+          "role": "user"
+        },
+        {
+          "content": "",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "arguments": "{\"v\":\"v1\"}",
+              "id": "t1",
+              "name": "echo_tool"
+            }
+          ]
+        },
+        {
+          "content": "ok:v1",
+          "name": "echo_tool",
+          "role": "tool",
+          "tool_call_id": "t1"
+        }
+      ]
+    },
+    {
+      "at": "post-compaction",
+      "payload": [
+        {
+          "content": "trace-sys",
+          "role": "system"
+        },
+        {
+          "content": "<compacted-context>\n以下是对前面讨论的总结（原始消息仍完整保留在会话历史中）:\n\ntrace-summary\n</compacted-context>",
+          "role": "user"
+        },
+        {
+          "content": "指令二",
+          "role": "user"
+        },
+        {
+          "content": "",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "arguments": "{\"v\":\"v1\"}",
+              "id": "t1",
+              "name": "echo_tool"
+            }
+          ]
+        },
+        {
+          "content": "ok:v1",
+          "name": "echo_tool",
+          "role": "tool",
+          "tool_call_id": "t1"
+        },
+        {
+          "content": "工具完成",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": []
+        }
+      ]
+    },
+    {
+      "at": "request-4-post-compaction",
+      "payload": [
+        {
+          "content": "trace-sys",
+          "role": "system"
+        },
+        {
+          "content": "<compacted-context>\n以下是对前面讨论的总结（原始消息仍完整保留在会话历史中）:\n\ntrace-summary\n</compacted-context>",
+          "role": "user"
+        },
+        {
+          "content": "指令二",
+          "role": "user"
+        },
+        {
+          "content": "",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "arguments": "{\"v\":\"v1\"}",
+              "id": "t1",
+              "name": "echo_tool"
+            }
+          ]
+        },
+        {
+          "content": "ok:v1",
+          "name": "echo_tool",
+          "role": "tool",
+          "tool_call_id": "t1"
+        },
+        {
+          "content": "工具完成",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": []
+        },
+        {
+          "content": "指令三",
+          "role": "user"
+        }
+      ]
+    },
+    {
+      "at": "post-retract",
+      "derivedCount": 7,
+      "payload": [
+        {
+          "content": "trace-sys",
+          "role": "system"
+        },
+        {
+          "content": "<compacted-context>\n以下是对前面讨论的总结（原始消息仍完整保留在会话历史中）:\n\ntrace-summary\n</compacted-context>",
+          "role": "user"
+        },
+        {
+          "content": "指令二",
+          "role": "user"
+        },
+        {
+          "content": "",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "arguments": "{\"v\":\"v1\"}",
+              "id": "t1",
+              "name": "echo_tool"
+            }
+          ]
+        },
+        {
+          "content": "ok:v1",
+          "name": "echo_tool",
+          "role": "tool",
+          "tool_call_id": "t1"
+        },
+        {
+          "content": "工具完成",
+          "reasoning_content": "",
+          "reasoning_signature": "",
+          "role": "assistant",
+          "tool_calls": []
+        }
+      ]
+    }
+  ]
+}
