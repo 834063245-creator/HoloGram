@@ -4,6 +4,12 @@
 > 接手者：下一个实现窗口（若决定启动 Phase 6）。本文自包含开工所需全部事实。
 > 前任交接文档 `agent-core-convergence-handoff-phase5.md` 已成历史，勿作现状依据。
 
+> **收尾追记（2026-08-16 第二窗口）：Phase 6 已完成**——T1 `431e6eca`（AgentBlueprint
+> 原语）+ T2（_assembleAgent 表驱动重写 + specs/phase-6 + gate.mjs phase-6 规则）。
+> 验收达成：新增工具/hook 走 `blueprint.add()`，AgentConfig 字段面冻结 31（T0 双层门禁）。
+> 终态：vitest 1162 passed / 1 skipped（109 文件），verify:convergence exit 0，tsc 干净。
+> 决策 30-33 与验收核对见 progress.md Phase 6 记录；§4 的维护约束（演进纪律）继续有效。
+
 ## 1. 工程终态一句话
 
 HoloGram 自有 Agent 运行时已完成向 Cordis 四原语的收敛——Context、Effect/Disposer、

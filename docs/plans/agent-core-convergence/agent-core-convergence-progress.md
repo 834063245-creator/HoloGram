@@ -14,7 +14,7 @@
 | 3 AgentContext 抽取 | ✅ 完成 | 三层收敛 26/11/12→0/0/0；wiring baseline 经审批冻结（828679fc）；决策 16-19 |
 | 4 生命周期所有权统一 | ✅ 完成 | dispose 21→14 步收敛为 ctx 所有权；wiring baseline 经审批冻结（45f328a2）；决策 20-23 |
 | 5 会话事件溯源日志 | ✅ 完成 | SessionLog 双写 + 14 变异点收敛三入口 + 11 场景差分 + session-projection 冻结（5e42c995）；决策 24-29 |
-| 6 组合层收尾（可选） | ⬜ 未开始 | 视 Phase 5 收益决定 |
+| 6 组合层收尾（可选） | ✅ 完成 | AgentBlueprint 声明式装配 + _assembleAgent 表驱动重写 + AgentConfig 字段面冻结（31）；决策 30-33 |
 
 ## Phase 0 / V0 记录（2026-08-16）
 
@@ -288,6 +288,40 @@
 6. [x] 全部旧测试 + 新测试通过，tool schema 与模型可见输出零漂移（1150/1 + verify:convergence exit 0）
 7. [x] 进度与决策记录更新到本文件（决策 1-29 + 检查点结论）
 
+## Phase 6 / V6 记录（2026-08-16）
+
+> 状态：**✅ 完成**（2026-08-16）。零新增 baseline——缺省装配面的字节契约由既有
+> phase-0/1 快照承担（决策 #33，同决策 #14 的等价性锚定原则）。
+
+### 交付物
+
+| commit | 内容 |
+|---|---|
+| `431e6eca` | T1：`src/agent/blueprint.ts`（AgentCapability key/phase/when/install + AgentBlueprint 重复 key 拒绝/阶段过滤保序/add 链式扩展 + standard() 标准表 14 项——表序与 Phase 5 末手写注册序一一对应）+ `tests/blueprint.test.ts` 6 例。行为中性（无消费者） |
+| （本 commit） | T2：`runtime.ts` `_assembleAgent` 重写为 blueprint 表驱动（-156/+65 行：组合面 12 项全部迁入 capability，runtime 保留构造 + 生命周期所有权三块 ctx.effect）；`blueprint.ts` graph-hooks 门控镜像修复（决策 #30）；`specs/phase-6.test.ts` 5 例（T0×3 + T2×2）；gate.mjs phase-6 T0 规则（负向验证通过） |
+
+### 验收核对（主计划 §6 Phase 6：新增一个工具或 hook 不再要求修改 AgentConfig）
+
+- [x] T0：AgentConfig 字段面冻结 31（AST PropertySignature 精确名单 + gate.mjs 计数扫描双层；负向验证：注入第 32 字段 → check 失败关闭）；`_assembleAgent` 零组合面直调（26 项禁止片段，spec AST + gate 文本双层；负向验证：注入 convergeRegistry → check 失败关闭）；缺省装配 = `AgentBlueprint.standard()` 两阶段表驱动
+- [x] T1：blueprint 原语行为 6 例（重复 key 拒绝 / 阶段过滤保序 / when 门控 / 实例隔离 / standard 表冻结 / 形状完整）
+- [x] T2 验收实证：扩展蓝图 `standard().add(...)` 注入新工具 → 出现在 Agent 工具面且标准面序逐字节不变（`[...stdNames, 'acme_probe']`），hook capability 经共享 registry 接线——全程未碰 AgentConfig；空蓝图 → 工具面只剩输入注册表（装配面完全由 blueprint 决定）
+- [x] T3：verify:convergence exit 0——phase-0/1 全部快照零漂移（tool-schemas.effective 跑真实 createAgent 全注册，工具面字节钉住 = 装配重写的等价性证据）
+- [x] T4：全量 vitest 终态 **1162 passed / 1 skipped / 0 failed（109 文件）**；tsc 干净；biome 触碰文件零新增（runtime.ts 20→19 净减 1；blueprint.ts / gate.mjs / phase-6 spec 零诊断）
+- [x] 既有门禁零回归：phase-3 T0（装配本体 config-free）、phase-4 T0（ctx.effect ≥3 处 + dispose 14 步）、phase-5 T0（session 三入口）在同一次 check 中全绿
+
+### 决策与偏差记录（Phase 6 追加）
+
+30. **graph-hooks 门控镜像旧装配**：`when` 只门控 `inputs.graphContext`；`loadEngineSnapshot` 不受 `hooksEnabled` 门控（旧装配只有 hook 注册受控——快照加载在 `if (graphContext)` 外层）。T1 首版把 hooksEnabled 一并进 `when`，会改变 `hooksEnabled: false` 时的快照加载行为；按"先镜像旧顺序/旧门控"原则修正为 install 内早退。
+31. **hooks 走共享 registries，runtime 统一 setHooks**：`Agent.setHooks` 是整体替换语义，capability 各自 set 会互相覆盖——scope 上挂共享 HookRegistry/PreflightHookRegistry，capability 只注册，runtime 在 capability 循环后一次性接线。
+32. **生命周期所有权不进 capability**：board-unregister / lifecycle-manager / runtime-maps 的 ctx.effect 留在 runtime 装配层（Phase 4 语义；phase-4 T0 的 ≥3 处断言继续钉住）。capability 只做组合，不做 teardown——BlueprintScope 不暴露 effect 写入面之外的 runtime 内部状态（deps 注入面隔离）。
+33. **Phase 6 零新增 baseline**：缺省装配面的等价性由既有 phase-0/1 快照承担（effective 快照 = 真实 createAgent 的模型可见工具面字节），不另立"新路径自证新 baseline"（同决策 #14）。phase-6 spec 只做结构门禁与验收实证。
+
+### Phase 6 决策检查点（计划 §10 / 主计划验收）
+
+> 验收：新增一个工具或 hook 不再要求修改 AgentConfig。
+
+结论：**达成，工程收尾**。T2 实证注入新工具/hook 仅需 `blueprint.add()` 一个 capability；AgentConfig 字段面由 T0 双层门禁冻结（31）。四原语 + 组合层全部落地，本工程转入维护态（gate 与 baseline 长期守护；演进约束见 handoff-phase6 §4.3）。
+
 ## 决策检查点（汇总）
 
 - Phase 1 结束：继续 Phase 2（价值在未来所有权接线）
@@ -295,3 +329,4 @@
 - Phase 3 结束：复杂度实质下降（26/11/12→0/0/0），进入 Phase 4（2026-08-16）
 - Phase 4 结束：可测泄漏减少成立（T5 百次归零 + T0 禁止片段），进入 Phase 5（2026-08-16）
 - Phase 5 结束：触发线未出现，继续自有 runtime；Phase 6 可选（2026-08-16）
+- Phase 6 结束：验收达成（新增工具/hook 不改 AgentConfig），工程收尾转入维护态（2026-08-16）
