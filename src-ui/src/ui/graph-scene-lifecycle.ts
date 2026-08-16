@@ -152,6 +152,9 @@ export class GraphSceneLifecycle {
   private _revealCancelled = false;
   private _revealGeneration = 0; // ponytail: 每次新揭示递增；旧 rAF 回调自行退出
   private _revealRevealed = false;
+  // ponytail: 揭示 stuck 安全定时器提升为类字段 — 取消/完成/清场必须显式清理，
+  // 否则旧渲染的 15s 定时器可能误清新渲染的 _renderInProgress。
+  private _revealSafetyTimer: ReturnType<typeof setTimeout> | null = null;
 
   // 动画循环状态
   private _lastFrameTime = 0;
@@ -564,6 +567,10 @@ export class GraphSceneLifecycle {
 
   private _startProgressiveReveal(nodeCount: number): void {
     this._revealCancelled = false;
+    if (this._revealSafetyTimer) {
+      clearTimeout(this._revealSafetyTimer);
+      this._revealSafetyTimer = null;
+    }
     const myGen = ++this._revealGeneration; // ponytail: 递增代际，使旧渲染的 rAF 回调自行退出
     const BATCH_SIZE = Math.max(50, Math.floor(nodeCount / 40));
     const totalNodes = this.host._nodeCount;
@@ -593,6 +600,9 @@ export class GraphSceneLifecycle {
     for (const lines of this.host.edgeLineGroups) {
       const mat = lines.material as LineMaterial;
       edgeTargetOpacities.push(mat.opacity);
+      // ponytail: 目标透明度挂到 userData — 揭示被增量更新（applyGraphDiff）
+      // 提前完成时，_finishProgressiveRevealNow 才能恢复全部边线。
+      lines.userData.revealOpacity = mat.opacity;
       mat.opacity = 0;
     }
     this.host.labelsContainer.style.opacity = '0';
@@ -605,13 +615,14 @@ export class GraphSceneLifecycle {
     // 安全超时：如 rAF 链因任何原因中断（代际递增、崩溃、
     // 快速重渲染），强制清除 _renderInProgress 使动画循环
     // 不被永久阻塞。
-    let safetyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-      safetyTimer = null;
+    const safetyTimer = setTimeout(() => {
+      this._revealSafetyTimer = null;
       if (this.host._renderInProgress) {
         console.warn('[StarGraph] progressive reveal stuck — force-clearing _renderInProgress');
         this.host._renderInProgress = false;
       }
     }, 15000);
+    this._revealSafetyTimer = safetyTimer;
 
         const revealFrame = () => {
       // ponytail: 若更新的渲染已开始则退出 — 防止旧 rAF
@@ -619,7 +630,10 @@ export class GraphSceneLifecycle {
       // 此处不触碰 _renderInProgress — 新渲染拥有该标志。
       if (this._revealGeneration !== myGen) return;
       if (this._revealCancelled) {
-        if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+        if (this._revealSafetyTimer) {
+          clearTimeout(this._revealSafetyTimer);
+          this._revealSafetyTimer = null;
+        }
         this.host._renderInProgress = false;
         return;
       }
@@ -660,7 +674,10 @@ export class GraphSceneLifecycle {
         // ponytail: 渐进揭示完成后解除动画循环阻塞。
         // _renderInProgress 自 _renderImpl 起保持 true，防止
         // 动画循环渲染部分状态（鬼影点）。
-        if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+        if (this._revealSafetyTimer) {
+          clearTimeout(this._revealSafetyTimer);
+          this._revealSafetyTimer = null;
+        }
         this.host._renderInProgress = false;
         return;
       }
@@ -669,9 +686,56 @@ export class GraphSceneLifecycle {
     requestAnimationFrame(revealFrame);
   }
 
+  /**
+   * 立即完成进行中的渐进揭示（取消 rAF 链并恢复全量可见性）。
+   * 分页加载时首页 render() 的揭示 rAF 还在飞，后续页的 applyGraphDiff
+   * 会先把 InstancedMesh.count 提到全量；旧揭示帧随后把 count 写回
+   * 首批节点数量 → 星图最终只剩第一批（后一批被前一批的揭示帧覆盖）。
+   * 增量更新前调用本方法，旧帧的代际立即失配，不再触碰新场景状态。
+   */
+  private _finishProgressiveRevealNow(): void {
+    if (!this.host._renderInProgress) return;
+    this._revealCancelled = true;
+    ++this._revealGeneration;
+    if (this._revealSafetyTimer) {
+      clearTimeout(this._revealSafetyTimer);
+      this._revealSafetyTimer = null;
+    }
+    // renderImpl 仍在布局/构建期（揭示尚未开始）时不接管 _renderInProgress —
+    // renderImpl 完成后会按正常流程启动自己的揭示。
+    const instanced = this.host.nodeCoresInstanced;
+    if (!instanced) return;
+
+    const totalNodes = this.host._nodeCount;
+    instanced.count = totalNodes;
+    instanced.instanceMatrix.needsUpdate = true;
+    instanced.boundingSphere = null;
+    // 恢复揭示完成态的辉光 alpha + override 标志
+    for (let i = 0; i < totalNodes; i++) this.host._glowRgba[i * 4 + 3] = 0.75;
+    this.host.nodeGlowsPoints.geometry.attributes.color.needsUpdate = true;
+    if (this.host.nodeGlows2Points && this.host._glow2Rgba.length > 0) {
+      for (let i = 0; i < totalNodes; i++) this.host._glow2Rgba[i * 4 + 3] = 0.48;
+      this.host.nodeGlows2Points.geometry.attributes.color.needsUpdate = true;
+    }
+    this.host._overrideFlags.fill(0);
+    this.host._nodes._flushOverrideAttrs();
+    // 恢复揭示前保存的边线目标透明度
+    for (const lines of this.host.edgeLineGroups) {
+      const target = lines.userData.revealOpacity;
+      if (typeof target === 'number') (lines.material as LineMaterial).opacity = target;
+    }
+    this.host.labelsContainer.style.opacity = '1';
+    this._revealRevealed = true;
+    this.host._renderInProgress = false;
+  }
+
   clearGraph(): void {
     this._revealCancelled = true; // 取消进行中的渐进揭示
     ++this._revealGeneration; // ponytail: 递增代际，使旧 rAF 回调静默退出
+    if (this._revealSafetyTimer) {
+      clearTimeout(this._revealSafetyTimer);
+      this._revealSafetyTimer = null;
+    }
     // ── 显式清理：每种对象类型知道该释放什么。
     //     切勿盲目遍历 disposeGroup — nodeCoresInstanced 共享
     //     this.sphereGeo（在 constructor 中创建，跨重渲染复用）。
@@ -779,6 +843,10 @@ export class GraphSceneLifecycle {
       this.host.render(fullGraph);
       return;
     }
+
+    // 完成进行中的渐进揭示 — 旧 rAF 帧会把 InstancedMesh.count 写回
+    // 首批节点数量，覆盖分页后续批已追加的节点（星图只剩第一批）。
+    this._finishProgressiveRevealNow();
 
     // 退出折叠模式 — 增量 + 折叠视觉上不一致
     if (this.host._fold.foldMode) this.host._fold.setFoldMode(false);

@@ -235,6 +235,8 @@ vi.mock('three', () => {
       boundingSphere: any = null;
       setMatrixAt = vi.fn();
       setColorAt = vi.fn();
+      getMatrixAt = vi.fn((_i: number, m: any) => m);
+      getColorAt = vi.fn((_i: number, c: any) => c);
       constructor(geo: any, mat: any, count: number) {
         this.geometry = geo;
         this.material = mat;
@@ -588,6 +590,70 @@ describe('StarGraph render abort', () => {
     // _renderInProgress=false before second render's progressive reveal
     // starts. Either true or false is valid here; hasGraph is the real invariant.
     expect(sg.hasGraph).toBe(true);
+  });
+});
+
+describe('StarGraph.applyGraphDiff — paged incremental update during progressive reveal', () => {
+  let container: HTMLElement;
+  let sg: StarGraph;
+
+  beforeEach(() => {
+    container = makeContainer();
+    sg = new StarGraph(container);
+  });
+
+  it('completes in-flight reveal so old rAF frames cannot overwrite appended page nodes', async () => {
+    // 分页加载竞态：首页 render() 的渐进揭示 rAF 还在飞，
+    // 后续页 applyGraphDiff 追加节点后，旧揭示帧会把 InstancedMesh.count
+    // 写回首批节点数 → 星图只剩第一批。修复：applyGraphDiff 先完成揭示。
+    const queue: FrameRequestCallback[] = [];
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
+      queue.push(cb);
+      return queue.length;
+    });
+    try {
+      const page0 = tinyGraph();
+      await sg.render(page0);
+      expect((sg as any)._nodeCount).toBe(2);
+      expect((sg as any).nodeCoresInstanced.count).toBe(0); // 揭示首帧尚未执行
+
+      const n3 = { id: 'n3', name: 'third', type: 'function', location: 'src/third.ts:7' };
+      const n4 = { id: 'n4', name: 'fourth', type: 'class', location: 'src/fourth.ts:9' };
+      const fullGraph = {
+        nodes: [...page0.nodes, n3, n4],
+        edges: [
+          ...page0.edges,
+          { id: 'e2', source: 'n2', target: 'n3', type: 'calls', coupling_depth: 1, direction: 'forward' },
+          { id: 'e3', source: 'n3', target: 'n4', type: 'calls', coupling_depth: 1, direction: 'forward' },
+        ],
+        communities: [],
+        hierarchical_communities: [],
+      };
+      const diff = {
+        added_nodes: [n3, n4],
+        added_edges: [fullGraph.edges[1], fullGraph.edges[2]],
+        removed_nodes: [],
+        removed_edges: [],
+        modified_nodes: [],
+      };
+
+      await sg.applyGraphDiff(diff, fullGraph);
+
+      expect((sg as any)._nodeCount).toBe(4);
+      expect((sg as any)._renderInProgress).toBe(false);
+      expect((sg as any).nodeCoresInstanced.count).toBe(4);
+
+      // 执行旧揭示链的剩余 rAF 帧（含 animate 自调度），确认它们不再写回 count。
+      for (let round = 0; round < 3; round++) {
+        const batch = queue.splice(0);
+        for (const cb of batch) cb(0);
+      }
+
+      expect((sg as any).nodeCoresInstanced.count).toBe(4);
+      expect((sg as any)._renderInProgress).toBe(false);
+    } finally {
+      rafSpy.mockRestore();
+    }
   });
 });
 
