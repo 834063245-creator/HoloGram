@@ -1,7 +1,7 @@
 # Agent Core Convergence 计划集
 
 > 创建日期：2026-08-15 · 更新：2026-08-16
-> 状态：In progress（Phase 0/V0 完成，分支 feat/agent-gap-closure；待人类放行 Phase 1）
+> 状态：In progress — Phase 0/1/2 + V0/V1/V2 完成（分支 feat/agent-gap-closure，10 commits，待 Phase 3）
 > 内容：HoloGram 自有 Agent 运行时向 Cordis 设计原语收敛的规划与验证工程。
 
 ## 文件
@@ -10,7 +10,8 @@
 |---|---|
 | `agent-core-convergence-plan-2026-08-15.md` | 主计划：Context / Effect / 类型化事件 / 事件溯源日志，6 个 Phase |
 | `agent-core-convergence-verification-plan-2026-08-15.md` | 验证工程计划：Agent 执行下的人机分工、门禁与 baseline 协议 |
-| `agent-core-convergence-progress.md` | 进度表：每 phase 的基线数字、度量与决策记录 |
+| `agent-core-convergence-progress.md` | 进度表：每 phase 的基线数字、度量、决策记录（1–15）与检查点结论 |
+| `agent-core-convergence-handoff-phase3.md` | **Phase 3 起的交接文档**（新窗口接手先读这份） |
 
 ## 结论摘要
 
