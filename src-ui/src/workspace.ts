@@ -530,12 +530,18 @@ export class Workspace {
     // （这是同步紧急路径；deactivate() 会 await 刷新）。
     if (this.runtime) {
       void this.runtime.flushAllBoards();
+      // 必须 disposeAll：不 dispose 的话每个存活 Agent 的 60s 巡检 timer 永久存活，
+      // _enforceTTL 会继续对共享后端发 agent_isolation_discard（真实删 worktree）。
+      // disposeAll 是同步方法（effects 走同步快通道），紧急路径可直接调用。
+      this.runtime.disposeAll();
     }
     this.runtime = null;
     this.agent = null;
     this.memoryManager = null;
     // 同 deactivate() — 紧急路径也要清注入缓存，防旧工作区状态串味
     resetAgentCaches();
+    // 同 deactivate() — aura 单例也要释放，否则旧项目 brain 句柄驻留
+    void auraShutdown();
     if (this.checkTimer) {
       clearTimeout(this.checkTimer);
       this.checkTimer = null;
