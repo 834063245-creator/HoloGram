@@ -34,6 +34,7 @@ import type { StoredThinking } from '../provider/thinking';
 import { loadSettingsWithSecrets } from '../settings';
 import type { GoalManager, GoalRecord } from './goal-manager';
 import { HookRegistry, type PreflightHookRegistry } from './hooks';
+import { AgentContext } from './context';
 import { log } from './logger';
 import { backoffDelay, isRetryable, MAX_RETRIES, sleepWithAbort } from './retry';
 import { StreamingToolExecutor } from './streaming-executor';
@@ -157,6 +158,11 @@ export class Agent {
   private _toolFoldBoundary = 0;
   private pricing: Pricing | undefined;
   private _agentOpts: AgentOptions;
+
+  // 装配 context — ctx 构造路径的服务来源（legacy 路径为 null）。
+  // Phase 3 字段来源替换：新路径身份/服务读 ctx，setBus/setSubAgentPool/
+  // setGoalManager 经 write-through 把后续注入同步回 ctx（ctx 是服务真源）。
+  private _ctx: AgentContext | null = null;
 
   // 上下文管理
   private contextWindow: number;
@@ -288,10 +294,23 @@ export class Agent {
   private _compactSummary: string | null = null;
   private _compactTailStart = -1;
 
-  constructor(prov: Provider, tools: ToolRegistry, systemPrompt: string, opts: AgentOptions = {}) {
-    this.prov = prov;
-    this.tools = tools;
-    this._sink = opts.eventSink ?? (() => {});
+  // Phase 3 兼容重载：ctx 入口（身份/服务读 context）与 legacy 入口（prov/tools/opts）
+  // 并存；legacy 路径字段来源逐字节不变，spawnSubAgent / 现有测试继续走 legacy 语义。
+  constructor(ctx: AgentContext, systemPrompt: string, opts?: AgentOptions);
+  constructor(prov: Provider, tools: ToolRegistry, systemPrompt: string, opts?: AgentOptions);
+  constructor(
+    provOrCtx: Provider | AgentContext,
+    toolsOrPrompt: ToolRegistry | string,
+    systemPromptOrOpts?: string | AgentOptions,
+    optsArg?: AgentOptions,
+  ) {
+    const ctx = provOrCtx instanceof AgentContext ? provOrCtx : null;
+    const systemPrompt = ctx ? (toolsOrPrompt as string) : (systemPromptOrOpts as string);
+    const opts: AgentOptions = (ctx ? (systemPromptOrOpts as AgentOptions | undefined) : optsArg) ?? {};
+    this._ctx = ctx;
+    this.prov = ctx ? ctx.resolve('provider') : (provOrCtx as Provider);
+    this.tools = ctx ? ctx.resolve('tools') : (toolsOrPrompt as ToolRegistry);
+    this._sink = opts.eventSink ?? ctx?.get('eventSink') ?? (() => {});
     this._ui = opts.ui ?? {};
     this._agentOpts = opts;
     this.temperature = opts.temperature ?? 0.7;
@@ -305,13 +324,16 @@ export class Agent {
     // 积累足够样本后根据 compaction-model.ts 数据调优。
     this.compactRatio = opts.compactRatio ?? 0.55;
     this.recentKeep = opts.recentKeep ?? 4;
-    this._subagentDepth = opts.subagentDepth ?? 0;
-    this.id = opts.agentId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    this.parentId = opts.parentId ?? null;
-    this._execState = opts.execState ?? execState;
-    this._bus = opts.messageBus ?? null;
-    this._taskBoard = opts.taskBoard ?? null;
-    this._discoveryBoard = opts.discoveryBoard ?? null;
+    this._subagentDepth = ctx?.subagentDepth ?? opts.subagentDepth ?? 0;
+    this.id = ctx?.agentId ?? opts.agentId ?? `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.parentId = ctx?.parentId ?? opts.parentId ?? null;
+    this._execState = opts.execState ?? ctx?.get('execState') ?? execState;
+    this._bus = ctx?.get('messageBus') ?? opts.messageBus ?? null;
+    this._taskBoard = ctx?.get('taskBoard') ?? opts.taskBoard ?? null;
+    this._discoveryBoard = ctx?.get('discoveryBoard') ?? opts.discoveryBoard ?? null;
+    this.agentStore = ctx?.get('agentStore') ?? null;
+    this.goalManager = ctx?.get('goalManager') ?? null;
+    this._subAgentPool = ctx?.get('subAgentPool') ?? null;
 
     this.sessionId = opts.sessionId || `session-${Date.now()}`;
     this._onSessionPersisted = opts.onSessionPersisted;
@@ -319,6 +341,14 @@ export class Agent {
     this.session = [];
     if (systemPrompt) {
       this.session.push({ role: 'system', content: systemPrompt });
+    }
+
+    // ctx 路径：bus 注册与隔离接线在构造内完成。旧路径中构造与 runtime 的
+    // setBus/_isolationId 接线之间无 await，时序等价；bus.register 为 Map.set
+    // 覆盖式，即使重复接线也无害（此处只接一次）。
+    if (ctx) {
+      if (this._bus) this.setBus(this._bus);
+      if (ctx.isolationId) this._isolationId = ctx.isolationId;
     }
   }
 
@@ -603,12 +633,14 @@ export class Agent {
 
   setSubAgentPool(pool: import('./coordinator').SubAgentPool): void {
     this._subAgentPool = pool;
+    this._ctx?.set('subAgentPool', pool);
   }
 
   /** 接线 Agent 间通信的消息总线。
    *  注册 Agent 地址 + 唤醒回调，当 Agent 空闲时消息到达会触发 runLoop。 */
   setBus(bus: MessageBus): void {
     this._bus = bus;
+    this._ctx?.set('messageBus', bus);
     bus.register(
       { agentId: this.id, parentId: this.parentId, depth: this._subagentDepth },
       () => { void this._onMessageDelivered(); },
@@ -674,6 +706,7 @@ export class Agent {
 
   setGoalManager(mgr: GoalManager): void {
     this.goalManager = mgr;
+    this._ctx?.set('goalManager', mgr);
   }
 
   /** 将当前状态 + 会话持久化到磁盘。Best-effort — 不抛异常。
@@ -2530,27 +2563,45 @@ ${subTools
     // 以报告当前工具调用 + 等待时间（见 subagent-activity.ts）。
     const subSink = wrapSubAgentSink(subAgentId, rawSubSink);
 
-    // 共享 provider，全新会话，不压缩
-    const subAgent = new Agent(this.prov, subTools, subSystem, {
-      temperature: 0.3,
-      subagentDepth: this._subagentDepth + 1,
-      contextWindow: this.contextWindow,
-      eventSink: subSink,
-      agentId: subAgentId,
-      parentId: this.id,
-      execState: createExecState(),
-    });
-    if (isolationId) {
-      subAgent._isolationId = isolationId;
-    }
-    // 从父 Agent 继承持久化存储
-    if (this.agentStore) {
-      subAgent.setAgentStore(this.agentStore);
-    }
+    // 共享 provider，全新会话，不压缩。
+    // Phase 3：优先经父 context child() 派生 — 身份（agentId/parentId/depth）
+    // 与继承服务（provider/messageBus/agentStore）来自 ctx，tools/eventSink/
+    // execState 为子 Agent 专属覆盖；legacy 构造路径保留（无 ctx 的直接构造方）。
+    const childCtx = this._ctx
+      ? this._ctx.child({
+          agentId: subAgentId,
+          isolationId: isolationId ?? undefined,
+          services: { tools: subTools, eventSink: subSink, execState: createExecState() },
+        })
+      : null;
 
-    // 从父 Agent 继承消息总线 — setBus 处理 register(addr, onWake)
-    if (this._bus) {
-      subAgent.setBus(this._bus);
+    const subAgent = childCtx
+      ? new Agent(childCtx, subSystem, {
+          temperature: 0.3,
+          contextWindow: this.contextWindow,
+        })
+      : new Agent(this.prov, subTools, subSystem, {
+          temperature: 0.3,
+          subagentDepth: this._subagentDepth + 1,
+          contextWindow: this.contextWindow,
+          eventSink: subSink,
+          agentId: subAgentId,
+          parentId: this.id,
+          execState: createExecState(),
+        });
+    if (!childCtx) {
+      if (isolationId) {
+        subAgent._isolationId = isolationId;
+      }
+      // 从父 Agent 继承持久化存储
+      if (this.agentStore) {
+        subAgent.setAgentStore(this.agentStore);
+      }
+
+      // 从父 Agent 继承消息总线 — setBus 处理 register(addr, onWake)
+      if (this._bus) {
+        subAgent.setBus(this._bus);
+      }
     }
 
     // 注册到 TaskBoard + 文件追踪 hook — 仅 async 模式。
