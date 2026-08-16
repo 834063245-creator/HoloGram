@@ -389,6 +389,13 @@ vi.mock('../../src/ui/gpu-layout', () => ({
   },
 }));
 
+// relaxNewNodes 打桩为 no-op — 让 _appendNodes 的初始落位（质心锚定）
+// 在测试中可直接观测，不被局部松弛掩盖。
+vi.mock('../../src/ui/graph-layout', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/ui/graph-layout')>();
+  return { ...actual, relaxNewNodes: vi.fn(async () => {}) };
+});
+
 vi.mock('../../src/ui/events', () => ({
   bus: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), clear: vi.fn() },
 }));
@@ -654,6 +661,187 @@ describe('StarGraph.applyGraphDiff — paged incremental update during progressi
     } finally {
       rafSpy.mockRestore();
     }
+  });
+});
+
+describe('StarGraph.applyGraphDiff — 分页末页社区 id 命名空间失配', () => {
+  let container: HTMLElement;
+  let sg: StarGraph;
+
+  beforeEach(() => {
+    container = makeContainer();
+    sg = new StarGraph(container);
+  });
+
+  it('按社区成员（而非 nodeCommMap id）锚定新节点 — l0_comm_N 不得退化为图心堆叠', async () => {
+    // 回归背景（2026-08-16「首页节点被覆盖」事故）：
+    //   末页携带的权威层级社区 id 是 l0_comm_{HashMap 枚举序}，与页 0
+    //   render 时渐进 level-0 社区的 String(community_id) 不同命名空间。
+    //   修复前 _appendNodes 用 nodeCommMap id 反查质心 → 必失配 → 末页
+    //   全部节点退化到图心 jitter 40 堆叠，覆盖首页节点。
+    // 页 0：两个渐进社区（id = String(community_id)）
+    const n = (id: string, cid: number) => ({
+      id,
+      name: id,
+      type: 'function',
+      location: `src/${id}.ts:1`,
+      community_id: cid,
+    });
+    const page0 = {
+      nodes: [n('a1', 1), n('a2', 1), n('b1', 2), n('b2', 2)],
+      edges: [
+        { id: 'e1', source: 'a1', target: 'a2', type: 'calls', coupling_depth: 1, direction: 'forward' },
+        { id: 'e2', source: 'b1', target: 'b2', type: 'calls', coupling_depth: 1, direction: 'forward' },
+      ],
+      communities: [
+        { id: '1', size: 2, node_ids: ['a1', 'a2'], label: 'a' },
+        { id: '2', size: 2, node_ids: ['b1', 'b2'], label: 'b' },
+      ],
+      hierarchical_communities: [],
+      meta: { source_root: '/test', generated_at: new Date().toISOString() },
+    };
+    await sg.render(page0);
+    expect((sg as any)._nodeCount).toBe(4);
+
+    // 固定页 0 节点位置到已知坐标：社区 1 在 +x 远端，社区 2 在 -x 远端，
+    // 图心在原点 — 质心锚定与图心回退的落点因此可区分。
+    const pos0 = (sg as any).nodePositions as Float32Array;
+    const setPos = (idx: number, x: number, y: number, z: number) => {
+      pos0[idx * 3] = x;
+      pos0[idx * 3 + 1] = y;
+      pos0[idx * 3 + 2] = z;
+    };
+    setPos(0, 100, 0, 0);
+    setPos(1, 110, 0, 0);
+    setPos(2, -100, 0, 0);
+    setPos(3, -110, 0, 0);
+
+    // 末页：权威层级社区 id 为 l0_comm_0（与 community_id 命名空间无关）
+    const nNew = n('a3', 1);
+    const fullGraph = {
+      nodes: [...page0.nodes, nNew],
+      edges: [...page0.edges],
+      communities: [{ id: '1', size: 3, node_ids: ['a1', 'a2', 'a3'], label: 'a' }],
+      hierarchical_communities: [
+        { id: 'l0_comm_0', label: '社区 1', node_ids: ['a1', 'a2', 'a3'], level: 0 },
+        { id: 'l0_comm_1', label: '社区 2', node_ids: ['b1', 'b2'], level: 0 },
+      ],
+      meta: page0.meta,
+    };
+    const diff = {
+      added_nodes: [nNew],
+      added_edges: [],
+      removed_nodes: [],
+      removed_edges: [],
+      modified_nodes: [],
+    };
+
+    await sg.applyGraphDiff(diff as any, fullGraph as any);
+
+    expect((sg as any)._nodeCount).toBe(5);
+    // _rebuildNodeBuffers 可能替换过数组 — 重新读取
+    const pos = (sg as any).nodePositions as Float32Array;
+    const idx = (sg as any).graphNodes.findIndex((g: any) => g?.id === 'a3');
+    expect(idx).toBe(4);
+    // 新节点应锚定在社区 1 质心 (105,0,0) ± jitter 15 内；
+    // 修复前退化为图心 (0,0,0) ± jitter 40，x 必然 < 60。
+    expect(pos[idx * 3]).toBeGreaterThan(90);
+    expect(Math.abs(pos[idx * 3 + 1])).toBeLessThanOrEqual(7.5);
+    expect(Math.abs(pos[idx * 3 + 2])).toBeLessThanOrEqual(7.5);
+
+    // nodeCommMap 应按当前（层级）社区命名空间整体重建 — 新旧节点一致
+    const nodeCommMap = (sg as any).nodeCommMap as Map<number, string>;
+    expect(nodeCommMap.get(0)).toBe('l0_comm_0');
+    expect(nodeCommMap.get(2)).toBe('l0_comm_1');
+    expect(nodeCommMap.get(4)).toBe('l0_comm_0');
+  });
+});
+
+describe('StarGraph.relayoutInPlace — 分页到齐后的全量就地重布局', () => {
+  let container: HTMLElement;
+  let sg: StarGraph;
+
+  beforeEach(() => {
+    container = makeContainer();
+    sg = new StarGraph(container);
+  });
+
+  it('用全量边+权威社区重算布局：位置更新、相机不动、场景状态完好', async () => {
+    // 机制背景：分页加载中首页布局基于缺失跨页边的残图，后续页只能
+    // 嫁接（老节点锚定）——relayoutInPlace 用全量图重算，收敛到与
+    // 全量渲染一致的最终布局，且不重置相机、不重建场景。
+    const n = (id: string, cid: number) => ({
+      id,
+      name: id,
+      type: 'function',
+      location: `src/${id}.ts:1`,
+      community_id: cid,
+    });
+    const g = {
+      nodes: [n('a1', 1), n('a2', 1), n('b1', 2), n('b2', 2)],
+      edges: [
+        { id: 'e1', source: 'a1', target: 'a2', type: 'calls', coupling_depth: 1, direction: 'forward' },
+        { id: 'e2', source: 'b1', target: 'b2', type: 'calls', coupling_depth: 1, direction: 'forward' },
+        { id: 'e3', source: 'a2', target: 'b1', type: 'calls', coupling_depth: 1, direction: 'forward' },
+      ],
+      communities: [
+        { id: '1', size: 2, node_ids: ['a1', 'a2'], label: 'a' },
+        { id: '2', size: 2, node_ids: ['b1', 'b2'], label: 'b' },
+      ],
+      hierarchical_communities: [],
+      meta: { source_root: '/test', generated_at: new Date().toISOString() },
+    };
+    await sg.render(g);
+    const cam = (sg as any).camera.position;
+    const camBefore = { x: cam.x, y: cam.y, z: cam.z };
+    const nodeCount = (sg as any)._nodeCount;
+    const edgeGroups = (sg as any).edgeLineGroups.length;
+    expect(nodeCount).toBe(4);
+    expect(edgeGroups).toBeGreaterThan(0);
+
+    // 模拟分页嫁接后的近似布局：人为打乱全部位置
+    ((sg as any).nodePositions as Float32Array).fill(0);
+
+    await sg.relayoutInPlace();
+
+    // 位置被重算：非全 0、全部有限、包围盒居中（均值≈0）
+    const pos = (sg as any).nodePositions as Float32Array;
+    let nonZero = 0;
+    for (let i = 0; i < nodeCount * 3; i++) {
+      expect(Number.isFinite(pos[i])).toBe(true);
+      if (pos[i] !== 0) nonZero++;
+    }
+    expect(nonZero).toBeGreaterThan(0);
+    let mx = 0,
+      my = 0,
+      mz = 0;
+    for (let i = 0; i < nodeCount; i++) {
+      mx += pos[i * 3];
+      my += pos[i * 3 + 1];
+      mz += pos[i * 3 + 2];
+    }
+    expect(Math.abs(mx / nodeCount)).toBeLessThan(0.01);
+    expect(Math.abs(my / nodeCount)).toBeLessThan(0.01);
+    expect(Math.abs(mz / nodeCount)).toBeLessThan(0.01);
+
+    // 相机不动、无场景重建：节点数/边组数不变
+    expect(cam.x).toBe(camBefore.x);
+    expect(cam.y).toBe(camBefore.y);
+    expect(cam.z).toBe(camBefore.z);
+    expect((sg as any)._nodeCount).toBe(nodeCount);
+    expect((sg as any).edgeLineGroups.length).toBe(edgeGroups);
+    expect((sg as any)._renderInProgress).toBe(false);
+    // 星系质心随新布局重算且有限
+    for (const gm of (sg as any)._fold.galaxyMeta) {
+      expect(Number.isFinite(gm.centroid.x)).toBe(true);
+      expect(Number.isFinite(gm.radius)).toBe(true);
+    }
+  });
+
+  it('空图直接跳过（no-op）', async () => {
+    await sg.relayoutInPlace();
+    expect((sg as any)._nodeCount).toBe(0);
+    expect(sg.hasGraph).toBe(false);
   });
 });
 

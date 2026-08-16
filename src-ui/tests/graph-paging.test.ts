@@ -60,6 +60,7 @@ function makeStarGraph(calls: RenderCall[]) {
     hierarchical: g.hierarchical_communities?.length ?? -1,
   });
   return {
+    hasGraph: true,
     render: vi.fn(async (g: any) => {
       calls.push(snap(g));
     }),
@@ -68,6 +69,7 @@ function makeStarGraph(calls: RenderCall[]) {
       s.kind = 'diff';
       calls.push(s);
     }),
+    relayoutInPlace: vi.fn(async () => {}),
   } as any;
 }
 
@@ -115,6 +117,8 @@ describe('loadGraphPages（P0-2 分页加载）', () => {
     expect(calls[0].hierarchical).toBe(1);
     expect(calls[0].communities).toBe(2);
     expect(calls[0].nodes).toBe(3);
+    // 单页：首页已是全量布局，无需就地重布局
+    expect(sg.relayoutInPlace).not.toHaveBeenCalled();
   });
 
   it('多页：末页 applyGraphDiff 时权威层级社区已挂上；节点按 id 去重', async () => {
@@ -122,14 +126,12 @@ describe('loadGraphPages（P0-2 分页加载）', () => {
     const calls: RenderCall[] = [];
     const sg = makeStarGraph(calls);
     // 页 0：不含社区（仅首页）；页 1：含权威社区，且携带与页 0 重复的节点（漂移吸收）
-    mockRpc
-      .mockResolvedValueOnce(pagePayload(0, 2, [node('a.ts:f1', 1), node('a.ts:f2', 1)]))
-      .mockResolvedValueOnce(
-        pagePayload(1, 2, [node('a.ts:f2', 1), node('b.ts:g1', 2)], {
-          communities: [{ id: '1', size: 3, node_ids: ['a.ts:f1', 'a.ts:f2', 'b.ts:g1'], label: 'a.ts' }],
-          hierarchical_communities: [{ id: 'h1', label: 'a', node_ids: ['a.ts:f1'], level: 0 }],
-        }),
-      );
+    mockRpc.mockResolvedValueOnce(pagePayload(0, 2, [node('a.ts:f1', 1), node('a.ts:f2', 1)])).mockResolvedValueOnce(
+      pagePayload(1, 2, [node('a.ts:f2', 1), node('b.ts:g1', 2)], {
+        communities: [{ id: '1', size: 3, node_ids: ['a.ts:f1', 'a.ts:f2', 'b.ts:g1'], label: 'a.ts' }],
+        hierarchical_communities: [{ id: 'h1', label: 'a', node_ids: ['a.ts:f1'], level: 0 }],
+      }),
+    );
 
     const ok = await loadGraphPages(ws, sg, { meta: {}, page_size: 2, total_pages: 2 });
 
@@ -145,6 +147,8 @@ describe('loadGraphPages（P0-2 分页加载）', () => {
     expect(ws.graphData.nodes.map((n: any) => n.id).sort()).toEqual(['a.ts:f1', 'a.ts:f2', 'b.ts:g1']);
     expect(ws.graphData.communities[0].size).toBe(3);
     expect(ws.graphData.hierarchical_communities[0].id).toBe('h1');
+    // 多页：末页到齐后必须做一次全量就地重布局（分页只是传输机制）
+    expect(sg.relayoutInPlace).toHaveBeenCalledTimes(1);
   });
 
   it('工作区切走：停止拉页并返回 false', async () => {

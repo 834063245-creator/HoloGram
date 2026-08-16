@@ -268,31 +268,8 @@ export class GraphSceneLifecycle {
       }
     }
     // 星系折叠模式始终使用 Level 0 进行顶层导航
-    const level0Communities = level0Comms;
-    // 预计算星系成员（质心在布局后填充）
-    // 仅保留高于最小大小的社区 — 单节点社区是噪声
-    this.host._fold.galaxyMeta = [];
-    let _skippedSingletons = 0;
-    for (const comm of level0Communities) {
-      const members: number[] = [];
-      for (const nid of comm.node_ids) {
-        const idx = nodeIdx.get(nid);
-        if (idx !== undefined) members.push(idx);
-      }
-      if (members.length >= GraphFold.MIN_GALAXY_SIZE) {
-        this.host._fold.galaxyMeta.push({
-          id: comm.id,
-          label: comm.label,
-          centroid: new THREE.Vector3(),
-          memberIndices: members,
-          radius: 0,
-        });
-      } else if (members.length > 0 && members.length < GraphFold.MIN_GALAXY_SIZE) {
-        _skippedSingletons += members.length;
-      }
-    }
-    // 按大小降序排列星系，最大的先渲染
-    this.host._fold.galaxyMeta.sort((a, b) => b.memberIndices.length - a.memberIndices.length);
+    // 预计算星系成员（质心在布局后由 _fillGalaxyCentroids 填充）
+    this._rebuildGalaxyMeta(level0Comms, nodeIdx);
 
     this.host.l34Count = new Array(nodes.length).fill(0);
     for (const e of eData) {
@@ -302,141 +279,11 @@ export class GraphSceneLifecycle {
       }
     }
 
-    // ── 力导向布局：GPU 计算（WebGPU）→ CPU 回退 ──
-    const shellRadius = Math.cbrt(nodes.length) * 14;
-    const sp = 0.006 + (nodes.length > 2000 ? 0.008 : 0) + (nodes.length > 4000 ? 0.006 : 0);
-    const maxIter = Math.min(60, Math.max(15, 60 - Math.floor(nodes.length / 800)));
-    let layoutSource = 'CPU';
-
-    // 构建布局用的数值社区索引数组（0..C-1，-1 = 未分配）
-    const commStrIds = [...new Set(this.host.nodeCommMap.values())];
-    const commStrToIdx = new Map<string, number>();
-    commStrIds.forEach((sid, i) => commStrToIdx.set(sid, i));
-    const nodeCommArr = new Array<number>(nodes.length).fill(-1);
-    for (const [nodeIdx, commStr] of this.host.nodeCommMap) {
-      nodeCommArr[nodeIdx] = commStrToIdx.get(commStr) ?? -1;
-    }
-
-    // 回退：如 Louvain 仅给出 ≤1 个社区，按顶级目录分组
-    if (commStrIds.length <= 1) {
-      console.warn(
-        `[StarGraph] Louvain only found ${commStrIds.length} communities — falling back to directory-based grouping`,
-      );
-      const dirGroups = new Map<string, number[]>();
-      for (let i = 0; i < nodes.length; i++) {
-        const loc = nodes[i].location || '';
-        // 提取顶级目录："src/foo/bar.py" → "src", "engine/src/main.rs" → "engine"
-        const topDir = loc.replace(/^[/\\]+/, '').split(/[/\\]/)[0] || '(root)';
-        if (!dirGroups.has(topDir)) dirGroups.set(topDir, []);
-        dirGroups.get(topDir)?.push(i);
-      }
-      console.warn(`[StarGraph] Directory-based groups: ${dirGroups.size} groups`, [...dirGroups.keys()]);
-      // 仅在比 Louvain 得到更多组时使用
-      if (dirGroups.size > 1) {
-        let nextId = 0;
-        for (const [_dir, members] of dirGroups) {
-          for (const mi of members) nodeCommArr[mi] = nextId;
-          nextId++;
-        }
-        layoutSource = 'CPU(dirs)';
-        console.warn(`[StarGraph] Using ${dirGroups.size} directory-based communities for layout`);
-      } else {
-        console.warn(
-          `[StarGraph] Even directory grouping only found ${dirGroups.size} group — falling back to uniform`,
-        );
-      }
-    } else {
-      console.warn(`[StarGraph] Using ${commStrIds.length} Louvain communities for layout`);
-      layoutSource = 'CPU(community)';
-    }
-
-    let rawPos: Float32Array;
-    const effGroups = new Set(nodeCommArr.filter((c) => c >= 0));
-    // 确保 GPU 初始化完成后再选择布局路径 — 消除首次渲染用 CPU（初始化
-    // 未完成）而后续渲染用 GPU 的竞争，避免视觉上不一致的布局。
-    await gpuLayout.init();
-    // GPU 路径：N-body 计算宏观结构，螺旋生成微观结构
-    if (gpuLayout.ready) {
-      // ── GPU N-body：边力产生宏观结构，螺旋产生微观结构 ──
-      // 过滤跨社区边 — 它们产生丝状结构。
-      // 社区放置由 repelCommunityCentroids 处理。
-      const intraPairs = effGroups.size > 1
-        ? pairs.filter(([s, t]) => nodeCommArr[s] === nodeCommArr[t])
-        : pairs;
-      const initPos = fibonacciSphere(nodes.length, shellRadius);
-      const gpuResult = await gpuLayout.compute(
-        nodes.length,
-        intraPairs,
-        initPos,
-        {
-          n: nodes.length,
-          rep: 600,
-          att: 0.018,
-          damp: 0.72,
-          REP_CAP: shellRadius * 8,
-          ATT_CAP: shellRadius,
-          VEL_CAP: shellRadius * 0.25,
-          shellRadius,
-          sp,
-          originStr: 0.0004,
-        },
-        maxIter,
-      );
-      if (gpuResult) {
-        rawPos = gpuResult;
-        layoutSource = 'GPU';
-        if (effGroups.size > 1) {
-          spiralGalaxies(rawPos, nodes.length, nodeCommArr, deg, shellRadius);
-          layoutSource = 'GPU+spiral';
-        }
-      } else {
-        rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal, nodeCommArr);
-        layoutSource = 'CPU(fallback)';
-      }
-    } else {
-      rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal, nodeCommArr);
-    }
-    // ponytail: 社区质心斥力后处理 — 推开重叠社区, 不碰内部布局
-    if (effGroups.size > 1) {
-      repelCommunityCentroids(rawPos, nodes.length, nodeCommArr, shellRadius, pairs);
-    }
-    // ── 安全：替换 NaN，安全质心 + 相机 ──
-    let fixed = 0;
-    for (let i = 0; i < rawPos.length; i++) {
-      if (!Number.isFinite(rawPos[i])) {
-        rawPos[i] = 0;
-        fixed++;
-      }
-    }
-    if (fixed > 0) console.warn(`[StarGraph] Fixed ${fixed} NaN position components`);
-    // ── 包围盒居中（不受簇大小偏差影响）──
-    let minX = Infinity,
-      minY = Infinity,
-      minZ = Infinity;
-    let maxX = -Infinity,
-      maxY = -Infinity,
-      maxZ = -Infinity;
-    for (let i = 0; i < nodes.length; i++) {
-      const x = rawPos[i * 3],
-        y = rawPos[i * 3 + 1],
-        z = rawPos[i * 3 + 2];
-      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-        if (z < minZ) minZ = z;
-        if (z > maxZ) maxZ = z;
-      }
-    }
-    const bbcx = (minX + maxX) / 2,
-      bbcy = (minY + maxY) / 2,
-      bbcz = (minZ + maxZ) / 2;
-    for (let i = 0; i < nodes.length; i++) {
-      rawPos[i * 3] -= bbcx;
-      rawPos[i * 3 + 1] -= bbcy;
-      rawPos[i * 3 + 2] -= bbcz;
-    }
+    // ── 力导向布局（GPU → CPU 回退）—— 管线与分页后的就地重布局共用 ──
+    const layout = await this._computeLayout(nodes, pairs, deg);
+    const rawPos = layout.rawPos;
+    const layoutSource = layout.layoutSource;
+    const fixed = layout.fixed;
     this.host.nodePositions = rawPos;
 
     // ── 半径 = 距包围盒中心的 p95 距离 ──
@@ -517,6 +364,204 @@ export class GraphSceneLifecycle {
     this._startProgressiveReveal(nodes.length);
 
     // ── 从布局计算星系质心 + 半径 ──────────
+    this._fillGalaxyCentroids(rawPos);
+    this.host._fold._buildCommunityRings();
+
+    // ── 如折叠覆盖激活则应用 ─────────────────────────
+    if (this.host._fold.foldMode) this.host._fold.applyFoldOverlay();
+
+    this.host.updateStatus(nodes.length, edges.length, graph.meta);
+    if (this.host.legendEl) this.host.legendEl.style.display = '';
+    // 附加布局诊断供用户报告（release 构建无 DevTools）
+    if (this._diagMsg) {
+      const cur = useShellStore.getState().statusText;
+      useShellStore.getState().setStatusText(`${cur} | ${this._diagMsg}`);
+    }
+    // 修复：constructor 中 onResize() 执行时容器可能是 display:none。
+    // 延迟一帧 resize 确保 CSS 布局已稳定。
+    requestAnimationFrame(() => this.handleResize());
+    // ponytail: _renderInProgress 保持 TRUE 直到渐进揭示完成。
+    // 动画循环在 InstancedMesh.count 仍在递增时跳过渲染，
+    // 否则辉光 Points 以完整数量渲染而核心部分隐藏
+    // → 鬼影点（报告为"鬼影"）。
+    // 该标志由 _startProgressiveReveal 的完成回调清除。
+  }
+
+  // ── 布局管线（renderImpl 与分页后就地重布局共用）────────
+
+  /**
+   * 力导向布局（GPU 计算（WebGPU）→ CPU 回退）。
+   * 社区分组读取 this.host.nodeCommMap（含目录兜底）；返回包围盒居中后的位置。
+   */
+  private async _computeLayout(
+    nodes: GraphNode[],
+    pairs: [number, number][],
+    deg: number[],
+  ): Promise<{ rawPos: Float32Array; layoutSource: string; fixed: number }> {
+    const shellRadius = Math.cbrt(nodes.length) * 14;
+    const sp = 0.006 + (nodes.length > 2000 ? 0.008 : 0) + (nodes.length > 4000 ? 0.006 : 0);
+    const maxIter = Math.min(60, Math.max(15, 60 - Math.floor(nodes.length / 800)));
+    let layoutSource = 'CPU';
+
+    // 构建布局用的数值社区索引数组（0..C-1，-1 = 未分配）
+    const commStrIds = [...new Set(this.host.nodeCommMap.values())];
+    const commStrToIdx = new Map<string, number>();
+    commStrIds.forEach((sid, i) => commStrToIdx.set(sid, i));
+    const nodeCommArr = new Array<number>(nodes.length).fill(-1);
+    for (const [nodeIdx, commStr] of this.host.nodeCommMap) {
+      nodeCommArr[nodeIdx] = commStrToIdx.get(commStr) ?? -1;
+    }
+
+    // 回退：如 Louvain 仅给出 ≤1 个社区，按顶级目录分组
+    if (commStrIds.length <= 1) {
+      console.warn(
+        `[StarGraph] Louvain only found ${commStrIds.length} communities — falling back to directory-based grouping`,
+      );
+      const dirGroups = new Map<string, number[]>();
+      for (let i = 0; i < nodes.length; i++) {
+        const loc = nodes[i].location || '';
+        // 提取顶级目录："src/foo/bar.py" → "src", "engine/src/main.rs" → "engine"
+        const topDir = loc.replace(/^[/\\]+/, '').split(/[/\\]/)[0] || '(root)';
+        if (!dirGroups.has(topDir)) dirGroups.set(topDir, []);
+        dirGroups.get(topDir)?.push(i);
+      }
+      console.warn(`[StarGraph] Directory-based groups: ${dirGroups.size} groups`, [...dirGroups.keys()]);
+      // 仅在比 Louvain 得到更多组时使用
+      if (dirGroups.size > 1) {
+        let nextId = 0;
+        for (const [_dir, members] of dirGroups) {
+          for (const mi of members) nodeCommArr[mi] = nextId;
+          nextId++;
+        }
+        layoutSource = 'CPU(dirs)';
+        console.warn(`[StarGraph] Using ${dirGroups.size} directory-based communities for layout`);
+      } else {
+        console.warn(
+          `[StarGraph] Even directory grouping only found ${dirGroups.size} group — falling back to uniform`,
+        );
+      }
+    } else {
+      console.warn(`[StarGraph] Using ${commStrIds.length} Louvain communities for layout`);
+      layoutSource = 'CPU(community)';
+    }
+
+    let rawPos: Float32Array;
+    const effGroups = new Set(nodeCommArr.filter((c) => c >= 0));
+    // 确保 GPU 初始化完成后再选择布局路径 — 消除首次渲染用 CPU（初始化
+    // 未完成）而后续渲染用 GPU 的竞争，避免视觉上不一致的布局。
+    await gpuLayout.init();
+    // GPU 路径：N-body 计算宏观结构，螺旋生成微观结构
+    if (gpuLayout.ready) {
+      // ── GPU N-body：边力产生宏观结构，螺旋生成微观结构 ──
+      // 过滤跨社区边 — 它们产生丝状结构。
+      // 社区放置由 repelCommunityCentroids 处理。
+      const intraPairs = effGroups.size > 1 ? pairs.filter(([s, t]) => nodeCommArr[s] === nodeCommArr[t]) : pairs;
+      const initPos = fibonacciSphere(nodes.length, shellRadius);
+      const gpuResult = await gpuLayout.compute(
+        nodes.length,
+        intraPairs,
+        initPos,
+        {
+          n: nodes.length,
+          rep: 600,
+          att: 0.018,
+          damp: 0.72,
+          REP_CAP: shellRadius * 8,
+          ATT_CAP: shellRadius,
+          VEL_CAP: shellRadius * 0.25,
+          shellRadius,
+          sp,
+          originStr: 0.0004,
+        },
+        maxIter,
+      );
+      if (gpuResult) {
+        rawPos = gpuResult;
+        layoutSource = 'GPU';
+        if (effGroups.size > 1) {
+          spiralGalaxies(rawPos, nodes.length, nodeCommArr, deg, shellRadius);
+          layoutSource = 'GPU+spiral';
+        }
+      } else {
+        rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal, nodeCommArr);
+        layoutSource = 'CPU(fallback)';
+      }
+    } else {
+      rawPos = await layout3D(nodes.length, pairs, this._layoutAbort?.signal, nodeCommArr);
+    }
+    // ponytail: 社区质心斥力后处理 — 推开重叠社区, 不碰内部布局
+    if (effGroups.size > 1) {
+      repelCommunityCentroids(rawPos, nodes.length, nodeCommArr, shellRadius, pairs);
+    }
+    // ── 安全：替换 NaN ──
+    let fixed = 0;
+    for (let i = 0; i < rawPos.length; i++) {
+      if (!Number.isFinite(rawPos[i])) {
+        rawPos[i] = 0;
+        fixed++;
+      }
+    }
+    if (fixed > 0) console.warn(`[StarGraph] Fixed ${fixed} NaN position components`);
+    // ── 包围盒居中（不受簇大小偏差影响）──
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity;
+    for (let i = 0; i < nodes.length; i++) {
+      const x = rawPos[i * 3],
+        y = rawPos[i * 3 + 1],
+        z = rawPos[i * 3 + 2];
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z;
+        if (z > maxZ) maxZ = z;
+      }
+    }
+    const bbcx = (minX + maxX) / 2,
+      bbcy = (minY + maxY) / 2,
+      bbcz = (minZ + maxZ) / 2;
+    for (let i = 0; i < nodes.length; i++) {
+      rawPos[i * 3] -= bbcx;
+      rawPos[i * 3 + 1] -= bbcy;
+      rawPos[i * 3 + 2] -= bbcz;
+    }
+    return { rawPos, layoutSource, fixed };
+  }
+
+  /** 从 level0 社区重建星系元数据（成员索引）；质心/半径由 _fillGalaxyCentroids 填充。 */
+  private _rebuildGalaxyMeta(level0Comms: CommunityData[], nodeIdx: Map<string, number>): void {
+    // 仅保留高于最小大小的社区 — 单节点社区是噪声
+    this.host._fold.galaxyMeta = [];
+    let _skippedSingletons = 0;
+    for (const comm of level0Comms) {
+      const members: number[] = [];
+      for (const nid of comm.node_ids) {
+        const idx = nodeIdx.get(nid);
+        if (idx !== undefined) members.push(idx);
+      }
+      if (members.length >= GraphFold.MIN_GALAXY_SIZE) {
+        this.host._fold.galaxyMeta.push({
+          id: comm.id,
+          label: comm.label,
+          centroid: new THREE.Vector3(),
+          memberIndices: members,
+          radius: 0,
+        });
+      } else if (members.length > 0 && members.length < GraphFold.MIN_GALAXY_SIZE) {
+        _skippedSingletons += members.length;
+      }
+    }
+    // 按大小降序排列星系，最大的先渲染
+    this.host._fold.galaxyMeta.sort((a, b) => b.memberIndices.length - a.memberIndices.length);
+  }
+
+  /** 从布局结果填充星系质心（成员均值）+ p90 半径。 */
+  private _fillGalaxyCentroids(rawPos: Float32Array): void {
     for (const gm of this.host._fold.galaxyMeta) {
       let sx = 0,
         sy = 0,
@@ -541,26 +586,65 @@ export class GraphSceneLifecycle {
       dists.sort((a, b) => a - b);
       gm.radius = dists[Math.floor(dists.length * 0.9)] || 30;
     }
-    this.host._fold._buildCommunityRings();
+  }
 
-    // ── 如折叠覆盖激活则应用 ─────────────────────────
-    if (this.host._fold.foldMode) this.host._fold.applyFoldOverlay();
+  /**
+   * 分页加载完成后的全量就地重布局 — 分页只是传输机制，不参与布局决策。
+   * 首页布局在缺失跨页边的残图上计算，后续页只能嫁接（老节点锚定），
+   * 最终图严格不等于全量布局。全部页到齐后用全量节点/边/权威社区
+   * 重算布局并写回 GPU；相机与 hover/选中等交互状态不变，
+   * 无场景重建、无渐进揭示。
+   */
+  async relayoutInPlace(): Promise<void> {
+    const n = this.host._nodeCount;
+    if (n === 0) return;
+    // 死亡节点使 索引↔位置 映射带洞 — 分页加载路径不会产生，其他场景交给全量 render
+    if (this.host._deadIndices.size > 0) return;
+    this._finishProgressiveRevealNow();
+    if (this.host._fold.foldMode) this.host._fold.setFoldMode(false);
 
-    this.host.updateStatus(nodes.length, edges.length, graph.meta);
-    if (this.host.legendEl) this.host.legendEl.style.display = '';
-    // 附加布局诊断供用户报告（release 构建无 DevTools）
-    if (this._diagMsg) {
-      const cur = useShellStore.getState().statusText;
-      useShellStore.getState().setStatusText(`${cur} | ${this._diagMsg}`);
+    const nodes = this.host.graphNodes.slice(0, n);
+    const pairs: [number, number][] = this.host.edgeDataList.map((e) => [e.s, e.t]);
+    const deg = this.host.deg.slice(0, n);
+
+    this._layoutAbort = new AbortController();
+    // 布局期间动画循环跳过渲染 — 不暴露半截位置更新
+    this.host._renderInProgress = true;
+    try {
+      const { rawPos, layoutSource } = await this._computeLayout(nodes, pairs, deg);
+      // 容量可能大于节点数（_rebuildNodeBuffers 预留 1.2x）— 只写前 n*3
+      this.host.nodePositions.set(rawPos.subarray(0, n * 3));
+      // 更新图空间尺度（相机位置与缩放范围沿用，不重置相机）
+      const dists: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const r2 = rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2;
+        if (Number.isFinite(r2)) dists.push(Math.sqrt(r2));
+      }
+      dists.sort((a, b) => a - b);
+      this.host._graphRadius = dists[Math.floor(dists.length * 0.95)] || 50;
+
+      // 核心 + 辉光 GPU 缓冲
+      this.host._nodes._syncNodeCoreMatrices();
+      this.host._nodes._syncNodePositions([...Array(n).keys()]);
+
+      // 边几何重建（所有位置都变了）— 边数据本身已是最新，无需 _rebuildEdgeData
+      this.host._edges._disposeEdges();
+      this.host._edges.buildEdges(this.host.nodePositions, this.host.edgeDataList);
+      this.host.initEdgeParticles(this.host.nodePositions, this.host.edgeDataList);
+      this.host.positionGrid(this.host.nodePositions);
+
+      // 星系元数据 + 社区环 — 用权威社区重建（首页 render 时只有渐进社区）
+      const nodeIdx = new Map<string, number>();
+      for (let i = 0; i < n; i++) nodeIdx.set(nodes[i].id, i);
+      const level0 = this.host.communities.filter((c) => !c.level || c.level === 0);
+      this._rebuildGalaxyMeta(level0, nodeIdx);
+      this._fillGalaxyCentroids(this.host.nodePositions);
+      this.host._fold._buildCommunityRings();
+
+      console.log(`[StarGraph] paged relayout done: ${layoutSource}, nodes=${n}`);
+    } finally {
+      this.host._renderInProgress = false;
     }
-    // 修复：constructor 中 onResize() 执行时容器可能是 display:none。
-    // 延迟一帧 resize 确保 CSS 布局已稳定。
-    requestAnimationFrame(() => this.handleResize());
-    // ponytail: _renderInProgress 保持 TRUE 直到渐进揭示完成。
-    // 动画循环在 InstancedMesh.count 仍在递增时跳过渲染，
-    // 否则辉光 Points 以完整数量渲染而核心部分隐藏
-    // → 鬼影点（报告为"鬼影"）。
-    // 该标志由 _startProgressiveReveal 的完成回调清除。
   }
 
   // ── 渐进揭示：分批物化节点 ────────
@@ -938,6 +1022,17 @@ export class GraphSceneLifecycle {
     // 8. 从完整图更新社区（空数组是真值 — 分页中间页必须回退到 communities）
     const hcDiff = fullGraph.hierarchical_communities;
     this.host.communities = (Array.isArray(hcDiff) && hcDiff.length > 0 ? hcDiff : fullGraph.communities) || [];
+    // nodeCommMap 按当前社区同命名空间整体重建 — 末页权威层级社区 id
+    //（l0_comm_N）与渐进 level-0 id（String(community_id)）不同名，
+    // 不重建会让 tooltip/fold 读到跨命名空间的过期映射。
+    this.host.nodeCommMap.clear();
+    for (const comm of this.host.communities) {
+      if (comm.level && comm.level !== 0) continue;
+      for (const nid of comm.node_ids) {
+        const idx = nodeIdxMap.get(nid);
+        if (idx !== undefined) this.host.nodeCommMap.set(idx, comm.id);
+      }
+    }
 
     // 9. 清除指向死亡节点的过期交互状态
     if (this.host.hoveredIdx >= 0 && this.host._deadIndices.has(this.host.hoveredIdx)) {

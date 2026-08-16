@@ -546,6 +546,14 @@ export class StarGraph {
     return this._lifecycle.applyGraphDiff(diff, fullGraph);
   }
 
+  /**
+   * 分页加载完成后的全量就地重布局 — 分页只是传输机制。
+   * 相机不动、无场景重建；详见 GraphSceneLifecycle.relayoutInPlace。
+   */
+  async relayoutInPlace(): Promise<void> {
+    return this._lifecycle.relayoutInPlace();
+  }
+
   // ── 渲染 ───────────────────────────────────────────────
   async render(graph: GraphJSON): Promise<void> {
     try {

@@ -440,23 +440,31 @@ export class GraphNodeRenderer {
     const nodeComm = new Map<string, string>();
     for (const c of comms) for (const nid of c.node_ids) nodeComm.set(nid, c.id);
 
-    // 从存活节点计算社区质心
+    // 按社区成员列表计算质心（经 nodeIdxMap 查已落位成员的位置）。
+    // 不能用 nodeCommMap 反查社区 id：末页权威层级社区的 id 是
+    // l0_comm_{HashMap 枚举序}，与渐进 level-0 社区的 String(community_id)
+    // 是两个不相干的命名空间 — 反查必失配，整页新节点全部退化到图心
+    // 堆叠（2026-08-16 分页「首页节点被覆盖」事故根因）。按成员匹配
+    // 与 id 命名空间无关，两种社区来源都正确。
     const centroids = new Map<string, { x: number; y: number; z: number; n: number }>();
-    for (let i = 0; i < this.host._nodeCount; i++) {
-      if (this.host._deadIndices.has(i)) continue;
-      const cid = this.host.nodeCommMap.get(i);
-      if (!cid) continue;
-      let c = centroids.get(cid);
+    for (const comm of comms) {
+      let c = centroids.get(comm.id);
       if (!c) {
         c = { x: 0, y: 0, z: 0, n: 0 };
-        centroids.set(cid, c);
+        centroids.set(comm.id, c);
       }
-      c.x += this.host.nodePositions[i * 3];
-      c.y += this.host.nodePositions[i * 3 + 1];
-      c.z += this.host.nodePositions[i * 3 + 2];
-      c.n++;
+      for (const nid of comm.node_ids) {
+        const idx = nodeIdxMap.get(nid);
+        // 本页/后续页成员尚未落位（nodeIdxMap 此刻只含已有存活节点）
+        if (idx === undefined || idx >= this.host._nodeCount) continue;
+        c.x += this.host.nodePositions[idx * 3];
+        c.y += this.host.nodePositions[idx * 3 + 1];
+        c.z += this.host.nodePositions[idx * 3 + 2];
+        c.n++;
+      }
     }
     for (const c of centroids.values()) {
+      if (c.n === 0) continue; // 社区成员全部未落位 — 保持 0 标记，使用处按无质心处理
       c.x /= c.n;
       c.y /= c.n;
       c.z /= c.n;
@@ -487,7 +495,8 @@ export class GraphNodeRenderer {
     for (const node of nodes) {
       const i = this.host._nodeCount;
       const cid = nodeComm.get(node.id);
-      const ct = cid ? centroids.get(cid) : null;
+      const ct0 = cid ? centroids.get(cid) : null;
+      const ct = ct0 && ct0.n > 0 ? ct0 : null;
       const jitter = ct ? 15 : 40;
       const px = (ct ? ct.x : bcx) + (Math.random() - 0.5) * jitter;
       const py = (ct ? ct.y : bcy) + (Math.random() - 0.5) * jitter;
@@ -553,7 +562,6 @@ export class GraphNodeRenderer {
         this.host._glow2Sizes[i] = this.host._coreScales[i] * 2.4; // 外层辉光始终基于核心球大小
       }
 
-      if (cid) this.host.nodeCommMap.set(i, cid);
       nodeIdxMap.set(node.id, i);
       this.host._nodeCount++;
     }

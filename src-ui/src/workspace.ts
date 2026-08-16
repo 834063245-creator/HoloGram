@@ -1040,6 +1040,9 @@ function mergeGraphDiff(graphData: GraphJSON, diff: GraphDiffJson): void {
 // applyGraphDiff 增量合入同一张星图（新节点落在社区质心附近 + 局部松弛）。
 // 单次 IPC 响应远小于护栏；页与页之间节点按 id 去重，图变更导致的分页
 // 漂移被自然吸收（与 graph-updated 的 mergeGraphDiff 同一策略）。
+// 全部页到齐后做一次 relayoutInPlace 全量就地重布局：分页只是传输机制，
+// 首页布局基于缺失跨页边的残图 + 后续页嫁接（老节点锚定），不等于全量
+// 布局 —— 末页后用全量节点/边/权威社区重算，收敛到与全量渲染一致。
 
 /** 从第 page 页拉取并合并进 ws.graphData；返回是否完整加载（false = 工作区已切走）。 */
 export async function loadGraphPages(
@@ -1068,6 +1071,13 @@ export async function loadGraphPages(
       await starGraph.applyGraphDiff(diff, ws.graphData);
     }
     if (totalPages > 1) ws.onStatusChange?.(`已加载图谱 ${page + 1}/${totalPages} 页`);
+  }
+  // 全部页到齐：分页只是传输机制。首页布局基于缺失跨页边的残图，
+  // 后续页只能嫁接（老节点锚定）——用全量节点/边/权威社区就地重布局
+  // 一次，收敛到与全量渲染一致的最终布局（相机不动、无渐进揭示）。
+  if (totalPages > 1 && ws.active && starGraph.hasGraph) {
+    ws.onStatusChange?.('正在整理星图布局...');
+    await starGraph.relayoutInPlace();
   }
   return true;
 }
