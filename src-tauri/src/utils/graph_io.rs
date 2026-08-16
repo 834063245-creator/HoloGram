@@ -284,8 +284,9 @@ fn build_hierarchical_communities_json(g: &Graph) -> serde_json::Value {
 //    (source_root, node_count, edge_count, page_size) — 图变更自动失效。
 //    每页响应远小于护栏；重复拉页不会跨页漏节点（边界重建时节点
 //    只会移位到相邻页，前端按 id 去重吸收）。
-// 2. 第 k 页只回「两端点均位于 0..=k 页」的边 — 前端逐页合并后
-//    边集单调收敛到全图。
+// 2. 第 k 页只回本页「新引入」的边（max(page_of(source), page_of(target)) == k）——
+//    每条边恰好下发一次，单页响应严格有界（旧累积规则 ≤k 会让末页 ≈ 全量
+//    边表，大图直接撞 128MB 护栏 → 末页永远拉不到）；前端按 id 合并即全图。
 // 3. 社区数据不随页下发（节点自带 community_id，前端渐进重建 level-0）；
 //    hierarchical_communities 仅最后一页携带（O(社区) 凝聚只做一次）。
 pub(crate) const GRAPH_PAGE_DEFAULT_NODES: usize = 12_000;
@@ -338,7 +339,7 @@ pub(crate) fn graph_meta_json(source_root: &str, page_size: usize) -> Result<Str
     }).to_string())
 }
 
-/// 序列化第 page 页（0 基）。边只含两端点均已被 ≤page 页覆盖的边。
+/// 序列化第 page 页（0 基）。边只含 max(两端点页号) == page 的边（每边恰好一次）。
 /// 最后一页附带完整 communities + hierarchical_communities。
 pub(crate) fn serialize_graph_page(source_root: &str, page: usize, page_size: usize) -> Result<String, String> {
     let (boundaries, node_count) = graph_page_index(source_root, page_size)?;
@@ -365,7 +366,7 @@ pub(crate) fn serialize_graph_page(source_root: &str, page: usize, page_size: us
             }))
             .collect();
         let edges: Vec<serde_json::Value> = g.edges_map().values()
-            .filter(|e| page_of(&e.source) <= page && page_of(&e.target) <= page)
+            .filter(|e| page_of(&e.source).max(page_of(&e.target)) == page)
             .map(|e| serde_json::json!({
                 "id": e.id, "source": e.source, "target": e.target,
                 "type": e.kind.as_str(), "coupling_depth": e.coupling_depth,

@@ -546,14 +546,6 @@ export class StarGraph {
     return this._lifecycle.applyGraphDiff(diff, fullGraph);
   }
 
-  /**
-   * 分页加载完成后的全量就地重布局 — 分页只是传输机制。
-   * 相机不动、无场景重建；详见 GraphSceneLifecycle.relayoutInPlace。
-   */
-  async relayoutInPlace(): Promise<void> {
-    return this._lifecycle.relayoutInPlace();
-  }
-
   // ── 渲染 ───────────────────────────────────────────────
   async render(graph: GraphJSON): Promise<void> {
     try {
@@ -565,7 +557,7 @@ export class StarGraph {
       try {
         this._lifecycle.clearGraph();
       } catch {
-      /* 尽力而为 */
+        /* 尽力而为 */
       }
       this.updateStatus(0, 0);
     }
@@ -594,12 +586,30 @@ export class StarGraph {
 
   /** 处理 Escape 键（由 escLayer 统一调度）。返回 true 表示已消费，不再继续冒泡。 */
   handleEscape(): boolean {
-    if (this.focusSubgraphActive) { this.exitFocusSubgraph(); return true; }
-    if (this._tooltip._promptBarEl?.style.display === 'flex') { this._tooltip._hidePrompt(); return true; }
-    if (this._fold.enteredSubCommunityId) { this._fold.exitSubCommunity(); return true; }
-    if (this._fold.enteredGalaxyId) { this._fold.exitGalaxy(); return true; }
-    if (this._fold.foldMode) { this._fold.setFoldMode(false); return true; }
-    if (this._analysis.blastMode) { this._analysis.exitBlastMode(); return true; }
+    if (this.focusSubgraphActive) {
+      this.exitFocusSubgraph();
+      return true;
+    }
+    if (this._tooltip._promptBarEl?.style.display === 'flex') {
+      this._tooltip._hidePrompt();
+      return true;
+    }
+    if (this._fold.enteredSubCommunityId) {
+      this._fold.exitSubCommunity();
+      return true;
+    }
+    if (this._fold.enteredGalaxyId) {
+      this._fold.exitGalaxy();
+      return true;
+    }
+    if (this._fold.foldMode) {
+      this._fold.setFoldMode(false);
+      return true;
+    }
+    if (this._analysis.blastMode) {
+      this._analysis.exitBlastMode();
+      return true;
+    }
     return false;
   }
 

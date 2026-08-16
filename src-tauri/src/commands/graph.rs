@@ -97,7 +97,7 @@ pub(crate) async fn get_graph_meta(state: tauri::State<'_, crate::WorkspaceState
 }
 
 /// 分页拉取当前工作区图的第 page 页（0 基）。
-/// 边只含两端点均已被 ≤page 页覆盖的边；最后一页附带社区数据。
+/// 边只含 max(两端点页号) == page 的边（增量下发，每边恰好一次）；最后一页附带社区数据。
 #[tauri::command]
 pub(crate) async fn get_graph_page(
     page: usize,

@@ -3,17 +3,19 @@
 
 // 图分页加载（P0-2）回归测试
 //
-// 回归背景（2026-08-11 布局「一锅粥」事故）：
-//   loadGraphPages 曾把最后一页才携带的权威 communities / hierarchical_communities
-//   在 render/applyGraphDiff 之后才挂到 graphData — 渲染器读到的永远是空壳 []，
-//   而 JS 空数组为真值使 `hierarchical_communities || communities` 无法回退，
-//   布局丢失社区分组退化为目录分组。
+// 回归背景（2026-08-16 分页渲染管线拆除）：
+//   loadGraphPages 曾在首页就 render、后续页 applyGraphDiff 嫁接、末页
+//   relayoutInPlace 补丁重算 —— 残图布局 ≠ 全量布局、流式期间折叠视图
+//   读到半成品社区态、末页累积边撞 IPC 护栏后整个收敛机制不执行。
+//   现为：逐页只合并数据，全部到齐后原子换入 ws.graphData 并 render 一次。
 //
-// 本文件锁定两条不变式：
-//   1. render/applyGraphDiff 被调用时，graphData 上必须已有该页携带的权威社区；
-//   2. 逐页合并后节点按 id 去重、最终社区为权威版本。
+// 本文件锁定三条不变式：
+//   1. 全部页到齐前不调用 render / applyGraphDiff；render 恰好一次且
+//      拿到的是全量合并图（含权威社区）；
+//   2. 节点/边按 id 去重，ws.graphData 原子换入；拉页失败时旧图保留；
+//   3. 工作区切走时停止拉页、不渲染、不换入。
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockRpc = vi.fn();
 vi.mock('../src/bridge', () => ({
@@ -28,8 +30,8 @@ import { loadGraphPages } from '../src/workspace';
 // ── helpers ──────────────────────────────────────────────
 
 interface RenderCall {
-  kind: 'render' | 'diff';
   nodes: number;
+  edges: number;
   communities: number;
   hierarchical: number;
 }
@@ -53,23 +55,18 @@ function makeWs(path = 'D:/proj') {
 }
 
 function makeStarGraph(calls: RenderCall[]) {
-  const snap = (g: any): RenderCall => ({
-    kind: 'render',
-    nodes: g.nodes.length,
-    communities: g.communities?.length ?? -1,
-    hierarchical: g.hierarchical_communities?.length ?? -1,
-  });
   return {
     hasGraph: true,
     render: vi.fn(async (g: any) => {
-      calls.push(snap(g));
+      calls.push({
+        nodes: g.nodes.length,
+        edges: g.edges.length,
+        communities: g.communities?.length ?? -1,
+        hierarchical: g.hierarchical_communities?.length ?? -1,
+      });
     }),
-    applyGraphDiff: vi.fn(async (_d: any, g: any) => {
-      const s = snap(g);
-      s.kind = 'diff';
-      calls.push(s);
-    }),
-    relayoutInPlace: vi.fn(async () => {}),
+    // 分页路径绝不允许再触碰增量嫁接 — 保留 spy 断言零调用
+    applyGraphDiff: vi.fn(async () => {}),
   } as any;
 }
 
@@ -95,7 +92,7 @@ function pagePayload(page: number, totalPages: number, nodes: any[], extra: any 
 describe('loadGraphPages（P0-2 分页加载）', () => {
   beforeEach(() => mockRpc.mockReset());
 
-  it('单页：render 时权威社区已挂上 graphData（空壳 [] 不得进入渲染器）', async () => {
+  it('单页：到齐后 render 恰好一次，权威社区已在图上', async () => {
     const ws = makeWs();
     const calls: RenderCall[] = [];
     const sg = makeStarGraph(calls);
@@ -113,15 +110,13 @@ describe('loadGraphPages（P0-2 分页加载）', () => {
 
     expect(ok).toBe(true);
     expect(sg.render).toHaveBeenCalledTimes(1);
-    // 修复前：render 看到 hierarchical=0（空壳），布局回退目录分组
+    expect(sg.applyGraphDiff).not.toHaveBeenCalled();
     expect(calls[0].hierarchical).toBe(1);
     expect(calls[0].communities).toBe(2);
     expect(calls[0].nodes).toBe(3);
-    // 单页：首页已是全量布局，无需就地重布局
-    expect(sg.relayoutInPlace).not.toHaveBeenCalled();
   });
 
-  it('多页：末页 applyGraphDiff 时权威层级社区已挂上；节点按 id 去重', async () => {
+  it('多页：渲染前零渲染零嫁接；唯一一次 render 拿到全量合并图 + 权威社区', async () => {
     const ws = makeWs();
     const calls: RenderCall[] = [];
     const sg = makeStarGraph(calls);
@@ -136,23 +131,21 @@ describe('loadGraphPages（P0-2 分页加载）', () => {
     const ok = await loadGraphPages(ws, sg, { meta: {}, page_size: 2, total_pages: 2 });
 
     expect(ok).toBe(true);
-    expect(calls.map((c) => c.kind)).toEqual(['render', 'diff']);
-    // 首页 render：无权威层级 → 回退到渐进重建的 level-0 社区（非空！）
-    expect(calls[0].hierarchical).toBe(0);
+    // 关键不变式：渲染只在全部页到齐后发生一次，且看到的是合并后的全量图
+    expect(sg.render).toHaveBeenCalledTimes(1);
+    expect(sg.applyGraphDiff).not.toHaveBeenCalled();
+    expect(calls[0].nodes).toBe(3);
+    expect(calls[0].hierarchical).toBe(1);
     expect(calls[0].communities).toBe(1);
-    // 末页 diff：权威层级必须先于 applyGraphDiff 挂上（修复前为 0）
-    expect(calls[1].hierarchical).toBe(1);
-    expect(calls[1].communities).toBe(1);
     // 合并结果：重复节点 a.ts:f2 去重，最终社区为权威版
     expect(ws.graphData.nodes.map((n: any) => n.id).sort()).toEqual(['a.ts:f1', 'a.ts:f2', 'b.ts:g1']);
     expect(ws.graphData.communities[0].size).toBe(3);
     expect(ws.graphData.hierarchical_communities[0].id).toBe('h1');
-    // 多页：末页到齐后必须做一次全量就地重布局（分页只是传输机制）
-    expect(sg.relayoutInPlace).toHaveBeenCalledTimes(1);
   });
 
-  it('工作区切走：停止拉页并返回 false', async () => {
+  it('工作区切走：停止拉页、不渲染、不换入 graphData', async () => {
     const ws = makeWs();
+    const shell = ws.graphData;
     const sg = makeStarGraph([]);
     mockRpc.mockImplementation(async () => {
       ws._active = false;
@@ -163,5 +156,28 @@ describe('loadGraphPages（P0-2 分页加载）', () => {
 
     expect(ok).toBe(false);
     expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(sg.render).not.toHaveBeenCalled();
+    expect(ws.graphData).toBe(shell);
+  });
+
+  it('拉页失败：抛错且旧 graphData 原样保留（原子换入）', async () => {
+    const ws = makeWs();
+    const oldGraph = {
+      meta: {},
+      nodes: [{ id: 'old.ts:keep' }],
+      edges: [] as any[],
+      communities: [] as any[],
+      hierarchical_communities: [] as any[],
+    };
+    ws.graphData = oldGraph as any;
+    const sg = makeStarGraph([]);
+    mockRpc
+      .mockResolvedValueOnce(pagePayload(0, 2, [node('a.ts:f1', 1)]))
+      .mockRejectedValueOnce(new Error('图谱分页响应超过 IPC 尺寸上限'));
+
+    await expect(loadGraphPages(ws, sg, { meta: {}, page_size: 1, total_pages: 2 })).rejects.toThrow('IPC 尺寸上限');
+    expect(sg.render).not.toHaveBeenCalled();
+    expect(ws.graphData).toBe(oldGraph);
+    expect(ws.graphData.nodes.map((n: any) => n.id)).toEqual(['old.ts:keep']);
   });
 });
