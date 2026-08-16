@@ -20,20 +20,20 @@ function getFontScale(): number {
   }
 }
 
-import { createRoot, type Root } from 'react-dom/client';
 // Monaco workers — Vite ?worker 语法将其打包为独立 chunk
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+import { createRoot, type Root } from 'react-dom/client';
 import { stripLineNumbers } from './chat-session';
 import { FileTranslator } from './file-translator';
-import { MarkdownFilePreview } from './react/MarkdownFilePreview';
 import {
   didChange,
   didClose,
   didOpen,
+  getLspSession,
   listenForDiagnostics,
   registerCompletionProvider,
   registerDefinitionProvider,
@@ -42,9 +42,10 @@ import {
   startLsp,
   stopAllLsp,
 } from './lsp-client';
+import { MarkdownFilePreview } from './react/MarkdownFilePreview';
 
-// LSP 会话缓存：language -> session_id（所有 FileViewer 实例共享）
-const lspSessions = new Map<string, number>();
+// LSP 会话单一事实源在 lsp-client.ts（getLspSession）— 这里不再自建第二张会话表，
+// 否则 stopAllLsp 清不到本表、切换后 LSP 永久假死还显示已连接（landmine-map H2）。
 
 // -- Monaco worker 配置 --
 self.MonacoEnvironment = {
@@ -786,7 +787,7 @@ export class FileViewer {
 
     // LSP 状态指示器
     const lang = tab.model.getLanguageId();
-    const lspActive = lspSessions.has(lang);
+    const lspActive = getLspSession(lang) !== undefined;
     if (lspActive) {
       this.statusLsp.innerHTML = `${iconHtml('dot', 8)} LSP`;
       this.statusLsp.style.color = 'var(--obs-pass)';
@@ -850,7 +851,7 @@ export class FileViewer {
 
     // LSP：通知服务器文档已关闭
     const lang = tab.model.getLanguageId();
-    const sid = lspSessions.get(lang);
+    const sid = getLspSession(lang);
     if (sid) didClose(sid, tab.model.uri.toString());
 
     tab.model.dispose();
@@ -975,7 +976,7 @@ export class FileViewer {
         newTab.dirty = model.getValue() !== newTab.originalContent;
         this.renderTabs();
         // LSP：通知文档变更
-        const sid = lspSessions.get(language);
+        const sid = getLspSession(language);
         if (sid) didChange(sid, uri.toString(), model.getValue());
       });
 
@@ -1014,10 +1015,10 @@ export class FileViewer {
       ]);
       // ponytail: 使用项目根作为 rootUri，使 LSP 能找到 tsconfig/pyproject 等。
       const rootUri = this.projectPath ? `file:///${this.projectPath.replace(/\\/g, '/')}` : `file:///${filePath}`;
-      if (!lspSessions.has(language) && LSP_LANGUAGES.has(language)) {
+      if (getLspSession(language) === undefined && LSP_LANGUAGES.has(language)) {
         startLsp(language, rootUri).then((sid) => {
+          // startLsp 已把成功 sid 写入 lsp-client 的单一会话表；这里只注册 provider。
           if (sid !== null) {
-            lspSessions.set(language, sid);
             registerCompletionProvider(language, sid, monaco);
             registerHoverProvider(language, sid, monaco);
             registerDefinitionProvider(language, sid, monaco);
@@ -1027,8 +1028,8 @@ export class FileViewer {
           }
         });
       } else {
-        const sid = lspSessions.get(language)!;
-        didOpen(sid, uri.toString(), language, content);
+        const sid = getLspSession(language);
+        if (sid) didOpen(sid, uri.toString(), language, content);
       }
 
       this.tabs.push(newTab);

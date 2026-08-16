@@ -13,6 +13,7 @@
 import type { editor, IDisposable, IRange, languages } from 'monaco-editor';
 import { listen } from '../bridge';
 import { typedRpc } from '../rpc-contract';
+import { getWorkspaceEpoch, isCurrentEpoch } from '../workspace-scope';
 
 const lspSessions = new Map<string, number>(); // 语言 → session_id
 let completionProviders: IDisposable[] = [];
@@ -173,10 +174,23 @@ function mapCompletionItem(item: LspCompletionItem, monaco: typeof import('monac
 
 const lspWarned = new Set<string>();
 
+/** 查询某语言的 LSP 会话 ID（单一事实源 — file-viewer 不再自建第二张会话表，H2）。
+ *  返回 undefined 表示该语言当前无会话（未启动 / 已被 stopAllLsp 清掉）。 */
+export function getLspSession(language: string): number | undefined {
+  return lspSessions.get(language);
+}
+
 export async function startLsp(language: string, rootUri: string): Promise<number | null> {
   if (lspSessions.has(language)) return lspSessions.get(language)!;
+  // 代际防护（H2）：startLsp 在途期间可能切换工作区 —
+  // 过期 resolve 的 sid 属于旧项目，直接 lsp_stop 丢弃，防把 A 项目文件发进 B 的 tsserver。
+  const epoch = getWorkspaceEpoch();
   try {
     const sid = Number(await typedRpc('lsp_start', { language, root_uri: rootUri }));
+    if (!isCurrentEpoch(epoch)) {
+      await typedRpc('lsp_stop', { session_id: sid }).catch(() => {});
+      return null;
+    }
     lspSessions.set(language, sid);
     return sid;
   } catch {
