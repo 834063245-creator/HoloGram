@@ -12,7 +12,7 @@
 | 1 Disposer 契约 + V1 | ✅ 完成 | 3 注册 API 返回 Disposer；startOwned/ownedDisposer；T0 门禁 + F8 快照 + F2 workflow |
 | 2 工具管道类型化事件 + V2 | ✅ 完成 | AgentEventBus 双路径；12 场景差分 + pipeline 对拍 phase-0 冻结 baseline 逐字节一致 |
 | 3 AgentContext 抽取 | ✅ 完成 | 三层收敛 26/11/12→0/0/0；wiring baseline 经审批冻结（828679fc）；决策 16-19 |
-| 4 生命周期所有权统一 | ⬜ 未开始 | |
+| 4 生命周期所有权统一 | 🔄 实现+验证完毕 | dispose 21→14 步收敛为 ctx 所有权；wiring baseline 变更待审批；决策 20-23 |
 | 5 会话事件溯源日志 | ⬜ 未开始 | |
 | 6 组合层收尾（可选） | ⬜ 未开始 | |
 
@@ -154,6 +154,44 @@
 | `createAgent` setter 接线 | 12 | 0（5 入构造 / 7 留装配本体） | 结构迁移 |
 | `_disposeAgent` 清理步骤 | 21 | 21 | 不变（Phase 4 对象） |
 
+## Phase 4 / V4 记录（2026-08-16）
+
+> 状态：实现与验证完毕，**停工待用户审批 wiring baseline 变更**
+> （`baseline-change-request.md`——仅 dispose_cleanup_steps 段 21→14；模型可见表面零变化）。
+
+### 交付物
+
+| commit | 内容 |
+|---|---|
+| `8c6279a8` | 生命周期原语备齐（行为中性）：`lifecycle.ts` DisposerBag **同步快通道**（非 Promise 清理器不产生微任务边界，全 sync 链在 dispose() 返回前完成；async 仍串行等待）；`coordinator.ts` `SubAgentPool.ownedDisposer()`（stopAll + 兜底清 timer，幂等）；`agent.ts` ctx 构造路径登记 `bus-unregister` effect；`tests/agent-context-dispose.test.ts` 6 例（幂等/并发单次/错误聚合可观测/后注册抛错/同步排空/终态只读）+ lifecycle-disposer 2 例 + agent-lifecycle-dispose 1 例 + coordinator 1 例。四门全绿（1107+1skip） |
+| （待审批后提交） | `runtime.ts`：装配期 effects 接线（board-unregister / lifecycle-manager 持有 startOwned / runtime-maps）+ `_disposeAgent` 重写（flush 前置序保持 → saveState → `ctx.dispose()` 逆序释放，聚合错误 log.warn）；`specs/phase-4.test.ts` 5 例（T0 静态×3 + T1 顺序 trace + T5 百次循环）；REGISTRY_OWNERSHIP.md 终态 |
+
+### 验收核对（验证计划 §4 Phase 4）
+
+- [x] T0：_disposeAgent 无分散清理调用（`_lifecycleManagers`/`unregister(`/`.stop(`/maps `.delete`，豁免表空）；_assembleAgent ≥3 处 ctx.effect；dispose 步骤 21→**14**（≤16 门禁）
+- [x] T1：dispose 幂等 / 并发单次 / 错误聚合可观测 / 后注册抛错（agent-context-dispose 6 例）；顺序 trace：flush 计时器清 → flush → saveState → 逆序 effects（bus 注销先于 board 注销，与旧代码相对序一致）
+- [x] T2（映射实现）：旧 dispose 行为的预言由既有栅栏承担（agent-lifecycle-dispose 同步可观测断言 + taskboard-session-routing + 新增双 dispose 单次注销观测）；新路径顺序由 trace 测试钉住——未保留双路径（dispose 无"可选参数"式分叉，保留双路径会复活分散清理）
+- [x] T5：fake timers 百次 create/dispose——每轮 +1 巡检 timer、dispose 归零，注册表/总线终态全空
+- [x] T3：其余全部快照逐字节不变；wiring dispose 段漂移 = 本申请对象
+- [x] T4：全量 vitest 1111 passed / 1 skipped / 1 failed（唯一 failed 即 wiring 比对，预期红）；tsc 干净；触碰文件 biome 零新增
+- [ ] wiring baseline freeze（待审批 → record → freeze commit）
+
+### 决策与偏差记录（Phase 4 追加）
+
+20. **DisposerBag 同步快通道**：`_disposeAgent` 的同步可观测语义（dispose() 返回后 listAgents/bus 立即为空，agent-lifecycle-dispose 钉住）要求全 sync effect 链不跨微任务——dispose() 改为条件 await（返回非 Promise 的清理器直接继续）。规约 1-5 不变（async 仍串行等待），新增 2 个行为测试。
+21. **McpClient / SubAgentPool 不挂单 Agent ctx**：两者都是跨 Agent 共享资源（MCP 连接 / 会话级子 Agent 池），挂单 Agent context 会在该 Agent dispose 时掐断兄弟 Agent 的工具面或在跑任务——与主计划 §6 Phase 4 的字面清单偏差，按"代码现实优先"落地为：disposer 原语齐备（ownedDisposer），owner 保持 workspace/会话层，REGISTRY_OWNERS.md 登记决策。
+22. **T2 不做双路径差分**：Phase 2 的 executor 有天然的"eventBus 可选参数"分叉点，dispose 没有等价物——保留旧 _disposeAgent 作为第二路径等于复活分散清理分支。等价性改由"既有栅栏（旧行为的预言）+ 新路径 trace"组合承担。
+23. **effect 释放顺序与旧代码相对序一致**：bus 注销先于 board 注销（ctor effect 晚于装配顶部的 board effect 注册 → 逆序释放时先跑），与旧 `_disposeAgent` 中 `bus.unregister → taskBoard.unregister` 顺序相同；runtime-maps effect 末端注册最先释放，保证同步可见。
+
+### Phase 4 决策检查点（计划 §10）
+
+> Phase 4 结束：确认生命周期统一是否带来可测的泄漏减少；否则不进入 Phase 5。
+
+结论：**可测泄漏减少成立，建议进入 Phase 5**（待 baseline 审批后生效）。证据：
+- T5：百次循环 timer 数严格归零（旧路径依赖 7 个手工清理步骤的"都记得调"，新路径所有权随构造登记、释放不可绕过）；
+- 防回归代价：phase-4 T0 禁止片段——任何把分散清理写回 _disposeAgent 的尝试在 gate 即失败；
+- REGISTRY_OWNERSHIP 清单闭环：runtime 侧订阅型注册 100% ctx 所有权，共享资源（MCP/pool）显式豁免并备好原语。
+
 
 ### 基线（freeze point：分支自 main 67f21ec2 切出）
 
@@ -206,5 +244,6 @@
 - Phase 1 结束：＿
 - Phase 2 结束：＿
 - Phase 3 结束：复杂度实质下降（26/11/12→0/0/0），进入 Phase 4（2026-08-16）
+- Phase 4 结束：可测泄漏减少成立（T5 百次归零 + T0 禁止片段），建议进入 Phase 5（2026-08-16，待 baseline 审批）
 - Phase 4 结束：＿
 - Phase 5 结束：＿

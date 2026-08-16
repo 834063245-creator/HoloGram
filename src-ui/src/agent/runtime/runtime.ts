@@ -87,6 +87,7 @@ class AgentHandleImpl implements AgentHandle {
   constructor(
     private readonly _agent: Agent,
     private readonly _runtime: AgentRuntime,
+    private readonly _ctx: AgentContext | null = null,
   ) {}
 
   get id(): string {
@@ -164,6 +165,11 @@ class AgentHandleImpl implements AgentHandle {
   /** 直接访问底层 Agent — 仅供内部使用 */
   _getAgent(): Agent {
     return this._agent;
+  }
+
+  /** 直接访问装配 context — 仅供内部使用（_disposeAgent / 收敛测试） */
+  _getContext(): AgentContext | null {
+    return this._ctx;
   }
 }
 
@@ -561,6 +567,10 @@ export class AgentRuntime implements RuntimePort {
     const discoveryProxy = ctx.resolve('discoveryBoard');
     const planState = ctx.resolve('planState');
 
+    // Phase 4：TaskBoard 条目注销的对称清理归 ctx 所有权（proxy 转发到该 Agent
+    // 终生绑定的会话板）。discoveryBoard 维持现状——旧 dispose 路径本就不注销它。
+    ctx.effect(() => () => taskProxy.unregister(agentId), 'board-unregister');
+
     // 1. 构建 system prompt（如果没预构建）
     let sysPrompt = inputs.systemPrompt;
     if (!sysPrompt) {
@@ -727,8 +737,19 @@ export class AgentRuntime implements RuntimePort {
         isolationExec,
         wrappedSink,
       );
-      lifecycle.start();
+      // Phase 4：巡检 timer（60s setInterval）所有权归 ctx —— startOwned 返回
+      // 幂等清理器，_disposeAgent 经 ctx.dispose() 释放，不再分散 stop。
       this._lifecycleManagers.set(agentId, lifecycle);
+      ctx.effect(
+        () => {
+          const stopOwned = lifecycle.startOwned();
+          return () => {
+            stopOwned();
+            this._lifecycleManagers.delete(agentId);
+          };
+        },
+        'lifecycle-manager',
+      );
 
       // 接线子 Agent 完成 → 归档 discoveries（会话级）
       if (!ctx.parentId) {
@@ -790,9 +811,20 @@ export class AgentRuntime implements RuntimePort {
     // 11. 自动调优
     newAgent.applyAutoTuneConfig().catch(() => {});
 
-    // 12. 注册并返回
-    const handle = new AgentHandleImpl(newAgent, this);
+    // 12. 注册并返回。runtime 注册表（agents/proxies/sessions/taskManagers）
+    // 的清理同样归 ctx 所有权——最后注册 → dispose 时最先释放，保证
+    // listAgents 在 dispose() 返回后同步可见移除（同步快通道）。
+    const handle = new AgentHandleImpl(newAgent, this, ctx);
     this.agents.set(agentId, handle);
+    ctx.effect(
+      () => () => {
+        this._agentProxies.delete(agentId);
+        this._agentSessions.delete(agentId);
+        this._agentTaskManagers.delete(agentId);
+        this.agents.delete(agentId);
+      },
+      'runtime-maps',
+    );
     log.info('runtime', `agent created: ${agentId}`);
 
     return handle;
@@ -809,11 +841,15 @@ export class AgentRuntime implements RuntimePort {
   }
 
   /** 销毁单个 Agent — 仅供内部使用（AgentHandle.dispose / disposeAll）。
-   *  外部代码必须经句柄销毁，不提供按 id 的公开入口。幂等。 */
+   *  外部代码必须经句柄销毁，不提供按 id 的公开入口。幂等。
+   *  Phase 4：顺序铁律保持不变 —— bus/board flush → saveState('done') →
+   *  context 逆序 effects（runtime maps 注销 → lifecycle timer → board/bus
+   *  条目注销）。effects 全 sync 链经 DisposerBag 同步快通道在返回前完成，
+   *  listAgents / bus 注册状态调用后立即可观测；聚合错误经 log.warn 可观测。 */
   _disposeAgent(id: string): void {
     const handle = this.agents.get(id);
     if (!handle) return;
-    // 获取此 Agent 的会话级 board
+    // 获取此 Agent 的会话级 board（effects 释放 maps 前完成查找）
     const sessionId = this._agentSessions.get(id) ?? 'default';
     const taskBoard = this._taskBoards.get(sessionId);
     const discoveryBoard = this._discoveryBoards.get(sessionId);
@@ -828,15 +864,11 @@ export class AgentRuntime implements RuntimePort {
       ._getAgent()
       .saveState('done')
       .catch(() => {});
-    // 停止 LifecycleManager 巡检定时器
-    this._lifecycleManagers.get(id)?.stop();
-    this._lifecycleManagers.delete(id);
-    this._bus.unregister(id);
-    taskBoard?.unregister(id);
-    this._agentProxies.delete(id);
-    this._agentSessions.delete(id);
-    this._agentTaskManagers.delete(id);
-    this.agents.delete(id);
+    // 分散清理已统一归 ctx 所有权（装配期 effect 登记），此处只释放 context
+    handle
+      ._getContext()
+      ?.dispose()
+      .catch((err) => log.warn('runtime', `agent ${id} context 清理部分失败: ${String(err)}`));
     log.info('runtime', `agent destroyed: ${id}`);
   }
 
