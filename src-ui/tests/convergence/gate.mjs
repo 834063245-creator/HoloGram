@@ -21,6 +21,48 @@ const [command] = process.argv.slice(2);
 const phase = process.env.CONVERGENCE_PHASE || '';
 const target = phase ? `tests/convergence/specs/phase-${phase}.test.ts` : 'tests/convergence/specs';
 
+// ── T0 静态检查（验证计划 §4 各 phase 的 T0 层）──
+// specs 内也有对应断言（自描述）；gate 侧再扫一次，双保险且 CI 无需跑 vitest 也能拦。
+// 豁免表：允许不满足规则的注册点（格式 '文件:方法'），新增必须附 progress.md 记录。
+const T0_EXEMPTIONS = new Set([]);
+
+const T0_RULES = [
+  {
+    phase: 1,
+    label: 'phase-1 T0: 注册 API 返回 Disposer',
+    check: () => {
+      const read = (rel) => readFileSync(path.resolve(pkgRoot, 'src/agent', rel), 'utf8');
+      const failures = [];
+      const expects = [
+        ['tool.ts', /register\(t: Tool\)\s*:\s*Disposer/, 'ToolRegistry.register'],
+        ['hooks.ts', /register\(hook: Hook\)\s*:\s*Disposer/, 'HookRegistry.register'],
+        ['hooks.ts', /register\(hook: PreflightHook\)\s*:\s*Disposer/, 'PreflightHookRegistry.register'],
+      ];
+      for (const [rel, pattern, method] of expects) {
+        if (T0_EXEMPTIONS.has(`${rel}:${method}`)) continue;
+        if (!pattern.test(read(rel))) failures.push(`${method} (${rel}) 未返回 Disposer`);
+      }
+      return failures;
+    },
+  },
+];
+
+function runT0StaticChecks() {
+  // CONVERGENCE_PHASE=N → 只跑 phase ≤ N 的规则；未指定 → 跑全部已落地规则
+  const limit = Number(phase) || Infinity;
+  const failures = [];
+  for (const rule of T0_RULES) {
+    if (rule.phase > limit) continue;
+    try {
+      failures.push(...rule.check().map((f) => `${rule.label}: ${f}`));
+    } catch (err) {
+      failures.push(`${rule.label}: 检查执行失败 — ${String(err)}`);
+    }
+  }
+  return failures;
+}
+
+
 function runSpecs(record) {
   const env = { ...process.env };
   if (record) env.CONVERGENCE_RECORD = '1';
@@ -85,6 +127,13 @@ function usage() {
 }
 
 if (command === 'check') {
+  const t0Failures = runT0StaticChecks();
+  if (t0Failures.length > 0) {
+    const file = writeReport('check', 1, t0Failures.map((f) => `T0 静态检查失败: ${f}`).join('\n'));
+    for (const f of t0Failures) console.log(`[convergence] T0 静态检查失败: ${f}`);
+    console.log(`[convergence] 报告: ${file}`);
+    process.exit(1);
+  }
   const { code, output } = runSpecs(false);
   const file = writeReport('check', code, output);
   console.log(`[convergence] check ${code === 0 ? '通过' : '失败'}（exit ${code}）`);

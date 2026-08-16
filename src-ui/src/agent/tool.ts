@@ -5,6 +5,7 @@
 
 // biome-ignore lint/style/noRestrictedImports: agentInvoke 动态方法名分发（工具名运行时确定），无法走 typedRpc
 import { rpc } from '../bridge';
+import type { Disposer } from './lifecycle';
 import type { ToolSchema } from '../provider/types';
 
 // ---- Tool 接口 ----
@@ -37,11 +38,21 @@ export class ToolRegistry {
   private tools = new Map<string, Tool>();
   private hiddenNames = new Set<string>();
 
-  register(t: Tool): void {
+  /** 注册工具并返回所有权清理器（Phase 1 disposer 契约）。
+   *  调用方持有 disposer 即持有该工具的清理责任；幂等。
+   *  同名后来被重新注册时，陈旧 disposer 不误删新工具。 */
+  register(t: Tool): Disposer {
     if (this.tools.has(t.name())) {
       throw new Error(`ToolRegistry: duplicate tool "${t.name()}"`);
     }
     this.tools.set(t.name(), t);
+    const name = t.name();
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      if (this.tools.get(name) === t) this.unregister(name);
+    };
   }
 
   /** 按名称移除工具。工具不存在时无操作。 */
