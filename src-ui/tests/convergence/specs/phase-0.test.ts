@@ -6,29 +6,22 @@
 //   tool-schemas.full / tool-schemas.plan / system-prompt.fixture /
 //   plan-gate.decisions / hook-pipeline.trace / create-agent.wiring
 import { describe, expect, it } from 'vitest';
-import { EventKind } from '../../../src/agent/agent-types';
-import { HookRegistry, PreflightHookRegistry } from '../../../src/agent/hooks';
 import { planGateCheck, planRegistry } from '../../../src/agent/plan/plan-registry';
 import { PlanStateManager } from '../../../src/agent/plan/plan-state';
 import { buildSystemPrompt } from '../../../src/agent/runtime/agent-builder';
-import { StreamingToolExecutor } from '../../../src/agent/streaming-executor';
-import { type Tool, ToolRegistry } from '../../../src/agent/tool';
-import type { ToolCall } from '../../../src/provider/types';
 import { runDifferential } from '../helpers/differential';
 import {
   agentDomainTool,
   buildStandardRegistry,
-  enrichableTool,
   FIXED_GRAPH_DATA,
   fixedGraphSnapshot,
   fsDomainTool,
-  legacyEditTool,
-  progressTool,
   readOnlyTool,
   throwingTool,
 } from '../helpers/fixtures';
 import { stableStringify } from '../helpers/normalize';
 import { compareText, snapshot } from '../helpers/snapshot';
+import { runTraceCase, traceCases } from '../helpers/trace-fixtures';
 import { extractRuntimeWiring, formatWiringReport } from '../helpers/wiring';
 
 describe('phase-0 契约快照', () => {
@@ -150,166 +143,6 @@ describe('phase-0 契约快照', () => {
     snapshot('phase-0/create-agent.wiring.txt', formatWiringReport(extractRuntimeWiring()));
   });
 });
-
-// ── trace 夹具：每个 case 独立 registry/hooks，互不共享实例 ──
-
-interface TraceCase {
-  label: string;
-  build: () => {
-    registry: ToolRegistry;
-    hooks?: HookRegistry | null;
-    preflight?: PreflightHookRegistry | null;
-    planGate?: ((name: string, args: Record<string, unknown>, tool: Tool) => string | null) | null;
-  };
-  calls: Array<{ id: string; name: string; arguments: string }>;
-}
-
-function traceCases(): TraceCase[] {
-  const ps = new PlanStateManager();
-  ps.enter('/proj');
-
-  return [
-    {
-      label: '未知工具',
-      build: () => ({ registry: regWith(readOnlyTool()) }),
-      calls: [{ id: 'c1', name: 'nope_tool', arguments: '{}' }],
-    },
-    {
-      label: '隐藏旧名重定向',
-      build: () => {
-        const registry = regWith(legacyEditTool());
-        registry.hide('edit_file');
-        return { registry };
-      },
-      calls: [{ id: 'c1', name: 'edit_file', arguments: '{}' }],
-    },
-    {
-      label: '非法JSON参数',
-      build: () => ({ registry: regWith(readOnlyTool()) }),
-      calls: [{ id: 'c1', name: 'graph_summary', arguments: '{invalid' }],
-    },
-    {
-      label: 'planGate拦截',
-      build: () => ({
-        registry: regWith(fsDomainTool()),
-        planGate: (name, args, tool) => planGateCheck(ps, name, args, tool),
-      }),
-      calls: [{ id: 'c1', name: 'fs', arguments: '{"action":"write","filePath":"/proj/a.ts"}' }],
-    },
-    {
-      label: 'preflight HIGH 拦截',
-      build: () => {
-        const preflight = new PreflightHookRegistry();
-        preflight.register({
-          name: 'fixture-high',
-          shouldCheck: (n) => n.includes('edit'),
-          check: () => '⚠️ fixture 警告 风险等级: HIGH — 合成高风险',
-        });
-        return { registry: regWith(legacyEditTool()), preflight };
-      },
-      calls: [{ id: 'c1', name: 'edit_file', arguments: '{"filePath":"/proj/a.ts"}' }],
-    },
-    {
-      label: 'preflight HIGH 带 _forceGate 放行并前置警告',
-      build: () => {
-        const preflight = new PreflightHookRegistry();
-        preflight.register({
-          name: 'fixture-high',
-          shouldCheck: (n) => n.includes('edit'),
-          check: () => '⚠️ fixture 警告 风险等级: HIGH — 合成高风险',
-        });
-        return { registry: regWith(legacyEditTool()), preflight };
-      },
-      calls: [{ id: 'c1', name: 'edit_file', arguments: '{"filePath":"/proj/a.ts","_forceGate":true}' }],
-    },
-    {
-      label: 'post hook 富化',
-      build: () => {
-        const hooks = new HookRegistry();
-        hooks.register({
-          name: 'fixture-enrich',
-          shouldEnrich: (n) => n.includes('search'),
-          enrich: async (_n, _a, r) => `${r}\n[ENRICHED]`,
-        });
-        return { registry: regWith(enrichableTool()), hooks };
-      },
-      calls: [{ id: 'c1', name: 'search_content', arguments: '{"query":"demo"}' }],
-    },
-    {
-      label: 'post hook 抛错静默降级',
-      build: () => {
-        const hooks = new HookRegistry();
-        hooks.register({
-          name: 'fixture-throw',
-          shouldEnrich: (n) => n.includes('search'),
-          enrich: async () => {
-            throw new Error('hook-boom');
-          },
-        });
-        return { registry: regWith(enrichableTool()), hooks };
-      },
-      calls: [{ id: 'c1', name: 'search_content', arguments: '{"query":"demo"}' }],
-    },
-    {
-      label: '工具执行错误',
-      build: () => ({ registry: regWith(throwingTool()) }),
-      calls: [{ id: 'c1', name: 'boom_tool', arguments: '{}' }],
-    },
-    {
-      label: '进度事件',
-      build: () => ({ registry: regWith(progressTool()) }),
-      calls: [{ id: 'c1', name: 'slow_tool', arguments: '{}' }],
-    },
-    {
-      label: '并行只读双工具事件顺序',
-      build: () => ({ registry: regWith(readOnlyTool(), progressTool()) }),
-      calls: [
-        { id: 'c1', name: 'graph_summary', arguments: '{}' },
-        { id: 'c2', name: 'slow_tool', arguments: '{}' },
-      ],
-    },
-  ];
-}
-
-function regWith(...tools: Tool[]): ToolRegistry {
-  const registry = new ToolRegistry();
-  for (const t of tools) registry.register(t);
-  return registry;
-}
-
-async function runTraceCase(c: TraceCase) {
-  const events: Array<{ kind: string; name: string | undefined; chunk?: string }> = [];
-  const { registry, hooks, preflight, planGate } = c.build();
-  const ex = new StreamingToolExecutor(
-    registry,
-    (ev) => {
-      const t = (ev as { tool?: { name?: string; output?: string } }).tool;
-      events.push({
-        kind: ev.kind as string,
-        name: t?.name,
-        chunk: ev.kind === EventKind.ToolProgress ? t?.output : undefined,
-      });
-    },
-    hooks ?? null,
-    preflight ?? null,
-    null,
-    null,
-    planGate ?? null,
-  );
-  for (const call of c.calls) ex.addTool(call as ToolCall);
-  const results = await ex.awaitRemaining();
-  return {
-    label: c.label,
-    events,
-    results: results.map((r) => ({
-      id: r.call.id,
-      name: r.call.name,
-      output: r.output,
-      truncated: r.truncated,
-      err: r.err ?? null,
-    })),
-  };
-}
 
 // ── 机制自检：比对器自身被测（验证计划 §7.4 — 门禁脚本要有会故意失败的小 spec）──
 
