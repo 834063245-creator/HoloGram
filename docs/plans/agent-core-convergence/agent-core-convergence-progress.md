@@ -10,7 +10,7 @@
 |---|---|---|
 | 0 基线冻结 + V0 验证工程 | ✅ 完成 | 6 契约快照 + gate.mjs 落地，全量绿；独立审计有条件放行，条件已处置 |
 | 1 Disposer 契约 + V1 | ✅ 完成 | 3 注册 API 返回 Disposer；startOwned/ownedDisposer；T0 门禁 + F8 快照 + F2 workflow |
-| 2 工具管道类型化事件 | ⬜ 未开始 | |
+| 2 工具管道类型化事件 + V2 | ✅ 完成 | AgentEventBus 双路径；12 场景差分 + pipeline 对拍 phase-0 冻结 baseline 逐字节一致 |
 | 3 AgentContext 抽取 | ⬜ 未开始 | |
 | 4 生命周期所有权统一 | ⬜ 未开始 | |
 | 5 会话事件溯源日志 | ⬜ 未开始 | |
@@ -70,6 +70,39 @@
 > Phase 1 结束：若 disposer 契约没有让任何现有 bug 消失，仍继续 Phase 2（价值主要在未来）。
 
 结论：**继续 Phase 2**。符合预期——Phase 1 价值在 Phase 3/4 的所有权接线；T5 泄漏检测与 startOwned 已为 worktree TTL 泄漏类问题提供了修复路径（docs/landmine-map.md 的 lifecycle 条目）。
+
+## Phase 2 / V2 记录（2026-08-16）
+
+### 交付物
+
+- `src/agent/events.ts`（新）：`AGENT_EVENT_MAP`（tool/guard·waterfall / tool/preflight·serial / tool/around·waterfall / tool/result·emit / tool/error·emit）+ `AgentEventBus`（on→Disposer、优先级调度、runGuard 同步短路不吞异常、runPreflight 聚合 join '\n\n'、runAround 异步 waterfall、emitResult/emitError 广播）+ 过渡适配层 `attachPlanGate/attachPreflightRegistry/attachHookRegistry`（静默降级语义与旧 executor 逐点一致）。
+- `agent-types.ts`：`ToolPipelineContext`（call/tool/args/agentId/signal/guardName）。
+- `streaming-executor.ts`：构造参数新增第 8 位可选 `eventBus`；eventBus 存在时 guard/preflight/around/result/error 经 bus 驱动、且 ctor 的 planGate/hooks/preflightHooks 被忽略（适配器挂 bus）；缺省时旧直调路径原样保留。双发纪律：bus 事件 + legacy EventKind sink 同发，UI 零改动。
+- `tests/tool-pipeline-events.test.ts`：T1 7 例（调度/短路/聚合/disposer）+ T2 12 场景差分（未知/隐藏/非法 JSON/HIGH/HIGH+forceGate/planGate/富化/hook 抛错/preflight 抛错/执行错误/AbortError/混合多调用）——两侧 PendingResult、sink 事件序列、异常行为逐项一致 + bus 事件结构性验证。
+- convergence：trace 夹具抽到 `helpers/trace-fixtures.ts`（legacy/pipeline 双模式）；`specs/phase-2.test.ts` T0 mode 门禁 + **pipeline 路径直接对拍 phase-0/hook-pipeline.trace.json 冻结 baseline，逐字节一致**（不另立 baseline——新路径的等价性锚在人类审批的 legacy 行为上）；phase-0 spec 复用共享夹具后 baseline 零漂移。
+
+### 验收核对（验证计划 §4 Phase 2）
+
+- [x] T0：事件声明 mode 合法且五事件齐备（specs/phase-2）
+- [x] T1：bus 各 mode 调度顺序与短路语义；listener disposer 移除
+- [x] T2 核心差分：12 场景矩阵全过（覆盖验证计划要求的全部场景 + preflight 抛错 + 混合多调用）
+- [x] T3：`hook-pipeline.trace.json` 逐项一致（双保险：phase-0 spec legacy 比对 + phase-2 spec pipeline 比对，同一 baseline）
+- [x] T4：全量 vitest 1079 passed / 1 skipped（99 文件）；tsc 干净；触碰文件 biome 诊断 7→5（顺手清 2 存量，零新增）
+- [x] 现有 hook/planGate 测试全绿（plan-gate / streaming-executor-hooks / agent-hooks / agent-exec 101 例）
+- [x] tool schema 字节不变（phase-0/1 全部 baseline 经 verify:convergence 零漂移）
+
+### 决策与偏差记录（Phase 2 追加）
+
+12. **管道顺序镜像 legacy 而非计划清单序**：计划 §6 列的顺序是 preflight→planGate，但 legacy 实际顺序是 planGate（addTool 同步段）→ preflight（executeTool）；按计划 §9 风险表"新路径先镜像旧顺序"，落地为 guard→preflight→around→result/error，dispatch 同步短路的时序结构（completed vs pending）也逐点保留。
+13. **guard 短路不吞异常**：legacy planGate 直调无 try/catch，bus.runGuard 同样传播——静默降级只属于 preflight/around（与旧代码容错点一致）。
+14. **phase-2 不新增 baseline**：pipeline 路径的等价性直接对拍 phase-0 冻结 trace（同一快照名），避免"新路径自证新 baseline"的循环；单元级差分与收敛级对拍互为印证。
+15. **双会话事故记录**：Phase 2 进行中另一会话把主工作区切回 main 并带入 graph 改动；对方迁往独立 worktree（D:/HoloGramHG-main）后无损恢复，WIP 曾备份于 D:/HoloGramHG-phase2-wip-backup（可删）。纪律：并发会话必须各自独占 worktree（与验证计划 §5.3 一致）。
+
+### Phase 2 决策检查点（计划 §10）
+
+> Phase 2 结束：若事件管道只是"换皮"，则说明工具阶段已经足够简单，降低 Phase 2 后续投入。
+
+结论：**非换皮**——eventBus 已把 guard/preflight/around 三类裁决从 executor 硬编码中分离为可组合监听器（T1 证明可排序/短路/聚合），Phase 3 起 AgentContext 可将 planGate、guard、hook 以 effect() 声明式接入。按计划推进 Phase 3。
 
 ### 基线（freeze point：分支自 main 67f21ec2 切出）
 
