@@ -13,8 +13,8 @@
 | 2 工具管道类型化事件 + V2 | ✅ 完成 | AgentEventBus 双路径；12 场景差分 + pipeline 对拍 phase-0 冻结 baseline 逐字节一致 |
 | 3 AgentContext 抽取 | ✅ 完成 | 三层收敛 26/11/12→0/0/0；wiring baseline 经审批冻结（828679fc）；决策 16-19 |
 | 4 生命周期所有权统一 | ✅ 完成 | dispose 21→14 步收敛为 ctx 所有权；wiring baseline 经审批冻结（45f328a2）；决策 20-23 |
-| 5 会话事件溯源日志 | ⬜ 未开始 | |
-| 6 组合层收尾（可选） | ⬜ 未开始 | |
+| 5 会话事件溯源日志 | ✅ 完成 | SessionLog 双写 + 14 变异点收敛三入口 + 11 场景差分 + session-projection 冻结（5e42c995）；决策 24-29 |
+| 6 组合层收尾（可选） | ⬜ 未开始 | 视 Phase 5 收益决定 |
 
 ## Phase 0 / V0 记录（2026-08-16）
 
@@ -240,11 +240,58 @@
 - [x] 契约快照 6 件全部采集且 check 模式绿
 - [x] 门禁脚本自身被测试（compareText/stableStringify/runDifferential 自检 + 负向漂移验证）
 
-## 决策检查点（待填）
+## Phase 5 / V5 记录（2026-08-16）
 
-- Phase 1 结束：＿
-- Phase 2 结束：＿
+> 状态：**✅ 完成并冻结**（2026-08-16）。新增 baseline `phase-5/session-projection.trace.json`
+> 经 record 幂等验证后 freeze（`5e42c995`）——**待用户过目**（交接协议 §9）。
+
+### 交付物
+
+| commit | 内容 |
+|---|---|
+| `bfa5bc91` | `src/agent/session-log.ts`（SessionEvent 封闭可扩展 9 kind + SessionLog：append 严格递增 / appendEvent 重复乱序拒绝 / snapshot / replay / deriveMessages / derivePayload 复刻压缩+工具折叠 / onEvent 内部事件）+ `buildCompactedSummaryMessage` 单一实现 + `tests/session-log.test.ts` 15 例 + `tests/session-replay.test.ts` 5 例。行为中性（未接线） |
+| `40ae6355` | 双写接线：agent.ts 14 处 session 变异点收敛到三入口（`_appendMessage`/`_replaceSession`/`_retractSessionRange`）+ runLoop 边界事件（turn/start、tool/call 审计）+ `_applyCompactState` 压缩事件 + payloadMessages 摘要构造来源替换（字节同源）；saveState 事件增量追加（`_persistedEventSeq` 永不重置 + `_eventAppendChain` 写链防并发重复 seq）；agent-store `appendSessionEvents`（log_append 真追加 session-log.ndjson）；context.ts `sessionLog` 服务位 + runtime `_materializeSessionServices` 物化（createAgent/_disposeAgent 本体零改动 → wiring 零漂移）；gate.mjs phase-5 T0 静态扫描（负向验证通过）+ `specs/phase-5.test.ts` 6 例 + `tests/session-differential.test.ts` T2 差分 11 场景 |
+| `5e42c995` | baseline freeze：`phase-5/session-projection.trace.json`（15 事件全序 + 6 逐步派生载荷）；二次 record 字节不变；既有 6 快照 git diff 零漂移 |
+| （本 commit） | progress.md Phase 5 记录 + plans 索引更新 + handoff-phase6 交接文档 |
+
+### 验收核对（验证计划 §4 Phase 5）
+
+- [x] T0：session event 类型封闭可扩展（SESSION_EVENT_KINDS 冻结 + Record 编译期对齐 + 主计划 7 kind 齐备）；seq 严格递增由运行检查保证（appendEvent 重复/乱序抛错）；日志接入后 agent.ts 直改 session 仅存在于三入口与构造初始化（spec AST 白名单 + gate.mjs 计数扫描双层，负向验证：注入违规 push → check 在 vitest 前失败关闭）
+- [x] T1：append / snapshot / deriveMessages / replay / 重复 append 拒绝 / 投影与旧 session 等价（session-log 15 例 + session-replay 5 例 + spec 2 例）
+- [x] T2 核心差分：11 场景矩阵——每步 provider 请求消息（请求时刻快照日志投影，字节级对拍）、compaction 边界（事件 tailStart 镜像 `_compactTailStart` + 压缩后请求含 `<compacted-context>`）、retract 后投影（含折叠保留 + tailStart 越界钳制）、多工具批、insertMessage 安全边界、setSession/newSession（折叠失效语义）、window>0 工具折叠（方法级：镜像边界前值单次推进与旧路径逐字节相等）、持久化双写（P1-15 游标钉住 + ndjson 事件回放重建投影）
+- [x] T3：新增 `session-projection.trace.json` 冻结（固定场景 15 事件 + 6 载荷步）；既有全部快照（tool-schemas.full/plan/effective、system-prompt.fixture、plan-gate.decisions、hook-pipeline.trace、create-agent.wiring）git diff 内容零漂移
+- [x] T4：全量 vitest 终态 **1150 passed / 1 skipped / 0 failed（107 文件）**；tsc 干净；`npm run build` 绿；重点重跑 compaction-pipeline / compaction-model / session-sync / agent-store-incremental / goal-persistence / agent-session-state / agent-exec / agent-lifecycle-dispose（8 套件 90 例全绿）
+- [x] 主计划验收附加项：模型请求消息可由 session log 派生（derivePayload）；旧持久化文件仍可读（恢复路径零改动）；关键模型可见路径有事件记录（turn/start、tool/call、tool/result、session/compaction）
+
+### 决策与偏差记录（Phase 5 追加）
+
+24. **事件 kind 超 7 种（+session/reset、session/retract）**：主计划列举 7 kind 覆盖不了既有会话变异面（setSession/newSession/goal 清场是整体替换、retractTurnAt/goal 暂停是区间裁剪）。按"封闭可扩展"落地为 9 kind——reset 事件携带深拷贝快照（调用方后续改动不得回写历史），retract 事件携带 [from,to) splice 语义。`assistant/reasoning` 按计划保留 kind 但双写阶段不发射（reasoning 已在 assistant/text 消息内，单一事实源）。
+25. **`tool/call` 为审计记录不参与投影**：assistant 消息内嵌 tool_calls 已是投影事实源；每调用一条的 tool/call 事件仅供审计与未来回放，deriveMessages 跳过。避免双源漂移。
+26. **`_toolFoldBoundary` 不入事件流，derivePayload 显式镜像**：折叠边界是 payloadMessages 调用序列的累积态（每步 2-4 次调用、跨步收敛到不动点），从事件重算只能得到无状态近似。诚实边界：derivePayload 接收调用前边界值并在内部执行同样的 nextFoldBoundary 单次推进——与旧路径同起同进，任何状态逐字节相等（差分测试钉住）；请求级对拍限 window=0（生产默认，边界恒 0）。
+27. **session/event 落地为 SessionLog.onEvent 订阅面，不加 AgentEventBus 第 6 事件**：Agent 不持有 eventBus（Phase 2 后 executor 才持有），挂上去是死代码；bus 是执行管道机制，会话日志不与之耦合。onEvent 返回 Disposer（Phase 1 契约），UI/EventSink 零改动。
+28. **事件持久化在 agent-store.ts 而非交接文档写的 message-store.ts**：message-store.ts 是 inbox 持久化（JsonMessageStore）；会话持久化与 `_persistedMsgCount`（P1-15）都在 agent-store.ts。按"代码现实优先"落在 agent-store.ts，经 `log_append` RPC 真追加（`OpenOptions.create+append`），不改 Rust、不动 agent_session_append。
+29. **`_eventAppendChain` 写链**：run() 结尾 fire-and-forget saveState 与显式/dispose saveState 并发时会读到同一事件游标重复追加（ndjson 出现重复 seq，回放即拒绝）。按 P1-13 `_indexChain` 模式按调用序串行化——差分测试曾真实抓到该竞态（修复前落盘事件 14 条含重复，修复后精确 7 条）。
+
+### Phase 5 决策检查点（计划 §10）
+
+> Phase 5 结束：重新评估是否值得迁移到 DSH。届时如果触发线（多表面运行、第三方插件生态、可续聊子 Agent、模型自修改）仍未出现，继续自有 runtime。
+
+结论：**触发线未出现，继续自有 runtime**。四原语（Context / Effect-Disposer / 类型化事件 / 事件溯源日志）全部落地，DoD 1-7 逐项达成（见下）；DSH 迁移的收益场景（多表面/插件生态/可续聊子 Agent/模型自修改）当前均不存在，而垂直机制（worktree 隔离、merge gate、boards、图引擎）仍是 HoloGram 护城河。Phase 6（组合层收尾）为可选项，视后续新增工具/hook 的装配痛点再启动。
+
+### 完成定义（DoD）核对（主计划 §11）
+
+1. [x] 注册点返回 disposer 且有 owner（Phase 1/4 + REGISTRY_OWNERSHIP.md）
+2. [x] 工具执行策略可由类型化事件组合表达（Phase 2 eventBus）
+3. [x] Agent 创建不再 30 字段手工装配（Phase 3 三层收敛 0/0/0）
+4. [x] `AgentHandle.dispose()` 唯一 teardown 且可等待 quiescence（Phase 4 ctx 所有权）
+5. [x] 模型请求消息可从 session log 派生（Phase 5 derivePayload，差分+冻结快照钉住）
+6. [x] 全部旧测试 + 新测试通过，tool schema 与模型可见输出零漂移（1150/1 + verify:convergence exit 0）
+7. [x] 进度与决策记录更新到本文件（决策 1-29 + 检查点结论）
+
+## 决策检查点（汇总）
+
+- Phase 1 结束：继续 Phase 2（价值在未来所有权接线）
+- Phase 2 结束：非换皮，按计划推进 Phase 3
 - Phase 3 结束：复杂度实质下降（26/11/12→0/0/0），进入 Phase 4（2026-08-16）
 - Phase 4 结束：可测泄漏减少成立（T5 百次归零 + T0 禁止片段），进入 Phase 5（2026-08-16）
-- Phase 4 结束：＿
-- Phase 5 结束：＿
+- Phase 5 结束：触发线未出现，继续自有 runtime；Phase 6 可选（2026-08-16）
