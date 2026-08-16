@@ -101,9 +101,9 @@ flowchart LR
 
 ## 工具层收敛（2026-08-08）
 
-- 模型可见工具收敛为领域工具：`fs` / `shell` / `git` / `search` / `web` / `agent` / `task` / `memory`，加常驻 `ask_user` / `Skill` / `wait` / `enter_plan_mode` / `exit_plan_mode`，再加 engine MCP 工具。
+- 模型可见工具收敛为领域工具：`fs` / `shell` / `git` / `search` / `web` / `agent` / `task` / `memory` / `browser` / `desktop`，加常驻 `ask_user` / `Skill` / `wait` / `enter_plan_mode` / `exit_plan_mode`；**engine MCP 工具同样收敛（2026-08-15）**：35 个图工具折叠为 `graph`（24 个只读动作：symbols/neighbors/impact/preflight/coupling/cycles/…）/ `ops`（analyze/validate/health/status/timeline/rename/import_scip）/ `lsp`（resolve_call/infer_type/implementations/references）三个领域。旧名（`search_symbols`、`preflight_check`、`analyze_project` 等）保留但 hide，模型调用被 `retireRedirect` 拦截重定向到领域动作。UI/typedRpc 直调旧名不受影响；外部 MCP 客户端（Cursor）仍见细粒度工具。
 - 旧工具名（`run_shell`、`write_file`、`agent_spawn`、`git_*` 等）保留在 `ToolRegistry` 中但被 `hide()`：内部代码与测试仍可直接调用，但不再出现在 `schemas()`；**模型调用隐藏旧名会被 executor 拦截并返回 `[已淘汰]` 重定向**（见 `tools/domains.ts` 的 `retireRedirect`），不再静默执行。
-- 每轮注入：默认发**全量**可见工具 schema（`visibleToolsLimit` 默认 0，2026-08-10 起）——DeepSeek 前缀缓存对 tools 段敏感，按用户消息重打分选子集会导致 tools 段漂移、整段历史缓存 miss 按全价计费（实测单次 ~10 万 tokens）；全量 ~46 工具 ≈ 10k tokens，稳定后常驻缓存按命中价计费。设 `visibleToolsLimit > 0` 回退 `tool-select.ts` 打分 + 常驻集子集模式。工具目录见 `ToolRegistry.catalog()`。
+- 每轮注入：默认发**全量**可见工具 schema（`visibleToolsLimit` 默认 0，2026-08-10 起）——DeepSeek 前缀缓存对 tools 段敏感，按用户消息重打分选子集会导致 tools 段漂移、整段历史缓存 miss 按全价计费（实测单次 ~10 万 tokens）；全量约 15 个领域/常驻工具 ≈ 数 k tokens（收敛前 ~46 工具 ≈ 10k tokens），稳定后常驻缓存按命中价计费。设 `visibleToolsLimit > 0` 回退 `tool-select.ts` 打分 + 常驻集子集模式。工具目录见 `ToolRegistry.catalog()`。
 - Plan 模式不再切换工具注册表（2026-08-10 起）：schema 跨模式恒定，enter/exit 不击穿前缀缓存；写约束在执行层按 `planState` 运行时拦截（`streaming-executor` 的 `planGate`，规则见 `plan/plan-registry.ts` 的 `planGateCheck`：只读动作放行、fs write/edit 计划文件豁免、agent spawn 豁免）。plan 中 spawn 的子 Agent 仍静态降级为只读克隆（`planRegistry()`），不依赖父 Agent 运行时状态。
 - 领域动作通过 `resolveGuardToolName()` 映射回旧工具名，preflight 架构门禁、图增强 hooks、子 Agent `_callId` 关联均不失效；文件所有权包装的是内层旧工具，天然生效。
 - 新增工具/动作必须同步：`tools/domains.ts` 的 `DOMAIN_SPECS`（动作→旧工具名）+ `collectHiddenToolNames()`（需隐藏的旧名）+ 本文件。

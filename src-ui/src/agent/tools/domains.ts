@@ -276,6 +276,63 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       screenshot: 'desktop_screenshot',
     },
   },
+  {
+    name: 'graph',
+    description:
+      '依赖图查询与分析（27 语言 AST + 符号级引用边）。**改代码前先问图**：定位符号、评估影响面、判断架构都走这里，grep 只能看到文本，图能看到结构。' +
+      'symbols 搜符号（「XX 在哪」）; neighbors 谁依赖谁(1跳)（「这个模块被谁依赖」）; impact 改某文件的影响面（改前必查）; path 两符号间依赖路径; inspect 单符号全景; explore 自然语言探索依赖; community 模块所属社区; clusters 全局社区地图; summary 图统计+解析率+SCIP 新鲜度; cycles 循环依赖; coupling 单模块耦合画像(L1-L4); fragile 脆弱模块排名; blindspots 架构盲点; boundaries 边界违规; conflicts 线程冲突; async 异步/时序边; unused 死代码; flows 数据流列表; flow 单条数据流; affected_flows 受影响数据流; dataflow 变量使用统计(语法级,非污点); preflight 改前预检(改文件前必须); grpc gRPC 服务映射; diff 与基线图对比。',
+    actions: {
+      symbols: 'search_symbols',
+      neighbors: 'get_neighbors',
+      impact: 'trace_impact',
+      path: 'find_dep_path',
+      inspect: 'inspect_symbol',
+      explore: 'explore_deps',
+      community: 'get_community',
+      clusters: 'cluster_report',
+      summary: 'graph_summary',
+      cycles: 'detect_cycles',
+      coupling: 'coupling_report',
+      fragile: 'fragile_modules',
+      blindspots: 'arch_blindspots',
+      boundaries: 'check_boundaries',
+      conflicts: 'thread_conflicts',
+      async: 'async_edges',
+      unused: 'find_unused',
+      flows: 'list_flows',
+      flow: 'get_flow',
+      affected_flows: 'get_affected_flows',
+      dataflow: 'trace_dataflow',
+      preflight: 'preflight_check',
+      grpc: 'grpc_services',
+      diff: 'graph_diff',
+    },
+  },
+  {
+    name: 'ops',
+    description:
+      '工程操作与状态：analyze 全量重分析（慢，后台跑）; validate 全约束校验; health 项目健康快照; status 引擎状态（含工具调用计数/向量索引/LSP）; timeline 审计日志; rename 符号重命名; import_scip 导入 SCIP 索引提升符号级引用精度。',
+    actions: {
+      analyze: 'analyze_project',
+      validate: 'validate_project',
+      health: 'project_health',
+      status: 'engine_status',
+      timeline: 'project_timeline',
+      rename: 'rename_symbol',
+      import_scip: 'import_scip',
+    },
+  },
+  {
+    name: 'lsp',
+    description:
+      '语言服务器精确解析（按需启动）：resolve_call 解析调用点的真实定义; infer_type 推断符号类型; implementations 找接口实现; references 找全部引用点。graph 查不到或需要类型级答案时用。',
+    actions: {
+      resolve_call: 'resolve_call',
+      infer_type: 'infer_type',
+      implementations: 'find_implementations',
+      references: 'find_references',
+    },
+  },
 ];
 
 function buildDomainTool(registry: ToolRegistry, spec: DomainSpec): Tool | null {

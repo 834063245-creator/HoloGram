@@ -75,6 +75,7 @@ export interface BuilderDeps {
 interface McpSchema {
   name: string;
   description: string;
+  readOnly?: boolean;
   inputSchema: {
     type: string;
     properties: Record<string, { type: string; description: string }>;
@@ -101,7 +102,10 @@ export function mcpSchemaToTool(schema: McpSchema, exec: ToolExecutor): Tool {
       properties: schema.inputSchema.properties,
       required,
     }),
-    readOnly: () => !['analyze_project', 'validate_project', 'rename_symbol'].includes(schema.name),
+    readOnly: () =>
+      // 优先用引擎 schema 的 readOnly 标志（领域收敛后 plan 门禁按动作判定，
+      // import_scip 等写工具不能再靠硬编码名单漏判）
+      schema.readOnly ?? !['analyze_project', 'validate_project', 'rename_symbol'].includes(schema.name),
     execute: (args: Record<string, unknown>) => exec(schema.name, args),
   };
 }
@@ -196,13 +200,14 @@ export function buildSystemPrompt(
 14. **工具调用一律用领域工具名**（fs/shell/git/search/web/agent/task/memory/ask_user/Skill/wait/plan/browser）。历史会话里出现的旧名（run_shell/write_file/read_file_content/edit_file/search_content/git_* 等）不要再用。
 
 ## 改代码前先问图（依赖图纪律，最高优先级工作流）
-项目已建好依赖图（27 语言 AST + 符号级引用边）。**图是给你用的，不是装饰品**——grep 只能看到文本，图能看到结构。规则：
-1. **定位符号/找调用关系**：先 search_symbols / explore_deps / get_neighbors，不要默认用 grep 猜。grep 找不到的别名绑定、跨文件引用，图里有。
-2. **改任何文件之前**：必须 preflight_check（传入要改的文件清单）或 trace_impact。拿到影响面再动手；fan-in 高的核心文件尤其必须先查再改。
-3. **判断架构问题**（耦合、循环依赖、模块归属）：coupling_report / detect_cycles / get_community / cluster_report，不要靠读文件自己猜全局结构。
-4. **改完复核**：改动落盘后如果涉及多处依赖，再跑一次 trace_impact 确认影响面收敛。
-5. **图答案带 staleness 横幅时**（⚠️ 开头）：说明图数据落后于当前文件状态——小改直接读文件确认，大改先 analyze_project 刷新。
+项目已建好依赖图（27 语言 AST + 符号级引用边），全部收敛在 graph 领域工具里。**图是给你用的，不是装饰品**——grep 只能看到文本，图能看到结构。规则：
+1. **定位符号/找调用关系**：先 graph(symbols) / graph(explore) / graph(neighbors)，不要默认用 grep 猜。grep 找不到的别名绑定、跨文件引用，图里有。
+2. **改任何文件之前**：必须 graph(preflight)（action 传 path 数组：要改的文件清单）或 graph(impact)。拿到影响面再动手；fan-in 高的核心文件尤其必须先查再改。
+3. **判断架构问题**（耦合、循环依赖、模块归属）：graph(coupling) / graph(cycles) / graph(community) / graph(clusters)，不要靠读文件自己猜全局结构。
+4. **改完复核**：改动落盘后如果涉及多处依赖，再跑一次 graph(impact) 确认影响面收敛。
+5. **图答案带 staleness 横幅时**（⚠️ 开头）：说明图数据落后于当前文件状态——小改直接读文件确认，大改先 ops(analyze) 刷新。
 6. **图查不到再退回文本**：图是优先手段，不是唯一手段。查不到时用 search/grep 兜底，但默认第一反应是先问图。
+7. **需要类型级/编译器级答案时**用 lsp(resolve_call) / lsp(infer_type)；SCIP 索引已导入时 graph 的引用边就是编译器精度。
 
 ## 视觉自评纪律（改 UI 后必做）
 - 改完 UI 相关文件（css/tsx/html）后，**不要默认"写完了"** —— 你写的是代码，不是看到的画面。

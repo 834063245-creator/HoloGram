@@ -50,6 +50,8 @@ impl ToolSchema {
         json!({
             "name": self.name,
             "description": self.description,
+            // readOnly 供前端领域收敛判定动作级只读性（plan 门禁依赖）
+            "readOnly": self.read_only,
             "inputSchema": {
                 "type": "object",
                 "properties": properties,
