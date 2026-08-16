@@ -18,7 +18,10 @@ export interface WiringFacts {
   disposeSteps: string[];
 }
 
-export function extractWiringFromSource(source: string): WiringFacts {
+export function extractWiringFromSource(
+  source: string,
+  methodNames: string[] = ['createAgent', '_disposeAgent'],
+): WiringFacts {
   const sf = ts.createSourceFile('runtime.ts', source, ts.ScriptTarget.ES2021, true);
   const methods = new Map<string, ts.MethodDeclaration>();
   for (const stmt of sf.statements) {
@@ -29,9 +32,6 @@ export function extractWiringFromSource(source: string): WiringFacts {
       }
     }
   }
-
-  const createAgent = methods.get('createAgent');
-  const disposeAgent = methods.get('_disposeAgent');
 
   const facts: WiringFacts = { configReads: [], registerCalls: [], setterCalls: [], disposeSteps: [] };
   const seenConfig = new Set<string>();
@@ -64,8 +64,13 @@ export function extractWiringFromSource(source: string): WiringFacts {
     }
     node.forEachChild(walk);
   };
-  createAgent?.forEachChild(walk);
+  // 多方法合并提取（Phase 3：度量可指向 _assembleAgent 等指定方法集）；
+  // 缺失的方法跳过——度量对"方法不存在"不报错，由调用方断言结构。
+  for (const name of methodNames) {
+    methods.get(name)?.forEachChild(walk);
+  }
 
+  const disposeAgent = methods.get('_disposeAgent');
   if (disposeAgent?.body) {
     for (const st of disposeAgent.body.statements) {
       facts.disposeSteps.push(st.getText(sf).split('\n')[0].replace(/\s+/g, ' ').slice(0, 100));
@@ -85,6 +90,12 @@ function describeRegisterArg(arg: ts.Expression | undefined, sf: ts.SourceFile):
  *  import.meta.url 在部分 vite 转换管线里非 file scheme，故以 cwd 候选优先
  *  （vitest 的约定调用方式均以 src-ui 为 cwd），URL 解析作兜底。 */
 export function extractRuntimeWiring(): WiringFacts {
+  return extractRuntimeMethodWiring(['createAgent', '_disposeAgent']);
+}
+
+/** 读取当前 runtime.ts，按指定方法名集合提取装配事实（Phase 3 T0：
+ *  度量指向 _assembleAgent / _contextFromConfig 等收敛后的结构位点）。 */
+export function extractRuntimeMethodWiring(methodNames: string[]): WiringFacts {
   const candidates: string[] = [path.resolve(process.cwd(), 'src/agent/runtime/runtime.ts')];
   try {
     candidates.push(fileURLToPath(new URL('../../../src/agent/runtime/runtime.ts', import.meta.url)));
@@ -95,7 +106,7 @@ export function extractRuntimeWiring(): WiringFacts {
   if (!file) {
     throw new Error(`[convergence] 找不到 runtime.ts（候选: ${candidates.join(' | ')}）— 请从 src-ui 目录运行 vitest`);
   }
-  return extractWiringFromSource(readFileSync(file, 'utf8'));
+  return extractWiringFromSource(readFileSync(file, 'utf8'), methodNames);
 }
 
 /** 人类可读的 wiring 报告（create-agent.wiring.txt 快照的格式）。 */
