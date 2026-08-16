@@ -21,6 +21,7 @@ import { EventKind } from "./agent-types"
 import type { EventSink } from "./agent-types"
 import type { ToolExecutor } from "./tool"
 import { enqueueIsolationOp } from "./isolation-queue"
+import { once, type Disposer } from "./lifecycle"
 
 // 巡检间隔 — 60 秒
 const LEAK_CHECK_INTERVAL_MS = 60_000
@@ -77,6 +78,16 @@ export class AgentLifecycleManager {
       this.timer = null
     }
     this.warnedKeys.clear()
+  }
+
+  /** 启动巡检并返回所有权清理器（Phase 1 disposer 契约）。
+   *  start/stop 均已幂等，包装后 disposer 亦幂等；现有 start/stop 调用方不变，
+   *  Phase 4 由 context effect 持有。 */
+  startOwned(): Disposer {
+    this.start()
+    return once(() => {
+      this.stop()
+    })
   }
 
   // ── 内部方法 ──

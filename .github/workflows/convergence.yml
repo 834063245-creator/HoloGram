@@ -1,0 +1,36 @@
+name: convergence
+
+# Agent Core Convergence 验证门禁（docs/plans/agent-core-convergence/）。
+# 审计 F2 落地：独立 workflow，不改 ci.yml（仓库规则）。
+# 只做契约快照比对（gate.mjs check = T0 静态扫描 + specs 逐字节比对 baseline）；
+# 不带 CONVERGENCE_PHASE（审计 F4：CI 恒跑全部 specs，防收窄）；
+# record 永不上 CI。
+on:
+  pull_request:
+    paths:
+      - 'src-ui/src/agent/**'
+      - 'src-ui/tests/convergence/**'
+      - '.github/workflows/convergence.yml'
+  push:
+    branches: [feat/agent-gap-closure]
+    paths:
+      - 'src-ui/src/agent/**'
+      - 'src-ui/tests/convergence/**'
+      - '.github/workflows/convergence.yml'
+  workflow_dispatch:
+
+jobs:
+  verify-convergence:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src-ui/package-lock.json
+      - run: npm ci
+      - run: npm run verify:convergence

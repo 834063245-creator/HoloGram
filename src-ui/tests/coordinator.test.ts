@@ -237,7 +237,7 @@ describe('SubAgentPool', () => {
     const pool = new SubAgentPool(1, 60000);
     // Fill the slot
     const occupier = pool.spawn('occupier', () => new Promise<{ text: string }>(() => {}))!;
-    
+
     // Queue a second agent
     const queuedSpawn = pool.spawn('queued', () => new Promise<{ text: string }>(() => {}))!;
     const modelId = 'sub-alias-test';
@@ -249,7 +249,7 @@ describe('SubAgentPool', () => {
     // Now stop the drained agent using the model-visible alias
     const stopped = pool.stop(modelId);
     expect(stopped).toBe(true);
-    
+
     const handle = await queuedSpawn.done;
     expect(handle.status).toBe(SubAgentStatus.Stopped);
   });
@@ -305,5 +305,22 @@ describe('SubAgentPool', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(queuedRan).toBe(false);
     expect(pool.runningCount).toBe(0);
+  });
+
+  it('ownedDisposer — 停全部子 Agent、清超时 timer，幂等（Phase 4 所有权原语）', async () => {
+    const pool = new SubAgentPool();
+    const a = pool.spawn('task A', fakeRun('a', 60000));
+    const b = pool.spawn('task B', fakeRun('b', 60000));
+    expect(pool.runningCount).toBe(2);
+
+    const dispose = pool.ownedDisposer();
+    dispose();
+    dispose(); // 幂等 — 第二次 no-op
+
+    expect(pool.runningCount).toBe(0);
+    const ha = await a?.done;
+    const hb = await b?.done;
+    expect(ha?.status).toBe(SubAgentStatus.Stopped);
+    expect(hb?.status).toBe(SubAgentStatus.Stopped);
   });
 });

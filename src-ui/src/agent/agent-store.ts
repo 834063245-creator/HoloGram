@@ -8,6 +8,7 @@
 import type { Message } from '../provider/types';
 import { typedRpc } from '../rpc-contract';
 import { stripNums } from './board-persistence';
+import type { SessionEvent } from './session-log';
 
 // ── 类型 ──
 
@@ -56,6 +57,25 @@ export class AgentStore {
   /** P1-15: 会话增量文件（NDJSON，append-only）。旧 session.json 仅作一次性兼容读取。 */
   private sessionNdsPath(id: string): string {
     return `${this.baseDir}/${id}/session.ndjson`;
+  }
+
+  /** Phase 5 双写：会话事件日志（append-only NDJSON，经 log_append 原语真追加）。 */
+  private sessionLogPath(id: string): string {
+    return `${this.baseDir}/${id}/session-log.ndjson`;
+  }
+
+  /** Phase 5：追加会话事件到 session-log.ndjson。事件只增不减（reset/retract 也是事件），
+   *  与 session.ndjson（当前消息数组投影）并存；恢复仍只读后者（向后兼容），事件回放
+   *  属未来能力。best-effort — 不抛异常（与 appendMessages 同纪律）。 */
+  async appendSessionEvents(id: string, events: SessionEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    await this.ensureAgentDir(id);
+    try {
+      const block = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      await typedRpc('log_append', { path: this.sessionLogPath(id), content: block });
+    } catch (e) {
+      console.warn(`[AgentStore] ${id} 会话事件日志追加失败:`, e);
+    }
   }
 
   private indexPath(): string {

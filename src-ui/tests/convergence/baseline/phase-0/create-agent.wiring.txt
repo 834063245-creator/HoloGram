@@ -1,0 +1,25 @@
+# createAgent / _disposeAgent 装配清单（AST 静态提取）
+# 来源: src/agent/runtime/runtime.ts
+# 用途: Phase 3/4 收敛度量基线 — config.* 直读数、注册点数、setter 接线数、清理步骤数
+
+config_reads (0):
+
+register_calls (0):
+
+setter_wiring (0):
+
+dispose_cleanup_steps (14):
+  - const handle = this.agents.get(id);
+  - if (!handle) return;
+  - const sessionId = this._agentSessions.get(id) ?? 'default';
+  - const taskBoard = this._taskBoards.get(sessionId);
+  - const discoveryBoard = this._discoveryBoards.get(sessionId);
+  - this._bus.clearFlushTimer();
+  - taskBoard?.clearFlushTimer();
+  - discoveryBoard?.clearFlushTimer();
+  - void this._bus.flush();
+  - void taskBoard?.flush();
+  - void discoveryBoard?.flush();
+  - handle 
+  - handle 
+  - log.info('runtime', `agent destroyed: ${id}`);

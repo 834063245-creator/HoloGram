@@ -189,3 +189,6 @@ engine-bin/
 
 # Reasonix local agent state (never commit)
 .reasonix/
+
+# Agent Core Convergence 测试 specs 是代码不是文档（上方 specs/ 为历史 markdown 文档目录而设）
+!src-ui/tests/convergence/specs/

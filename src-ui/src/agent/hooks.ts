@@ -15,6 +15,8 @@
 
 // ── Hook 接口 ──
 
+import type { Disposer } from './lifecycle';
+
 export interface Hook {
   name: string;
   shouldEnrich(toolName: string, args: Record<string, unknown>): boolean;
@@ -26,8 +28,16 @@ export interface Hook {
 export class HookRegistry {
   private hooks: Hook[] = [];
 
-  register(hook: Hook): void {
+  /** 注册 hook 并返回所有权清理器（Phase 1 disposer 契约）。幂等。 */
+  register(hook: Hook): Disposer {
     this.hooks.push(hook);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const i = this.hooks.indexOf(hook);
+      if (i >= 0) this.hooks.splice(i, 1);
+    };
   }
 
   async apply(toolName: string, args: Record<string, unknown>, result: string): Promise<string> {
@@ -61,8 +71,16 @@ export interface PreflightHook {
 export class PreflightHookRegistry {
   private hooks: PreflightHook[] = [];
 
-  register(hook: PreflightHook): void {
+  /** 注册 preflight hook 并返回所有权清理器（Phase 1 disposer 契约）。幂等。 */
+  register(hook: PreflightHook): Disposer {
     this.hooks.push(hook);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const i = this.hooks.indexOf(hook);
+      if (i >= 0) this.hooks.splice(i, 1);
+    };
   }
 
   /** 运行所有匹配的 hook 并聚合其警告（原来是首个匹配生效，

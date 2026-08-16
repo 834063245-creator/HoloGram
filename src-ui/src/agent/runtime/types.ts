@@ -132,6 +132,34 @@ export interface AgentConfig {
   discoveryBoard?: import('../discovery-board').DiscoveryBoard;
 }
 
+// ── AgentContext 入口的装配输入 ──
+//
+// 非服务的装配素材与调优参数（提示词原料 / graph 快照 / 运行参数）。
+// 服务与身份一律走 AgentContext；本类型随 Phase 6 blueprint 进一步收敛。
+
+import type { AgentContext } from '../context';
+
+/** createAgentFromContext 的非服务装配输入 — 与 AgentConfig 的对应字段同语义。 */
+export interface AgentAssemblyInputs {
+  /** 预构建 system prompt（缺省由 runtime 按 ctx + graphData 构建） */
+  systemPrompt?: string;
+  /** 图数据快照（null/缺省 = 无图模式；system prompt 图段落原料） */
+  graphData?: unknown;
+  /** 图上下文（hooks 用；缺省不注册图 hooks） */
+  graphContext?: GraphContext | null;
+  /** 提示注入类 hooks 总开关（false = 关闭 graph-context / preflight / state / plan 注入；
+   *  默认开启。board-tracking 等有实际副作用的 hook 不受影响） */
+  hooksEnabled?: boolean;
+  /** 子 Agent 派生函数 — 由调用者注入；装配时替换 agent_spawn 为绑定本 Agent 的版本 */
+  subAgentSpawner?: import('../tools/subagent').SubAgentSpawner;
+  temperature?: number;
+  contextWindow?: number;
+  pricing?: Pricing;
+  toolResultWindow?: number;
+  onSessionPersisted?: (sessionId: string, messages: Message[]) => void;
+  preRunHook?: (input: string) => Promise<string | null>;
+}
+
 // ── Agent 句柄 ──
 //
 // 调用者通过此接口操作 Agent — 不直接接触 Agent 类。
@@ -171,6 +199,11 @@ export interface RuntimePort {
   /** 创建一个 Agent 实例。返回的句柄拥有该 Agent 的生命周期 —
    *  调用者负责在生命周期结束时 handle.dispose()。 */
   createAgent(config: AgentConfig): Promise<AgentHandle>;
+  /** 从 AgentContext 创建 Agent — Phase 3 收敛入口（agent-core-convergence）。
+   *  身份与服务来自 ctx；缺失的会话级基础设施（board proxies / planState /
+   *  execState）由 runtime 物化并写回 ctx。与 AgentConfig 入口的等价性由
+   *  convergence specs/phase-3 差分钉住。 */
+  createAgentFromContext(ctx: AgentContext, inputs?: AgentAssemblyInputs): Promise<AgentHandle>;
   /** 获取 Agent */
   getAgent(agentId: string): AgentHandle | null;
   /** 销毁所有 Agent — 编排者（Workspace）整体停用时调用。

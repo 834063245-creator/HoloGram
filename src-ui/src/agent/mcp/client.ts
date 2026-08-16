@@ -17,6 +17,7 @@ import {
   type McpTransport,
   type ProcIO,
 } from './transport';
+import { once, type Disposer } from '../lifecycle';
 
 /** 远端工具 schema（MCP tools/list 项）。 */
 export interface McpToolSchema {
@@ -218,6 +219,12 @@ export class McpClient {
     }
     this.pending.clear();
     await this.transport.close();
+  }
+
+  /** 所有权清理器：断开连接（Phase 1 disposer 契约）。幂等——disconnect 未连接时 no-op，
+   *  Phase 4 由 context effect 持有；现有 disconnect 调用方不变。 */
+  ownedDisposer(): Disposer {
+    return once(() => this.disconnect());
   }
 
   /** 远端工具列表（raw names）。 */

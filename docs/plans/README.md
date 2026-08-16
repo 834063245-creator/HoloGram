@@ -10,7 +10,7 @@
 | [`arch-action-plan.md`](arch-action-plan.md) | 批 1/2 完成；批 3 的 13/12/11a/11b 完成，14 部分完成，11c 搁置 | 11c 与 agent 区 any 清理 |
 | [`shell-stability-bundled-bash-plan.md`](shell-stability-bundled-bash-plan.md) | P0–P5 已落地 | Windows 真机验证（cfg(windows) 路径） |
 | [`browser-cdp-suite-review-round2.md`](browser-cdp-suite-review-round2.md) | 第一至第五批已提交 | Windows 真机 E2E-1/2/3/4/5 |
-| [`agent-core-convergence/`](agent-core-convergence/) | Proposed | 人类评审后执行 |
+| [`agent-core-convergence/`](agent-core-convergence/) | Phase 0–5 + V0–V5 完成（四原语全落地：Context / Effect 所有权 / 类型化事件 / 事件溯源日志；baseline 8 快照，phase-5 新增待用户过目） | Phase 6 可选（检查点结论：无装配痛点则不开工；交接文档 handoff-phase6） |
 | [`v4-pro-minimal-ab-test-plan.md`](v4-pro-minimal-ab-test-plan.md) | Draft | Linux 环境执行 |
 
 ## 已归档计划

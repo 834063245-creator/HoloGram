@@ -1,0 +1,306 @@
+{
+  "count": 11,
+  "traces": [
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "nope_tool"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "nope_tool"
+        }
+      ],
+      "label": "未知工具",
+      "results": [
+        {
+          "err": "unknown tool \"nope_tool\"",
+          "id": "c1",
+          "name": "nope_tool",
+          "output": "error: unknown tool \"nope_tool\"",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "edit_file"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "edit_file"
+        }
+      ],
+      "label": "隐藏旧名重定向",
+      "results": [
+        {
+          "err": null,
+          "id": "c1",
+          "name": "edit_file",
+          "output": "[已淘汰] edit_file 已并入 fs(edit)，请直接调用 fs(edit)。不要再使用旧工具名。",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "graph_summary"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "graph_summary"
+        }
+      ],
+      "label": "非法JSON参数",
+      "results": [
+        {
+          "err": "invalid JSON arguments",
+          "id": "c1",
+          "name": "graph_summary",
+          "output": "error: invalid JSON arguments: {invalid",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "fs"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "fs"
+        }
+      ],
+      "label": "planGate拦截",
+      "results": [
+        {
+          "err": null,
+          "id": "c1",
+          "name": "fs",
+          "output": "[已拦截] 规划模式下 fs 仅允许只读动作: read, list。把修改方案写入计划文件（/proj/.hologram/plans/plan-<id>.md），或退出规划模式后再执行。",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "edit_file"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "edit_file"
+        }
+      ],
+      "label": "preflight HIGH 拦截",
+      "results": [
+        {
+          "err": null,
+          "id": "c1",
+          "name": "edit_file",
+          "output": "⚠️ fixture 警告 风险等级: HIGH — 合成高风险\n\n🚫 架构门禁已阻止此操作。\n使用 trace_impact 查看完整波及范围。\n确认安全后，带 _forceGate: true 重试同一工具调用。",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "edit_file"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "edit_file"
+        }
+      ],
+      "label": "preflight HIGH 带 _forceGate 放行并前置警告",
+      "results": [
+        {
+          "err": null,
+          "id": "c1",
+          "name": "edit_file",
+          "output": "⚠️ fixture 警告 风险等级: HIGH — 合成高风险\n\n────────────────────────────────────────\n\nedited",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "search_content"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "search_content"
+        }
+      ],
+      "label": "post hook 富化",
+      "results": [
+        {
+          "err": null,
+          "id": "c1",
+          "name": "search_content",
+          "output": "raw-result\n[ENRICHED]",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "search_content"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "search_content"
+        }
+      ],
+      "label": "post hook 抛错静默降级",
+      "results": [
+        {
+          "err": null,
+          "id": "c1",
+          "name": "search_content",
+          "output": "raw-result",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "boom_tool"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "boom_tool"
+        }
+      ],
+      "label": "工具执行错误",
+      "results": [
+        {
+          "err": "boom",
+          "id": "c1",
+          "name": "boom_tool",
+          "output": "error: boom",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "slow_tool"
+        },
+        {
+          "chunk": "chunk-1",
+          "kind": "tool_progress",
+          "name": "slow_tool"
+        },
+        {
+          "chunk": "chunk-2",
+          "kind": "tool_progress",
+          "name": "slow_tool"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "slow_tool"
+        }
+      ],
+      "label": "进度事件",
+      "results": [
+        {
+          "err": null,
+          "id": "c1",
+          "name": "slow_tool",
+          "output": "done",
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "graph_summary"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_dispatch",
+          "name": "slow_tool"
+        },
+        {
+          "chunk": "chunk-1",
+          "kind": "tool_progress",
+          "name": "slow_tool"
+        },
+        {
+          "chunk": "chunk-2",
+          "kind": "tool_progress",
+          "name": "slow_tool"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "graph_summary"
+        },
+        {
+          "chunk": null,
+          "kind": "tool_result",
+          "name": "slow_tool"
+        }
+      ],
+      "label": "并行只读双工具事件顺序",
+      "results": [
+        {
+          "err": null,
+          "id": "c1",
+          "name": "graph_summary",
+          "output": "ok",
+          "truncated": false
+        },
+        {
+          "err": null,
+          "id": "c2",
+          "name": "slow_tool",
+          "output": "done",
+          "truncated": false
+        }
+      ]
+    }
+  ]
+}
