@@ -213,7 +213,6 @@ pub fn status() -> SandboxStatus {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ShellInterpreter {
     Auto,
-    Bash,
     Pwsh,
 }
 

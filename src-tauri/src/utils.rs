@@ -441,7 +441,7 @@ pub(crate) fn fuzzy_find(content: &str, query: &str) -> Option<(usize, String)> 
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn merge_path_entries(existing: &[String], extras: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let mut push = |p: &str, out: &mut Vec<String>| {
+    let push = |p: &str, out: &mut Vec<String>| {
         let p = p.trim().trim_matches('"');
         if p.is_empty() {
             return;

@@ -304,7 +304,7 @@ fn decode_body(bytes: &[u8], charset: Option<&str>) -> String {
 }
 
 /// 从 reader 按字节 cap 读取：读 cap+1 字节以区分「恰好到 cap」与「真截断」。
-fn read_capped<R: std::io::Read>(mut reader: R, cap: usize) -> std::io::Result<(Vec<u8>, bool)> {
+fn read_capped<R: std::io::Read>(reader: R, cap: usize) -> std::io::Result<(Vec<u8>, bool)> {
     use std::io::Read as _;
     let mut buf = Vec::new();
     reader.take((cap as u64) + 1).read_to_end(&mut buf)?;

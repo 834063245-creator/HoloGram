@@ -6,7 +6,6 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
-use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -1720,6 +1719,9 @@ pub(crate) async fn cdp_wait(
 pub(super) const SENSITIVE_CLICK_RE_SOURCE: &str = r"(确认|提交|支付|转账|购买|删除|注销|退订|清空|\b(pay(?:\s+now)?|payment|purchase|buy(?:\s+now)?|delete|confirm|unsubscribe|sign\s*out|log\s*out|transfer|checkout|clear|submit)\b)";
 
 /// 纯函数版高危文本判定（单测锁定英文词覆盖）。页面内 JS 用同一正则源。
+#[cfg(test)]
+use std::sync::LazyLock;
+
 #[cfg(test)]
 pub(super) fn is_sensitive_click_text(text: &str) -> bool {
     static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
