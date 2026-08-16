@@ -1085,6 +1085,19 @@ mod tests {
             })
             .unwrap();
 
+        // 新鲜度治理：导入后记录漂移基，scip_staleness 可读
+        assert_eq!(
+            engine.scip_staleness(),
+            Some((0, 0)),
+            "导入时漂移基应落库（当前 0 = 尚无增量）"
+        );
+        engine.record_incremental_success();
+        assert_eq!(
+            engine.scip_staleness(),
+            Some((1, 0)),
+            "导入后发生增量 → SCIP 边应标记过期（漂移 1 > 基 0）"
+        );
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

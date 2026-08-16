@@ -300,6 +300,9 @@ impl Engine {
     ) -> Result<crate::scip_bridge::ScipImportStats, String> {
         let index = crate::scip_bridge::parse_index_file(path)?;
         let root = self.project_root();
+        // 先取漂移基再拿 store 锁 —— 锁内不可调 incremental_since_full()
+        //（std Mutex 不可重入，曾在此死锁）。
+        let drift_base = self.incremental_since_full();
         let mut store_guard = self
             .store
             .lock()
@@ -315,6 +318,12 @@ impl Engine {
             idx.to_sqlite(&store.db)?;
             s
         };
+        // 新鲜度治理：记录导入时的增量漂移基。此后的任何增量更新
+        // 都发生在静态索引生成之后 → SCIP 边可能过期（scip_staleness()）。
+        store.db.set_meta("scip_imported", "1")?;
+        store
+            .db
+            .set_meta("scip_import_drift_base", &drift_base.to_string())?;
         Ok(stats)
     }
 
@@ -335,6 +344,72 @@ impl Engine {
             ),
             Err(e) => warn!("[engine] auto-import index.scip failed: {}", e),
         }
+    }
+
+    /// SCIP 边过期状态：(当前增量漂移, SCIP 导入时的漂移基)。
+    /// None = 尚未导入 SCIP。任何导入后的增量更新都发生在静态索引
+    /// 生成之后 —— 漂移差 > 0 即 SCIP 边可能过期（不静默冒充新鲜）。
+    /// 两个 meta 值在同一把 store 锁内读取 —— 不可锁内调
+    /// incremental_since_full()（std Mutex 不可重入，曾在此死锁）。
+    pub fn scip_staleness(&self) -> Option<(u64, u64)> {
+        let store_guard = self.store.lock().ok()?;
+        let store = store_guard.as_ref()?;
+        let base = store
+            .db
+            .get_meta("scip_import_drift_base")
+            .ok()
+            .flatten()?
+            .parse::<u64>()
+            .ok()?;
+        let drift = store
+            .db
+            .get_meta("incr_since_full")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        Some((drift, base))
+    }
+
+    /// 增量漂移重算阈值：默认 10 次增量后自动全量重分析，
+    /// 可用 HOLOGRAM_INCR_FULL_REANALYZE 覆盖，0 = 禁用。
+    pub fn full_reanalyze_threshold() -> u64 {
+        std::env::var("HOLOGRAM_INCR_FULL_REANALYZE")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(10)
+    }
+
+    /// 漂移达标且没有正在进行的分析 → 应触发全量重分析。
+    /// 纯判定逻辑，便于单测。
+    pub(crate) fn should_full_reanalyze(drift: u64, threshold: u64, analyzing: bool) -> bool {
+        threshold > 0 && drift >= threshold && !analyzing
+    }
+
+    /// 漂移达标 → 触发全量重分析，整体刷新社区/合成边/框架路由等
+    /// 派生结果。analyze_lock 串行化、状态机防重入，与回退路径一致。
+    fn maybe_full_reanalyze(engine: &super::Engine, root: &Path) {
+        let threshold = Engine::full_reanalyze_threshold();
+        if threshold == 0 {
+            return;
+        }
+        let drift = engine.incremental_since_full();
+        let analyzing = matches!(engine.state(), super::EngineState::Analyzing { .. });
+        if !Self::should_full_reanalyze(drift, threshold, analyzing) {
+            return;
+        }
+        info!(
+            "[engine watcher] drift {} >= threshold {}, triggering full re-analysis to refresh derived results",
+            drift, threshold
+        );
+        let _ = super::engine_record_timeline_with_props(
+            "drift_full_reanalyze",
+            None,
+            &format!("增量漂移 {} 达阈值 {}，自动全量重分析", drift, threshold),
+            &serde_json::json!({"drift": drift, "threshold": threshold}),
+        );
+        // 与增量失败回退同一路径：同步全量重分析（成功后漂移归零）。
+        let _ = super::engine_analyze(root);
     }
 
     /// 处理来自 watcher 的文件变更。先尝试增量更新，
@@ -457,6 +532,9 @@ impl Engine {
                         engine.clear_pending_files();
                         // 漂移计数 +1：社区/聚类等派生结果自此标记为近似（P1-4）。
                         engine.record_incremental_success();
+                        // 漂移阈值：增量次数达标 → 自动全量重分析，
+                        // 社区/合成边/框架路由等派生结果整体刷新（P1-4 重算臂）。
+                        Self::maybe_full_reanalyze(engine, root);
                     }
                 }
                 return Ok(());
@@ -517,5 +595,23 @@ impl Engine {
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_full_reanalyze_threshold_logic() {
+        // 阈值 0 = 禁用
+        assert!(!Engine::should_full_reanalyze(99, 0, false));
+        // 未达标不触发
+        assert!(!Engine::should_full_reanalyze(9, 10, false));
+        // 达标且空闲 → 触发
+        assert!(Engine::should_full_reanalyze(10, 10, false));
+        assert!(Engine::should_full_reanalyze(25, 10, false));
+        // 达标但正在分析 → 不重入
+        assert!(!Engine::should_full_reanalyze(10, 10, true));
     }
 }

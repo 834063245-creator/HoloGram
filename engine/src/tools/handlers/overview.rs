@@ -12,7 +12,19 @@ use crate::tools::derive_comm_label;
 use crate::tools::ToolResponse;
 
 pub(crate) fn handler_graph_summary(_args: &Value) -> ToolResponse {
-    ToolResponse::Success(with_store(graph_summary_from_index))
+    let mut v = with_store(graph_summary_from_index);
+    // SCIP 边过期状态注入 summary（结构化、机器可读；P1-1 新鲜度治理）
+    if let Some((drift, base)) = engine::with_engine(|eng| eng.scip_staleness()).flatten() {
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("scip_staleness".into(), json!({
+                "scip_imported": true,
+                "drift_since_import": drift.saturating_sub(base),
+                "stale": drift > base,
+                "_note": "SCIP 边来自静态索引，不随增量刷新；stale=true 时请重新生成 index.scip 并 import_scip"
+            }));
+        }
+    }
+    ToolResponse::Success(v)
 }
 
 pub(crate) fn handler_clusters(args: &Value) -> ToolResponse {

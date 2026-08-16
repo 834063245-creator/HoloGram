@@ -450,12 +450,16 @@ impl McpServer {
         let mut result = crate::tools::ToolRegistry::dispatch(tool_name, &args, id);
 
         // 注入过期横幅提示（存在待处理的文件变更时），
-        // 以及增量漂移近似性横幅（社区/聚类结果，P1-4）。
+        // 以及增量漂移近似性横幅（社区/聚类结果，P1-4），
+        // 以及 SCIP 边过期横幅（P1-1 新鲜度治理）。
         let mut banners: Vec<String> = Vec::new();
         if let Some(banner) = crate::tools::staleness::check_staleness(&result) {
             banners.push(banner);
         }
         if let Some(banner) = crate::tools::staleness::check_derived_staleness(tool_name) {
+            banners.push(banner);
+        }
+        if let Some(banner) = crate::tools::staleness::check_scip_staleness(tool_name) {
             banners.push(banner);
         }
         if !banners.is_empty() {

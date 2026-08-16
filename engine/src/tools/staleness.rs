@@ -39,6 +39,48 @@ pub(crate) fn derived_banner_for(tool_name: &str, drift: u64) -> Option<String> 
     ))
 }
 
+/// SCIP 边过期横幅（P1-1/P1-4 新鲜度治理）：SCIP 边来自静态索引，
+/// 导入后任何增量更新都让它可能过期 —— 相关工具结果带提示，
+/// 不静默冒充新鲜。drift <= base → None（未过期）；非图导航工具不打扰。
+pub fn check_scip_staleness(tool_name: &str) -> Option<String> {
+    let (drift, base) = engine::with_engine(|eng| eng.scip_staleness()).flatten()?;
+    scip_banner_for(tool_name, drift, base)
+}
+
+/// 纯函数版本（可单测）。
+pub(crate) fn scip_banner_for(tool_name: &str, drift: u64, base: u64) -> Option<String> {
+    if drift <= base {
+        return None;
+    }
+    let scoped = matches!(
+        tool_name,
+        "search_symbols"
+            | "get_neighbors"
+            | "inspect_symbol"
+            | "trace_impact"
+            | "coupling_report"
+            | "trace_dataflow"
+            | "graph_summary"
+            | "find_references"
+            | "find_unused"
+            | "preflight_check"
+            | "detect_cycles"
+            | "fragile_modules"
+            | "explore_deps"
+            | "find_dep_path"
+            | "async_edges"
+    );
+    if !scoped {
+        return None;
+    }
+    Some(format!(
+        "⚠️ SCIP 桥接边可能过期：导入后经历了 {} 次增量更新（导入时漂移基 {}）。\
+         SCIP 边来自静态索引，不随增量刷新 —— 如需精确，请重新生成 index.scip 并运行 import_scip。",
+        drift.saturating_sub(base),
+        base
+    ))
+}
+
 /// 检查结果是否引用了待同步文件，并渲染警告横幅。
 pub fn check_staleness(result: &Value) -> Option<String> {
     let pending = engine::with_engine(|eng| eng.get_pending_files()).unwrap_or_default();
@@ -139,5 +181,19 @@ mod tests {
         assert!(derived_banner_for("coupling_report", 3).is_none());
         assert!(derived_banner_for("get_neighbors", 3).is_none());
         assert!(derived_banner_for("graph_summary", 3).is_none());
+    }
+
+    #[test]
+    fn test_scip_banner_stale_only_after_import_drift() {
+        // 未过期（drift == base）→ 不提示
+        assert!(scip_banner_for("get_neighbors", 5, 5).is_none());
+        assert!(scip_banner_for("get_neighbors", 3, 5).is_none());
+        // 导入后发生增量 → 图导航工具带提示
+        let b = scip_banner_for("get_neighbors", 7, 5).expect("stale scip must warn");
+        assert!(b.contains("2"), "banner 应写清漂移差: {}", b);
+        assert!(b.contains("import_scip"), "banner 应指向重导入路径: {}", b);
+        // 非图导航工具不打扰
+        assert!(scip_banner_for("analyze_project", 7, 5).is_none());
+        assert!(scip_banner_for("engine_status", 7, 5).is_none());
     }
 }

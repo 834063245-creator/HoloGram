@@ -53,5 +53,6 @@ T2 行为：tree-sitter 解析照旧 + `lsp_resolved` 按需回写（P1-2）+ �
   - 已知 kind 映射差异：scip-typescript 把 import 语句的引用标为 Reference 角色（→usage 边挂文档节点），不以 Imports 出现——信息在场，kind 不同；gold 按 kind 计数故 SCIP 侧 imports 记 0/5。
   - 顺带修复：`MemoryIndex::rebuild_csr` 旧边复制守卫在节点增删后失效导致旧 CSR 边整批丢失（SCIP 导入首个踩中）——已按句柄对重新入桶，tree-sitter 边与 SCIP 边共存。
   - 对比流程已固化：`scripts/bench_scip_bridge.py --fixture engine/fixtures/gap_probe_ts --gold …`（scip-typescript index → analyze 基线 → import → 分管道 recall/负数边检查，自动选较新的引擎二进制）。
+- ✅ SCIP 边 stale 治理（2026-08-15）：导入时落 `scip_import_drift_base`（meta，漂移基）；任何导入后的增量更新 → `graph_summary.scip_staleness` 结构化字段 + 图导航工具 `_stalenessBanner` 提示重生成 index.scip。
+- ✅ 增量漂移重算臂（P1-4 补全）：漂移达阈值（默认 10 次增量，`HOLOGRAM_INCR_FULL_REANALYZE` 可调，0 禁用）自动触发全量重分析，社区/合成边/框架路由整体刷新、漂移归零。
 - ⬜ 精度对比基准扩围（§3 第 1–2 步：引用边真值集 + CI 对比）——P1-1 的收尾工程。
-- ⬜ SCIP 边 stale 治理（挂 P1-4 漂移计数）。

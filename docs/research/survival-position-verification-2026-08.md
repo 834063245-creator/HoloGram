@@ -72,7 +72,7 @@ P0 落地后，文件级依赖图在 TS 上与 dependency-cruiser 打平、Pytho
 | P1-1 | 🟡 桥接已通 + 首份精度对比，分档基准扩围未做 | SCIP 桥接落地：官方 protobuf 绑定解析 index.scip → 定义节点（file:line 复用）+ 精确引用边（provenance=scip）+ 外部符号 `ext:` 节点 + 文档级 File 节点；`import_scip` 工具 + 分析后自动桥接；真实 scip-typescript 实测 gap_probe_ts：合并后 gold recall **11/11、0 误报、0 负数边**，SCIP +24 条编译器级 usage 边且 usage gold 2/2。分档决策见 `scip-bridge-tiering-decision-2026-08.md`。**剩余 = 引用边真值集扩围 + CI 精度对比** |
 | P1-2 | ✅ 已落地 | `lsp_resolved` 变活字段：resolve_call 的 LSP 解析命中回写图——图中已存在的 calls 边标记 `lsp_resolved=true`（内存覆盖层 + SQLite 单边 UPDATE + 快照持久化，重启保留）；`graph_summary.lsp_resolution` 报占比（calls 边总数 / lsp_resolved 数 / 占比），边输出带 `lsp_resolved` 逐边可追溯；只标记真实存在的边，不凭空造边 |
 | P1-3 | 🟡 基准已落地，CI 门禁未接 | `scripts/bench_resolution.py --all` 三 fixture p0 100% / p03 100% / precision 100%；尚未接入 CI |
-| P1-4 | ✅ 已落地 | `cross_file`/`metadata` 已贯通 CSR→SQLite→快照→增量并落库可读回（imports 边 100% 落库）；增量后耦合深度全量重算，社区结果带 stale 标注——漂移计数持久化 meta 键 `incr_since_full`（重启保留），`get_community`/`cluster_report` 结果带 `staleness` 结构化标记 + MCP `_stalenessBanner`，全量重分析后归零 |
+| P1-4 | ✅ 已落地 | `cross_file`/`metadata` 已贯通 CSR→SQLite→快照→增量并落库可读回（imports 边 100% 落库）；增量后耦合深度全量重算，社区结果带 stale 标注——漂移计数持久化 meta 键 `incr_since_full`（重启保留），`get_community`/`cluster_report` 结果带 `staleness` 结构化标记 + MCP `_stalenessBanner`，全量重分析后归零；**重算臂**：漂移达阈值（默认 10 次增量）自动全量重分析刷新派生结果；SCIP 边过期检测（`scip_import_drift_base` + `graph_summary.scip_staleness` + 横幅） |
 
 ---
 
