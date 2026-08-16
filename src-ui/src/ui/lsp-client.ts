@@ -19,6 +19,7 @@ let completionProviders: IDisposable[] = [];
 let hoverProviders: IDisposable[] = [];
 let definitionProviders: IDisposable[] = [];
 let referenceProviders: IDisposable[] = [];
+let unlistenDiagnostics: (() => void) | null = null; // 诊断监听器 — 重复注册先注销（H1 幂等化）
 
 // ── 诊断缓存 — 由 LSP 推送填充，供 agent 状态钩子查询 ──
 
@@ -35,16 +36,24 @@ export interface LspDiagnostic {
 
 const diagnosticsCache = new Map<string, LspDiagnostic[]>();
 
+/** 将 URI 或文件路径归一到全路径形式（去掉 file:// 前缀 + 统一斜杠）用于精确比较。 */
+function normalizeDiagnosticPath(p: string): string {
+  return p
+    .replace(/^file:\/\//i, '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+}
+
 /** 获取文件的缓存 LSP 诊断（URI 或文件路径）。 */
 export function getDiagnosticsForFile(fileUriOrPath: string): LspDiagnostic[] {
-  // 先尝试精确匹配，再归一化
+  // 先尝试精确匹配，再全路径归一比较。不做 basename 尾匹配 ——
+  // 同名不同目录文件会跨项目串味（landmine-map H1）。
   if (diagnosticsCache.has(fileUriOrPath)) {
     return diagnosticsCache.get(fileUriOrPath)!;
   }
-  const normalized = fileUriOrPath.replace(/\\/g, '/');
+  const normalized = normalizeDiagnosticPath(fileUriOrPath);
   for (const [key, val] of diagnosticsCache) {
-    const keyNorm = key.replace(/\\/g, '/');
-    if (keyNorm === normalized || keyNorm.endsWith('/' + normalized.split('/').pop()!)) {
+    if (normalizeDiagnosticPath(key) === normalized) {
       return val;
     }
   }
@@ -225,6 +234,9 @@ export async function stopAllLsp(): Promise<void> {
     await typedRpc('lsp_stop', { session_id: sid }).catch(() => {});
   }
   lspSessions.clear();
+  // 切换工作区后旧项目的诊断缓存/静默提示不得带入新项目（landmine-map H1）
+  diagnosticsCache.clear();
+  lspWarned.clear();
 }
 
 /** 注册由 LSP 支持的 Monaco 补全 provider（同步响应）。 */
@@ -420,57 +432,66 @@ export function listenForDiagnostics(
   _monacoEditor: editor.IStandaloneCodeEditor,
   monaco: typeof import('monaco-editor'),
 ): void {
-  listen<{ session_id: number; message: { method?: string; params?: { uri: string; diagnostics: LspDiagnosticPayload[] } } }>(
-    'lsp-message',
-    (event) => {
-      const msg = event.payload.message;
-      if (msg?.method !== 'textDocument/publishDiagnostics') return;
-      const params = msg.params;
-      if (!params?.uri || !params?.diagnostics) return;
+  // 幂等化：编辑器随面板重建会重复调用本函数，重复注册会让监听器叠加（H1）。
+  // 重新注册前先注销旧监听器。
+  unlistenDiagnostics?.();
+  unlistenDiagnostics = null;
+  void listen<{
+    session_id: number;
+    message: { method?: string; params?: { uri: string; diagnostics: LspDiagnosticPayload[] } };
+  }>('lsp-message', (event) => {
+    const msg = event.payload.message;
+    if (msg?.method !== 'textDocument/publishDiagnostics') return;
+    const params = msg.params;
+    if (!params?.uri || !params?.diagnostics) return;
 
-      const markers: editor.IMarkerData[] = params.diagnostics.map((d) => ({
-        severity:
-          d.severity === 1
-            ? monaco.MarkerSeverity.Error
-            : d.severity === 2
-              ? monaco.MarkerSeverity.Warning
-              : d.severity === 3
-                ? monaco.MarkerSeverity.Info
-                : monaco.MarkerSeverity.Hint,
+    const markers: editor.IMarkerData[] = params.diagnostics.map((d) => ({
+      severity:
+        d.severity === 1
+          ? monaco.MarkerSeverity.Error
+          : d.severity === 2
+            ? monaco.MarkerSeverity.Warning
+            : d.severity === 3
+              ? monaco.MarkerSeverity.Info
+              : monaco.MarkerSeverity.Hint,
+      message: d.message,
+      startLineNumber: (d.range.start.line || 0) + 1,
+      startColumn: (d.range.start.character || 0) + 1,
+      endLineNumber: (d.range.end.line || 0) + 1,
+      endColumn: (d.range.end.character || 0) + 1,
+    }));
+
+    // 填充诊断缓存供 agent 状态钩子使用（发后即忘）
+    diagnosticsCache.set(
+      params.uri,
+      params.diagnostics.map((d) => ({
+        severity: (d.severity === 1
+          ? 'error'
+          : d.severity === 2
+            ? 'warning'
+            : d.severity === 3
+              ? 'info'
+              : 'hint') as LspDiagnostic['severity'],
         message: d.message,
-        startLineNumber: (d.range.start.line || 0) + 1,
-        startColumn: (d.range.start.character || 0) + 1,
-        endLineNumber: (d.range.end.line || 0) + 1,
-        endColumn: (d.range.end.character || 0) + 1,
-      }));
+        startLine: d.range.start.line || 0,
+        startColumn: d.range.start.character || 0,
+        endLine: d.range.end.line || 0,
+        endColumn: d.range.end.character || 0,
+        source: d.source,
+        code: d.code,
+      })),
+    );
 
-      // 填充诊断缓存供 agent 状态钩子使用（发后即忘）
-      diagnosticsCache.set(
-        params.uri,
-        params.diagnostics.map((d) => ({
-          severity: (d.severity === 1
-            ? 'error'
-            : d.severity === 2
-              ? 'warning'
-              : d.severity === 3
-                ? 'info'
-                : 'hint') as LspDiagnostic['severity'],
-          message: d.message,
-          startLine: d.range.start.line || 0,
-          startColumn: d.range.start.character || 0,
-          endLine: d.range.end.line || 0,
-          endColumn: d.range.end.character || 0,
-          source: d.source,
-          code: d.code,
-        })),
-      );
-
-      const uri = monaco.Uri.parse(params.uri);
-      const model = monaco.editor.getModel(uri);
-      if (model) {
-        monaco.editor.setModelMarkers(model, 'lsp', markers);
-      }
-    }).catch(() => {});
+    const uri = monaco.Uri.parse(params.uri);
+    const model = monaco.editor.getModel(uri);
+    if (model) {
+      monaco.editor.setModelMarkers(model, 'lsp', markers);
+    }
+  })
+    .then((unlisten) => {
+      unlistenDiagnostics = unlisten;
+    })
+    .catch(() => {});
 }
 
 /** 释放所有已注册的 provider。 */
