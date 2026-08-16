@@ -35,7 +35,6 @@ import { TaskBoard, TaskBoardProxy } from '../task-board';
 import { DiscoveryBoard, DiscoveryBoardProxy } from '../discovery-board';
 import type { SkillRegistry } from '../skills';
 import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
-import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from '../state-inject';
 import type { TaskManager } from '../task';
 import { ToolRegistry, agentInvoke } from '../tool';
 import { AgentLifecycleManager } from '../lifecycle-manager';

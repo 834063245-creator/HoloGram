@@ -266,12 +266,7 @@ export function buildGraphSnapshot(graphData: any): string {
 
 /** 触发 post-tool 图上下文注入的工具名
  *  ponytail: 'read_file' 是 alias→read_file_content，模型会吐出这个名字，必须保留 */
-export const GRAPH_ENRICH_TOOLS = [
-  'read_file_content',
-  'read_file',
-  'git_diff',
-  'run_shell',
-] as const;
+export const GRAPH_ENRICH_TOOLS = ['read_file_content', 'read_file', 'git_diff', 'run_shell'] as const;
 
 /** 触发 preflight 写前影响分析的工具名
  *  ponytail: 写操作可能注册为别名，保留原始名 */
@@ -353,9 +348,13 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
           const isBuild = /npm.install|cargo.build|pip.install|make|cmake|npx|yarn/.test(cmd);
 
           if (isTest || isBuild) {
+            // 归属标记：executor 在 execute 前往同一 args 对象注入的 _agent_id
+            // （streaming-executor.ts）。turn-start 只消费同 Agent 的构建结果，
+            // 避免 A 会话跑的结果注入 B 会话的上下文。
+            const ownerId = typeof args._agent_id === 'string' ? args._agent_id : null;
             const parsed = parseBuildOutput(cmd, result);
             if (parsed) {
-              cacheBuildResult(parsed);
+              cacheBuildResult(parsed, ownerId);
               snippet = parsed.outcome === 'pass' ? `✅ ${parsed.summary}` : `❌ ${parsed.summary}`;
               // 引擎层：失败时报告脆弱度上下文
               if (parsed.outcome === 'fail' && ctx.engine && ctx.engine.fragilityRanks.length > 0) {
@@ -367,7 +366,10 @@ export function createGraphContextHook(ctx: GraphContext): Hook {
               // 让 agent 知道命令已运行 — 只是无法解析结果
               const label = cmd.split(' ').slice(0, 2).join(' ');
               const tail = result.slice(-200).replace(/\n/g, ' ');
-              cacheBuildResult({ command: label, outcome: 'pass', summary: `完成 (输出未解析)`, ts: Date.now() });
+              cacheBuildResult(
+                { command: label, outcome: 'pass', summary: `完成 (输出未解析)`, ts: Date.now() },
+                ownerId,
+              );
               snippet = `⚠️ 完成，但无法解析输出格式。尾部: ${tail}`;
             }
           }
@@ -402,6 +404,7 @@ import {
   cacheBuildResult,
   type DiagnosticsSource,
   formatDiagnostics,
+  invalidateBlameEntry,
   refreshGitBlame,
 } from './state-inject';
 
@@ -446,6 +449,9 @@ export function createStatePreflightHook(diagSource: DiagnosticsSource): Preflig
     check(_toolName, args) {
       const filePath = String(args.filePath || args.file_path || '');
       if (!filePath) return null;
+      // 文件即将被改 — blame 缓存即刻失效，下次 pre-read 重新拉取。
+      // （edit 最终被门禁拦下也只是多一次无害的重新拉取。）
+      invalidateBlameEntry(filePath);
       return formatDiagnostics(filePath, diagSource);
     },
   };
@@ -718,14 +724,24 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
               normFp.includes(h.file.replace(/\\/g, '/').toLowerCase()),
           );
           if (fileHit.length > 0) {
-            lspParts.push(fileHit.slice(0, 3).map((h) => `${h.symbol}(${h.callers}↓)`).join(','));
+            lspParts.push(
+              fileHit
+                .slice(0, 3)
+                .map((h) => `${h.symbol}(${h.callers}↓)`)
+                .join(','),
+            );
           }
           if (eng.lspCallers.size > 0) {
             const callerEntries =
               eng.lspCallers.get(normFp) ||
               [...eng.lspCallers.entries()].find(([k]) => k.replace(/\\/g, '/').toLowerCase().includes(normFp))?.[1];
             if (callerEntries && callerEntries.length > 0) {
-              lspParts.push(callerEntries.slice(0, 3).map((c) => `${c.symbol}(${c.count}↓)`).join(','));
+              lspParts.push(
+                callerEntries
+                  .slice(0, 3)
+                  .map((c) => `${c.symbol}(${c.count}↓)`)
+                  .join(','),
+              );
             }
           }
           if (eng.semanticNeighbors.size > 0) {
@@ -735,7 +751,12 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
                 k.replace(/\\/g, '/').toLowerCase().includes(normFp),
               )?.[1];
             if (neighbors && neighbors.length > 0) {
-              lspParts.push(`邻居:${neighbors.slice(0, 5).map((n) => n.name).join(',')}`);
+              lspParts.push(
+                `邻居:${neighbors
+                  .slice(0, 5)
+                  .map((n) => n.name)
+                  .join(',')}`,
+              );
             }
           }
           if (eng.synthesisAlerts.length > 0) {
@@ -754,7 +775,7 @@ export function createGraphPreflightHook(ctx: GraphContext): PreflightHook {
         }
       }
 
-      lines.push(`│  精确影响面 → preflight_check([\"${fp.replace(/\\/g, '/')}\"])`);
+      lines.push(`│  精确影响面 → preflight_check(["${fp.replace(/\\/g, '/')}"])`);
       return lines.join('\n');
     },
   };

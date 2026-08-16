@@ -12,9 +12,11 @@
 // 所有调用都能优雅降级 — 数据不可用时不注入任何内容。
 
 import { typedRpc } from '../rpc-contract';
+import type { BuildResult, CheckStatusSummary } from './cache-store';
 import {
   getBlameCache,
   getBuildResultCache,
+  getCacheEpoch,
   getCheckCache,
   getGitCache,
   getGitCacheTs,
@@ -27,9 +29,9 @@ import {
   setGitCache,
   setTimelineCache,
 } from './cache-store';
-import type { BuildResult, CheckStatusSummary } from './cache-store';
 
 export type { BuildResult, CheckStatusSummary, GitStatusSummary, TimelineEvent } from './cache-store';
+export { invalidateBlameEntry } from './cache-store';
 
 /** LSP 诊断的结构类型 — 与 ui/lsp-client 的 LspDiagnostic 结构一致，
  *  在 agent 层本地定义以保持单向边界（诊断数据由调用方注入）。 */
@@ -56,8 +58,11 @@ export async function refreshGitStatus(projectPath: string): Promise<void> {
   const now = Date.now();
   const cached = getGitCache();
   if (cached && now - getGitCacheTs() < GIT_CACHE_MS) return;
+  const epoch = getCacheEpoch();
   try {
     const json = await typedRpc('git_status', { path: projectPath });
+    // 工作区已切换（缓存被 reset）— 旧项目的在途结果直接丢弃
+    if (getCacheEpoch() !== epoch) return;
     const raw = JSON.parse(json);
     setGitCache(
       {
@@ -85,8 +90,11 @@ export function getGitStatusCached() {
 export async function refreshGitBlame(projectPath: string, filePath: string): Promise<void> {
   if (hasBlameEntry(filePath)) return;
   if (!filePath.match(/\.(ts|tsx|js|jsx|rs|py|go|java|rb|cs|kt|swift|php|lua|css|html)$/)) return;
+  const epoch = getCacheEpoch();
   try {
     const raw = await typedRpc('git_blame', { path: projectPath, file: filePath });
+    // 工作区已切换（缓存被 reset）— 旧项目的在途结果直接丢弃
+    if (getCacheEpoch() !== epoch) return;
     const lines = raw.split('\n');
     const authors = new Set<string>();
     let latestAuthor = '';
@@ -132,15 +140,27 @@ export function getCheckStatusCached() {
 
 // ── 构建/测试结果缓存 ──
 
-/** 由 run_shell 钩子在测试/构建命令完成时调用。 */
-export function cacheBuildResult(result: ReturnType<typeof getBuildResultCache> & {}): void {
-  setBuildResultCache(result as BuildResult);
+/** 由 run_shell 钩子在测试/构建命令完成时调用。
+ *  ownerId 为产生该结果的 Agent（executor 注入的 _agent_id）。 */
+export function cacheBuildResult(result: ReturnType<typeof getBuildResultCache> & {}, ownerId?: string | null): void {
+  setBuildResultCache({ ...(result as BuildResult), ownerId: ownerId ?? null });
 }
 
-/** 格式化缓存的构建/测试结果用于 turn-start。读取时消费。 */
-export function formatBuildResult(): string | null {
+/** 构建结果的最大滞留时间 — 超时未消费视为陈旧，丢弃不注入。
+ *  （无匹配消费者的条目，如子 Agent 产生的结果，靠它兜底清理。） */
+const BUILD_RESULT_MAX_AGE_MS = 10 * 60 * 1000;
+
+/** 格式化缓存的构建/测试结果用于 turn-start。读取时消费。
+ *  consumerId 提供时只消费同属该 Agent 的条目；
+ *  属于其他 Agent 的留在槽位里等本尊，避免跨会话张冠李戴。 */
+export function formatBuildResult(consumerId?: string): string | null {
   const r = getBuildResultCache();
   if (!r) return null;
+  if (Date.now() - r.ts > BUILD_RESULT_MAX_AGE_MS) {
+    setBuildResultCache(null); // 陈旧 — 清除不注入
+    return null;
+  }
+  if (consumerId && r.ownerId && r.ownerId !== consumerId) return null; // 别的 Agent 的 — 不消费
   setBuildResultCache(null); // 消费 — 只注入一次
   const icon = r.outcome === 'pass' ? '✅' : '❌';
   return `[构建] ${icon} ${r.command}: ${r.summary}`;
@@ -155,11 +175,14 @@ export async function refreshTimeline(projectPath: string): Promise<void> {
   const now = Date.now();
   const cached = getTimelineCache();
   if (cached.length > 0 && now - getTimelineCacheTs() < TIMELINE_CACHE_MS) return;
+  const epoch = getCacheEpoch();
   try {
     const json = await typedRpc('hologram_call', {
       tool: 'project_timeline',
       args: { path: projectPath, limit: 8 },
     });
+    // 工作区已切换（缓存被 reset）— 旧项目的在途结果直接丢弃
+    if (getCacheEpoch() !== epoch) return;
     const raw = JSON.parse(json);
     setTimelineCache((raw.events || []).slice(0, 8), now);
   } catch {
@@ -261,8 +284,9 @@ export function formatBlame(filePath: string): string | null {
 
 // ── Turn-start 快照 — 用于 system-reminder 注入的完整状态块 ──
 
-/** 从所有缓存数据源构建完整的 turn-start 注入块。 */
-export function buildTurnStartBlock(): string {
+/** 从所有缓存数据源构建完整的 turn-start 注入块。
+ *  consumerId 用于 buildResult 的归属匹配（见 formatBuildResult）。 */
+export function buildTurnStartBlock(consumerId?: string): string {
   const lines: string[] = [];
   const git = formatGitStatus();
   if (git) lines.push(git);
@@ -270,7 +294,7 @@ export function buildTurnStartBlock(): string {
   if (check) lines.push(check);
   const timeline = formatTimeline();
   if (timeline) lines.push(timeline);
-  const build = formatBuildResult();
+  const build = formatBuildResult(consumerId);
   if (build) lines.push(build);
   return lines.length > 0 ? lines.join('\n') : '';
 }

@@ -15,6 +15,7 @@ import type { Agent } from './agent/agent';
 import { agentSessionState } from './agent/agent-session-state';
 import { AgentStore } from './agent/agent-store';
 import { auraShutdown } from './agent/aura-memory';
+import { resetAgentCaches } from './agent/cache-store';
 import { SubAgentPool } from './agent/coordinator';
 import { GoalManager } from './agent/goal-manager';
 import type { GraphContext } from './agent/hooks';
@@ -493,6 +494,10 @@ export class Workspace {
     useAgentPanelStore.getState().setDiscoveries([]);
     // this.agent 是借用引用 — disposeAll 已完成 saveState，这里只需断开
     this.agent = null;
+    // 清空 agent 状态注入缓存（git/blame/check/build/timeline）并推进代际 —
+    // 否则旧工作区的缓存会注入下一个工作区的 turn-start，
+    // 在途的 fire-and-forget 刷新 resolve 后也会回填旧项目数据
+    resetAgentCaches();
     try {
       await auraShutdown();
     } catch {
@@ -529,6 +534,8 @@ export class Workspace {
     this.runtime = null;
     this.agent = null;
     this.memoryManager = null;
+    // 同 deactivate() — 紧急路径也要清注入缓存，防旧工作区状态串味
+    resetAgentCaches();
     if (this.checkTimer) {
       clearTimeout(this.checkTimer);
       this.checkTimer = null;
@@ -805,10 +812,11 @@ export class Workspace {
       const agentOpts = s.agent || {};
 
       await runtime.ready();
+      // 唯一 agentId — 每会话一个 Agent 实例；'main' 硬编码会让所有会话的
+      // Agent 在 runtime.agents/_agentSessions 里互相覆盖（多会话错位根因之一）
+      const sessionAgentId = `main-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const handle = await runtime.createAgent({
-        // 唯一 agentId — 每会话一个 Agent 实例；'main' 硬编码会让所有会话的
-        // Agent 在 runtime.agents/_agentSessions 里互相覆盖（多会话错位根因之一）
-        agentId: `main-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        agentId: sessionAgentId,
         parentId: null,
         projectPath: this.path,
         graphData: this.graphData,
@@ -858,7 +866,8 @@ export class Workspace {
           (async () => {
             await refreshGitStatus(this.path);
             await refreshTimeline(this.path);
-            const block = buildTurnStartBlock();
+            // 只消费本 Agent 产生的构建结果（其他会话的留在槽位等本尊）
+            const block = buildTurnStartBlock(sessionAgentId);
             if (block)
               agentRef.current?.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`, { silent: true });
           })().catch(() => {});
