@@ -59,8 +59,8 @@ usearch = "2"
 # SCIP 桥接（P1-1）：官方 protobuf 绑定，解析 index.scip 无需 protoc
 scip = "0.9"
 protobuf = "=3.7.2"
+# ONNX Runtime 绑定（动态加载项目自带 DLL，不下载二进制）——全平台，Windows 也需要
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "api-21"] }
 # LSP 子进程 die-with-parent（PR_SET_PDEATHSIG，unix）
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-# ONNX Runtime 绑定（动态加载项目自带 DLL，不下载二进制）
-ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "api-21"] }
