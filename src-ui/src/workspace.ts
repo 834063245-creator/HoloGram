@@ -11,50 +11,49 @@
 //
 // 切换工作区是原子的：old.deactivate() → new = Workspace.open() → 赋值。
 
-import { Agent } from './agent/agent';
-import { AgentStore } from './agent/agent-store';
+import type { Agent } from './agent/agent';
 import { agentSessionState } from './agent/agent-session-state';
+import { AgentStore } from './agent/agent-store';
 import { auraShutdown } from './agent/aura-memory';
 import { SubAgentPool } from './agent/coordinator';
 import { GoalManager } from './agent/goal-manager';
 import type { GraphContext } from './agent/hooks';
 import { initLogger } from './agent/logger';
 import { MemoryManager } from './agent/memory';
+import { memoryBundleIngest } from './agent/memory-bundle-client';
+import {
+  type BuilderDeps,
+  buildGraphContextFromData,
+  buildToolRegistry,
+  extractGraphNodeNames,
+  scheduleEngineSnapshotRefresh,
+} from './agent/runtime/agent-builder';
+// ── 运行时层（替代 bootstrap.ts）──
+import { AgentRuntime } from './agent/runtime/runtime';
+import type { AgentHandle } from './agent/runtime/types';
+import { SkillRegistry } from './agent/skills';
 import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from './agent/state-inject';
 import { TaskManager } from './agent/task';
-import type { Tool } from './agent/tool';
-import { ToolRegistry } from './agent/tool';
+import type { Tool, ToolRegistry } from './agent/tool';
 import type { ChatCore } from './app/chat/chat-core';
-import { typedListen, typedRpc } from './rpc-contract';
+import { withTimeout } from './lifecycle/timeout';
 import { createProvider } from './provider';
-import { mergeDynamicModels, getModel } from './provider/catalog';
+import { getModel, mergeDynamicModels } from './provider/catalog';
 import { withThinkingDisabled } from './provider/thinking';
-import { defaultPricing, getActiveProvider, loadSettingsWithSecrets, type AppSettings } from './settings';
-import { stripLineNumbers } from './ui/chat-session';
-import { resolveSemanticToolName } from './ui/tool-semantics';
-import { useDockStore } from './ui/dock-store';
+import type { Provider } from './provider/types';
+import { typedListen, typedRpc } from './rpc-contract';
+import { type AppSettings, defaultPricing, getActiveProvider, loadSettingsWithSecrets } from './settings';
 import { useAgentPanelStore } from './ui/agent-panel-store';
-import { bus, type AgentConfigChangeReason } from './ui/events';
+import { stripLineNumbers } from './ui/chat-session';
+import { useDockStore } from './ui/dock-store';
+import { type AgentConfigChangeReason, bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
 import type { CommunityData, GraphDiffJson, GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
 import { getDiagnosticsForFile } from './ui/lsp-client';
 import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
-// ── 运行时层（替代 bootstrap.ts）──
-import { AgentRuntime } from './agent/runtime/runtime';
-import type { AgentHandle } from './agent/runtime/types';
-import {
-  buildGraphContextFromData,
-  buildToolRegistry,
-  extractGraphNodeNames,
-  scheduleEngineSnapshotRefresh,
-  type BuilderDeps,
-} from './agent/runtime/agent-builder';
-import { createRuntimeAdapter, createBuilderDeps } from './ui/runtime-adapter';
-import type { Provider } from './provider/types';
-import { memoryBundleIngest } from './agent/memory-bundle-client';
-import { SkillRegistry } from './agent/skills';
-import { withTimeout } from './lifecycle/timeout';
+import { createBuilderDeps, createRuntimeAdapter } from './ui/runtime-adapter';
+import { resolveSemanticToolName } from './ui/tool-semantics';
 
 // ═══════════════════════════════════════════════════════
 // 从引擎注册表动态加载工具
@@ -231,7 +230,7 @@ export class Workspace {
     try {
       if (opts?.skipAnalysis && opts.cachedGraph) {
         if (opts.cachedGraph.paged) {
-          // 冷启动（分页 meta）：先放空壳，立即后台逐页拉取渲染 —
+          // 冷启动（分页 meta）：先放空壳，后台逐页拉取、到齐后一次全量渲染 —
           // ensure_engine_graph 顺带完成引擎预热（等价旧 fire-and-track
           // analyze_and_load 的引擎初始化部分）。若拉页失败，工作区进入
           // 降级模式 — 可见但不阻塞。
@@ -319,8 +318,9 @@ export class Workspace {
       setTimeout(async () => {
         console.log('[Workspace.open] render starting');
         try {
-          // P0-2 分页化：完整分析路径已在 loadGraphPages 中渲染（含首页全量
-          // 布局）。此处仅在「有图但尚未渲染」（旧 cachedGraph 兼容 / 竞态）时补渲染。
+          // P0-2 分页化：完整分析路径已在 loadGraphPages 中渲染（全部页
+          // 到齐后的一次全量渲染）。此处仅在「有图但尚未渲染」（旧 cachedGraph
+          // 兼容 / 竞态）时补渲染。
           const gd = ws.graphData;
           const nc = gd && Array.isArray(gd.nodes) ? gd.nodes.length : 0;
           if (nc > 0 && !starGraph.hasGraph && gd) {
@@ -513,7 +513,11 @@ export class Workspace {
   forceClearState(): void {
     this._active = false;
     for (const unlisten of this._unlisteners) {
-      try { unlisten(); } catch { /* 忽略 */ }
+      try {
+        unlisten();
+      } catch {
+        /* 忽略 */
+      }
     }
     this._unlisteners = [];
     this.subAgentPool.stopAll();
@@ -702,7 +706,10 @@ export class Workspace {
     // 初始化 Agent 状态持久化 + goal 生命周期 + skill 注册表
     this.agentStore = new AgentStore(this.path);
     this.goalManager = new GoalManager(this.path, (r) => bus.emit('goal:state', r));
-    this.goalManager.migrateLegacy().then(() => this.goalManager?.adoptOrphans()).catch((e) => console.warn('[workspace] goal migration failed:', e));
+    this.goalManager
+      .migrateLegacy()
+      .then(() => this.goalManager?.adoptOrphans())
+      .catch((e) => console.warn('[workspace] goal migration failed:', e));
     this.skillRegistry = new SkillRegistry(this.path);
 
     await auraReady;
@@ -716,7 +723,8 @@ export class Workspace {
     const prov: Provider = this._buildProvider(settings);
     prov.prewarm?.();
     // 从 API 获取动态模型，合并到目录（尽力而为）
-    prov.fetchModels?.()
+    prov
+      .fetchModels?.()
       .then((models) => {
         if (models.length > 0) mergeDynamicModels(active.name, models);
       })
@@ -840,7 +848,10 @@ export class Workspace {
           : undefined,
         onSessionPersisted: (_sid: string, messages: Array<{ role: string; content: unknown }>) => {
           memoryBundleIngest(
-            messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+            messages.map((m) => ({
+              role: m.role,
+              content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+            })),
             'holo',
             _sid,
           ).catch(() => {});
@@ -848,12 +859,13 @@ export class Workspace {
             await refreshGitStatus(this.path);
             await refreshTimeline(this.path);
             const block = buildTurnStartBlock();
-            if (block) agentRef.current?.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`, { silent: true });
+            if (block)
+              agentRef.current?.insertMessage(`<system-reminder>\n${block}\n</system-reminder>`, { silent: true });
           })().catch(() => {});
         },
       });
 
-      const agent = ('_getAgent' in handle ? (handle as { _getAgent(): Agent })._getAgent() : null);
+      const agent = '_getAgent' in handle ? (handle as { _getAgent(): Agent })._getAgent() : null;
       if (!agent) return null;
       agentRef.current = agent;
       this.memoryManager?.prewarmAura();
@@ -943,9 +955,7 @@ export class Workspace {
   doGraphUpdate(starGraph: StarGraph, diff?: GraphDiffJson): void {
     const gd = this.graphData;
     if (!gd) return;
-    const nodeCount = Array.isArray(gd.nodes)
-      ? gd.nodes.length
-      : Object.keys(gd.nodes || {}).length;
+    const nodeCount = Array.isArray(gd.nodes) ? gd.nodes.length : Object.keys(gd.nodes || {}).length;
     // ponytail: 增量路径 — 不 clearGraph，不重置相机，仅对新节点做局部布局松弛
     if (diff && starGraph.hasGraph) {
       starGraph
@@ -1036,23 +1046,30 @@ function mergeGraphDiff(graphData: GraphJSON, diff: GraphDiffJson): void {
 // 图分页加载（P0-2 分页化 — landmine-map.md 雷 2 清账）
 // ═══════════════════════════════════════════════════════════════
 // 大仓库全量图 JSON 超 IPC 128MB 护栏，analyze_and_load 只回 meta + 分页信息，
-// 图数据经 get_graph_page 逐页拉取：首页全量渲染（布局），后续页走
-// applyGraphDiff 增量合入同一张星图（新节点落在社区质心附近 + 局部松弛）。
-// 单次 IPC 响应远小于护栏；页与页之间节点按 id 去重，图变更导致的分页
-// 漂移被自然吸收（与 graph-updated 的 mergeGraphDiff 同一策略）。
-// 全部页到齐后做一次 relayoutInPlace 全量就地重布局：分页只是传输机制，
-// 首页布局基于缺失跨页边的残图 + 后续页嫁接（老节点锚定），不等于全量
-// 布局 —— 末页后用全量节点/边/权威社区重算，收敛到与全量渲染一致。
+// 图数据经 get_graph_page 逐页拉取。分页只是传输机制，不参与渲染决策：
+// 逐页合并进本地暂存图（节点/边按 id 去重，吸收图变更导致的分页漂移），
+// 全部页到齐后原子换入 ws.graphData 并做一次全量 render —— 任何时刻
+// 屏幕上的星图都是自洽的（要么旧图，要么全量新图），加载进度经
+// onStatusChange 上报。旧设计「首页残图布局 + 后续页嫁接 + 末页补丁
+// 重布局」已拆除（2026-08-16：嫁接布局 ≠ 全量布局、末页累积边撞护栏、
+// 折叠视图读到半成品社区态）。拉页失败直接抛错：暂存图丢弃，旧图保留。
 
-/** 从第 page 页拉取并合并进 ws.graphData；返回是否完整加载（false = 工作区已切走）。 */
+/** 逐页拉取并合并为全量图，到齐后原子换入 ws.graphData 并渲染一次；返回是否完整加载（false = 工作区已切走）。 */
 export async function loadGraphPages(
   ws: Workspace,
   starGraph: StarGraph,
-  paged: { page_size?: number; total_pages?: number },
+  paged: { meta?: Record<string, unknown>; page_size?: number; total_pages?: number },
 ): Promise<boolean> {
-  if (!ws.graphData) return false;
   const pageSize = paged.page_size || 12000;
   const totalPages = paged.total_pages ?? 1;
+  // 暂存图：全部页到齐前不触碰 ws.graphData 与渲染器
+  const merged: GraphJSON = {
+    meta: paged.meta || {},
+    nodes: [],
+    edges: [],
+    communities: [],
+    hierarchical_communities: [],
+  };
   for (let page = 0; page < totalPages; page++) {
     if (!ws.active) return false;
     const raw = await typedRpc('get_graph_page', { page, page_size: pageSize });
@@ -1060,45 +1077,28 @@ export async function loadGraphPages(
     const p = JSON.parse(raw) as GraphPage;
     const root = p.meta?.source_root || '';
     if (root && !isSamePath(root, ws.path)) continue; // 引擎已被切走，丢弃错页
-    const diff = mergePageIntoGraph(ws.graphData, p);
-    // 权威社区（最后一页携带）必须先挂到 graphData 再交给渲染器 —
-    // render/applyGraphDiff 在调用时读取 communities 构建布局与质心锚定。
-    if (p.communities) ws.graphData.communities = p.communities;
-    if (p.hierarchical_communities) ws.graphData.hierarchical_communities = p.hierarchical_communities;
-    if (page === 0) {
-      await starGraph.render(ws.graphData);
-    } else if (diff.added_nodes.length > 0 || diff.added_edges.length > 0) {
-      await starGraph.applyGraphDiff(diff, ws.graphData);
-    }
+    mergePageIntoGraph(merged, p);
+    // 权威社区（最后一页携带）覆盖渐进重建版本，必须先于 render 挂载
+    if (p.communities) merged.communities = p.communities;
+    if (p.hierarchical_communities) merged.hierarchical_communities = p.hierarchical_communities;
     if (totalPages > 1) ws.onStatusChange?.(`已加载图谱 ${page + 1}/${totalPages} 页`);
   }
-  // 全部页到齐：分页只是传输机制。首页布局基于缺失跨页边的残图，
-  // 后续页只能嫁接（老节点锚定）——用全量节点/边/权威社区就地重布局
-  // 一次，收敛到与全量渲染一致的最终布局（相机不动、无渐进揭示）。
-  if (totalPages > 1 && ws.active && starGraph.hasGraph) {
-    ws.onStatusChange?.('正在整理星图布局...');
-    await starGraph.relayoutInPlace();
-  }
+  if (!ws.active) return false;
+  ws.graphData = merged;
+  await starGraph.render(merged);
   return true;
 }
 
-/** 分页全量重载：get_graph_meta → 重置 graphData → 逐页重建（事件兜底/重分析用）。 */
+/** 分页全量重载：get_graph_meta → 逐页重建（事件兜底/重分析用）。失败时旧图保留。 */
 async function reloadGraphPaged(ws: Workspace, starGraph: StarGraph): Promise<void> {
   const raw = await typedRpc('get_graph_meta', {});
   const meta = JSON.parse(raw) as CachedGraphMeta;
   if (!meta.paged) throw new Error('引擎未返回分页信息');
-  ws.graphData = {
-    meta: meta.meta || {},
-    nodes: [],
-    edges: [],
-    communities: [],
-    hierarchical_communities: [],
-  };
   await loadGraphPages(ws, starGraph, meta);
 }
 
-/** 把一页数据并入 graphData（节点/边按 id 去重）；返回渲染层 diff（仅新增项）。 */
-function mergePageIntoGraph(graphData: GraphJSON, page: GraphPage): GraphDiffJson {
+/** 把一页数据并入 graphData（节点/边按 id 去重）。 */
+function mergePageIntoGraph(graphData: GraphJSON, page: GraphPage): void {
   if (!Array.isArray(graphData.nodes)) graphData.nodes = [];
   if (!Array.isArray(graphData.edges)) graphData.edges = [];
   const nodes = graphData.nodes;
@@ -1107,25 +1107,20 @@ function mergePageIntoGraph(graphData: GraphJSON, page: GraphPage): GraphDiffJso
   for (const n of nodes) existingNodeIds.add(n.id);
   const existingEdgeIds = new Set<string>();
   for (const e of edges) existingEdgeIds.add(e.id);
-  const added_nodes: GraphNode[] = [];
-  const added_edges: GraphEdge[] = [];
   for (const n of page.nodes || []) {
     if (!existingNodeIds.has(n.id)) {
       existingNodeIds.add(n.id);
       nodes.push(n);
-      added_nodes.push(n);
     }
   }
   for (const e of page.edges || []) {
     if (!existingEdgeIds.has(e.id)) {
       existingEdgeIds.add(e.id);
       edges.push(e);
-      added_edges.push(e);
     }
   }
   // 渐进重建 level-0 社区（节点自带 community_id；最后一页服务器会下发权威社区覆盖）
   graphData.communities = rebuildLevel0Communities(nodes);
-  return { added_nodes, added_edges, removed_nodes: [], removed_edges: [], modified_nodes: [] };
 }
 
 /** 从节点的 community_id 重建 level-0 社区（端口自引擎 derive_community_label）。 */

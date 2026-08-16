@@ -9,13 +9,13 @@
 
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import type { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import type { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import type { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { useShellStore } from '../app/shell-store';
 import { bus } from './events';
 import { gpuLayout } from './gpu-layout';
-import { useShellStore } from '../app/shell-store';
 import type { GraphAnalysis } from './graph-analysis';
 import { GLOW_COLORS, NODE_COLORS } from './graph-colors';
 import type { GraphDiffOverlay } from './graph-diff-overlay';
@@ -135,7 +135,7 @@ export interface LifecycleHost {
   positionGrid(pos: Float32Array): void;
   initEdgeParticles(pos: Float32Array, data: EdgeData[]): void;
   initTwinkleData(n: number): void;
-    onResize: () => void;
+  onResize: () => void;
   _langHandler: ((data: { lang: string }) => void) | null;
 }
 
@@ -588,65 +588,6 @@ export class GraphSceneLifecycle {
     }
   }
 
-  /**
-   * 分页加载完成后的全量就地重布局 — 分页只是传输机制，不参与布局决策。
-   * 首页布局在缺失跨页边的残图上计算，后续页只能嫁接（老节点锚定），
-   * 最终图严格不等于全量布局。全部页到齐后用全量节点/边/权威社区
-   * 重算布局并写回 GPU；相机与 hover/选中等交互状态不变，
-   * 无场景重建、无渐进揭示。
-   */
-  async relayoutInPlace(): Promise<void> {
-    const n = this.host._nodeCount;
-    if (n === 0) return;
-    // 死亡节点使 索引↔位置 映射带洞 — 分页加载路径不会产生，其他场景交给全量 render
-    if (this.host._deadIndices.size > 0) return;
-    this._finishProgressiveRevealNow();
-    if (this.host._fold.foldMode) this.host._fold.setFoldMode(false);
-
-    const nodes = this.host.graphNodes.slice(0, n);
-    const pairs: [number, number][] = this.host.edgeDataList.map((e) => [e.s, e.t]);
-    const deg = this.host.deg.slice(0, n);
-
-    this._layoutAbort = new AbortController();
-    // 布局期间动画循环跳过渲染 — 不暴露半截位置更新
-    this.host._renderInProgress = true;
-    try {
-      const { rawPos, layoutSource } = await this._computeLayout(nodes, pairs, deg);
-      // 容量可能大于节点数（_rebuildNodeBuffers 预留 1.2x）— 只写前 n*3
-      this.host.nodePositions.set(rawPos.subarray(0, n * 3));
-      // 更新图空间尺度（相机位置与缩放范围沿用，不重置相机）
-      const dists: number[] = [];
-      for (let i = 0; i < n; i++) {
-        const r2 = rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2;
-        if (Number.isFinite(r2)) dists.push(Math.sqrt(r2));
-      }
-      dists.sort((a, b) => a - b);
-      this.host._graphRadius = dists[Math.floor(dists.length * 0.95)] || 50;
-
-      // 核心 + 辉光 GPU 缓冲
-      this.host._nodes._syncNodeCoreMatrices();
-      this.host._nodes._syncNodePositions([...Array(n).keys()]);
-
-      // 边几何重建（所有位置都变了）— 边数据本身已是最新，无需 _rebuildEdgeData
-      this.host._edges._disposeEdges();
-      this.host._edges.buildEdges(this.host.nodePositions, this.host.edgeDataList);
-      this.host.initEdgeParticles(this.host.nodePositions, this.host.edgeDataList);
-      this.host.positionGrid(this.host.nodePositions);
-
-      // 星系元数据 + 社区环 — 用权威社区重建（首页 render 时只有渐进社区）
-      const nodeIdx = new Map<string, number>();
-      for (let i = 0; i < n; i++) nodeIdx.set(nodes[i].id, i);
-      const level0 = this.host.communities.filter((c) => !c.level || c.level === 0);
-      this._rebuildGalaxyMeta(level0, nodeIdx);
-      this._fillGalaxyCentroids(this.host.nodePositions);
-      this.host._fold._buildCommunityRings();
-
-      console.log(`[StarGraph] paged relayout done: ${layoutSource}, nodes=${n}`);
-    } finally {
-      this.host._renderInProgress = false;
-    }
-  }
-
   // ── 渐进揭示：分批物化节点 ────────
 
   private _startProgressiveReveal(nodeCount: number): void {
@@ -708,7 +649,7 @@ export class GraphSceneLifecycle {
     }, 15000);
     this._revealSafetyTimer = safetyTimer;
 
-        const revealFrame = () => {
+    const revealFrame = () => {
       // ponytail: 若更新的渲染已开始则退出 — 防止旧 rAF
       // 回调触碰新场景对象（鬼影点根因）。
       // 此处不触碰 _renderInProgress — 新渲染拥有该标志。
@@ -1115,8 +1056,7 @@ export class GraphSceneLifecycle {
     // 旧逻辑 mouse.x > -999 只在 pointerleave 时重置——指针静置画布
     // 会永远满帧渲染，GPU 空转烧核（CPU 100% 根因之一）。
     const mouseMoved =
-      Math.abs(this.host.mouse.x - this._lastMouseX) > 1e-4 ||
-      Math.abs(this.host.mouse.y - this._lastMouseY) > 1e-4;
+      Math.abs(this.host.mouse.x - this._lastMouseX) > 1e-4 || Math.abs(this.host.mouse.y - this._lastMouseY) > 1e-4;
     const isActive =
       camMoved ||
       mouseMoved ||
@@ -1217,22 +1157,22 @@ export class GraphSceneLifecycle {
     if (!IDLE || this._idleCounter % 3 === 0) {
       // ponytail: 无数据时跳过，animation loop 早于 render 执行
       if (this.host._nodeCount > 0) {
-      this.host._tooltip.updateTooltip(
-        this.host.hoveredIdx,
-        this.host.hoveredGalaxyIdx,
-        this.host.communities,
-        this.host.nodeCommMap,
-        this.host._fold.foldMode,
-        this.host._fold,
-        this.host.container,
-        this.host.camera,
-        this.host._nodeCount,
-        this.host.graphNodes,
-        this.host.deg,
-        this.host.nodePositions,
-      );
-      this.host._labels.updateLabels();
-      this.host._fold._updateCommunityRingHover();
+        this.host._tooltip.updateTooltip(
+          this.host.hoveredIdx,
+          this.host.hoveredGalaxyIdx,
+          this.host.communities,
+          this.host.nodeCommMap,
+          this.host._fold.foldMode,
+          this.host._fold,
+          this.host.container,
+          this.host.camera,
+          this.host._nodeCount,
+          this.host.graphNodes,
+          this.host.deg,
+          this.host.nodePositions,
+        );
+        this.host._labels.updateLabels();
+        this.host._fold._updateCommunityRingHover();
       } // _nodeCount > 0
     }
     this.host.controls.update();

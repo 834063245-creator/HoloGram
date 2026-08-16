@@ -757,94 +757,6 @@ describe('StarGraph.applyGraphDiff — 分页末页社区 id 命名空间失配'
   });
 });
 
-describe('StarGraph.relayoutInPlace — 分页到齐后的全量就地重布局', () => {
-  let container: HTMLElement;
-  let sg: StarGraph;
-
-  beforeEach(() => {
-    container = makeContainer();
-    sg = new StarGraph(container);
-  });
-
-  it('用全量边+权威社区重算布局：位置更新、相机不动、场景状态完好', async () => {
-    // 机制背景：分页加载中首页布局基于缺失跨页边的残图，后续页只能
-    // 嫁接（老节点锚定）——relayoutInPlace 用全量图重算，收敛到与
-    // 全量渲染一致的最终布局，且不重置相机、不重建场景。
-    const n = (id: string, cid: number) => ({
-      id,
-      name: id,
-      type: 'function',
-      location: `src/${id}.ts:1`,
-      community_id: cid,
-    });
-    const g = {
-      nodes: [n('a1', 1), n('a2', 1), n('b1', 2), n('b2', 2)],
-      edges: [
-        { id: 'e1', source: 'a1', target: 'a2', type: 'calls', coupling_depth: 1, direction: 'forward' },
-        { id: 'e2', source: 'b1', target: 'b2', type: 'calls', coupling_depth: 1, direction: 'forward' },
-        { id: 'e3', source: 'a2', target: 'b1', type: 'calls', coupling_depth: 1, direction: 'forward' },
-      ],
-      communities: [
-        { id: '1', size: 2, node_ids: ['a1', 'a2'], label: 'a' },
-        { id: '2', size: 2, node_ids: ['b1', 'b2'], label: 'b' },
-      ],
-      hierarchical_communities: [],
-      meta: { source_root: '/test', generated_at: new Date().toISOString() },
-    };
-    await sg.render(g);
-    const cam = (sg as any).camera.position;
-    const camBefore = { x: cam.x, y: cam.y, z: cam.z };
-    const nodeCount = (sg as any)._nodeCount;
-    const edgeGroups = (sg as any).edgeLineGroups.length;
-    expect(nodeCount).toBe(4);
-    expect(edgeGroups).toBeGreaterThan(0);
-
-    // 模拟分页嫁接后的近似布局：人为打乱全部位置
-    ((sg as any).nodePositions as Float32Array).fill(0);
-
-    await sg.relayoutInPlace();
-
-    // 位置被重算：非全 0、全部有限、包围盒居中（均值≈0）
-    const pos = (sg as any).nodePositions as Float32Array;
-    let nonZero = 0;
-    for (let i = 0; i < nodeCount * 3; i++) {
-      expect(Number.isFinite(pos[i])).toBe(true);
-      if (pos[i] !== 0) nonZero++;
-    }
-    expect(nonZero).toBeGreaterThan(0);
-    let mx = 0,
-      my = 0,
-      mz = 0;
-    for (let i = 0; i < nodeCount; i++) {
-      mx += pos[i * 3];
-      my += pos[i * 3 + 1];
-      mz += pos[i * 3 + 2];
-    }
-    expect(Math.abs(mx / nodeCount)).toBeLessThan(0.01);
-    expect(Math.abs(my / nodeCount)).toBeLessThan(0.01);
-    expect(Math.abs(mz / nodeCount)).toBeLessThan(0.01);
-
-    // 相机不动、无场景重建：节点数/边组数不变
-    expect(cam.x).toBe(camBefore.x);
-    expect(cam.y).toBe(camBefore.y);
-    expect(cam.z).toBe(camBefore.z);
-    expect((sg as any)._nodeCount).toBe(nodeCount);
-    expect((sg as any).edgeLineGroups.length).toBe(edgeGroups);
-    expect((sg as any)._renderInProgress).toBe(false);
-    // 星系质心随新布局重算且有限
-    for (const gm of (sg as any)._fold.galaxyMeta) {
-      expect(Number.isFinite(gm.centroid.x)).toBe(true);
-      expect(Number.isFinite(gm.radius)).toBe(true);
-    }
-  });
-
-  it('空图直接跳过（no-op）', async () => {
-    await sg.relayoutInPlace();
-    expect((sg as any)._nodeCount).toBe(0);
-    expect(sg.hasGraph).toBe(false);
-  });
-});
-
 describe('StarGraph.clearGraph — nodeCoreColors / _nodeCount consistency', () => {
   let container: HTMLElement;
   let sg: StarGraph;
@@ -933,7 +845,7 @@ describe('GraphInteractionController.updateHover — array length guard', () => 
 
   it('does not call _setCoreColor when nodeCoreColors is shorter than _nodeCount', () => {
     const interaction = (sg as any)._interaction;
-    const host = (sg as any);
+    const host = sg as any;
     // Simulate the bug: _nodeCount is 2 but nodeCoreColors is empty
     host._nodeCount = 2;
     host.nodeCoreColors = [];
@@ -950,7 +862,7 @@ describe('GraphInteractionController.updateHover — array length guard', () => 
 
   it('does not call _setCoreColor when nodeCoreColors element is undefined', () => {
     const interaction = (sg as any)._interaction;
-    const host = (sg as any);
+    const host = sg as any;
     // nodeCoreColors has an entry but it's undefined
     host._nodeCount = 2;
     host.nodeCoreColors = [0x6ab0ff, undefined as any];

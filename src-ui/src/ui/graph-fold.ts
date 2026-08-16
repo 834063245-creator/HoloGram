@@ -12,8 +12,8 @@ import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import type { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import type { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { communityColor, edgeColorByType, edgeOpacityByDepth, GLOW_COLORS } from './graph-colors';
 import { useShellStore } from '../app/shell-store';
+import { communityColor, edgeColorByType, edgeOpacityByDepth, GLOW_COLORS } from './graph-colors';
 import type { CommunityData, EdgeData, GraphNode } from './graph-types';
 
 export interface GalaxyMeta {
@@ -163,10 +163,16 @@ export class GraphFold {
   }
 
   /** Set up camera fly-to animation targeting a centroid. */
-  private _flyTo(centroid: THREE.Vector3, clusterRadius: number, viewDist: number,
-    camOffset: [number, number, number] = [0.5, 0.4, 0.7]): void {
+  private _flyTo(
+    centroid: THREE.Vector3,
+    clusterRadius: number,
+    viewDist: number,
+    camOffset: [number, number, number] = [0.5, 0.4, 0.7],
+  ): void {
     this.host.focusTarget.copy(
-      centroid.clone().add(new THREE.Vector3(viewDist * camOffset[0], viewDist * camOffset[1], viewDist * camOffset[2])),
+      centroid
+        .clone()
+        .add(new THREE.Vector3(viewDist * camOffset[0], viewDist * camOffset[1], viewDist * camOffset[2])),
     );
     this.host.focusStartCam.copy(this.host.camera.position);
     this.host.focusStartLook.copy(this.host.controls.target);
@@ -441,7 +447,9 @@ export class GraphFold {
       this._showSubCommunityClouds(subCommunities);
       const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
       this.showGalaxyTitle(gm);
-      useShellStore.getState().setStatusText(`${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`);
+      useShellStore
+        .getState()
+        .setStatusText(`${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`);
     } else {
       this._showConstellation(galaxyId);
       const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
@@ -458,7 +466,9 @@ export class GraphFold {
         this.host.controls.enablePan = true;
       }
       this.showGalaxyTitle(gm);
-      useShellStore.getState().setStatusText(`星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`);
+      useShellStore
+        .getState()
+        .setStatusText(`星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`);
     }
   }
 
@@ -627,7 +637,9 @@ export class GraphFold {
       this._showSubCommunityClouds(deeperSubs);
       const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
       this.showGalaxyTitle({ id: subCommId, label: subComm.label });
-      useShellStore.getState().setStatusText(`子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`);
+      useShellStore
+        .getState()
+        .setStatusText(`子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`);
     } else {
       this._hideAllNodes();
       const shownIndices: number[] = [];
@@ -639,24 +651,32 @@ export class GraphFold {
       }
       this._showNodes(shownIndices, 0xffaa44, 0.7);
       this._buildSubCommunityEdges(subComm.node_ids);
-      let sx = 0,
-        sy = 0,
-        sz = 0;
-      for (const mi of shownIndices) {
-        sx += this.host.nodePositions[mi * 3];
-        sy += this.host.nodePositions[mi * 3 + 1];
-        sz += this.host.nodePositions[mi * 3 + 2];
+      // 空成员守卫：子社区节点全部不可解析时 centroid = 0/0 = NaN，
+      // _flyTo(NaN) 会把相机 target 污染成 NaN → 画布全黑（分页残图期可踩）。
+      if (shownIndices.length > 0) {
+        let sx = 0,
+          sy = 0,
+          sz = 0;
+        for (const mi of shownIndices) {
+          sx += this.host.nodePositions[mi * 3];
+          sy += this.host.nodePositions[mi * 3 + 1];
+          sz += this.host.nodePositions[mi * 3 + 2];
+        }
+        const centroid = new THREE.Vector3(
+          sx / shownIndices.length,
+          sy / shownIndices.length,
+          sz / shownIndices.length,
+        );
+        let clusterRadius = 30;
+        for (const mi of shownIndices) {
+          const dx = this.host.nodePositions[mi * 3] - centroid.x;
+          const dy = this.host.nodePositions[mi * 3 + 1] - centroid.y;
+          const dz = this.host.nodePositions[mi * 3 + 2] - centroid.z;
+          clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        }
+        const viewDist = clusterRadius * 3.5;
+        this._flyTo(centroid, clusterRadius, viewDist);
       }
-      const centroid = new THREE.Vector3(sx / shownIndices.length, sy / shownIndices.length, sz / shownIndices.length);
-      let clusterRadius = 30;
-      for (const mi of shownIndices) {
-        const dx = this.host.nodePositions[mi * 3] - centroid.x;
-        const dy = this.host.nodePositions[mi * 3 + 1] - centroid.y;
-        const dz = this.host.nodePositions[mi * 3 + 2] - centroid.z;
-        clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
-      }
-      const viewDist = clusterRadius * 3.5;
-      this._flyTo(centroid, clusterRadius, viewDist);
       const shortName = subComm.label.split('/')[0].replace(/_/g, ' ');
       this.showGalaxyTitle({ id: subCommId, label: subComm.label });
       useShellStore.getState().setStatusText(`子社区: ${shortName} · ${shownIndices.length} 节点 · ESC 退回`);
@@ -680,7 +700,9 @@ export class GraphFold {
         this._showSubCommunityClouds(deeperSubs);
         const shortName = parentSub.label.split('/')[0].replace(/_/g, ' ');
         this.showGalaxyTitle({ id: parentSubId, label: parentSub.label });
-        useShellStore.getState().setStatusText(`子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`);
+        useShellStore
+          .getState()
+          .setStatusText(`子社区: ${shortName} · ${deeperSubs.length} 子星团 · 点击进入或 ESC 退回`);
       } else {
         this._hideAllNodes();
         const shownIndices: number[] = [];
@@ -703,12 +725,16 @@ export class GraphFold {
         this._showSubCommunityClouds(subCommunities);
         const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
         this.showGalaxyTitle(gm);
-        useShellStore.getState().setStatusText(`${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`);
+        useShellStore
+          .getState()
+          .setStatusText(`${gm?.label || galaxyId} · ${subCommunities.length} 子星团 · 点击进入或 ESC 退回`);
       } else {
         this._showConstellation(galaxyId);
         const gm = this.galaxyMeta.find((g) => g.id === galaxyId);
         this.showGalaxyTitle(gm);
-        useShellStore.getState().setStatusText(`星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`);
+        useShellStore
+          .getState()
+          .setStatusText(`星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`);
       }
     }
   }

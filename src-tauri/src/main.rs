@@ -517,16 +517,16 @@ mod tests {
         assert_eq!(merged_nodes, full_nodes, "逐页节点集合必须与全量一致");
         assert_eq!(merged_edges, full_edges, "逐页边集合必须收敛到全量");
 
-        // 边累计规则：第 k 页只含两端点均 ≤k 页覆盖的边 → 逐页计数非降
-        let mut prev_edge_count = 0usize;
+        // 边增量规则：每条边恰好在 max(两端点页号) 页下发一次 →
+        // 各页边数之和 == 全量边数（单页响应有界，末页不再 ≈ 全量边表）
+        let mut redelivered_total = 0usize;
         for page in 0..total_pages {
             let p: serde_json::Value = serde_json::from_str(
                 &utils::serialize_graph_page(&tmp_s, page, page_size).unwrap(),
             ).unwrap();
-            let c = p["edges"].as_array().unwrap().len();
-            assert!(c >= prev_edge_count, "边集必须单调收敛（累积规则）");
-            prev_edge_count = c;
+            redelivered_total += p["edges"].as_array().unwrap().len();
         }
+        assert_eq!(redelivered_total, full_edges.len(), "增量规则：每条边必须恰好下发一次");
 
         // 越界页报错
         let err = utils::serialize_graph_page(&tmp_s, total_pages, page_size).unwrap_err();
