@@ -35,7 +35,7 @@ reports/            运行报告（gitignored）
 | 快照 | 钉住的契约 |
 |---|---|
 | `tool-schemas.full.json` | 标准注册表模型可见工具面（name/description/parameters 逐字节） |
-| `tool-schemas.plan.json` | planRegistry 静态只读克隆工具面 |
+| `tool-schemas.plan.json` | planRegistry 派生工具面（现仅服务 plan 中 spawn 的只读子 Agent；主 Agent 的 plan 约束走 planGate 运行时拦截，不切换注册表） |
 | `system-prompt.fixture.json` | 固定输入下 buildSystemPrompt 的完整输出 |
 | `plan-gate.decisions.json` | 固定工具/args 矩阵下 planGateCheck 的判定与拦截文案 |
 | `hook-pipeline.trace.json` | StreamingToolExecutor 固定调用的事件顺序与输出 |

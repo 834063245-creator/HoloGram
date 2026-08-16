@@ -24,6 +24,9 @@ const target = phase ? `tests/convergence/specs/phase-${phase}.test.ts` : 'tests
 function runSpecs(record) {
   const env = { ...process.env };
   if (record) env.CONVERGENCE_RECORD = '1';
+  // 审计 F1：check 必须显式剔除该 env——外部导出的 CONVERGENCE_RECORD=1
+  // 曾可把 check 静默劫持成 record（baseline 被重写且 exit 0）。
+  else delete env.CONVERGENCE_RECORD;
   const res = spawnSync('npx', ['vitest', 'run', target], {
     cwd: pkgRoot,
     env,
@@ -87,6 +90,10 @@ if (command === 'check') {
   console.log(`[convergence] check ${code === 0 ? '通过' : '失败'}（exit ${code}）`);
   console.log(`[convergence] 报告: ${file}`);
   if (code !== 0) {
+    // 审计 F3：失败时 stdout 直接回显漂移定位，不强迫人开报告文件
+    for (const line of output.split('\n')) {
+      if (line.includes('[convergence] baseline')) console.log(line.trim());
+    }
     console.log('[convergence] baseline 漂移不是修代码能解决时：写 baseline-change-request.md 停止实现，交人类审批。');
   }
   process.exit(code === 0 ? 0 : 1);

@@ -18,6 +18,25 @@
 
 ## Phase 0 / V0 记录（2026-08-16）
 
+### 独立审计结论（2026-08-16，对抗性审计）
+
+**有条件放行**。审计复算了全部自述数字（vitest 1030/1sk、tsc、biome 581/338、wiring 四项度量、8 条决策记录）——全部一致；确认 freeze 干净、baseline 真实钉住声称契约、门禁对诚实路径（漂移/缺失/无 env record）失败关闭。放行条件处置如下：
+
+| 发现 | 严重度 | 处置 |
+|---|---|---|
+| F1 环境劫持：外部导出 `CONVERGENCE_RECORD=1` 可把 check 静默变成 record | major | ✅ **已修**：`runSpecs(check)` 显式剔除该 env；实测注入漂移 + 劫持 env 后 check 仍 exit 1、baseline 字节未被重写、stdout 报出差异行 |
+| F2 门禁代码自身零锚定 + 零 CI 执行 | major | ⏳ 随 V1 落地：新增独立 workflow（不改 `ci.yml`，决策#5）+ baseline/gate 路径变更的机器可识别标记 |
+| F3 check 失败时 stdout 无差异定位 | minor | ✅ **已修**：失败时 stdout 回显含 `[convergence] baseline` 的漂移/缺失行 |
+| F4 `CONVERGENCE_PHASE` 可收窄执行范围 | minor | ⏳ V1 的 CI 固定不带 phase 跑全量 specs |
+| F5 归一化宽度（plan-id / ISO 时间戳） | info | 维持现状；新增快照时 review 归一化命中面 |
+| F6 compareText 末尾差异不可被掩盖 | info | 无需动作（审计确认行为正确） |
+| F7 autocrlf 下 record 后 `git status` 可能有 stat 噪声 | info | 约定：审批 baseline 变更以 `git diff` 为准（diff 为空即内容未变） |
+| F8 createAgent 运行时注册的工具 schema 无快照 | minor→major（随 phase 升） | ⏳ **范围已定**（见下），实现随 V1 |
+
+**F8 范围决定（Phase 1/2 开工前条件）**：V1 新增 `tool-schemas.effective` 快照——用确定性 fixture 跑完 `createAgent` 完整注册后的模型可见 schema 面，至少覆盖 enter/exit_plan_mode、通信族（agent_message/inbox/ack/reply/list）、discovery 族（agent_discover/lookup）、子 Agent 管理族（agent_merge/board/kill/request/spawn 替换版）、task 替换版与 compaction 工具。引擎动态工具豁免维持（决策#1）。
+
+审计放行条件核对：F1 已修 ✅；F2 随 V1 ⏳；F8 范围已定 ⏳ → **Phase 1 可以开工**（F2/F8 的实现属 V1 工作包，与 Phase 1 并行推进，不阻塞）。
+
 ### 基线（freeze point：分支自 main 67f21ec2 切出）
 
 | 项 | 结果 |
