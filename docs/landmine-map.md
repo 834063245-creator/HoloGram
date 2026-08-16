@@ -73,3 +73,51 @@
 2. **第二批（P1 的 16/17/19/22/23，~1 天）**：阻塞持锁与吞错类 ✅ 已完成
 3. **第三批（P1 剩余，按需）**：写放大与竞态类（13/14/15/21），需要设计，别赶工 ✅ 已完成（2026-08-08，cargo 226 · tsc 0 · vitest 798）
 4. **第四批（已立项，待排期）**：rpc 返回值 Value 化（L 级，独立项目，见根治级段）——开工前先清 P2 双重编码残留热身
+
+---
+
+## 第二批审计（2026-08-17）— 工作区生命周期/状态管理家族
+
+> 来源：四路并行只读审计（workspace 对称性 / 模块级状态 / 异步竞态 / 单例与会话资源），
+> 触发点是 state-inject 缓存修复（commit `176f4873`）暴露的同族病。
+> 家族指纹：**全局单例 + fire-and-forget 在途 + 工作区切换无代际/无清理**——
+> 「工作区存活期」没有结构体，deactivate 靠人肉枚举清理对象，枚举必然漂移。
+
+### P0 — 高危（有真实引爆路径）
+
+| # | 位置 | 雷 | 触发 → 后果 | 状态 |
+|---|------|----|------------|------|
+| H1 | `ui/lsp-client.ts:36` + `:47` | `diagnosticsCache` 永不清、无界、`stopAllLsp()` 不清；`getDiagnosticsForFile` 有 basename 尾匹配 | 旧项目诊断注入新项目 Agent 上下文（经 setDiagnosticsSource → state hooks）；同项目同名不同目录文件互串 | 🔧 拆除中（Phase 1） |
+| H2 | `ui/file-viewer.tsx:47` + `lsp-client.ts:167` | 第二份私有 `lspSessions`（stopAllLsp 清不到）+ `startLsp` 在途 resolve 无代际 | 切换后 LSP 永久假死且状态栏显示已连接；在途 resolve 把 B 项目文件内容发进 A 的 tsserver | 📋 计划 Phase 3 |
+| H3 | `workspace.ts` `forceClearState()` | deactivate 超时走紧急路径时恰恰不调 `disposeAll()` | 60s 巡检 timer 永久存活，`_enforceTTL` 继续发 `agent_isolation_discard`（真实删 worktree）；saveState 不落盘留 'running' 死账 | 🔧 拆除中（Phase 1） |
+| H4 | `workspace.ts:898` `runCheck` | 在途 RPC resolve 后无 `_active` 守卫；finally 在清理后重新武装 checkTimer | 旧项目检查结果写进新项目 dock store + 自动弹面板；与新项目自身 runCheck 竞争 | 🔧 拆除中（Phase 1） |
+| H5 | `ui/chat-session.ts:549`（冻结文件） | `autoRestoreLastSession` fire-and-forget 跨 await 不校验项目；`_autoSaveTimers` 捕获旧 projectPath | A 的会话列表覆盖 B 的面板（拿 B 的 factory 灌 A 的消息）；新会话可被写进旧项目目录 | 📋 计划 Phase 3（epoch 外科手术） |
+
+### P1 — 中危
+
+| # | 位置 | 雷 | 状态 |
+|---|------|----|------|
+| M1 | `ui/agent-panel-store.ts` + `workspace.ts:492` | `runtimeRef`/`currentSessionId`/`messageFlow`/`alerts` 切换不重置 → 2s 轮询拿旧会话 id 在新 runtime 建错位 board | 📋 计划 Phase 2 |
+| M2 | `agent/agent-session-state.ts:233` | 清理挂在下一个 setupAgent 而非 deactivate；setupAgent 失败路径死引用残留 | 📋 计划 Phase 2 |
+| M3 | `agent/memory.ts:91` | `initAura` 在途晚于 deactivate 的 `auraShutdown` 落地 → 新项目语义召回静默禁用 | 📋 计划 Phase 2 |
+| M4 | `ui/chat-store.ts:91` | `disposePanelStores` 零调用 → 每会话 messages store 只增不减，无界内存 | 📋 计划 Phase 3 |
+| M5 | `app/chat/chat-core.ts:282` | 无 API key 时切换工作区，旧项目会话列表/消息面板原样残留 | 📋 计划 Phase 3 |
+| M6 | `main.ts:250` `resetCheckPanelState` | deactivate 清完缓存后又回填人造「✅ 通过」进 checkCache → 未检过的项目注入假简报 | 📋 计划 Phase 2 |
+
+### P2 — 低危（记录在案，暂不拆）
+
+- `agent/runtime/agent-builder.ts:561`：`_snapshotRefreshTimer` 模块级单槽，切换后白打一轮引擎查询（写孤儿 ctx，无污染）
+- `agent/logger.ts:23`：`initLogger` 未 await，交错时漏一个 2s interval
+- `main.ts:302` vs `shell-store`：`_diffActive` 双份标志切换不重置，首次 toggleDiff 语义反转
+- `lib/pretext/measurement.js:3,13`：测量缓存无界缓增（清理函数零调用）
+- `agent/coordinator.ts:87`：SubAgentPool `_aliasToInternal` 只增不减（限单工作区寿命）
+- `agent/agent.ts:2526`：FileOwnership 按会话主 Agent 各一份，并行会话子 Agent 互不知晓（Rust 临界区兜底，设计缝隙记录）
+- `lsp-client.ts:165`：`lspWarned` 无清理（有界，仅告警提示）
+
+### 本家族已确认健康（审计覆盖，不要再动）
+
+- workspace 监听器/总线订阅全进 `_unlisteners` 双路径消费；后端 watcher 三段防护（deactivate 停 + Drop 兜底 + 先停旧线程）
+- runtime 重建先 flushAllBoards + disposeAll（P0-10 已拆）；SubAgentPool stopAll 双路径；agentSessionState 工厂注销链完整
+- `loadGraphPages` 逐页 `ws.active` + `source_root` 对拍（epoch 防护教科书）；graph-scene-lifecycle 代际 + safety timer
+- cache-store 全量（epoch + resetAgentCaches 双路径 + buildResult 归属，commit `176f4873`）
+- scoped-store 分区机制、runtime per-session board 注册表、MessageBus inbox、子 Agent finally 链、board-persistence `_destroyed` 标志
