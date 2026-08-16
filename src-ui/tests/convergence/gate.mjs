@@ -70,6 +70,66 @@ const T0_RULES = [
       return failures;
     },
   },
+  {
+    phase: 6,
+    label: 'phase-6 T0: AgentConfig 字段面冻结 + 装配本体零组合面直调',
+    check: () => {
+      const failures = [];
+      // AgentConfig 字段面冻结（31）——组合扩展走 blueprint capability，不再扩 config
+      if (!T0_EXEMPTIONS.has('types.ts:AgentConfig-fields')) {
+        const types = readFileSync(path.resolve(pkgRoot, 'src/agent/runtime/types.ts'), 'utf8');
+        const m = types.match(/export interface AgentConfig \{[\s\S]*?\n\}/);
+        if (!m) {
+          failures.push('未找到 AgentConfig interface（runtime/types.ts）');
+        } else {
+          const count = (m[0].match(/^\s+[A-Za-z_][A-Za-z0-9_]*\??:/gm) || []).length;
+          if (count !== 31) {
+            failures.push(
+              `AgentConfig 字段数 ${count}（冻结 31）——新增工具/hook 走 blueprint capability；` +
+                '确需新增 config 字段须登记豁免并更新 specs/phase-6 断言',
+            );
+          }
+        }
+      }
+      // 组合面（工具/hook 工厂、plan 接线、调优）只出现在 blueprint.ts capability 表
+      const rt = readFileSync(path.resolve(pkgRoot, 'src/agent/runtime/runtime.ts'), 'utf8');
+      const forbidden = [
+        'createEnterPlanModeTool',
+        'createExitPlanModeTool',
+        'createCommunicationTools',
+        'createDiscoveryTools',
+        'createMergeTool',
+        'createBoardStatusTool',
+        'createAgentKillTool',
+        'createRequestTool',
+        'createSubAgentTool',
+        'createTaskTools',
+        'new TaskManager(',
+        'registerCompactionTools',
+        'convergeRegistry',
+        'createGraphContextHook',
+        'createStateReadHook',
+        'createGraphPreflightHook',
+        'createStatePreflightHook',
+        'createPlanExploreHook',
+        'createPlanWriteHook',
+        'createBoardTrackingHook',
+        'loadEngineSnapshot',
+        'setCompactionConfigPath',
+        'setPlanState',
+        'setPreRunHook',
+        'PlanModeInjector',
+        'applyAutoTuneConfig',
+      ];
+      for (const f of forbidden) {
+        if (T0_EXEMPTIONS.has(`runtime.ts:${f}`)) continue;
+        if (rt.includes(f)) {
+          failures.push(`runtime.ts 出现组合面直调 ${f}——装配声明必须落在 blueprint.ts capability 表`);
+        }
+      }
+      return failures;
+    },
+  },
 ];
 
 function runT0StaticChecks() {

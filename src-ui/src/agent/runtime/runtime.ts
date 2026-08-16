@@ -20,20 +20,12 @@ import { Agent } from '../agent';
 import type { AgentStore } from '../agent-store';
 import type { AgentEvent, AgentUINotifier, EventSink } from '../agent-types';
 import { EventKind } from '../agent-types';
+import { AgentBlueprint, type BlueprintScope } from '../blueprint';
 import type { SubAgentPool } from '../coordinator';
 import { createExecState, type ExecStateInstance } from '../execution-state';
 import type { GoalManager } from '../goal-manager';
 import type { GraphContext } from '../hooks';
-import {
-  buildGraphSnapshot,
-  createGraphContextHook,
-  createGraphPreflightHook,
-  createStatePreflightHook,
-  createStateReadHook,
-  HookRegistry,
-  PreflightHookRegistry,
-} from '../hooks';
-import { createBoardTrackingHook } from '../hooks/board-tracking-hook';
+import { buildGraphSnapshot, HookRegistry, PreflightHookRegistry } from '../hooks';
 import { log } from '../logger';
 import type { MemoryManager } from '../memory';
 import { memoryBundleIngest } from '../memory-bundle-client';
@@ -41,34 +33,22 @@ import { MessageBus } from '../message-bus';
 import { JsonMessageStore } from '../message-store';
 import { TaskBoard, TaskBoardProxy } from '../task-board';
 import { DiscoveryBoard, DiscoveryBoardProxy } from '../discovery-board';
-import { createDiscoveryTools } from '../tools/discovery';
 import type { SkillRegistry } from '../skills';
 import type { DiagnosticsSource, LspDiagnostic } from '../state-inject';
 import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from '../state-inject';
-import { createTaskTools, TaskManager } from '../task';
+import type { TaskManager } from '../task';
 import { ToolRegistry, agentInvoke } from '../tool';
-import { createCommunicationTools } from '../tools/communication';
-import { createMergeTool } from '../tools/merge';
-import { createBoardStatusTool } from '../tools/board-status';
-import { createAgentKillTool, createSubAgentTool } from '../tools/subagent';
-import { createRequestTool } from '../tools/request';
 import { AgentLifecycleManager } from '../lifecycle-manager';
 import { enqueueIsolationOp } from '../isolation-queue';
 import type { SubAgentSpawner } from '../tools/subagent';
-import { convergeRegistry } from '../tools/domains';
 import {
   type BuilderDeps,
   buildGraphContextFromData,
   buildSystemPrompt,
   buildToolRegistry,
   extractGraphNodeNames,
-  loadEngineSnapshot,
-  registerCompactionTools,
 } from './agent-builder';
-import { PlanModeInjector } from '../plan/plan-injection';
 import { PlanStateManager } from '../plan/plan-state';
-import { createEnterPlanModeTool, createExitPlanModeTool } from '../plan/plan-tools';
-import { createPlanExploreHook, createPlanWriteHook } from '../plan/plan-graph-hook';
 import { AgentContext } from '../context';
 import { SessionLog } from '../session-log';
 
@@ -483,9 +463,15 @@ export class AgentRuntime implements RuntimePort {
     return this._assembleAgent(ctx, inputs);
   }
 
-  /** 从 AgentContext 创建 Agent — Phase 3 收敛入口（RuntimePort 契约见 types.ts）。 */
-  async createAgentFromContext(ctx: AgentContext, inputs: AgentAssemblyInputs = {}): Promise<AgentHandle> {
-    return this._assembleAgent(ctx, inputs);
+  /** 从 AgentContext 创建 Agent — Phase 3 收敛入口（RuntimePort 契约见 types.ts）。
+   *  Phase 6：第 3 参 blueprint 允许调用方以声明式 capability 扩展装配面 —
+   *  新增工具/hook 不再要求修改 AgentConfig。缺省 AgentBlueprint.standard()。 */
+  async createAgentFromContext(
+    ctx: AgentContext,
+    inputs: AgentAssemblyInputs = {},
+    blueprint?: AgentBlueprint,
+  ): Promise<AgentHandle> {
+    return this._assembleAgent(ctx, inputs, blueprint);
   }
 
   /** AgentConfig → AgentContext 翻译层 — 身份与调用方供给的服务进 ctx，
@@ -560,15 +546,20 @@ export class AgentRuntime implements RuntimePort {
     if (!ctx.get('sessionLog')) ctx.set('sessionLog', new SessionLog());
   }
 
-  /** 装配本体 — 只消费 AgentContext + AgentAssemblyInputs（config-free）。
-   *  与 Phase 3 前的 createAgent 行为逐点一致：只换依赖来源（config.* → ctx/inputs），
-   *  不减逻辑、不改工具/ hook 注册顺序（tool-schemas.effective 与前缀缓存依赖此序）。 */
-  private async _assembleAgent(ctx: AgentContext, inputs: AgentAssemblyInputs): Promise<AgentHandle> {
+  /** 装配本体 — 只消费 AgentContext + AgentAssemblyInputs + AgentBlueprint（config-free）。
+   *  Phase 6：工具/hook/接线由 blueprint capability 表驱动（表序 = 注册序，
+   *  与 Phase 5 前的手写注册序一一对应；phase-1 effective 快照钉字节）。
+   *  runtime 保留三块生命周期所有权：board-unregister / lifecycle-manager /
+   *  runtime-maps 的 ctx.effect（Phase 4 语义，specs/phase-4 T0 钉住 ≥3 处）。 */
+  private async _assembleAgent(
+    ctx: AgentContext,
+    inputs: AgentAssemblyInputs,
+    blueprint: AgentBlueprint = AgentBlueprint.standard(),
+  ): Promise<AgentHandle> {
     this._materializeSessionServices(ctx);
     const agentId = ctx.agentId;
     const taskProxy = ctx.resolve('taskBoard');
     const discoveryProxy = ctx.resolve('discoveryBoard');
-    const planState = ctx.resolve('planState');
 
     // Phase 4：TaskBoard 条目注销的对称清理归 ctx 所有权（proxy 转发到该 Agent
     // 终生绑定的会话板）。discoveryBoard 维持现状——旧 dispose 路径本就不注销它。
@@ -632,16 +623,36 @@ export class AgentRuntime implements RuntimePort {
     for (const t of ctx.resolve('tools').all()) r.register(t);
     ctx.set('tools', r);
 
-    // 2b/2c. 注册 plan 工具（readOnly: true → 两种模式都存活）—
-    // planState 由 ctx 提供（翻译层或物化层创建，plan 模式已在翻译层 enter）
-    r.register(createEnterPlanModeTool(planState, ctx.projectPath));
-    // exit_plan_mode 使用 eventSink 将 PlanReview 事件推入聊天流
-    r.register(createExitPlanModeTool(planState, ctx.get('eventSink')));
+    // 2b. isolationExec — agent_isolation_* 的 invoke 包装，被 merge/kill 工具与
+    //     LifecycleManager 共用；Phase 6 经 BlueprintDeps 注入 capability。
+    const isolationExec = async (name: string, args: Record<string, unknown>): Promise<string> => {
+      const result = await agentInvoke<string>(name, args);
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    };
 
-    // 3. 始终构建完整工具集（不再静态过滤，也不再派生 plan 过滤版）—
-    //    plan 只读约束在 streaming-executor 的 planGate 按 planState
-    //    运行时拦截，schema 跨模式恒定（前缀缓存不被 plan 切换击穿）。
-    const effR = r;
+    // 3. Phase 6 声明式装配 — capability 表驱动。context 阶段（Agent 构造前，
+    //    可写 ctx 服务）→ 构造 → agent 阶段（表序即工具面注册序）。
+    const scope: BlueprintScope = {
+      ctx,
+      inputs,
+      tools: r,
+      hooks: new HookRegistry(),
+      preflightHooks: new PreflightHookRegistry(),
+      deps: {
+        isolationExec,
+        messageBus: this._bus,
+        diagnosticsSource: this._diagSource ?? undefined,
+        onPlanModeChange: (active, planFilePath) => {
+          this.notifier?.onPlanModeChange?.(agentId, active, planFilePath);
+        },
+        registerTaskManager: (tm) => {
+          this._agentTaskManagers.set(agentId, tm);
+        },
+      },
+    };
+    for (const cap of blueprint.capabilities('context')) {
+      if (cap.when?.(scope) ?? true) cap.install(scope);
+    }
 
     // 4. 创建 Agent 实例（Phase 3：ctx 入口 — 身份/服务/总线/boards 从 ctx 读；
     //    隔离 ID、bus 注册、store/goalManager/pool 接线在构造内完成，
@@ -655,71 +666,19 @@ export class AgentRuntime implements RuntimePort {
       ui: this._wrapNotifier(agentId),
     });
 
-    // 5. 接线压缩工具
-    newAgent.setCompactionConfigPath(ctx.projectPath);
-
-    // 6. 注册通信/discovery 工具 — setBus/setDiscoveryBoard 已在 Agent 构造内
-    //    经 ctx 完成（bus.register 及唤醒回调由 setBus 处理，无需重复调用）
-    for (const tool of createCommunicationTools(this._bus, () => newAgent.id)) {
-      effR.register(tool);
+    // 5. agent 阶段 capability — 注册序 = 表序（通信/discovery/merge/request/
+    //    spawn/task/compaction/converge + hooks + plan 接线 + pre-run + 自动调优）。
+    const agentScope: BlueprintScope = { ...scope, agent: newAgent };
+    for (const cap of blueprint.capabilities('agent')) {
+      if (cap.when?.(agentScope) ?? true) cap.install(agentScope);
     }
+    // hooks 统一接线 — capability 只往共享 registries 注册（setHooks 是整体替换语义）
+    newAgent.setHooks(scope.hooks);
+    newAgent.setPreflightHooks(scope.preflightHooks);
 
-    // 注册 discovery 工具 — 同上，plan 过滤版只保留只读 agent_lookup
-    for (const tool of createDiscoveryTools(discoveryProxy as any, () => newAgent.id)) {
-      effR.register(tool);
-    }
-
-    // isolationExec — 用于 agent_isolation_discard / agent_isolation_merge
-    // 被 agent_merge 工具和 LifecycleManager 共用
-    const isolationExec = async (name: string, args: Record<string, unknown>): Promise<string> => {
-      const result = await agentInvoke<string>(name, args);
-      return typeof result === 'string' ? result : JSON.stringify(result);
-    };
-
+    // 6. 接线 LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理
+    //    （生命周期所有权留 runtime，不进 capability — Phase 4 语义）
     const subPool = ctx.get('subAgentPool');
-
-    // 注册 agent_merge 工具 — 允许父 Agent 合并已完成的异步子 Agent worktree
-    // （完整集注册；plan 模式下这些非只读工具由执行层 planGate 拦截）
-    if (subPool) {
-      effR.register(createMergeTool(taskProxy as any, () => newAgent.id, isolationExec, { projectPath: ctx.projectPath }));
-      effR.register(createBoardStatusTool(taskProxy as any, () => newAgent.id));
-      effR.register(createAgentKillTool(subPool, isolationExec));
-    }
-
-    // 注册 agent_request 工具 — 带超时的同步请求
-    effR.register(createRequestTool(this._bus, () => newAgent.id));
-
-    // ── 替换 agent_spawn 为绑定本 Agent 的版本 ──
-    // 背景：agent_spawn 在 buildToolRegistry 用 workspace 传入的 subAgentSpawner
-    // （捕获 agentRef.current 单一引用）注册一次，所有 Agent 共享 → 多会话下
-    // spawn 会路由到最后创建的 Agent 实例，子 Agent 卡片 attach 到错误会话。
-    // 这里为每个 Agent 替换成绑定自身的 spawnSubAgent，_uiSessionId 必属本会话。
-    if (subPool && inputs.subAgentSpawner) {
-      effR.unregister('agent_spawn');
-      effR.register(
-        createSubAgentTool(
-          (desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride, outputSchema) =>
-            newAgent.spawnSubAgent(desc, prompt, prog, mode, al, sig, asyncMode, agentIdOverride, outputSchema),
-          subPool,
-        ),
-      );
-    }
-
-    // ── 替换 task_* 为绑定本 Agent（实例）的任务工具 ──
-    // 背景：task_create/get/list/update/stop 在 buildToolRegistry 用 workspace 级
-    // TaskManager 注册一次，所有 Agent 共享 → 多会话下建的是同一份待办清单。
-    // 这里为每个 Agent（每会话主 Agent 一个实例）换成专属 TaskManager 的版本，
-    // 实现"每 Agent 实例一份待办"的隔离；UI 的 TasksPanel 按 agentId 读同一份。
-    {
-      const perAgentTaskManager = new TaskManager();
-      for (const taskTool of createTaskTools(perAgentTaskManager)) {
-        effR.unregister(taskTool.name());
-        effR.register(taskTool);
-      }
-      this._agentTaskManagers.set(agentId, perAgentTaskManager);
-    }
-
-    // 7. 接线 LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理
     if (subPool) {
       // 停止此 agentId 的前一个 LifecycleManager — 否则其 60s setInterval
       // 会在会话创建/恢复周期中泄漏并堆积。
@@ -762,59 +721,7 @@ export class AgentRuntime implements RuntimePort {
       }
     }
 
-    // 8. 在 Agent 的有效注册表上注册压缩工具
-    registerCompactionTools(newAgent, effR);
-
-    // 8b. 工具层收敛：领域工具 + 隐藏旧名。始终收敛完整工具集（effR = r）；
-    // plan 模式的写约束由执行层 planGate 处理（见 8c 注释）。
-    convergeRegistry(effR);
-
-    // 8c. （已移除 plan 过滤工具集：单一注册表 + 执行层 plan 门禁——
-    //     schema 跨模式恒定，DeepSeek 前缀缓存不被 plan 切换击穿。
-    //     门禁规则见 plan/plan-registry.ts 的 planGateCheck；
-    //     plan 中 spawn 的只读子 Agent 克隆在 Agent.spawnSubAgent 内按需派生。）
-
-    // 9. 接线 hooks（图上下文 + 状态 + board 追踪 + plan）
-    const hooks = new HookRegistry();
-    const preflightHooks = new PreflightHookRegistry();
-    if (inputs.graphContext) {
-      loadEngineSnapshot(inputs.graphContext, ctx.projectPath).catch(() => {});
-      if (inputs.hooksEnabled !== false) {
-        hooks.register(createGraphContextHook(inputs.graphContext));
-        if (this._diagSource) {
-          hooks.register(createStateReadHook(ctx.projectPath, this._diagSource));
-        }
-        preflightHooks.register(createGraphPreflightHook(inputs.graphContext));
-        if (this._diagSource) {
-          preflightHooks.register(createStatePreflightHook(this._diagSource));
-        }
-        // Plan 模式图增强 hook — 探索时注入影响面，写计划时追加分析
-        hooks.register(createPlanExploreHook(inputs.graphContext, planState));
-        hooks.register(createPlanWriteHook(inputs.graphContext, planState));
-      }
-    }
-    // Board 追踪 hook — board 可用时始终注册
-    hooks.register(createBoardTrackingHook(agentId, taskProxy as any));
-    newAgent.setHooks(hooks);
-    newAgent.setPreflightHooks(preflightHooks);
-
-    // 9b. 接线 plan 模式 — runLoop 提醒注入器 + 状态通知。
-    // 传入 projectPath：UI 按钮切换（setPlanMode）需要它来 enter。
-    const planInjector = new PlanModeInjector();
-    newAgent.setPlanState(planState, planInjector, ctx.projectPath);
-    planState.onChange((s) => {
-      this.notifier?.onPlanModeChange?.(agentId, s.active, s.planFilePath);
-    });
-
-    // 10. 接线 pre-run hook（AuraSDK 语义检索）
-    if (inputs.preRunHook) {
-      newAgent.setPreRunHook(inputs.preRunHook);
-    }
-
-    // 11. 自动调优
-    newAgent.applyAutoTuneConfig().catch(() => {});
-
-    // 12. 注册并返回。runtime 注册表（agents/proxies/sessions/taskManagers）
+    // 7. 注册并返回。runtime 注册表（agents/proxies/sessions/taskManagers）
     // 的清理同样归 ctx 所有权——最后注册 → dispose 时最先释放，保证
     // listAgents 在 dispose() 返回后同步可见移除（同步快通道）。
     const handle = new AgentHandleImpl(newAgent, this, ctx);

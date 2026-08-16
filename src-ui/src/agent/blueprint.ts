@@ -272,11 +272,13 @@ export class AgentBlueprint {
         // 图上下文 + 状态 + plan 增强 hooks（提示注入类 — 受 hooksEnabled 总开关）
         key: 'graph-hooks',
         phase: 'agent',
-        when: ({ inputs }) => !!inputs.graphContext && inputs.hooksEnabled !== false,
+        when: ({ inputs }) => !!inputs.graphContext,
         install: ({ ctx, inputs, hooks, preflightHooks, deps }) => {
           const graphContext = inputs.graphContext;
           if (!graphContext) return;
+          // 引擎快照加载不受 hooksEnabled 门控（与旧装配一致 — 只有 hook 注册受控）
           void loadEngineSnapshot(graphContext, ctx.projectPath).catch(() => {});
+          if (inputs.hooksEnabled === false) return;
           hooks.register(createGraphContextHook(graphContext));
           if (deps.diagnosticsSource) {
             hooks.register(createStateReadHook(ctx.projectPath, deps.diagnosticsSource));
