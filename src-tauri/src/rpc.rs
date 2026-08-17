@@ -517,6 +517,116 @@ pub(crate) async fn rpc(
             // 全屏截图(高隐私面, 已 Ask);需交互桌面会话
             crate::desktop::desktop_screenshot()
         }
+        "desktop_uia_tree" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "uia_tree".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 只读:窗口 UIA 控件树 + ref 清单(标准控件全覆盖;自绘控件为空树)
+            crate::uia::uia_tree(
+                opt_str(&params, "title").as_deref(),
+                opt_u32(&params, "pid"),
+                opt_u64(&params, "hwnd"),
+                opt_u32(&params, "depth"),
+            )
+        }
+        "desktop_uia_find" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "uia_find".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 只读:按条件在窗口内查找控件
+            crate::uia::uia_find(
+                opt_str(&params, "title").as_deref(),
+                opt_u32(&params, "pid"),
+                opt_u64(&params, "hwnd"),
+                opt_str(&params, "name").as_deref(),
+                opt_str(&params, "control_type").as_deref(),
+                opt_str(&params, "automation_id").as_deref(),
+                opt_bool(&params, "enabled"),
+            )
+        }
+        "desktop_uia_click" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "uia_click".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 写:向目标应用注入真实点击(Invoke/Toggle/Selection 优先,坐标兜底)
+            crate::uia::uia_click(
+                opt_str(&params, "title").as_deref(),
+                opt_u32(&params, "pid"),
+                opt_u64(&params, "hwnd"),
+                req_u16(&params, "ref", "desktop_uia_click")? as u32,
+            )
+        }
+        "desktop_uia_right_click" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "uia_right_click".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 写:向目标应用注入真实右键(上下文菜单)
+            crate::uia::uia_right_click(
+                opt_str(&params, "title").as_deref(),
+                opt_u32(&params, "pid"),
+                opt_u64(&params, "hwnd"),
+                req_u16(&params, "ref", "desktop_uia_right_click")? as u32,
+            )
+        }
+        "desktop_uia_type" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "uia_type".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 写:向目标应用输入文字(ValuePattern.SetValue 优先,剪贴板粘贴兜底)
+            crate::uia::uia_type(
+                opt_str(&params, "title").as_deref(),
+                opt_u32(&params, "pid"),
+                opt_u64(&params, "hwnd"),
+                req_u16(&params, "ref", "desktop_uia_type")? as u32,
+                &req_str(&params, "text", "desktop_uia_type")?,
+            )
+        }
+        "desktop_uia_scroll" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "uia_scroll".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 写:滚动目标控件(ScrollPattern 优先,滚轮兜底)
+            crate::uia::uia_scroll(
+                opt_str(&params, "title").as_deref(),
+                opt_u32(&params, "pid"),
+                opt_u64(&params, "hwnd"),
+                req_u16(&params, "ref", "desktop_uia_scroll")? as u32,
+                &req_str(&params, "direction", "desktop_uia_scroll")?,
+                opt_f64(&params, "amount"),
+            )
+        }
+        "desktop_uia_window_shot" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            {
+                let ctx = crate::utils::get_ctx(&state)?;
+                let tool = crate::tools::DesktopTool { action: "uia_window_shot".into(), agent_id: agent_id.clone() };
+                crate::utils::check_permission(&tool, &ctx, &app).await?;
+            }
+            // 只读:按窗口矩形截图(非全屏,隐私面更小)
+            crate::uia::uia_window_shot(
+                opt_str(&params, "title").as_deref(),
+                opt_u32(&params, "pid"),
+                opt_u64(&params, "hwnd"),
+            )
+        }
         "browser_attach" => {
             let agent_id = opt_str(&params, "_agent_id");
             check_browser_permission("attach", agent_id.as_deref(), &state, &app).await?;

@@ -607,6 +607,13 @@ export function createBrowserTools(): Tool[] {
 const DESKTOP_ACTION_MAP: Record<string, string> = {
   probe: 'desktop_probe',
   screenshot: 'desktop_screenshot',
+  uia_tree: 'desktop_uia_tree',
+  uia_find: 'desktop_uia_find',
+  uia_click: 'desktop_uia_click',
+  uia_right_click: 'desktop_uia_right_click',
+  uia_type: 'desktop_uia_type',
+  uia_scroll: 'desktop_uia_scroll',
+  uia_window_shot: 'desktop_uia_window_shot',
 };
 
 async function runDesktopAction(action: string, args: Record<string, unknown>): Promise<string> {
@@ -644,6 +651,117 @@ export function createDesktopTools(): Tool[] {
       schema: z.object({}),
       readOnly: true,
       execute: () => run('screenshot', {}),
+    }),
+    defineTool({
+      name: 'desktop_uia_tree',
+      description:
+        'Read the Windows UI Automation control tree of a desktop window (standard controls only: buttons, inputs, lists, menus...). ' +
+        'Returns {window:{pid,title,hwnd}, refs:N, tree:"[ref] ControlType \\"Name\\"", controls:[{ref,name,type,automation_id,enabled,value,rect}]}. ' +
+        'Locate the window by ONE of: hwnd (exact, from desktop_probe), pid (its main window), title (fuzzy, first match), or omit all to use the foreground window. ' +
+        'Then act on controls by their ref with desktop_uia_click/type/scroll. ' +
+        'Self-drawn controls (WeChat/QQ/DingTalk etc.) expose an empty tree - use desktop_uia_window_shot + a vision model instead.',
+      schema: z.object({
+        hwnd: z.number().int().optional().describe('Window handle from desktop_probe (hwnd field)'),
+        pid: z.number().int().optional().describe('Process id - resolves to its main window'),
+        title: z.string().optional().describe('Window title substring (fuzzy, first match)'),
+        depth: z.number().int().optional().describe('Reserved'),
+      }),
+      readOnly: true,
+      execute: (a) => run('uia_tree', a),
+    }),
+    defineTool({
+      name: 'desktop_uia_find',
+      description:
+        'Find controls inside a desktop window by criteria (name fuzzy / control_type / automation_id / enabled). ' +
+        'Returns matching controls with their ref for later actions. Window located as in desktop_uia_tree. ' +
+        'Use instead of a full tree when you already know what kind of control you need.',
+      schema: z.object({
+        hwnd: z.number().int().optional().describe('Window handle from desktop_probe'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+        name: z.string().optional().describe('Control name substring (case-insensitive)'),
+        control_type: z.string().optional().describe('e.g. Button, Edit, ListItem, MenuItem, CheckBox'),
+        automation_id: z.string().optional().describe('Exact automation id'),
+        enabled: z.boolean().optional().describe('Filter by enabled state'),
+      }),
+      readOnly: true,
+      execute: (a) => run('uia_find', a),
+    }),
+    defineTool({
+      name: 'desktop_uia_click',
+      description:
+        'Click a control in a desktop window by its ref (from desktop_uia_tree/find). ' +
+        'Triggers the control via InvokePattern/TogglePattern/SelectionItemPattern when available, else real mouse click at its center. ' +
+        'Returns {done, method} where method reveals the mechanism used (invoke/toggle/selection/coords). ' +
+        'Requires approval - this injects a real click into the target app and may trigger save/send/delete side effects. ' +
+        'If the ref is stale, re-run desktop_uia_tree to get fresh refs.',
+      schema: z.object({
+        ref: z.number().int().describe('Control ref from desktop_uia_tree/find'),
+        hwnd: z.number().int().optional().describe('Window handle (re-locate if tree changed)'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: (a) => run('uia_click', a),
+    }),
+    defineTool({
+      name: 'desktop_uia_right_click',
+      description:
+        'Right-click a control in a desktop window by its ref - opens the context menu at the control center. ' +
+        'Requires approval (injects a real right-click; may trigger destructive/send actions from the context menu). ' +
+        'Returns {done, method:"coords"}.',
+      schema: z.object({
+        ref: z.number().int().describe('Control ref from desktop_uia_tree/find'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: (a) => run('uia_right_click', a),
+    }),
+    defineTool({
+      name: 'desktop_uia_type',
+      description:
+        'Type text into a control in a desktop window by its ref. ' +
+        'Uses ValuePattern.SetValue when the control supports it (instant replace), else focuses the control and pastes via clipboard. ' +
+        'Returns {done, method} (setvalue/sendkeys). Requires approval - text is really written into the target app and may be saved/sent. ' +
+        'The clipboard is restored to its previous content afterwards.',
+      schema: z.object({
+        ref: z.number().int().describe('Control ref (usually an Edit/ComboBox)'),
+        text: z.string().describe('Text to type'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: (a) => run('uia_type', a),
+    }),
+    defineTool({
+      name: 'desktop_uia_scroll',
+      description:
+        'Scroll a scrollable control in a desktop window by its ref. ' +
+        'Uses ScrollPattern when available (precise), else real mouse wheel at the control center (wheel/wheel for horizontal). ' +
+        'Returns {done, method} (scrollpattern/wheel). Requires approval - moves the viewport of the target app.',
+      schema: z.object({
+        ref: z.number().int().describe('Control ref (scrollable pane/list)'),
+        direction: z.enum(['up', 'down', 'left', 'right']).describe('Scroll direction'),
+        amount: z.number().optional().describe('Scroll amount (ScrollPattern units, or wheel ticks * 120); default 1'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: (a) => run('uia_scroll', a),
+    }),
+    defineTool({
+      name: 'desktop_uia_window_shot',
+      description:
+        'Capture a screenshot of a single window rect (not the full screen) - smaller privacy surface than desktop_screenshot. ' +
+        'Locate window as in desktop_uia_tree (hwnd/pid/title/foreground). ' +
+        'Returns {path, bytes, rect}. With a text-only model hand the path to the user; with a vision model read the image to see self-drawn controls that UIA cannot see.',
+      schema: z.object({
+        hwnd: z.number().int().optional().describe('Window handle from desktop_probe'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      readOnly: true,
+      execute: (a) => run('uia_window_shot', a),
     }),
   ];
 }

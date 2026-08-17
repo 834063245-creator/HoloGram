@@ -274,6 +274,13 @@ export const DOMAIN_SPECS: DomainSpec[] = [
     actions: {
       probe: 'desktop_probe',
       screenshot: 'desktop_screenshot',
+      uia_tree: 'desktop_uia_tree',
+      uia_find: 'desktop_uia_find',
+      uia_click: 'desktop_uia_click',
+      uia_right_click: 'desktop_uia_right_click',
+      uia_type: 'desktop_uia_type',
+      uia_scroll: 'desktop_uia_scroll',
+      uia_window_shot: 'desktop_uia_window_shot',
     },
   },
   {
@@ -423,6 +430,13 @@ export function collectHiddenToolNames(): string[] {
     'browser_wait',
     'desktop_probe',
     'desktop_screenshot',
+    'desktop_uia_tree',
+    'desktop_uia_find',
+    'desktop_uia_click',
+    'desktop_uia_right_click',
+    'desktop_uia_type',
+    'desktop_uia_scroll',
+    'desktop_uia_window_shot',
   ]) {
     names.add(n);
   }

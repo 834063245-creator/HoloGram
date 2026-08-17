@@ -258,7 +258,7 @@ impl Tool for BrowserTool {
     }
 }
 
-// DesktopTool — desktop_probe / desktop_screenshot
+// DesktopTool — desktop_probe / desktop_screenshot / desktop_uia_*
 // ═══════════════════════════════════════════════════════════════
 
 pub struct DesktopTool {
@@ -272,15 +272,20 @@ impl Tool for DesktopTool {
     }
 
     fn get_path(&self) -> Option<PathBuf> {
-        None // 桌面快照不针对单个文件
+        None // 桌面快照/UIA 不针对单个文件
     }
 
     fn is_read_only(&self) -> bool {
-        true // probe / screenshot 均为观察, 不改变状态
+        // 观察类: probe(进程/窗口快照) + screen/窗口截图 + UIA 读树/查找
+        matches!(
+            self.action.as_str(),
+            "probe" | "screenshot" | "uia_tree" | "uia_find" | "uia_window_shot"
+        )
     }
 
     fn is_destructive(&self) -> bool {
-        false
+        // 写动作(点击/输入/滚动)会改变目标应用状态
+        !self.is_read_only()
     }
 
     fn agent_id(&self) -> Option<&str> {
@@ -298,18 +303,32 @@ impl Tool for DesktopTool {
         if rules.find_allow("Desktop", None).is_some() {
             return PermissionResult::Allow;
         }
-        // 3. probe = 进程表/窗口/控制台可见性快照(只读) → 放行
-        if self.action == "probe" {
+        // 3. 观察类动作放行（probe / 截图 / UIA 读树/查找 — 不改变桌面状态）
+        if self.is_read_only() {
             return PermissionResult::Passthrough;
         }
-        // 4. screenshot = 截进整个桌面(高隐私面) → Ask
+        // 4. 写动作 → Ask（真实点击/输入/滚动到目标应用，可能触发保存/发送/删除等副作用）
+        let reason = match self.action.as_str() {
+            "uia_click" | "uia_right_click" => {
+                "Agent 请求向一个桌面应用界面注入真实鼠标点击。\
+                 点击可能触发保存、发送、删除、提交等不可逆操作，请确认目标应用与动作安全。".into()
+            }
+            "uia_type" => {
+                "Agent 请求向一个桌面应用的输入框注入文字。\
+                 输入内容会真实写入目标应用，可能被保存或发送，请确认目标输入框与内容安全。".into()
+            }
+            "uia_scroll" => {
+                "Agent 请求滚动一个桌面应用内的滚动区域。滚动本身无破坏性，但可能让敏感内容进入视野。".into()
+            }
+            _ => "Agent 请求控制桌面应用（动作: {}）".replace("{}", &self.action),
+        };
         PermissionResult::Ask {
-            reason: "Agent 请求截取整个屏幕(全屏截图)。截图中可能包含任意窗口的敏感内容                 (邮件/聊天/密码/其他应用界面)。请确认当前屏幕没有敏感信息后再批准。".into(),
+            reason,
             suggestions: vec![PermissionUpdate {
                 rule: "Desktop".into(),
                 behavior: "allow".into(),
             }],
-            danger: Some("桌面截图".into()),
+            danger: Some("桌面自动化操作".into()),
         }
     }
 }
