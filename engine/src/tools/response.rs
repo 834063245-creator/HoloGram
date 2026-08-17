@@ -96,7 +96,7 @@ fn tool_result(id: &Value, data: Value) -> Value {
     success_response(id, json!({
         "content": [{ "type": "text", "text": text }],
         "_meta": {
-            "generator": "HoloGram v4.0",
+            "generator": format!("HoloGram {}", env!("CARGO_PKG_VERSION")),
             "license": "MIT",
             "copyright": "Copyright (c) 2026 Wenbing Jing"
         }

@@ -121,7 +121,7 @@ pub fn explore(
             "totalFilesMatched": ctx.named_files.len(),
             "filesShown": if output_truncated { ctx.named_files.len().min(explore_output_budget(ctx.graph.node_count()).default_max_files) } else { ctx.named_files.len() },
             "hint": if output_truncated { truncation_hint } else { String::new() },
-            "_generator": "HoloGram v4.0 — Copyright (c) 2026 Wenbing Jing — MIT License"
+            "_generator": format!("HoloGram {} — Copyright (c) 2026 Wenbing Jing — MIT License", env!("CARGO_PKG_VERSION"))
         }
     })
 }

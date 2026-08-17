@@ -94,13 +94,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── --version / --help：打印版本信息后退出 ──
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("HoloGram Engine v4.0");
+        println!("HoloGram Engine {}", env!("CARGO_PKG_VERSION"));
         println!("Copyright (c) 2026 Wenbing Jing. MIT License.");
         println!("https://github.com/834063245-creator/HoloGram");
         return Ok(());
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("HoloGram Engine v4.0 — Code Dependency Topology Analyzer");
+        println!("HoloGram Engine {} — Code Dependency Topology Analyzer", env!("CARGO_PKG_VERSION"));
         println!("Copyright (c) 2026 Wenbing Jing. MIT License.");
         println!();
         println!("USAGE:");
@@ -579,7 +579,7 @@ fn full_analyze_impl(root: &std::path::Path) -> Vec<u8> {
         obj.insert("elapsed_secs".into(), serde_json::json!(result.elapsed_secs));
         obj.insert("node_count".into(), serde_json::json!(result.node_count));
         obj.insert("edge_count".into(), serde_json::json!(result.edge_count));
-        obj.insert("generator".into(), serde_json::json!("HoloGram v4.0 — Copyright (c) 2026 Wenbing Jing — MIT License"));
+        obj.insert("generator".into(), serde_json::json!(format!("HoloGram {} — Copyright (c) 2026 Wenbing Jing — MIT License", env!("CARGO_PKG_VERSION"))));
     }
     serde_json::to_vec(&resp).unwrap_or_default()
 }
