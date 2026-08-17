@@ -134,7 +134,7 @@ fn build_tree_ps(_depth: Option<u32>) -> String {
          $__count = $__all.Count\n\
          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n\
          # BoundingRectangle 可能返回 ±Infinity（隐藏/虚拟化控件）——安全转 int，非法值兜底 0\n\
-         function __SafeInt([double]$v) {{ if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) {{ 0 }} else {{ [int]$v }} }}\n\
+         function __SafeInt([double]$v) { if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { 0 } else { [int]$v } }\n\
          for ($i = 0; $i -lt $__count; $i++) {\n\
            $e = $__all.Item($i)\n\
            if ($null -eq $e) { continue }\n\
@@ -407,7 +407,7 @@ fn action_prefix_ps(
     // 坐标计算（供兜底路径使用）：以元素矩形中心为点击点
     ps.push_str(
         "$__rect = $__el.Current.BoundingRectangle\n\
-         function __SafeInt([double]$v) {{ if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) {{ 0 }} else {{ [int]$v }} }}\n\
+         function __SafeInt([double]$v) { if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { 0 } else { [int]$v } }\n\
          $__cx = __SafeInt ($__rect.X + $__rect.Width / 2)\n\
          $__cy = __SafeInt ($__rect.Y + $__rect.Height / 2)\n\
          if ($__rect.Width -le 0 -or $__rect.Height -le 0) { throw \"ref $ref 的控件没有可点击区域（可能已隐藏或滚动出视口，请重新 desktop_uia_tree）\" }\n",
@@ -750,5 +750,18 @@ mod tests {
         let t = tree_text(&controls);
         assert!(t.contains("[0] Edit value=hello"));
         assert!(t.contains("[1] Button \"OK\" (disabled)"));
+    }
+}
+
+#[cfg(test)]
+mod debug_script_tests {
+    use super::*;
+
+    #[test]
+    fn debug_print_script() {
+        let loc = window_locator_ps(Some("Calculator"), None, None);
+        let bt = build_tree_ps(None);
+        let script = format!("{loc}\n{bt}");
+        eprintln!("===SCRIPT-BEGIN===\n{script}\n===SCRIPT-END===");
     }
 }
