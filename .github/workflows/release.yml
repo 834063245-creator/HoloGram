@@ -67,7 +67,7 @@ jobs:
 
       - name: Generate changelog
         shell: bash
-        run: git cliff --latest > /tmp/changelog.md
+        run: git cliff --tag "${GITHUB_REF_NAME}" > /tmp/changelog.md
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -192,7 +192,7 @@ jobs:
         run: |
           {
             echo 'changelog<<CLIFF_EOF'
-            git cliff --latest
+            git cliff --tag "${GITHUB_REF_NAME}"
             echo CLIFF_EOF
           } >> "$GITHUB_OUTPUT"
 
