@@ -235,7 +235,7 @@ mod tests {
         assert!(r.is_err());
     }
 
-    /// spill 回归：大 diff 必须完整落盘、路径含 .hologram/spill、内容无损。
+    /// spill 回归：大 diff 必须完整落盘、位于 .hologram/spill 下、内容无损。
     #[test]
     fn spill_diff_file_writes_full_content() {
         let tmp = std::env::temp_dir().join("hologram_test_spill_diff");
@@ -244,12 +244,14 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
 
         let diff = "diff-line\n".repeat(2_000); // ~20KB > 8KB 阈值
+        let spill_dir = project.join(".hologram").join("spill");
         let path = spill_diff_file(&project.to_string_lossy(), "agent-test-spill", &diff).unwrap();
         assert!(path.exists(), "spill 文件必须存在");
         assert!(
-            path.to_string_lossy().contains(".hologram/spill"),
-            "spill 路径必须在 .hologram/spill 下: {}",
-            path.to_string_lossy()
+            path.starts_with(&spill_dir),
+            "spill 文件必须位于 {} 下: {}",
+            spill_dir.display(),
+            path.display()
         );
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),

@@ -495,10 +495,12 @@ window.addEventListener('load', () => { document.getElementById('hover-zone').ad
     assert_eq!(hovered.as_bool(), Some(true), "hover 后 mouseenter 应触发");
 
     // 组合键：Ctrl+A 主键事件必须带 ctrlKey。
+    // label 恒为规范名 "control+a"（actions.rs parse_modifiers 把 ctrl→Control 再小写），
+    // 断言用 control 而非 ctrl——"control+a" 不含子串 "ctrl"（曾因跳过守卫掩盖未触发）。
     let combo = cdp_press("a", Some(vec!["ctrl".into()]), Some(agent))
         .await
         .expect("组合键应成功");
-    assert!(combo.contains("ctrl"), "组合键返回异常: {combo}");
+    assert!(combo.contains("control"), "组合键返回异常: {combo}");
     let combo_state = runtime_evaluate("window.__combo", Some(agent))
         .await
         .expect("读组合键标记");
