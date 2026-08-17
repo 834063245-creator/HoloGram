@@ -4,6 +4,7 @@
 // HTTP 请求的共享重试逻辑 — 从 openai.ts 和 anthropic.ts 中提取
 
 import { classifyError } from './types';
+import { proxyFetch } from './transport';
 
 export interface RetryConfig {
   url: string;
@@ -31,7 +32,7 @@ export async function sendWithRetry(cfg: RetryConfig): Promise<Response> {
 
     let resp: Response;
     try {
-      resp = await fetch(cfg.url, {
+      resp = await proxyFetch(cfg.url, {
         method: 'POST',
         headers: cfg.headers,
         body: cfg.body,

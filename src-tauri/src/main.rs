@@ -31,6 +31,7 @@ mod rpc;
 mod lifecycle;
 mod cdp;
 mod desktop;
+mod llm_proxy;
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -110,6 +111,8 @@ fn main() {
             }
             // v4 Phase 4: Unity 事件服务器
             commands::external::start_unity_event_server(app.handle().clone());
+            // LLM 反向代理 — 绕开 WebView CORS，让 provider 调用走后端（2026-08-16）
+            let _proxy_port = llm_proxy::spawn_llm_proxy();
             // Memory Bundle: 如果在 hologram 旁找到 exe 则启动
             if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_path.parent() {

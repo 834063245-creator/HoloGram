@@ -6,7 +6,7 @@
 
 ## 一句话
 
-Provider 系统 = **两种协议实现**（Anthropic / OpenAI 兼容）+ **一份数据目录**（6 厂商 JSON）+ **一条创建入口**（`createProvider` 工厂），密钥由 Rust 后端加密保管，前端只经 RPC 存取。
+Provider 系统 = **两种协议实现**（Anthropic / OpenAI 兼容）+ **一份数据目录**（7 厂商 JSON）+ **一条创建入口**（`createProvider` 工厂），密钥由 Rust 后端加密保管，前端只经 RPC 存取。
 
 ## 现状盘点（2026-08-07 实测）
 
@@ -30,7 +30,7 @@ Provider 系统 = **两种协议实现**（Anthropic / OpenAI 兼容）+ **一�
 | `retry.ts` (59 行) | 3 次指数退避重试 | ✅ 完整，测试覆盖 |
 | `shared.ts` (109 行) | sseEvents / prewarm / fetchJsonWithTimeout / write 预览提取 | ✅ 完整 |
 | `catalog.ts` (123 行) | 静态目录 + 动态模型合并 | ✅ 完整，测试覆盖 |
-| `catalog/*.json` | 6 厂商模型数据（deepseek 4 / anthropic 14 / openai 29 / moonshot 10 / minimax 3 / qwen 5） | ⚠️ 覆盖不全（无 GLM/Ollama） |
+| `catalog/*.json` | 7 厂商模型数据（deepseek 4 / anthropic 14 / openai 29 / moonshot 10 / minimax 3 / qwen 5 / glm 3 / ollama 3 / opencode 2） | ✅ 已含 GLM/Ollama；opencode 为 GO 套餐网关端点（2026-08-17 新增） |
 
 ### 设置与 UI
 
@@ -522,3 +522,45 @@ SettingsPanel.tsx（外壳：tab / dirty / 保存 / 凭据暂存）
 
 - `npx tsc --noEmit` 0 错；新增 thinking 映射 + openai 请求体测试全绿
 - 真机回归（并入 P3 挂起项）：DeepSeek 高/极限/关闭 各一轮对话
+
+## P13 — 全链路断链根治：LLM 本地反向代理（CORS 绕开）+ 切换链路修复（2026-08-16）
+
+> 动机：用户实测「配置多个供应商，切换后全部无法实际调用」。审计结论——
+> **provider 请求从 WebView 直接 fetch 受浏览器 CORS 限制**：Anthropic 返回 403 且无
+> `Access-Control-Allow-Origin`（浏览器必被挡）、OpenAI 当前不可达；只有 DeepSeek 等少数
+> 厂商放行。而全仓库测试全部 mock 了 fetch，从未真机跑通一条真实 LLM 调用（P3「真机
+> 回归」一直挂在「用户未做」），所以代码全绿但真实链路从未打通。成熟 Agent 软件
+> （Cline / Cherry Studio / Chatbox）均把 LLM HTTP 走后端转发以绕开 CORS。
+
+### 修复：Rust 本地反向代理（`src-tauri/src/llm_proxy.rs`）
+
+- 起一个 `127.0.0.1:14570`（被占则 +1 重试）的 hyper server + reqwest client：
+  前端把真实目标 URL 放 `x-hologram-target` 头，POST/GET 到本代理；代理流式转发、
+  **SSE 逐块透传**，并给每个响应加 `Access-Control-Allow-Origin: *`。
+- 前端 `provider/transport.ts`：`proxyFetch()` 优先走代理，端口取不到（dev/测试）回退直连。
+  `openai.ts` / `anthropic.ts` / `shared.ts` 的 `sendWithRetry` / `fetchJsonWithTimeout` /
+  `prewarmEndpoint` 全部改经 `proxyFetch`。前端既有 SSE 解析（`sseEvents` / `readSSE`）不变。
+- 安全：仅绑定 127.0.0.1；只接受 GET/POST/OPTIONS；目标必须是绝对 http/https
+  （允许本地端点如 Ollama）；请求体 64MB 上限。
+- RPC：`rpc.rs` 新增 `llm_proxy_port`，前端 `transport` 惰性取端口并缓存。
+
+### 修复：切换链路两个运行时 bug
+
+1. **`Agent.setProvider` 未写穿 ctx 服务表**（`agent.ts:431`）——热切换后新 spawn 的
+   子 Agent 从 `context.child()` 继承旧 provider/旧 Key，导致「切换后子任务仍用旧供应商」
+   与「provider 调用混乱」。修复：`setProvider` 里 `this._ctx?.set('provider', prov)`。
+2. **清空 API Key 的拆除路径不重置 `_lastAgentCfgKey`**（`workspace.ts`）——重新填入相同
+   `name/kind/key/baseUrl/model` 时 `_agentRebuildKey` 与残留键相同，重建被跳过，
+   provider/agent 永远起不来。修复：拆除分支 `this._lastAgentCfgKey = null`。
+
+### 验证（2026-08-16 实测）
+
+- `cd src-tauri && cargo test llm_proxy` 通过（含端到端 SSE 透传测试：代理把上游两段
+  `data:` + `[DONE]` 完整透传）。
+- 前端 `npx tsc --noEmit` 0 错；`npx vitest run tests/provider-*` 全绿
+  （新增 provider-transport.test.ts：代理转发 / 直连回退 / 端口缓存）。
+- 真机 CORS 证据：DeepSeek 放行 CORS（直连可通）；Anthropic 403 无 CORS 头（必须走代理）。
+
+> 遗留：P3 的「带工具真实对话 / Claude thinking / 翻译器 / 摘要」仍应在 Tauri 真机各跑一轮
+> 才算完整验收（此前的审计只到代码层）。
+

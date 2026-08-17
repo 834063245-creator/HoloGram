@@ -199,6 +199,7 @@ export interface RpcContract {
   credential_store: { params: { provider: string; key: string }; result: string }; // "null"
   credential_get: { params: { provider: string }; result: string }; // JSON
   credential_delete: { params: { provider: string }; result: string }; // "null"
+  llm_proxy_port: { params: Record<string, never>; result: string }; // 端口号字符串（0=不可用）
 
   // ── Agent 隔离（worktree）────────────────────────────────
   agent_isolation_create: { params: { agent_id: string }; result: string }; // JSON

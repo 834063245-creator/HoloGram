@@ -3,6 +3,8 @@
 
 // provider 实现的共享工具函数 — 从 anthropic.ts 和 openai.ts 中提取
 
+import { proxyFetch } from './transport';
+
 /** 从流式 JSON 参数中提取 write/edit 工具的部分内容。
  *  处理不完整的 JSON — content 字符串可能尚未闭合。
  *  工具收敛后模型调用领域工具 fs(action=write/edit)：从部分参数中正则提取 action。 */
@@ -42,7 +44,7 @@ export function extractWritePreview(toolName: string, args: string): string | nu
 export function prewarmEndpoint(url: string, headers: Record<string, string>): void {
   const ctrl = new AbortController();
   setTimeout(() => ctrl.abort(), 3000);
-  fetch(url, { headers, signal: ctrl.signal }).catch(() => {});
+  proxyFetch(url, { headers, signal: ctrl.signal }).catch(() => {});
 }
 
 /** 带超时的 JSON 获取。任何失败均返回 null（非 ok、网络错误、超时）。 */
@@ -54,7 +56,7 @@ export async function fetchJsonWithTimeout(
   const ctrl = new AbortController();
   setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const resp = await fetch(url, { headers, signal: ctrl.signal });
+    const resp = await proxyFetch(url, { headers, signal: ctrl.signal });
     if (!resp.ok) return null;
     return await resp.json();
   } catch {

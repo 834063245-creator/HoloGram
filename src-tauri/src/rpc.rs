@@ -915,6 +915,7 @@ pub(crate) async fn rpc(
                 .map_err(|e| format!("credential_delete 任务失败: {e}"))?;
             ok_unit(r)
         }
+        "llm_proxy_port" => Ok(crate::llm_proxy::proxy_port().to_string()),
 
         // ═══════════════════════════════════════════════════════
         // Agent 隔离（7 个命令）

@@ -24,9 +24,14 @@ glob = "0.3"
 url = "2"
 portable-pty = "0.9"
 chrono = "0.4"
-tokio = { version = "1", features = ["sync", "time", "net", "io-util", "rt"] }
+tokio = { version = "1", features = ["sync", "time", "net", "io-util", "rt", "rt-multi-thread", "macros", "io-std"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls", "http2"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "tokio", "http1"] }
+http-body-util = "0.1"
+http-body = "1"
 libloading = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

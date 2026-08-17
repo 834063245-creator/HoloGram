@@ -432,6 +432,14 @@ export class Agent {
     this.prov = prov;
     if (pricing) this.pricing = pricing;
     this._summaryProv = null;
+    // write-through：子 Agent 从 ctx 服务表继承 provider（context.ts child()）。
+    // 不写则热切换后新 spawn 的子 Agent 仍持有旧 provider/旧 Key ——
+    // 2026-08-16 全链路断链审计（provider 切换 不生效 的根因之一）。
+    try {
+      this._ctx?.set('provider', prov);
+    } catch {
+      /* ctx 已 dispose —— 忽略写入 */
+    }
   }
 
   /** 从持久化快照恢复 plan 状态 — 在 agent load 后调用 */
