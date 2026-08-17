@@ -244,11 +244,15 @@ async fn handle_inner(client: reqwest::Client, req: Request<Incoming>) -> Respon
                     rb = rb.header(k.as_str(), s);
                 }
             }
-            // 强制 CORS + 透传 SSE 内容类型
+            // 强制 CORS + 透传 SSE 内容类型。
+            // access-control-allow-private-network 兼容 WebView2/Chrome 的
+            // Private Network Access 预检（否则 http://127.0.0.1 代理可能被拦）。
             rb = rb
                 .header("access-control-allow-origin", "*")
                 .header("access-control-allow-methods", "GET, POST, OPTIONS")
-                .header("access-control-allow-headers", "*");
+                .header("access-control-allow-headers", "*")
+                .header("access-control-allow-private-network", "true")
+                .header("access-control-expose-headers", "x-hologram-proxy-error");
             let body = StreamBody::new(
                 upstream.bytes_stream().map(|r| {
                     r.map(|bytes| hyper::body::Frame::data(bytes))
@@ -281,6 +285,8 @@ fn cors_response(status: StatusCode, body: Bytes) -> Response<BoxBody> {
         .header("access-control-allow-origin", "*")
         .header("access-control-allow-methods", "GET, POST, OPTIONS")
         .header("access-control-allow-headers", "*")
+        .header("access-control-allow-private-network", "true")
+        .header("access-control-expose-headers", "x-hologram-proxy-error")
         .body(full_boxed(body))
         .unwrap_or_else(|_| err_response(StatusCode::INTERNAL_SERVER_ERROR, "proxy: 构造 CORS 响应失败"))
 }
@@ -296,6 +302,11 @@ fn err_response(status: StatusCode, msg: &str) -> Response<BoxBody> {
     Response::builder()
         .status(status)
         .header("access-control-allow-origin", "*")
+        .header("access-control-allow-methods", "GET, POST, OPTIONS")
+        .header("access-control-allow-headers", "*")
+        .header("access-control-allow-private-network", "true")
+        .header("access-control-expose-headers", "x-hologram-proxy-error")
+        .header("x-hologram-proxy-error", "1")
         .header("content-type", "text/plain; charset=utf-8")
         .body(full_boxed(Bytes::copy_from_slice(msg.as_bytes())))
         .unwrap_or_else(|_| {
@@ -389,6 +400,26 @@ mod tests {
             server_handle.abort();
         });
         upstream_thread.join().unwrap();
+    }
+
+    /// 代理自身的错误响应必须带 x-hologram-proxy-error 标记，前端据此回退直连；
+    /// 同时携带 Private Network Access 允许头，兼容 WebView2/Chrome 的本地代理预检。
+    #[test]
+    fn err_response_marks_proxy_error_and_allows_private_network() {
+        let resp = err_response(StatusCode::BAD_GATEWAY, "proxy: boom");
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            resp.headers().get("x-hologram-proxy-error").and_then(|v| v.to_str().ok()),
+            Some("1")
+        );
+        assert_eq!(
+            resp.headers().get("access-control-allow-private-network").and_then(|v| v.to_str().ok()),
+            Some("true")
+        );
+        assert_eq!(
+            resp.headers().get("access-control-expose-headers").and_then(|v| v.to_str().ok()),
+            Some("x-hologram-proxy-error")
+        );
     }
 
     /// 停机标志置位后 serve_listener 必须在 ≤1s 内退出。

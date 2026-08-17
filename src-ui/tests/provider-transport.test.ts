@@ -12,6 +12,7 @@ import { proxyFetch, resetProxyPort } from '../src/provider/transport';
 // 本地代理端口走 typedRpc → bridge.rpc；这里 mock 掉 bridge，使
 // llm_proxy_port 返回指定端口。
 vi.mock('../src/bridge', () => ({ rpc: vi.fn() }));
+
 import { rpc } from '../src/bridge';
 
 describe('provider/transport.proxyFetch', () => {
@@ -77,5 +78,59 @@ describe('provider/transport.proxyFetch', () => {
     await proxyFetch('https://b.example/y');
     expect(rpc).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('代理请求失败（fetch reject）时回退直连', async () => {
+    (rpc as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce('14570');
+    const fetchSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(new Response('direct-ok', { status: 200 }));
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    const resp = await proxyFetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer sk' },
+      body: '{}',
+    });
+
+    expect(await resp.text()).toBe('direct-ok');
+    const calls = fetchSpy.mock.calls as [string, RequestInit][];
+    expect(calls[0][0]).toBe('http://127.0.0.1:14570/proxy');
+    expect(calls[1][0]).toBe('https://api.deepseek.com/v1/chat/completions');
+  });
+
+  it('代理自身 502（带 x-hologram-proxy-error）时回退直连', async () => {
+    (rpc as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce('14570');
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('proxy down', { status: 502, headers: { 'x-hologram-proxy-error': '1' } }))
+      .mockResolvedValueOnce(new Response('direct-ok', { status: 200 }));
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    const resp = await proxyFetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer sk' },
+      body: '{}',
+    });
+
+    expect(await resp.text()).toBe('direct-ok');
+    const calls = fetchSpy.mock.calls as [string, RequestInit][];
+    expect(calls[0][0]).toBe('http://127.0.0.1:14570/proxy');
+    expect(calls[1][0]).toBe('https://api.deepseek.com/v1/chat/completions');
+  });
+
+  it('上游 502 不带代理错误标记时保持透传（不误回退）', async () => {
+    (rpc as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce('14570');
+    const fetchSpy = vi.fn(async () => new Response('upstream down', { status: 502 }));
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    const resp = await proxyFetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      body: '{}',
+    });
+
+    expect(resp.status).toBe(502);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -9,8 +9,10 @@
 // （src-tauri/src/llm_proxy.rs）起了一个 127.0.0.1 本地代理，本模块把
 // fetch(url) 改造成 fetch(http://127.0.0.1:<port>, { x-hologram-target: url })。
 //
-// 降级：代理端口取不到（dev 无后端 / 端口 0）→ 回退直连。直连对本地端点
-// （Ollama 等本就走 127.0.0.1，无 CORS 问题）与测试（mock fetch）仍然成立。
+// 降级：代理端口取不到（dev 无后端 / 端口 0）、代理请求失败（CORS/PNA/网络），
+// 或 Rust 代理自身返回 5xx（带 x-hologram-proxy-error）→ 回退直连。直连对本地端点
+// （Ollama 等本就走 127.0.0.1，无 CORS 问题）、原本放行 CORS 的厂商（DeepSeek）
+// 与测试（mock fetch）仍然成立。
 
 import { typedRpc } from '../rpc-contract';
 
@@ -50,10 +52,7 @@ export function resetProxyPort(): void {
  * 保持与原生 fetch 相同的签名契约（method/headers/body/signal），供
  * openai.ts / anthropic.ts / shared.ts 直接替换使用。
  */
-export async function proxyFetch(
-  url: string,
-  init: RequestInit & { signal?: AbortSignal } = {},
-): Promise<Response> {
+export async function proxyFetch(url: string, init: RequestInit & { signal?: AbortSignal } = {}): Promise<Response> {
   const port = await getProxyPort();
   if (!port) return fetch(url, init);
 
@@ -62,10 +61,24 @@ export async function proxyFetch(
   headers.set('x-hologram-target', url);
   // 浏览器自动加的 host 等 hop-by-hop 头由 Rust 侧过滤，这里直接删 host
   headers.delete('host');
-  return fetch(`http://127.0.0.1:${port}/proxy`, {
+  const proxyUrl = `http://127.0.0.1:${port}/proxy`;
+  const proxyInit: RequestInit = {
     ...rest,
     method: rest.method || 'GET',
     headers,
     signal,
-  });
+  };
+  try {
+    const resp = await fetch(proxyUrl, proxyInit);
+    // 代理自身失败（Rust 侧连不上目标/TLS 失败等）时回退直连；
+    // 上游业务错误（401/429/400 等）不带该标记，保持原样透传。
+    if (resp.headers.get('x-hologram-proxy-error') === '1' && resp.status >= 500) {
+      return fetch(url, init);
+    }
+    return resp;
+  } catch {
+    // 代理不可达 / CORS / Private Network Access 预检被拦 → 回退直连。
+    // DeepSeek 等原本直连可用的厂商不能因为代理链路问题而不可用。
+    return fetch(url, init);
+  }
 }
