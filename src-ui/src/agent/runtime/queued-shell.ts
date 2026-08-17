@@ -84,19 +84,27 @@ export async function execStreamedShell(
         () => resolveOnce(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)\n${fullOutput}`),
         SHELL_TIMEOUT,
       );
+      // 中止语义（2026-08-17 修复，会话 223 事故）：
+      // 1) 监听器覆盖整个执行周期——之前 finally 里立刻摘掉，命令运行中
+      //    按停止/新消息打断时 bash_kill 永不触发，进程与构建锁泄漏；
+      // 2) abort 必须落地 promise（resolveOnce），否则调用方永远收不到结果，
+      //    卡片停在"执行中"，且 runLoop 会追加误导性的 "did not produce a result"。
       const onAbort = () => {
         if (jobId != null) {
           void agentInvoke('bash_kill', { jobId, agentId }).catch(() => {});
         }
+        resolveOnce('[已取消] 命令执行被中止（agent 运行被中断）。\n' + fullOutput);
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       try {
         const startedRaw = await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId });
         jobId = parseStartedJobId(startedRaw);
+        // started 响应已返回：若此刻已 aborted（invoke 期间被中止），补一次 kill
+        if (signal?.aborted && jobId != null) {
+          void agentInvoke('bash_kill', { jobId, agentId }).catch(() => {});
+        }
       } catch (e: unknown) {
-        resolveOnce(`错误: ${e}`);
-      } finally {
-        signal?.removeEventListener('abort', onAbort);
+        resolveOnce('错误: ' + e);
       }
     })();
   });

@@ -1529,6 +1529,21 @@ ${resumeNote}
         let content = r
           ? r.output || `(工具 ${call.name} 执行成功，无输出)`
           : `error: tool "${call.name}" did not produce a result`;
+        if (!r) {
+          // 补发 ToolResult 终止 UI 卡片（执行器 abort 已覆盖主流路径，
+          // 此处兜底任何残留缺口，防止卡片永久"执行中"——会话 223 事故）。
+          this._sink({
+            kind: EventKind.ToolResult,
+            tool: {
+              id: call.id,
+              name: call.name,
+              args: call.arguments,
+              output: content,
+              err: 'did not produce a result',
+              read_only: this.toolReadOnly(call.name),
+            },
+          });
+        }
         if (stormNudge && i === 0) content += stormNudge;
         this._appendMessage('tool/result', {
           role: 'tool',

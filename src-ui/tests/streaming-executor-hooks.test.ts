@@ -319,3 +319,72 @@ describe('StreamingToolExecutor — unknown tool', () => {
     expect(resultEv?.tool?.output).toBe('error: unknown tool "hallucinated_tool"');
   });
 });
+
+describe('StreamingToolExecutor — abort settles pending tools (会话 223 事故回归)', () => {
+  it('abort before awaitRemaining: pending tool gets [已取消] result + ToolResult event (card terminates)', async () => {
+    // 永不 settle 的工具 — 模拟卡住的 shell
+    const neverTool: Tool = {
+      name: () => 'run_shell',
+      description: () => 'mock shell',
+      parameters: () => ({ type: 'object', properties: {}, required: [] }),
+      readOnly: () => false,
+      execute: () => new Promise<string>(() => {}), // 永不 resolve
+    };
+    const registry = makeRegistry([neverTool]);
+    const events: AgentEvent[] = [];
+    const ctrl = new AbortController();
+    const executor = new StreamingToolExecutor(registry, (ev) => events.push(ev), null, null, null, ctrl.signal);
+    executor.addTool({ id: 'c-shell', name: 'run_shell', arguments: '{"command":"cargo test"}' });
+    ctrl.abort();
+
+    const results = await executor.awaitRemaining();
+    expect(results).toHaveLength(1);
+    expect(results[0].call.id).toBe('c-shell');
+    expect(results[0].err).toBe('aborted');
+    expect(results[0].output).toContain('已取消');
+
+    // 卡片必须有 ToolResult 终结事件 — 之前缺失导致卡片永久"执行中"
+    const resultEv = events.find((e) => e.kind === EventKind.ToolResult && e.tool?.id === 'c-shell');
+    expect(resultEv).toBeDefined();
+    expect(resultEv?.tool?.err).toBe('aborted');
+  });
+
+  it('abort mid-awaitRemaining: remaining pending tools also settle with [已取消]', async () => {
+    const slowTool: Tool = {
+      name: () => 'search_content',
+      description: () => 'mock search',
+      parameters: () => ({ type: 'object', properties: {}, required: [] }),
+      readOnly: () => true,
+      execute: (args: any) =>
+        new Promise<string>((res) => {
+          // 依 id 区分：c-fast 立即返回；c-slow 永不返回
+          const callId = (args as { _testId?: string })._testId ?? '';
+          if (callId === 'c-fast') {
+            setTimeout(() => res('fast result'), 10);
+          }
+          // c-slow 永不 settle
+        }),
+    };
+    const registry = makeRegistry([slowTool]);
+    const events: AgentEvent[] = [];
+    const ctrl = new AbortController();
+    const executor = new StreamingToolExecutor(registry, (ev) => events.push(ev), null, null, null, ctrl.signal);
+    executor.addTool({ id: 'c-fast', name: 'search_content', arguments: '{"_testId":"c-fast"}' });
+    executor.addTool({ id: 'c-slow', name: 'search_content', arguments: '{"_testId":"c-slow"}' });
+
+    // 等 fast 完成的过程中 abort
+    setTimeout(() => ctrl.abort(), 30);
+    const results = await executor.awaitRemaining();
+
+    const byId = new Map(results.map((r) => [r.call.id, r]));
+    expect(byId.get('c-fast')?.output).toBe('fast result'); // 已完成 → 真实结果
+    const slow = byId.get('c-slow');
+    expect(slow).toBeDefined();
+    expect(slow?.err).toBe('aborted');
+    expect(slow?.output).toContain('已取消');
+
+    const slowEv = events.find((e) => e.kind === EventKind.ToolResult && e.tool?.id === 'c-slow');
+    expect(slowEv).toBeDefined();
+    expect(slowEv?.tool?.err).toBe('aborted');
+  });
+});

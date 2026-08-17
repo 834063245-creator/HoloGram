@@ -53,6 +53,7 @@ export class StreamingToolExecutor {
   private hooks: HookRegistry | null;
   private preflightHooks: PreflightHookRegistry | null;
   private pending = new Map<string, Promise<PendingResult>>();
+  private pendingCalls = new Map<string, ToolCall>();
   private completed: PendingResult[] = [];
   private toolIndex = 0;
   /** 追踪已分发的工具 ID，防止流式重试时重复分发。 */
@@ -175,6 +176,7 @@ export class StreamingToolExecutor {
     // 立即开始执行 — 不等待流结束
     const promise = this.executeTool(call, tool, idx);
     this.pending.set(call.id, promise);
+    this.pendingCalls.set(call.id, call);
   }
 
   /** 等待所有剩余工具执行完成。
@@ -182,10 +184,11 @@ export class StreamingToolExecutor {
    *  如设置了中止信号，将每个 pending promise 与其竞速，
    *  使永不解决的工具（如卡住的 Tauri invoke）不会无限阻塞循环。 */
   async awaitRemaining(): Promise<PendingResult[]> {
-    // 如已中止，立即丢弃所有
+    // 如已中止：剩余 pending 工具以取消结果落地（发 ToolResult + 返回结果），
+    // 而非静默丢弃——否则 UI 卡片永远停在"执行中"，runLoop 还会追加
+    // 误导性的 "did not produce a result"（会话 223 事故根因之一）。
     if (this.signal?.aborted) {
-      this.discard();
-      return [];
+      return this._settleCancelled();
     }
 
     const remaining: PendingResult[] = [];
@@ -194,20 +197,58 @@ export class StreamingToolExecutor {
         const result = this.signal ? await this._raceWithAbort(promise) : await promise;
         remaining.push(result);
       } catch (e: any) {
-        // 中止 — 丢弃剩余并停止收集
+        // 中止 — 剩余未完成工具同样以取消结果落地，再停止收集
         if (e?.name === 'AbortError' || this.signal?.aborted) {
+          remaining.push(...(await this._settleCancelled()));
           break;
         }
         // 其他错误不应发生 — executeTool 捕获所有
       }
     }
     this.pending.clear();
+    this.pendingCalls.clear();
     const syncCompleted = [...this.completed];
     this.completed = [];
     for (const r of syncCompleted) {
       this.pending.delete(r.call.id);
     }
     return [...syncCompleted, ...remaining];
+  }
+
+  /** 中止时把仍 pending 的工具全部落地为结果：短竞速窗口（100ms）内
+   *  已完成的取真实结果，未完成的给"已取消"结果并补发 ToolResult，
+   *  保证调用方（runLoop）拿到全部调用对应的结果、UI 卡片全部终结。
+   *  仅中止路径调用；正常路径不受影响。 */
+  private async _settleCancelled(): Promise<PendingResult[]> {
+    const out: PendingResult[] = [];
+    const entries = [...this.pending.entries()];
+    for (const [id, promise] of entries) {
+      const call = this.pendingCalls.get(id);
+      let result: PendingResult | null = null;
+      try {
+        result = await Promise.race([promise, new Promise<null>((res) => setTimeout(() => res(null), 100))]);
+      } catch {
+        result = null;
+      }
+      if (!result) {
+        if (!call) continue;
+        result = {
+          call,
+          output: '[已取消] 工具执行被中止（agent 运行被中断）。',
+          err: 'aborted',
+          truncated: false,
+        };
+      }
+      let guardName = call?.name ?? result.call.name;
+      try {
+        guardName = resolveGuardToolName(this.tools, result.call.name, JSON.parse(result.call.arguments || '{}'));
+      } catch {
+        // 参数非 JSON — 保持原名
+      }
+      this.emitPipelineResult(result.call, this.tools.get(result.call.name) ?? null, result, guardName, true);
+      out.push(result);
+    }
+    return out;
   }
 
   /** 将工具 promise 与中止信号竞速。信号在 promise 完成前触发时
@@ -237,6 +278,7 @@ export class StreamingToolExecutor {
   /** 丢弃所有待处理执行（如中止时）。 */
   discard(): void {
     this.pending.clear();
+    this.pendingCalls.clear();
     this.completed = [];
     this.dispatchedIds.clear();
   }
