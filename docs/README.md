@@ -1,6 +1,6 @@
 # HoloGram 文档索引
 
-> 收敛日期：2026-08-16。原则：**根目录只放入口与规则；docs/ 按用途分层；完成即归档。**
+> 收敛日期：2026-08-17。原则：**根目录只放入口与规则；docs/ 按用途分层；完成即归档。**
 > 找文档先看本页；本页没有的再去 `docs/archive/`，归档内容不是现状。
 
 ## 入口（按角色）
@@ -24,7 +24,7 @@
 
 | 文档 | 状态 | 内容 |
 |---|---|---|
-| [`ARCHITECTURE.md`](../ARCHITECTURE.md) | 当前（2026-08-16 校准） | 系统架构、技术栈、关键决策、验证基线 |
+| [`ARCHITECTURE.md`](../ARCHITECTURE.md) | 当前（2026-08-17 校准） | 系统架构、技术栈、关键决策、验证基线 |
 | [`CONTEXT.md`](../CONTEXT.md) | 当前 | 应用级统一词汇（`kind`/`status` 带簇前缀） |
 | [`docs/MULTI_AGENT_ROADMAP.md`](MULTI_AGENT_ROADMAP.md) | 工作台 | 多 Agent 路线图与已落地能力 |
 | [`docs/landmine-map.md`](landmine-map.md) | 当前 | 雷区地图、拆弹批次状态 |

@@ -229,16 +229,16 @@ DOM 所有权按层划分，不要跨层抢 DOM：
    （历史遗留按 docs/landmine-map.md 拆除，新代码不得新增）
 ```
 
-## 3. 验证门禁与基线（2026-08-16 实测）
+## 3. 验证门禁与基线（2026-08-17 实测）
 
 | 改了什么 | 必须过 | 实测基线 |
 |---|---|---|
 | 前端 | `cd src-ui && npm run build` | tsc --noEmit + vite build 全绿 |
-| 前端逻辑 | `cd src-ui && npx vitest run` | 1162 passed / 1 skipped（109 文件） |
+| 前端逻辑 | `cd src-ui && npx vitest run` | 1200 passed / 1 skipped（116 文件，共 1201） |
 | `src-ui/src/agent/**` | `cd src-ui && npm run verify:convergence` | exit 0（T0 静态 + 全部 phase specs 对拍 8 baseline；record 永不上 CI，baseline 变更走 change request 审批） |
 | 前端格式 | `npx biome check --write <改动文件>` | 全仓 588 errors/335 warnings 是存量基线（会漂移），只保证不新增 |
-| 引擎 | `cd engine && cargo test` | 698 tests（lib 670 + bin 27 + doc 1） |
-| 壳 | `cd src-tauri && cargo test` | 309 tests（bin 295 + 集成 14） |
+| 引擎 | `cd engine && cargo test` | 697 tests（lib 669 + bin 27 + doc 1；696 passed / 1 ignored） |
+| 壳 | `cd src-tauri && cargo test` | 322 tests（bin 308 + 集成 14，全绿；pwsh 冒烟在无 pwsh 7 的环境自动跳过） |
 | 桌面打包 | `cd src-tauri && cargo tauri build` | 会先跑前端构建；禁止用 `cargo build --release` 代替 |
 
 - CI（`.github/workflows/ci.yml`）只做编译 + 测试。**不要修改 CI。**

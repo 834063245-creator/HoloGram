@@ -1,6 +1,6 @@
 # HoloGram — Agent 项目手册
 
-> 生成：2026-06-18 · 更新：2026-08-16（按 main HEAD 9702140d 与实测基线校准；agent-core-convergence Phase 0-6 已并入 main）
+> 生成：2026-06-18 · 更新：2026-08-17（按 main HEAD 与实测基线校准；agent-core-convergence Phase 0-6 已并入 main）
 > 本文件是项目级静态注入文档：Codex 读 `AGENTS.md`，Claude Code 读 `CLAUDE.md`，内置 HoloGram Agent 把 `CLAUDE.md` 注入 system prompt。
 > **编码规则不是本文件的正文，而是 `CONVENTIONS.md` + `INVARIANTS.md`；本文件负责让规则真正被执行。**
 
@@ -20,7 +20,7 @@
 
 ```
 HoloGram/
-├── engine/            Rust 分析引擎（27 静态 tree-sitter 语法；34 默认 MCP 工具）
+├── engine/            Rust 分析引擎（27 静态 tree-sitter 语法；35 默认 MCP 工具 / 36 schema）
 ├── src-tauri/         Tauri 2 桌面壳（rpc.rs 单一 IPC 入口 + 权限沙箱 + 命令实现）
 ├── src-ui/            TypeScript 前端（React 19 + Three.js + Monaco + Zustand 5）
 │   ├── src/app/       新观测台壳（单 React 根；新 UI 落这里）
@@ -66,10 +66,10 @@ flowchart LR
   MCP[Cursor / Claude Code] -->|stdio serve| Engine
 ```
 
-## 4. 引擎能力与工具面（2026-08-16 实测）
+## 4. 引擎能力与工具面（2026-08-17 实测）
 
-- **语言**：27 种 tree-sitter 语法静态链接；18 种有专用结构查询（`.scm`，`engine/queries/` 共 38 个查询文件），其余走通用兜底；Kotlin / Markdown / TOML 动态加载。
-- **引擎 MCP 工具**：35 个 schema，默认激活 34 个（`symbol_history` 为 legacy 不默认激活）。外部 MCP 客户端（Cursor/Claude Code）仍见细粒度工具名。
+- **语言**：27 种 tree-sitter 语法静态链接；18 族适配器有专用结构查询（`.scm`，`engine/queries/` 共 38 个查询文件），其余静态语言走通用兜底；JSON 语法在代码中禁用（数据文件不解析）；Kotlin / Markdown / TOML 动态加载。
+- **引擎 MCP 工具**：36 个 schema，默认激活 35 个（`symbol_history` 为 legacy 不默认激活；`HOLOGRAM_MCP_TOOLS=*` 放开全量）。外部 MCP 客户端（Cursor/Claude Code）仍见细粒度工具名。
 - **内置 Agent 领域工具**（模型可见）：`fs / shell / git / search / web / agent / task / memory / browser / desktop / graph / ops / lsp` + 常驻 `ask_user / Skill / wait / enter_plan_mode / exit_plan_mode`。
   - `graph`：symbols / neighbors / impact / preflight / cycles / coupling / fragile / flows / dataflow 等 24 个只读动作——**改代码前先问图**。
   - `ops`：analyze / validate / health / status / timeline / rename / import_scip。
@@ -123,13 +123,13 @@ flowchart LR
 - `/goal`：`goal-manager.ts` 驱动 `Agent._goalLoop`；状态在 `.hologram/goals/{id}/`，与普通聊天槽隔离；完成靠 `goal_report` 工具，`[GOAL_COMPLETE]` 只是旧会话 fallback。
 - Plan 模式：工具 schema 跨模式恒定（保护 DeepSeek 前缀缓存）；写约束由 `planGate` 在执行层拦截。只读动作放行，fs write/edit 计划文件豁免，agent spawn 豁免；plan 中 spawn 的子 Agent 静态只读（`planRegistry()`）。
 
-## 10. 验证基线（2026-08-16 实测，数字会漂移，以重新实测为准）
+## 10. 验证基线（2026-08-17 实测，数字会漂移，以重新实测为准）
 
 | 层 | 命令 | 基线 |
 |---|---|---|
-| 引擎 | `cd engine && cargo test` | 698 tests（lib 670 + bin 27 + doc 1） |
-| 壳 | `cd src-tauri && cargo test` | 309 tests（bin 295 + 集成 14） |
-| 前端 | `cd src-ui && npx vitest run` | 1162 passed / 1 skipped（109 文件） |
+| 引擎 | `cd engine && cargo test` | 697 tests（lib 669 + bin 27 + doc 1；696 passed / 1 ignored） |
+| 壳 | `cd src-tauri && cargo test` | 322 tests（bin 308 + 集成 14，全绿；pwsh 冒烟在无 pwsh 7 的环境自动跳过） |
+| 前端 | `cd src-ui && npx vitest run` | 1200 passed / 1 skipped（116 文件，共 1201） |
 | 前端构建 | `cd src-ui && npm run build` | tsc --noEmit + vite build 全绿 |
 | Agent 运行时 | `cd src-ui && npm run verify:convergence` | exit 0（T0 静态 + 全部 phase specs 对拍 8 baseline） |
 | 前端格式 | `cd src-ui && npx biome ci .` | 588 errors / 335 warnings 是存量基线，不要顺手清；改动文件零新增 |

@@ -4,7 +4,7 @@ HoloGram 的代码依赖分析引擎 + 3D 图谱，作为 **DeepSeek Harness bun
 
 把代码库变成可对话的 3D 依赖星图：
 
-- **34 个 MCP 图分析工具**（`mcp__hologram__*`）：直查依赖图，不用让 LLM 猜源码
+- **35 个 MCP 图分析工具**（`mcp__hologram__*`，注册表共 36 个 schema，`symbol_history` 为 legacy）:直查依赖图，不用让 LLM 猜源码
 - **3D 星图**：DSH 侧边栏「3D 星图」入口，全屏渲染项目依赖图（Three.js，同一引擎数据）
 - **单一数据生命周期**：引擎一个进程双入口（MCP stdio + TCP），存量秒开 + watcher 增量更新
 
@@ -21,7 +21,7 @@ postinstall 会按平台从 GitHub Releases 下载引擎二进制（当前：**W
 重启后：
 
 - 侧边栏底部出现「3D 星图 / 🌌」按钮 → 全屏 3D 依赖图（分析当前会话工作区）
-- 34 个 `mcp__hologram__*` 工具进入 agent 工具箱：`explore_deps`、`search_symbols`、`get_neighbors`、`trace_impact`、`find_dep_path`、`inspect_symbol`、`get_community`、`cluster_report`、`fragile_modules`、`detect_cycles`、`coupling_report`、`arch_blindspots`、`analyze_project`、`graph_summary`、`validate_project`、`engine_status`、`list_flows`、`trace_dataflow`、`find_references` 等
+- 35 个 `mcp__hologram__*` 工具进入 agent 工具箱：`explore_deps`、`search_symbols`、`get_neighbors`、`trace_impact`、`find_dep_path`、`inspect_symbol`、`get_community`、`cluster_report`、`fragile_modules`、`detect_cycles`、`coupling_report`、`arch_blindspots`、`analyze_project`、`graph_summary`、`validate_project`、`engine_status`、`list_flows`、`trace_dataflow`、`find_references` 等
 
 > 引擎分析的项目根默认取 DSH 进程的 cwd（或当前会话工作区），可在 profile 的
 > `cordis.patch.yml` 里覆盖 `hologram-engine` 行的 `config.projectRoot`。

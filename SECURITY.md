@@ -4,9 +4,9 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| Latest (桌面应用 10.1.x / 引擎 0.1.x) | :white_check_mark: |
 
-HoloGram is in early development (0.x). Security patches will be released for the latest version.
+Security patches will be released for the latest version.
 
 ## Reporting a Vulnerability
 
@@ -28,11 +28,11 @@ You should receive an acknowledgement within 48 hours. We will keep you updated 
 
 Security-relevant areas of HoloGram include:
 
-1. **Agent tool execution** — The built-in Agent can execute shell commands and read/write files. Permission escalation bugs, sandbox escapes, or privilege bypasses in the tool guard layer are critical.
-2. **Python engine subprocess** — The Rust shell communicates with the Python analysis engine via JSON-RPC over stdio. Injection vectors in IPC messages that could cause arbitrary code execution in the Python process.
-3. **Tree-sitter grammar compilation** — Grammars are downloaded from GitHub and compiled with `gcc` at runtime. Supply-chain attacks via compromised grammar repositories or injection through grammar source files.
-4. **Graph serialization deserialization** — Malformed JSON/MessagePack/SQLite graph files could trigger memory corruption or code execution in the native Rust layer.
-5. **LLM API keys** — API keys are stored in local config with restricted file permissions. Any vector that leaks these keys is in scope.
+1. **Agent tool execution** — The built-in Agent can execute shell commands and read/write files. Permission escalation bugs, sandbox escapes, or privilege bypasses in the tool guard layer (permission engine / sandbox / confined fs) are critical.
+2. **Engine subprocess IPC** — The shell communicates with the Rust analysis engine (`hologram-engine`) via JSON-RPC over stdio / TCP :9777. Injection vectors in IPC messages that could cause arbitrary code execution, or path/command smuggling that escapes the project boundary.
+3. **Dynamic grammar loading** — `grammars/*.dll` (tree-sitter Kotlin / Markdown / TOML) and `aura.dll` are loaded at runtime via `libloading`; supply-chain attacks via compromised grammar/sdk artifacts or release attachments.
+4. **Graph serialization deserialization** — Malformed JSON/SQLite graph files or `.hologram/` state (sessions, boards, goals, permissions.json) could trigger memory corruption or code execution in the native Rust layer.
+5. **LLM API keys & credentials** — API keys are stored in system-encrypted credential storage (Windows DPAPI / macOS Keychain / Linux secret-tool). Any vector that leaks these keys (including through the loopback LLM proxy or logs) is in scope.
 
 ### Out of Scope
 
@@ -42,6 +42,7 @@ Security-relevant areas of HoloGram include:
 
 ## Security Best Practices for Users
 
-- **API keys**: Store in `.env`, never commit them. The `.env` file is git-ignored by default.
-- **Agent permissions**: Run the Agent with the minimum necessary permissions. Review before approving shell execution.
+- **API keys**: Store only through the app's credential store; never commit keys to the repository or `.env` files.
+- **Agent permissions**: Run the Agent with the minimum necessary permissions. Review before approving shell execution (Ask cards), and keep an eye on the permission mode (Ask / Auto / Yolo).
 - **Constraint gates**: Use `hologram.constraints.yaml` to set pre-commit/CI gates — L5 irreversible changes cannot be silenced.
+- **Graph/state files**: Treat `.hologram/` contents as untrusted project data — do not open graphs or sessions from sources you do not trust with full local privileges.
