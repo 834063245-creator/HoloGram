@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 fn run_ps_strict(script_body: &str) -> Result<String, String> {
     let script = format!(
         "$ErrorActionPreference='Stop'\n\
+         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n\
          try {{\n{script_body}\n}} catch {{\n\
            Write-Output ('UIA_ERROR=' + $_.Exception.Message)\n\
            exit 1\n\
@@ -132,6 +133,8 @@ fn build_tree_ps(_depth: Option<u32>) -> String {
          $__out = New-Object System.Text.StringBuilder\n\
          $__count = $__all.Count\n\
          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n\
+         # BoundingRectangle 可能返回 ±Infinity（隐藏/虚拟化控件）——安全转 int，非法值兜底 0\n\
+         function __SafeInt([double]$v) {{ if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) {{ 0 }} else {{ [int]$v }} }}\n\
          for ($i = 0; $i -lt $__count; $i++) {\n\
            $e = $__all.Item($i)\n\
            if ($null -eq $e) { continue }\n\
@@ -144,7 +147,7 @@ fn build_tree_ps(_depth: Option<u32>) -> String {
            $__val = ''\n\
            if ($__vp) { try { $__val = $__vp.Current.Value } catch { $__val = '' } }\n\
            try { $__r = $e.Current.BoundingRectangle } catch { $__r = [System.Windows.Rect]::Empty }\n\
-           $__x = [int]$__r.X; $__y = [int]$__r.Y; $__w = [int]$__r.Width; $__h = [int]$__r.Height\n\
+           $__x = __SafeInt $__r.X; $__y = __SafeInt $__r.Y; $__w = __SafeInt $__r.Width; $__h = __SafeInt $__r.Height\n\
            [void]$__map.Add($e)\n\
            $__ref = $__map.Count - 1\n\
            $__nm2 = $__nm -replace \"[\\r\\n]\", ' '\n\
@@ -404,8 +407,9 @@ fn action_prefix_ps(
     // 坐标计算（供兜底路径使用）：以元素矩形中心为点击点
     ps.push_str(
         "$__rect = $__el.Current.BoundingRectangle\n\
-         $__cx = [int]($__rect.X + $__rect.Width / 2)\n\
-         $__cy = [int]($__rect.Y + $__rect.Height / 2)\n\
+         function __SafeInt([double]$v) {{ if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) {{ 0 }} else {{ [int]$v }} }}\n\
+         $__cx = __SafeInt ($__rect.X + $__rect.Width / 2)\n\
+         $__cy = __SafeInt ($__rect.Y + $__rect.Height / 2)\n\
          if ($__rect.Width -le 0 -or $__rect.Height -le 0) { throw \"ref $ref 的控件没有可点击区域（可能已隐藏或滚动出视口，请重新 desktop_uia_tree）\" }\n",
     );
     ps
@@ -596,14 +600,16 @@ pub(crate) fn uia_window_shot(
          Add-Type -AssemblyName System.Drawing\n\
          $__r = $__win.Current.BoundingRectangle\n\
          if ($__r.Width -le 0 -or $__r.Height -le 0) {{ throw '窗口矩形无效（窗口可能最小化或已关闭）' }}\n\
-         $b = New-Object System.Drawing.Bitmap([int]$__r.Width, [int]$__r.Height)\n\
+         function __SafeInt([double]$v) {{ if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) {{ 0 }} else {{ [int]$v }} }}\n\
+         $__w = __SafeInt $__r.Width; $__h = __SafeInt $__r.Height\n\
+         $b = New-Object System.Drawing.Bitmap($__w, $__h)\n\
          $g = [System.Drawing.Graphics]::FromImage($b)\n\
-         $g.CopyFromScreen([int]$__r.X, [int]$__r.Y, 0, 0, $b.Size)\n\
+         $g.CopyFromScreen((__SafeInt $__r.X), (__SafeInt $__r.Y), 0, 0, $b.Size)\n\
          $out = Join-Path $env:TEMP (\"hologram-uia-\" + [guid]::NewGuid().ToString(\"N\") + \".png\")\n\
          $b.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)\n\
          $g.Dispose(); $b.Dispose()\n\
          Write-Output $out\n\
-         Write-Output \"__RECT__=$([int]$__r.X),$([int]$__r.Y),$([int]$__r.Width),$([int]$__r.Height)\"\n",
+         Write-Output \"__RECT__=$(__SafeInt $__r.X),(__SafeInt $__r.Y),(__SafeInt $__r.Width),(__SafeInt $__r.Height)\"\n",
     );
     let out = run_ps_strict(&script)?;
     let path = out
