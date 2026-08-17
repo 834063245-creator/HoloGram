@@ -267,7 +267,7 @@ Python · JavaScript/TypeScript/TSX · Rust · Go · Java · C/C++ · C# · Ruby
 
 ### 沙箱（三层）
 
-- **OS 层**：Windows Job Object（进程树随父死亡、64 进程 / 1 GiB 上限）；macOS sandbox-exec；Linux bubblewrap；shell 走捆绑 MSYS2 bash（vendor/msys2），Windows 原生任务才用 pwsh
+- **OS 层**：Windows Job Object（进程树随父死亡、64 进程 / 1 GiB 上限）；macOS sandbox-exec；Linux bubblewrap；shell 走捆绑 MSYS2 bash（vendor，标准 MSYS2 根布局 `usr/bin` + `tmp`），Windows 原生任务才用 pwsh
 - **路径层**：canonicalize + 符号链接/junction 检测，读写边界校验；边界外不静默拒绝，升级为 Ask 弹窗
 - **受限文件系统**：统一 I/O 包装（100 MiB 读写上限、30s 超时、3 次瞬态重试、原子写）
 

@@ -4,7 +4,7 @@
 # 需要 objdump（Linux binutils）。任何非系统 DLL 缺口 → 退出码 1。
 set -euo pipefail
 
-BIN="${1:-$(dirname "$0")/../src-tauri/vendor/msys2/bin}"
+BIN="${1:-$(dirname "$0")/../src-tauri/vendor/usr/bin}"
 
 if ! command -v objdump >/dev/null 2>&1; then
   echo "[check-msys2-deps] 需要 objdump（binutils）" >&2

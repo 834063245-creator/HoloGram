@@ -22,7 +22,7 @@ Agent shell(run) ──> Rust spawn_shell ──> 捆绑的 bash.exe -c <cmd>（
 
 | 批 | 内容 | 验证 |
 |---|---|---|
-| P0 | 下载 MSYS2 包（bash/coreutils/sed/grep/gawk/findutils/diffutils/tar/gzip/which + 依赖 DLL），objdump 解析依赖闭环，vendor 进 `src-tauri/vendor/msys2/`，tauri resources + `THIRD_PARTY_NOTICES.md` GPL 声明 | 目录完整 + 依赖闭包脚本自检 |
+| P0 | 下载 MSYS2 包（bash/coreutils/sed/grep/gawk/findutils/diffutils/tar/gzip/which + 依赖 DLL），objdump 解析依赖闭环，vendor 进 `src-tauri/vendor/`（标准 MSYS2 根：`usr/bin/` + `tmp/`），tauri resources + `THIRD_PARTY_NOTICES.md` GPL 声明 | 目录完整 + 依赖闭包脚本自检 |
 | P1 | 钉死解释器：`os_sandbox::init(app)` 解析 resource_dir 缓存捆绑 bash 路径；`spawn_shell` 主路径用捆绑 bash；Git Bash/探测降级为仅当资源缺失时的回退（大声告警）；`shell_env()` 上报捆绑版本+解释器健康自检 | Linux `cargo check` 通过；Windows 由用户实跑 `cargo test os_sandbox` |
 | P2 | 每命令独立 Job Object（`CreateJobObjectW` 每 spawn 一次，`DIE_ON_JOB_CLOSE|KILL_ON_JOB_CLOSE`，无 BREAKAWAY）+ `TerminateJobObject` FFI 替换 `kill_tree` 的 taskkill；`SandboxedChild` 持 job 句柄，Drop 时 CloseHandle（= die-with-parent）；保留 `assign_to_job` 全局 Job 给 LSP/MCP 不动 | Windows 实跑杀树测试（spawn cargo 树 → kill_tree → 无残留） |
 | P3 | PATH 归一化：init 时 `reg query` 读用户/机器 PATH + 探测 `~/.cargo/bin`、`%APPDATA%\npm`、scoop shims、choco bin，合并缓存注入每个子进程；编码/env 纪律（上表） | 纯函数（合并/去重/优先级）单测 Linux 可跑 |
@@ -34,8 +34,8 @@ Agent shell(run) ──> Rust spawn_shell ──> 捆绑的 bash.exe -c <cmd>（
 - 源：`https://mirror.msys2.org/msys/x86_64/`（当前版本以 `*pkg.tar.zst` 元数据为准，版本号写死进 NOTICE）
 - 功能包：`bash`、`coreutils`、`sed`、`grep`、`gawk`、`findutils`、`diffutils`、`tar`、`gzip`、`which`
 - 依赖闭包：每包解包后用 `objdump -p *.exe/*.dll` 抓 `DLL Name`，缺哪个补哪个包（预期：`msys2-runtime`(msys-2.0.dll)、`libintl`、`libiconv`、`libpcre2_8`、`libreadline`、`zlib`、`libbz2`、`liblzma`、`libzstd`、`libgmp`、`libmpfr`、`libncursesw`）
-- 目录形态：`vendor/msys2/{bin,share/doc-notice}/`，bin 只放 exe+dll；NOTICE 列版本与许可（bash=GPLv3、coreutils=GPLv3、其余各自 GPL/LGPL/BSD）
-- tauri.conf.json `bundle.resources` 加 `"vendor/msys2/**"`（dev 模式 resource_dir 同样解析）
+- 目录形态：`vendor/{usr/bin,tmp}/`，`usr/bin` 只放 exe+dll；NOTICE 列版本与许可（bash=GPLv3、coreutils=GPLv3、其余各自 GPL/LGPL/BSD）。必须用标准 MSYS2 根布局，否则 runtime 把 `/tmp` 解析到 `vendor/tmp`、把 `/bin` 解析到 `vendor/usr/bin`，目录不对会报 `could not find /tmp`。
+- tauri.conf.json `bundle.resources` 加 `"vendor/**/*"`（dev 模式 resource_dir 同样解析）
 
 ## 3. 关键设计决策
 

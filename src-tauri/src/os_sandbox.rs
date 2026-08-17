@@ -508,23 +508,27 @@ pub mod imp {
     pub(crate) static BUNDLED_BASH_VERSION: OnceLock<Option<String>> = OnceLock::new();
 
     /// 捆绑资源内 bash.exe 的相对路径（tauri bundle.resources 带出）。
-    const BUNDLED_BASH_REL: &str = "vendor/msys2/bin/bash.exe";
+    /// 必须是标准 MSYS2 根布局：`<root>/usr/bin/bash.exe`，/tmp 落在 `<root>/tmp`。
+    const BUNDLED_BASH_REL: &str = "vendor/usr/bin/bash.exe";
 
     /// MSYS2 runtime 启动时会检查 POSIX 根下的 `/tmp`；缺失会向 stderr 打印
     /// "bash.exe: warning: could not find /tmp, please create!"。
     /// 每次 shell 调用都会新起一个 bash.exe，因此该 warning 会反复出现。
-    /// 正常打包已带 `vendor/msys2/tmp/`，这里兜底开发目录/旧安装包。
+    /// 正常打包已带 `vendor/tmp/`，这里兜底开发目录/旧安装包。
     fn ensure_msys2_tmp(bash_path: &std::path::Path) -> io::Result<()> {
         let root = bash_path
-            .parent()
-            .and_then(|p| p.parent())
+            .ancestors()
+            .find(|p| p.join("usr").is_dir())
             .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "bundled bash path is too shallow")
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "bundled bash is not under <root>/usr/bin",
+                )
             })?;
         std::fs::create_dir_all(root.join("tmp"))
     }
 
-    /// 解析捆绑 bash：resource_dir 必须含 vendor/msys2/bin/bash.exe。
+    /// 解析捆绑 bash：resource_dir 必须含 vendor/usr/bin/bash.exe。
     /// 缺失时保留 None——resolve_shell 走回退阶梯并大声告警，不静默。
     pub fn init_bundled(app: &tauri::AppHandle) {
         let resolved = app
@@ -544,7 +548,7 @@ pub mod imp {
         // 版本探针（带超时纪律，与 smoke_test_bash 同款）：
         // bash --version 可能卡住（杀毒/损坏），失败只影响 prompt 注入文本。
         if let Some(path) = resolved {
-            // 兜底：老安装包/开发目录若没有 vendor/msys2/tmp，先补上，
+            // 兜底：老安装包/开发目录若没有 vendor/tmp，先补上，
             // 避免每次 bash 启动都向 stderr 打 "could not find /tmp" warning。
             if let Err(e) = ensure_msys2_tmp(&path) {
                 eprintln!(
@@ -1265,9 +1269,9 @@ pub mod imp {
 
             let base = std::env::temp_dir().join(format!("holo_msys2_tmp_{}", std::process::id()));
             let _ = fs::remove_dir_all(&base);
-            let bin = base.join("bin");
+            let bin = base.join("usr").join("bin");
             let bash = bin.join("bash.exe");
-            fs::create_dir_all(&bin).expect("create fake bin");
+            fs::create_dir_all(&bin).expect("create fake usr/bin");
             fs::write(&bash, "").expect("create fake bash");
 
             super::ensure_msys2_tmp(&bash).expect("ensure_msys2_tmp should create tmp");
