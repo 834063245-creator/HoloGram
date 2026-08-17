@@ -43,11 +43,13 @@ pub(crate) const DETACHED_PROCESS_FLAG: u32 = 0x00000008; // 仅一次性探测�
 
 pub(crate) mod bg_jobs;
 pub(crate) mod build_lock;
+pub(crate) mod encoding;
 pub(crate) mod graph_io;
 pub(crate) mod ipc_guard;
 pub(crate) mod path_resolve;
 pub(crate) use bg_jobs::*;
 pub(crate) use build_lock::*;
+pub(crate) use encoding::*;
 pub(crate) use graph_io::*;
 pub(crate) use ipc_guard::*;
 pub(crate) use path_resolve::*;

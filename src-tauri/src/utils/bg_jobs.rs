@@ -272,8 +272,8 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
         let so = crate::utils::lock_or_recover(&shared.stdout);
         let se = crate::utils::lock_or_recover(&shared.stderr);
         let has_new = so.len() > job.stdout_buf.len() || se.len() > job.stderr_buf.len();
-        let s = String::from_utf8_lossy(&so).to_string();
-        let t = String::from_utf8_lossy(&se).to_string();
+        let s = crate::utils::decode_shell_bytes(&so);
+        let t = crate::utils::decode_shell_bytes(&se);
         job.stdout_buf = so.clone();
         job.stderr_buf = se.clone();
         (s, t, has_new)
@@ -313,8 +313,8 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
                     let shared = &job.shared;
                     let so = crate::utils::lock_or_recover(&shared.stdout);
                     let se = crate::utils::lock_or_recover(&shared.stderr);
-                    let s = String::from_utf8_lossy(&so).to_string();
-                    let t = String::from_utf8_lossy(&se).to_string();
+                    let s = crate::utils::decode_shell_bytes(&so);
+                    let t = crate::utils::decode_shell_bytes(&se);
                     (s, t)
                 };
                 let elapsed = job.start_time.elapsed().as_secs();
@@ -372,8 +372,8 @@ pub(crate) fn kill_bg(id: u32, caller: Option<&str>) -> Result<String, String> {
             let shared = &job.shared;
             let so = crate::utils::lock_or_recover(&shared.stdout);
             let se = crate::utils::lock_or_recover(&shared.stderr);
-            (String::from_utf8_lossy(&so).to_string(),
-             String::from_utf8_lossy(&se).to_string())
+            (crate::utils::decode_shell_bytes(&so),
+             crate::utils::decode_shell_bytes(&se))
         };
         let lk = job.lock_key.clone();
         jobs.remove(&id);

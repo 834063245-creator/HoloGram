@@ -99,6 +99,9 @@ pub(crate) async fn exec_command(
             let dd = Arc::clone(&drain_done);
             std::thread::spawn(move || {
                 use std::io::{IoSliceMut, Read};
+                // 增量编码解码（2026-08-17）：跨 4KB 块边界的多字节 UTF-8
+                // 不再被 from_utf8_lossy 切成 U+FFFD；GBK 输出自动转码。
+                let mut dec = crate::utils::StreamDecoder::new();
                 let mut buf = [0u8; 4096];
                 loop {
                     let n = {
@@ -109,13 +112,24 @@ pub(crate) async fn exec_command(
                             Err(_) => break,
                         }
                     };
-                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let chunk = dec.push(&buf[..n]);
+                    if !chunk.is_empty() {
+                        let _ = app_stdout.emit("shell:output", serde_json::json!({
+                            "streamId": sid_stdout,
+                            "kind": "stdout",
+                            "chunk": chunk,
+                        }));
+                    }
+                    crate::utils::lock_or_recover(&so_clone).extend_from_slice(&buf[..n]);
+                }
+                // EOF：清空解码器残余（不完整序列 / GBK 尾）
+                let tail = dec.finish();
+                if !tail.is_empty() {
                     let _ = app_stdout.emit("shell:output", serde_json::json!({
                         "streamId": sid_stdout,
                         "kind": "stdout",
-                        "chunk": chunk,
+                        "chunk": tail,
                     }));
-                    crate::utils::lock_or_recover(&so_clone).extend_from_slice(&buf[..n]);
                 }
                 dd.fetch_add(1, Ordering::SeqCst);
             })
@@ -128,6 +142,8 @@ pub(crate) async fn exec_command(
             let dd = Arc::clone(&drain_done);
             std::thread::spawn(move || {
                 use std::io::{IoSliceMut, Read};
+                // 与 stdout 同款增量编码解码（2026-08-17）
+                let mut dec = crate::utils::StreamDecoder::new();
                 let mut buf = [0u8; 4096];
                 loop {
                     let n = {
@@ -138,13 +154,23 @@ pub(crate) async fn exec_command(
                             Err(_) => break,
                         }
                     };
-                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let chunk = dec.push(&buf[..n]);
+                    if !chunk.is_empty() {
+                        let _ = app_stderr.emit("shell:output", serde_json::json!({
+                            "streamId": stream_id_stderr,
+                            "kind": "stderr",
+                            "chunk": chunk,
+                        }));
+                    }
+                    crate::utils::lock_or_recover(&se_clone).extend_from_slice(&buf[..n]);
+                }
+                let tail = dec.finish();
+                if !tail.is_empty() {
                     let _ = app_stderr.emit("shell:output", serde_json::json!({
                         "streamId": stream_id_stderr,
                         "kind": "stderr",
-                        "chunk": chunk,
+                        "chunk": tail,
                     }));
-                    crate::utils::lock_or_recover(&se_clone).extend_from_slice(&buf[..n]);
                 }
                 dd.fetch_add(1, Ordering::SeqCst);
             })
@@ -327,12 +353,12 @@ fn wait_child_blocking(
                 let stdout = stdout_drainer
                     .as_ref()
                     .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
-                    .map(|v| String::from_utf8_lossy(&v).to_string())
+                    .map(|v| crate::utils::decode_shell_bytes(&v))
                     .unwrap_or_default();
                 let stderr = stderr_drainer
                     .as_ref()
                     .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
-                    .map(|v| String::from_utf8_lossy(&v).to_string())
+                    .map(|v| crate::utils::decode_shell_bytes(&v))
                     .unwrap_or_default();
 
                 let full_output = if stdout.is_empty() && stderr.is_empty() {
@@ -361,12 +387,12 @@ fn wait_child_blocking(
                     let stdout = stdout_drainer
                         .as_ref()
                         .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
-                        .map(|v| String::from_utf8_lossy(&v).to_string())
+                        .map(|v| crate::utils::decode_shell_bytes(&v))
                         .unwrap_or_default();
                     let stderr = stderr_drainer
                         .as_ref()
                         .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok())
-                        .map(|v| String::from_utf8_lossy(&v).to_string())
+                        .map(|v| crate::utils::decode_shell_bytes(&v))
                         .unwrap_or_default();
                     return Ok(truncate_output_spill(
                         &format!(
