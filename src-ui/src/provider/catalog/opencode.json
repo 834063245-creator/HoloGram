@@ -1,0 +1,38 @@
+{
+  "deepseek-v4-flash": {
+    "id": "deepseek-v4-flash",
+    "name": "DeepSeek V4 Flash (opencode GO)",
+    "kind": "openai",
+    "vendor": "opencode",
+    "baseUrl": "https://opencode.ai/zen/go/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000
+  },
+  "deepseek-v4-pro": {
+    "id": "deepseek-v4-pro",
+    "name": "DeepSeek V4 Pro (opencode GO)",
+    "kind": "openai",
+    "vendor": "opencode",
+    "baseUrl": "https://opencode.ai/zen/go/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000
+  }
+}

@@ -17,6 +17,7 @@ import minimaxJson from './catalog/minimax.json';
 import moonshotaiJson from './catalog/moonshotai.json';
 import ollamaJson from './catalog/ollama.json';
 import openaiJson from './catalog/openai.json';
+import opencodeJson from './catalog/opencode.json';
 import qwenJson from './catalog/qwen.json';
 import type { ModelDescriptor } from './types';
 
@@ -31,6 +32,7 @@ const CATALOG_FILES: Record<string, CatalogFile> = {
   moonshotai: moonshotaiJson as CatalogFile,
   ollama: ollamaJson as CatalogFile,
   openai: openaiJson as CatalogFile,
+  opencode: opencodeJson as CatalogFile,
   qwen: qwenJson as CatalogFile,
 };
 
@@ -81,7 +83,14 @@ function loadCatalog(): CatalogData {
     }
   }
 
-  _catalog = { allModels: all, modelMap: new Map(all.map((m) => [m.id, m])) };
+  // modelMap 先到先得（首个文件为权威）：目录允许不同厂商共享同一模型 id
+  // （opencode GO 等网关会复用上游 deepseek/openai 的模型 id），后加载的条目
+  // 不覆盖先加载厂商的元数据（定价/上下文窗口）；vendor 过滤仍走 allModels。
+  const modelMap = new Map<string, ModelDescriptor>();
+  for (const m of all) {
+    if (!modelMap.has(m.id)) modelMap.set(m.id, m);
+  }
+  _catalog = { allModels: all, modelMap };
   return _catalog;
 }
 

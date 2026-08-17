@@ -6,11 +6,11 @@ import { describe, expect, it } from 'vitest';
 import {
   findModels,
   getAllModels,
+  getCatalogVendors,
   getDefaultModel,
   getModel,
   mergeDynamicModels,
   searchModels,
-  getCatalogVendors,
 } from '../src/provider/catalog';
 import { guessReasoning } from '../src/provider/openai';
 
@@ -31,6 +31,7 @@ describe('catalog', () => {
     expect(vendors).toContain('qwen-token-plan');
     expect(vendors).toContain('glm');
     expect(vendors).toContain('ollama');
+    expect(vendors).toContain('opencode');
   });
 
   it('findModels returns only models for the specified vendor', () => {
@@ -96,11 +97,22 @@ describe('catalog', () => {
       'qwen-token-plan',
       'glm',
       'ollama',
+      'opencode',
     ]) {
       const model = getDefaultModel(providerName);
       expect(model, `default model for ${providerName}`).toBeDefined();
       if (model) expect(model.vendor).toBe(providerName);
     }
+  });
+
+  it('opencode GO provider defaults to deepseek-v4-flash on zen/go/v1', () => {
+    const model = getDefaultModel('opencode');
+    expect(model).toBeDefined();
+    expect(model?.id).toBe('deepseek-v4-flash');
+    expect(model?.baseUrl).toBe('https://opencode.ai/zen/go/v1');
+    expect(model?.kind).toBe('openai');
+    expect(model?.vendor).toBe('opencode');
+    expect(findModels('opencode').some((m) => m.id === 'deepseek-v4-pro')).toBe(true);
   });
 
   it('getDefaultModel returns undefined for unknown vendor', () => {
