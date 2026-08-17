@@ -48,6 +48,18 @@ const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 /// 记录实际绑定的端口（若 14570 被占则 +1 重试）。
 static BOUND_PORT: AtomicU16 = AtomicU16::new(0);
 
+/// 进程级停机标志 — 窗口关闭 drain 阶段由 LlmProxyService 置位，accept 循环
+/// 每 200ms 轮询一次后退出。否则 std::process::exit(0) 会撞上仍在跑的
+/// hyper/reqwest 网络线程（Winsock I/O 与 ExitProcess 竞争 → 0x40000015
+/// unknown software exception 弹窗，2026-08-17 修复，模式同 unity_event_server）。
+static PROXY_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// 请求代理优雅停机：置位标志后服务线程 ≤200ms 内退出 accept 循环，
+/// tokio runtime 随之 drop（在途连接被中止）。幂等，可重复调用。
+pub fn stop_llm_proxy() {
+    PROXY_SHUTDOWN.store(true, Ordering::SeqCst);
+}
+
 pub fn proxy_port() -> u16 {
     BOUND_PORT.load(Ordering::SeqCst)
 }
@@ -66,6 +78,8 @@ pub fn spawn_llm_proxy() -> u16 {
     let done = std::sync::Arc::new(AtomicBool::new(false));
     let done_flag = std::sync::Arc::clone(&done);
     let _rt_thread = std::thread::spawn(move || {
+        // 启动即复位停机标志（模式同 start_unity_event_server）。
+        PROXY_SHUTDOWN.store(false, Ordering::SeqCst);
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -110,7 +124,10 @@ async fn run_server() -> u16 {
                     .redirect(reqwest::redirect::Policy::none())
                     .build()
                     .expect("llm_proxy: reqwest client build");
-                serve_listener(&listener, client).await;
+                serve_listener(&listener, client, &PROXY_SHUTDOWN).await;
+                // serve_listener 只在停机标志置位后返回——直接结束，
+                // 不得继续 for 循环去 rebind 新端口（否则停机变无限重启）。
+                return port;
             }
             Err(e) if attempt < 7 => {
                 eprintln!("[llm_proxy] bind 127.0.0.1:{port} 失败: {e}，尝试下一端口");
@@ -124,22 +141,30 @@ async fn run_server() -> u16 {
     0
 }
 
-/// 服务监听器上的连接（常驻 accept 循环）。供生产 run_server 与集成测试复用。
-async fn serve_listener(listener: &TcpListener, client: reqwest::Client) {
+/// 服务监听器上的连接（常驻 accept 循环，200ms 间隔轮询停机标志）。
+/// 供生产 run_server 与集成测试复用；测试可传入私有标志避免全局串扰。
+async fn serve_listener(listener: &TcpListener, client: reqwest::Client, shutdown: &AtomicBool) {
     loop {
-        let (stream, _peer) = match listener.accept().await {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let io = TokioIo::new(stream);
-        let client = client.clone();
-        tokio::task::spawn(async move {
-            let svc = service_fn(move |req| handle(client.clone(), req));
-            let _ = http1::Builder::new()
-                .serve_connection(io, svc)
-                .with_upgrades()
-                .await;
-        });
+        if shutdown.load(Ordering::SeqCst) {
+            eprintln!("[llm_proxy] shutdown flag set, exiting accept loop");
+            break;
+        }
+        // 200ms 超时轮询：无连接时也要醒来检查停机标志（模式同 unity event server）。
+        match tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept()).await {
+            Ok(Ok((stream, _peer))) => {
+                let io = TokioIo::new(stream);
+                let client = client.clone();
+                tokio::task::spawn(async move {
+                    let svc = service_fn(move |req| handle(client.clone(), req));
+                    let _ = http1::Builder::new()
+                        .serve_connection(io, svc)
+                        .with_upgrades()
+                        .await;
+                });
+            }
+            Ok(Err(_)) => continue,
+            Err(_) => continue, // accept 超时 → 回到循环头检查停机标志
+        }
     }
 }
 
@@ -337,8 +362,9 @@ mod tests {
                 .build()
                 .unwrap();
 
-            // 代理 server 常驻 accept
-            let server_handle = tokio::spawn(async move { serve_listener(&listener, client).await });
+            // 代理 server 常驻 accept（私有标志永不复位，保证本测试不受停机逻辑干扰）
+            let shutdown = std::sync::atomic::AtomicBool::new(false);
+            let server_handle = tokio::spawn(async move { serve_listener(&listener, client, &shutdown).await });
 
             // 客户端：等代理就绪后发请求并读响应（带读取超时防挂）
             let ctrl = std::net::TcpStream::connect(proxy_addr).unwrap();
@@ -363,5 +389,32 @@ mod tests {
             server_handle.abort();
         });
         upstream_thread.join().unwrap();
+    }
+
+    /// 停机标志置位后 serve_listener 必须在 ≤1s 内退出。
+    /// 回归：退出流程 std::process::exit(0) 会撞上仍活着的 hyper/reqwest
+    /// 网络线程（Winsock I/O 与 ExitProcess 竞争 → 0x40000015 弹窗）。
+    #[test]
+    fn serve_listener_exits_when_shutdown_flag_set() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let client = reqwest::Client::builder().build().unwrap();
+            // 私有标志（非全局 PROXY_SHUTDOWN）：测试隔离，避免并行测试串扰。
+            let shutdown = std::sync::atomic::AtomicBool::new(true);
+            let res = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                serve_listener(&listener, client, &shutdown),
+            )
+            .await;
+            assert!(
+                res.is_ok(),
+                "serve_listener 必须在停机标志置位后退出（防 exit(0) 撞网络线程）"
+            );
+        });
     }
 }

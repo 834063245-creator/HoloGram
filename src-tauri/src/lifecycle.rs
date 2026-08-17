@@ -206,6 +206,20 @@ impl LifecycleService for MemoryBundleService {
     }
 }
 
+/// LLM 本地反向代理 — 置停机标志使 accept 循环（≤200ms）退出。
+/// 必须注册：否则 exit(0) 会撞上仍活着的 hyper/reqwest 线程，
+/// Windows 弹 0x40000015 unknown software exception（2026-08-17 修复）。
+pub struct LlmProxyService;
+
+impl LifecycleService for LlmProxyService {
+    fn name(&self) -> &'static str { "llm_proxy" }
+
+    fn shutdown(&self, _deadline: Instant) -> ShutdownStatus {
+        crate::llm_proxy::stop_llm_proxy();
+        ShutdownStatus::Clean
+    }
+}
+
 /// Unity 事件 TCP 服务器 — 设置关闭标志使监听线程退出。
 pub struct UnityEventService;
 

@@ -135,6 +135,7 @@ fn main() {
             // 将所有服务注册到 ResourceLedger
             let mut ledger = lifecycle::ResourceLedger::new();
             ledger.register(Box::new(lifecycle::UnityEventService));
+            ledger.register(Box::new(lifecycle::LlmProxyService));
             ledger.register(Box::new(lifecycle::BgJobsService));
             ledger.register(Box::new(lifecycle::McpService));
             ledger.register(Box::new(lifecycle::UnityService));
