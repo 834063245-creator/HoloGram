@@ -1,7 +1,7 @@
 {
   "name": "@a834063245/hologram-dsh",
   "description": "HoloGram code-dependency graph engine + 3D viewer, packaged as a DeepSeek Harness bundle plugin. Engine binary is fetched from GitHub Releases on install (Windows x64).",
-  "version": "10.1.1",
+  "version": "10.2.0",
   "type": "module",
   "main": "lib/index.mjs",
   "exports": {
