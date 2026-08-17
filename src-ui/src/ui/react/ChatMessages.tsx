@@ -364,6 +364,34 @@ function handleToolResultClick(e: React.MouseEvent<HTMLDivElement>): void {
 // (tr.status = 'error')，因此对象引用不变。React.memo
 // 会在工具状态转换时阻止重新渲染（如 pending→running→done/error）。
 
+// ── 运行中工具输出的增量渲染（2026-08-17）──
+// 之前 ToolProgress 每 16ms 同步 → ToolResultView 对【全量累积输出】做
+// escapeHtml + 重建 <pre> DOM。输出越大每帧越贵（O(n²) 总量），主线程被
+// 占满 → 卡片看起来"不实时"，且 shell:done 事件处理被拖慢（观感 hang）。
+// 此组件用 ref 只追加新增块：首帧建空 <pre>，后续每帧把 output 增量
+// slice 出来的新文本 appendChild 一个 textNode，O(增量) 而非 O(全量)。
+// 输出被整体替换（ToolResult 全量落地）时长度回退 → 重建。
+const StreamingToolOutput: React.FC<{ output: string }> = ({ output }) => {
+  const ref = useRef<HTMLPreElement>(null);
+  const lastLen = useRef(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (output.length < lastLen.current) {
+      // 全量替换（例如 ToolResult 权威结果落地）— 重建
+      el.textContent = output;
+      lastLen.current = output.length;
+      return;
+    }
+    if (output.length > lastLen.current) {
+      const chunk = output.slice(lastLen.current);
+      lastLen.current = output.length;
+      el.appendChild(document.createTextNode(chunk));
+    }
+  }, [output]);
+  return <pre ref={ref} className="msg-tool-result" />;
+};
+
 // ── 工具结果视图 ──
 // 特殊渲染（JSON 美化 / diff / dataflow 卡片等）产出结构化 HTML，
 // 经 dangerouslySetInnerHTML 注入；默认分支为 markdown 文本，
@@ -433,7 +461,11 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
         </span>
         <span className={`msg-tool-badge ${badgeCls}`}>{badgeLabel}</span>
       </div>
-      {isExpanded && part.output && (
+      {isExpanded && part.output && part.status === 'running' && (
+        // 运行中：增量渲染终端输出（只追加新块，不每帧全量重建 DOM）
+        <StreamingToolOutput output={part.output} />
+      )}
+      {isExpanded && part.output && part.status !== 'running' && (
         <ToolResultView
           toolName={part.name}
           output={part.output}
