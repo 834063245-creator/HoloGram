@@ -20,7 +20,36 @@
 
 use serde_json::{json, Value};
 
-use crate::desktop::run_ps;
+/// 运行 PowerShell（错误严格模式）：$ErrorActionPreference='Stop' + try/catch 包裹，
+/// 任何异常以 `UIA_ERROR=` 行输出到 stdout（避免 desktop::run_ps 的 SilentlyContinue 吞错），
+/// Rust 端解析该行并转为 Err。与 desktop::run_ps 相同的静默无窗口执行姿势。
+fn run_ps_strict(script_body: &str) -> Result<String, String> {
+    let script = format!(
+        "$ErrorActionPreference='Stop'\n\
+         try {{\n{script_body}\n}} catch {{\n\
+           Write-Output ('UIA_ERROR=' + $_.Exception.Message)\n\
+           exit 1\n\
+         }}\n"
+    );
+    let mut ps = std::process::Command::new("powershell");
+    ps.args(["-NoProfile", "-Command", &script]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        ps.creation_flags(crate::utils::HIDDEN_CONSOLE);
+    }
+    let out = ps
+        .output()
+        .map_err(|e| format!("uia: 执行 PowerShell 失败: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if let Some(err_line) = stdout.lines().find(|l| l.trim_start().starts_with("UIA_ERROR=")) {
+        return Err(err_line.trim_start().trim_start_matches("UIA_ERROR=").trim().to_string());
+    }
+    if !out.status.success() {
+        return Err(format!("uia: PowerShell 退出码 {}", out.status));
+    }
+    Ok(stdout)
+}
 
 // ═══════════════════════════════════════════════════════════
 // 窗口定位参数（树/查找/操作的公共入口）
@@ -47,13 +76,17 @@ fn window_locator_ps(title: Option<&str>, pid: Option<u32>, hwnd: Option<u64>) -
              if (-not $__win) {{ throw '窗口定位失败: 找不到 pid={p} 的主窗口（进程可能没有顶层窗口，或已退出）' }}\n"
         ));
     } else if let Some(t) = title {
-        let esc = t.replace('\'', "''").replace('"', "''");
+        let esc = t.replace('\'', "''");
+        // UIA PropertyCondition 不支持通配符（'*x*' 会被当字面量）——
+        // 改为遍历顶层窗口按 -like 模糊匹配（大小写不敏感）。
         ps.push_str(&format!(
-            "$__cond = New-Object System.Windows.Automation.PropertyCondition(\
-             [System.Windows.Automation.AutomationElement]::NameProperty, '*{esc}*')\n\
-             $__all = $__root.FindAll([System.Windows.Automation.TreeScope]::Children, $__cond)\n\
-             if ($__all.Count -lt 1) {{ throw '窗口定位失败: 找不到标题含「{esc}」的顶层窗口' }}\n\
-             $__win = $__all.Item(0)\n"
+            "$__all = $__root.FindAll([System.Windows.Automation.TreeScope]::Children, \
+             [System.Windows.Automation.Condition]::TrueCondition)\n\
+             $__win = $null\n\
+             foreach ($__c in $__all) {{\n\
+               try {{ if ($__c.Current.Name -like '*{esc}*') {{ $__win = $__c; break }} }} catch {{}}\n\
+             }}\n\
+             if (-not $__win) {{ throw '窗口定位失败: 找不到标题含「{esc}」的顶层窗口（先 desktop_probe 确认窗口存在）' }}\n"
         ));
     } else {
         ps.push_str(
@@ -251,7 +284,7 @@ pub(crate) fn uia_tree(
     let loc = window_locator_ps(title, pid, hwnd);
     let bt = build_tree_ps(_depth);
     let script = format!("{loc}\n{bt}");
-    let out = run_ps(&script)?;
+    let out = run_ps_strict(&script)?;
     // 解析：先 __REFS__ 行 / __WIN__ 行，再逐控件行
     let mut controls: Vec<UiControl> = Vec::new();
     let mut refs = 0usize;
@@ -430,7 +463,7 @@ pub(crate) fn uia_click(
 ) -> Result<String, String> {
     let prefix = action_prefix_ps(title, pid, hwnd, ref_id);
     let script = format!("{prefix}\n{}", click_impl_ps(false));
-    let out = run_ps(&script)?;
+    let out = run_ps_strict(&script)?;
     let method = out
         .lines()
         .find_map(|l| l.trim().strip_prefix("__METHOD__="))
@@ -448,7 +481,7 @@ pub(crate) fn uia_right_click(
 ) -> Result<String, String> {
     let prefix = action_prefix_ps(title, pid, hwnd, ref_id);
     let script = format!("{prefix}\n{}", click_impl_ps(true));
-    let out = run_ps(&script)?;
+    let out = run_ps_strict(&script)?;
     let method = out
         .lines()
         .find_map(|l| l.trim().strip_prefix("__METHOD__="))
@@ -489,7 +522,7 @@ pub(crate) fn uia_type(
          Start-Sleep -Milliseconds 80\n\
          try {{ [System.Windows.Forms.Clipboard]::SetText($__oldClip) }} catch {{}}\n",
     ));
-    let out = run_ps(&ps)?;
+    let out = run_ps_strict(&ps)?;
     let method = out
         .lines()
         .find_map(|l| l.trim().strip_prefix("__METHOD__="))
@@ -542,7 +575,7 @@ pub(crate) fn uia_scroll(
         "{wheel_call}\n\
          Write-Output '__METHOD__=wheel'\n",
     ));
-    let out = run_ps(&ps)?;
+    let out = run_ps_strict(&ps)?;
     let method = out
         .lines()
         .find_map(|l| l.trim().strip_prefix("__METHOD__="))
@@ -572,7 +605,7 @@ pub(crate) fn uia_window_shot(
          Write-Output $out\n\
          Write-Output \"__RECT__=$([int]$__r.X),$([int]$__r.Y),$([int]$__r.Width),$([int]$__r.Height)\"\n",
     );
-    let out = run_ps(&script)?;
+    let out = run_ps_strict(&script)?;
     let path = out
         .lines()
         .find(|l| l.contains(".png"))
