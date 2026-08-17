@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "hologram-engine"
-version = "10.2.0"
+version = "10.3.0"
 dependencies = [
  "bincode",
  "chrono",
