@@ -484,6 +484,20 @@ impl Engine {
         store.save()
     }
 
+    /// 读取最近一次图持久化的时刻（unix 毫秒串，meta.graph_generated_at）。
+    /// SQLite 缓存新鲜度判定的单一事实源 —— 冷启动 fast path 读的就是 SQLite。
+    /// 旧库没有该 meta 时返回 None，调用方回退旧判定（hologram_graph.json mtime）。
+    pub fn graph_generated_at(&self) -> Result<Option<String>, String> {
+        let store_guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("Store lock poisoned: {}", e))?;
+        let store = store_guard
+            .as_ref()
+            .ok_or_else(|| "Engine not initialized".to_string())?;
+        store.db.get_meta("graph_generated_at")
+    }
+
     /// 通过 SQLite FTS5 全文搜索。返回匹配的节点。
     pub fn fts_search(
         &self,
@@ -632,6 +646,15 @@ pub fn engine_save() -> Result<(), String> {
         .as_ref()
         .ok_or_else(|| "Engine not initialized".to_string())?;
     engine.save()
+}
+
+/// 读取最近一次图持久化的时刻（unix 毫秒串）。SQLite 新鲜度判定的依据。
+pub fn engine_graph_generated_at() -> Result<Option<String>, String> {
+    let guard = ENGINE.read();
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+    engine.graph_generated_at()
 }
 
 /// 在全局引擎上通过 FTS5 全文搜索。

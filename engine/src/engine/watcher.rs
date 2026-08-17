@@ -324,6 +324,11 @@ impl Engine {
         store
             .db
             .set_meta("scip_import_drift_base", &drift_base.to_string())?;
+        // SCIP 合并后的图已全量落库 → 同步冷启动新鲜度基准（见 store.rs save()）。
+        store.db.set_meta(
+            "graph_generated_at",
+            &chrono::Utc::now().timestamp_millis().to_string(),
+        )?;
         Ok(stats)
     }
 

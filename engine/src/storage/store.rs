@@ -215,13 +215,35 @@ impl GraphStore {
                 chrono::Utc::now().timestamp_millis()
             );
             idx.save_snapshot(&self.project_root, &token)?;
-            // token 落库失败只 warn —— 退化为下次启动走 SQLite，安全
+            // token 落库失败只 warn —— 退化为下次启动走 SQLite，安全。
+            // 但此时磁盘上没有可被冷启动认可的权威快照，不能刷新 graph_generated_at，
+            // 否则 SQLite 旧图会被误判为“新鲜”。
             if let Err(e) = self.db.set_meta("snapshot_token", &token) {
                 warn!("[store] snapshot_token 写入失败（下次启动走 SQLite，安全退化）: {}", e);
+                return Ok(());
+            }
+            // 记录本次持久化的完成时刻 —— 冷启动新鲜度判定的单一事实源。
+            if let Err(e) = self
+                .db
+                .set_meta("graph_generated_at", &chrono::Utc::now().timestamp_millis().to_string())
+            {
+                warn!("[store] graph_generated_at 写入失败（冷启动新鲜度判定将回退旧逻辑）: {e}");
             }
             Ok(())
         } else {
-            idx.to_sqlite(&self.db)
+            let result = idx.to_sqlite(&self.db);
+            if result.is_ok() {
+                // 记录本次持久化的完成时刻 —— 旧实现用 root/hologram_graph.json 的
+                // mtime 判定新鲜度，而冷启动实际读的是 SQLite，两者由不同路径写入
+                // 可能分歧 → 旧 SQLite 会被误判为“新鲜”永不重分析。
+                if let Err(e) = self.db.set_meta(
+                    "graph_generated_at",
+                    &chrono::Utc::now().timestamp_millis().to_string(),
+                ) {
+                    warn!("[store] graph_generated_at 写入失败（冷启动新鲜度判定将回退旧逻辑）: {e}");
+                }
+            }
+            result
         }
     }
 
@@ -236,7 +258,7 @@ impl GraphStore {
     /// 否则走 SQLite 全量重写。快照路径的代际 token 写入失败视为落盘失败并向上
     /// 传播（上一版吞错会让下次启动因 token 不匹配回退读旧 SQLite）。
     pub fn save_index(&self, idx: &MemoryIndex) -> Result<(), String> {
-        if idx.edge_count() >= crate::storage::snapshot::snapshot_min_edges() {
+        let stored = if idx.edge_count() >= crate::storage::snapshot::snapshot_min_edges() {
             let token = format!(
                 "{}:{}:{}",
                 idx.node_count(),
@@ -244,12 +266,21 @@ impl GraphStore {
                 chrono::Utc::now().timestamp_millis()
             );
             idx.save_snapshot(&self.project_root, &token)?;
-            self.db.set_meta("snapshot_token", &token)
+            self.db
+                .set_meta("snapshot_token", &token)
                 .map_err(|e| format!("snapshot_token 写入失败，快照可能不被冷启动认可: {e}"))?;
             Ok(())
         } else {
             idx.to_sqlite(&self.db)
+        };
+        // 全量分析主路径（pipeline.rs）走这里 —— 同样记录持久化时刻，见 save() 注释。
+        if let Err(e) = self
+            .db
+            .set_meta("graph_generated_at", &chrono::Utc::now().timestamp_millis().to_string())
+        {
+            warn!("[store] graph_generated_at 写入失败（冷启动新鲜度判定将回退旧逻辑）: {e}");
         }
+        stored
     }
 
     /// 返回此存储对应的项目根目录。

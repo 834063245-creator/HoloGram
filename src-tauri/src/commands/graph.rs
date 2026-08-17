@@ -33,6 +33,15 @@ pub(crate) async fn load_graph_json(
         }
         // 引擎图（内存/SQLite 缓存）优先 — ensure_engine_graph 只加载缓存不分析。
         if let Ok(()) = crate::utils::ensure_engine_graph(&root) {
+            // 冷启动新鲜度门禁（2026-08-18 修复）：SQLite 缓存可能过期
+            // （源文件在上次分析后被修改）。过期时不阻断渲染，但必须留痕，
+            // 由前端紧随其后的 analyze_and_load(force=false) 触发重分析，
+            // graph-updated 事件随后把 UI 换到最新图。
+            if crate::utils::cache_is_stale(std::path::Path::new(&root)) {
+                eprintln!(
+                    "[hologram] ⚠ 冷启动：SQLite 缓存的图已过期（源文件在上次分析后被修改），将触发重新分析"
+                );
+            }
             return crate::utils::graph_meta_json(
                 &root,
                 crate::utils::GRAPH_PAGE_DEFAULT_NODES,

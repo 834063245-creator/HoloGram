@@ -27,6 +27,16 @@ fn is_common_extension(s: &str) -> bool {
     code_extension_set().contains(s)
 }
 
+/// 判断边是否为歧义边（多候选平局，已标记 metadata.ambiguous）。
+/// 歧义边既不删除也不改写为 `unresolved:` —— 留待用户/LSP 解析。
+fn edge_is_ambiguous(e: &Edge) -> bool {
+    e.metadata
+        .as_ref()
+        .and_then(|m| m.get("ambiguous"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 /// 提取文件名主干：不含扩展名的文件名。
 ///
 /// 示例：
@@ -292,21 +302,38 @@ impl CrossFileResolver {
         }
         let wb_secs = t_wb.elapsed().as_secs_f64();
 
-        // P0-3：不再静默丢弃未解析的跨文件边。
-        // 端点缺失的边改写为 `unresolved:<裸名>` 占位节点并保留，
-        // 查询层诚实呈现；解析率由 graph_summary 报告。
+        // P0-3 修正（2026-08-18 回归）：不再把每条悬空跨文件边都烤成
+        // `unresolved:<目标文本>` 假符号节点。旧逻辑对任意 kind 建占位节点，
+        // 而合成层（dynamic dispatch / query adapter 的 Usage）喂进来的
+        // Calls target 多为 stdlib/宏/方法名甚至整段表达式（`map`、`to_string`、
+        // `Vec::new`、`String(n).padStart`、模板字符串……），某次全量分析烤出
+        // 4076 个（占节点 24.5%）跟任何文件无关的垃圾节点污染星图。
+        //
+        // 修正后：
+        //  - Imports 边保留 `unresolved:<裸名>` 占位节点（unresolved:os 这类真实
+        //    未解析 import，解析率诚实呈现，graph_summary 继续报告）。
+        //  - 其余悬空跨文件边（Calls/Inherits/…）恢复 P0-3 之前的孤儿清理语义
+        //    ——直接删除，避免垃圾节点每次冷启动都被 SQLite 缓存原样读回。
+        //  - 歧义边（多候选平局）保持原样，留待用户/LSP 解析。
         // 文件内边（Usage、Writes、同文件 Calls）的 target 本就是裸名，原样有效。
         let t_orphan = std::time::Instant::now();
-        let unresolved_list: Vec<(String, String)> = graph
+        let unresolved_list: Vec<(String, String, EdgeKind)> = graph
             .edges_iter()
             .filter(|(_, e)| {
                 e.cross_file
                     && !(graph.get_node(&e.source).is_some() && graph.get_node(&e.target).is_some())
+                    && !edge_is_ambiguous(e)
             })
-            .map(|(id, e)| (id.to_string(), e.target.as_str().to_string()))
+            .map(|(id, e)| (id.to_string(), e.target.as_str().to_string(), e.kind))
             .collect();
         let mut kept_unresolved = 0usize;
-        for (eid, bare_target) in unresolved_list {
+        let mut to_drop: Vec<String> = Vec::new();
+        for (eid, bare_target, kind) in unresolved_list {
+            if kind != EdgeKind::Imports {
+                // 非 import 悬空边 → 孤儿清理，删除（恢复 P0-3 之前语义）
+                to_drop.push(eid);
+                continue;
+            }
             let uid = format!("unresolved:{}", bare_target);
             if graph.get_node(&uid).is_none() {
                 let mut n = Node::new(&uid, &bare_target, NodeKind::Symbol);
@@ -317,6 +344,9 @@ impl CrossFileResolver {
                 e.target = uid.into();
             }
             kept_unresolved += 1;
+        }
+        for eid in &to_drop {
+            graph.remove_edge(eid);
         }
         let orphan_secs = t_orphan.elapsed().as_secs_f64();
         eprintln!(
@@ -848,32 +878,36 @@ mod tests {
     }
 
     #[test]
-    fn test_orphan_edge_cleanup() {
+    fn test_orphan_call_edge_cleanup() {
+        // 2026-08-18 回归：悬空 Calls 边（stdio/宏/方法名，如 `to_string`）
+        // 不再改写为 unresolved 假节点 —— 恢复孤儿清理删除。
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
-        // 指向不存在节点的边
-        g.add_edge_unchecked(cross_edge("e1", "a", "nonexistent", EdgeKind::Calls));
+        // 指向不存在节点的 Calls 边
+        g.add_edge_unchecked(cross_edge("e1", "a", "to_string", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // P0-3：孤儿边不再删除——改写为 unresolved:<裸名> 占位节点保留
-        let e = g.get_edge("e1").expect("P0-3: unresolved edge must be kept");
-        assert_eq!(e.target.as_str(), "unresolved:nonexistent");
-        assert!(g.get_node("unresolved:nonexistent").is_some());
-        assert_eq!(resolved, 0, "unresolved edges do not count as resolved");
+        assert!(
+            g.get_edge("e1").is_none(),
+            "悬空 Calls 边应被孤儿清理删除（不得烤 unresolved:to_string）"
+        );
+        assert!(
+            g.get_node("unresolved:to_string").is_none(),
+            "不得为 Calls 悬空边创建 unresolved 占位节点"
+        );
+        assert_eq!(resolved, 0, "孤儿清理不计入已解析");
     }
 
     #[test]
     fn test_resolve_no_name_match() {
         let mut g = Graph::new();
         g.add_node(Node::new("a", "fn_a", NodeKind::Symbol));
-        // 指向不匹配任何内容的名称的边
+        // 指向不匹配任何内容的 Calls 边 —— 恢复孤儿清理语义
         g.add_edge_unchecked(cross_edge("e1", "a", "totally_unknown_name", EdgeKind::Calls));
 
         let resolved = CrossFileResolver::resolve(&mut g);
-        // P0-3：保留为 unresolved 占位节点
-        let e = g.get_edge("e1").expect("P0-3: unresolved edge must be kept");
-        assert_eq!(e.target.as_str(), "unresolved:totally_unknown_name");
-        assert_eq!(resolved, 0, "unresolved edge → kept, not resolved");
+        assert!(g.get_edge("e1").is_none(), "悬空 Calls 边应被删除");
+        assert_eq!(resolved, 0, "未解析边不计入 resolved");
     }
 
     // ── 新增：import 边的文件主干解析 ──

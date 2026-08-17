@@ -203,6 +203,16 @@ impl IncrementalUpdater {
         }
         if let Some(e) = write_err {
             warn!("[incr] SQLite write-back failed after 3 retries: {}", e);
+        } else {
+            // 记录增量落库时刻 —— 冷启动新鲜度基准（与 store.rs save/save_index 同源）。
+            // 不更新的话，增量保存后基准仍停在最后一次全量分析，源文件一动就会被
+            // 误判为过期 → 每次冷启动都白跑一次全量重分析。
+            if let Err(e) = db.set_meta(
+                "graph_generated_at",
+                &chrono::Utc::now().timestamp_millis().to_string(),
+            ) {
+                warn!("[incr] graph_generated_at 写入失败: {e}");
+            }
         }
 
         Ok((new_index, total_errors))

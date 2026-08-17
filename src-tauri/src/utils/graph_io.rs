@@ -14,14 +14,27 @@ use tauri::Emitter;
 use crate::utils::ipc_guard::lock_or_recover;
 use crate::utils::{regenerate_file_graph, write_atomic};
 
-fn cache_is_stale(root: &std::path::Path) -> bool {
-    let graph_json = root.join("hologram_graph.json");
-    let cache_mtime = match std::fs::metadata(&graph_json) {
-        Ok(m) => match m.modified() {
-            Ok(t) => t,
-            Err(_) => return true, // 无法读取 mtime → 假设已过期
-        },
-        Err(_) => return true, // 无基线 → 已过期
+pub(crate) fn cache_is_stale(root: &std::path::Path) -> bool {
+    // 新鲜度基准 = SQLite 里最近一次图持久化的时刻（冷启动实际读取的产物）。
+    // 旧实现用 root/hologram_graph.json 的 mtime —— 该文件只在 direct_analyze 里
+    // 写，而 SQLite 由 engine_analyze / watcher 增量也会写，两者可能分歧：
+    // SQLite 旧、json 新时会把旧图误判为“新鲜”，冷启动就永远停在旧图上。
+    let cache_mtime = engine_api::engine_graph_generated_at()
+        .ok()
+        .flatten()
+        .and_then(|s| {
+            s.parse::<u64>()
+                .ok()
+                .and_then(|ms| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(ms)))
+        })
+        .or_else(|| {
+            // 旧库无 graph_generated_at —— 回退到 json mtime（兼容旧数据）
+            let graph_json = root.join("hologram_graph.json");
+            std::fs::metadata(&graph_json).ok().and_then(|m| m.modified().ok())
+        });
+    let cache_mtime = match cache_mtime {
+        Some(t) => t,
+        None => return true, // 无任何持久化基准 → 假设已过期（触发重分析补全）
     };
 
     const EXTS: &[&str] = &[

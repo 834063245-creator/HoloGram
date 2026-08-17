@@ -222,6 +222,31 @@ pub(crate) fn urlencoding(s: &str) -> String {
     out
 }
 
+/// 从节点 location 提取文件路径 —— 必须容忍 Windows 盘符与 `:line[:col]` 后缀。
+/// `"D:/root/src/a.ts:325"` → `"D:/root/src/a.ts"`；`"src/a.ts"` → `"src/a.ts"`。
+/// 旧实现 `location.split(':').next()` 会把 `D:` 盘符吞成 "D"，导致文件级图谱
+/// 所有节点归并到单一 "D" 节点（2026-08-18 回归修复）。
+pub(crate) fn file_part_of_location(loc: &str) -> &str {
+    fn digits(s: &str) -> bool {
+        !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+    }
+    // 只剥 `:行号`（或 `:行号:列号`）后缀 —— 盘符 `D:` 不满足“尾段纯数字”，不会误伤。
+    if let Some((path, rest)) = loc.rsplit_once(':') {
+        let first = rest.split(':').next().unwrap_or("");
+        if digits(first) {
+            // 形如 "…:line:col"（列号）时再剥一层
+            if let Some((p2, _)) = path.rsplit_once(':') {
+                let after_p2 = &path[p2.len() + 1..];
+                if digits(after_p2) {
+                    return p2;
+                }
+            }
+            return path;
+        }
+    }
+    loc
+}
+
 pub(crate) fn regenerate_file_graph(project_path: &str) -> Result<String, String> {
     let graph_path = format!("{}/hologram_graph.json", project_path);
     let files_path = format!("{}/hologram_graph_files.json", project_path);
@@ -236,8 +261,8 @@ pub(crate) fn regenerate_file_graph(project_path: &str) -> Result<String, String
     if let Some(nodes) = g.get("nodes").and_then(|v| v.as_array()) {
         for n in nodes {
             let loc = n.get("location").and_then(|v| v.as_str()).unwrap_or("");
-            // 从 "file.py:123" 或 "file.py" 中提取文件路径
-            let file = loc.split(':').next().unwrap_or("").to_string();
+            // 从 "D:/…/file.py:123" 或 "file.py" 中提取文件路径（保留 Windows 盘符）
+            let file = file_part_of_location(loc).to_string();
             if !file.is_empty() {
                 if let Some(id) = n.get("id").and_then(|v| v.as_str()) {
                     file_nodes.entry(file).or_default().push(id.to_string());
@@ -252,8 +277,9 @@ pub(crate) fn regenerate_file_graph(project_path: &str) -> Result<String, String
         .map(|nodes| {
             nodes.iter().filter_map(|n| {
                 let id = n.get("id").and_then(|v| v.as_str())?;
-                let file = n.get("location").and_then(|v| v.as_str()).unwrap_or("")
-                    .split(':').next().unwrap_or("");
+                let file = file_part_of_location(
+                    n.get("location").and_then(|v| v.as_str()).unwrap_or(""),
+                );
                 if file.is_empty() { None } else { Some((id, file)) }
             }).collect()
         }).unwrap_or_default();
@@ -581,6 +607,28 @@ mod tests {
         let s = "x".repeat(MAX_IPC_RESPONSE_BYTES + 1);
         let err = guard_ipc_size(s, "Graph JSON").unwrap_err();
         assert!(err.contains("超过 IPC 上限"), "报错必须说明原因：{err}");
+    }
+
+    /// 回归 2026-08-18：location 含 Windows 盘符 D: —— 旧实现 split(':') 把盘符
+    /// 吞掉导致文件级图所有节点归并到单一 "D" 节点。
+    #[test]
+    fn file_part_of_location_keeps_windows_drive() {
+        assert_eq!(
+            file_part_of_location("D:/HoloGramHG/src/a.ts:325"),
+            "D:/HoloGramHG/src/a.ts"
+        );
+        assert_eq!(
+            file_part_of_location("D:/HoloGramHG/src/a.ts"),
+            "D:/HoloGramHG/src/a.ts"
+        );
+        assert_eq!(
+            file_part_of_location("D:/HoloGramHG/src/a.ts:32:6"),
+            "D:/HoloGramHG/src/a.ts"
+        );
+        assert_eq!(file_part_of_location("src/main.rs:12"), "src/main.rs");
+        assert_eq!(file_part_of_location("src/main.rs"), "src/main.rs");
+        assert_eq!(file_part_of_location("main.py:120"), "main.py");
+        assert_eq!(file_part_of_location(""), "");
     }
 
     /// 回归 P0-3：上次崩溃残留的 .bak 不得让后续写入永久失败。
