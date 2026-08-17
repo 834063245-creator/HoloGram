@@ -100,3 +100,11 @@ pub(crate) fn acquire_build_lock(
     );
     Ok(Some(key))
 }
+
+/// 释放构建锁（如果持有）。用于 spawn 失败且尚未登记 job 的错误路径，
+/// 避免锁被永久占用导致后续命令全部“构建锁冲突”。
+pub(crate) fn release_build_lock(lock_key: &Option<LockKey>) {
+    if let Some(k) = lock_key {
+        lock_or_recover(&BUILD_LOCKS).remove(k);
+    }
+}

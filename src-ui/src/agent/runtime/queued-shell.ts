@@ -16,6 +16,8 @@ import { listen } from '../../bridge';
 import { agentInvoke } from '../tool';
 
 const SHELL_TIMEOUT = 600_000;
+/** 流式累积上限：只保留末尾，防止超长输出在 WebView/Agent 上下文里无界膨胀。 */
+const STREAM_OUTPUT_CAP = 64 * 1024;
 
 /** streamId → 事件解绑函数 — resolveOnce 时统一清理 */
 const _shellCleanups = new Map<string, Array<() => void>>();
@@ -41,6 +43,11 @@ export async function execStreamedShell(
   onProgress?: (chunk: string) => void,
   signal?: AbortSignal,
 ): Promise<string> {
+  // 已 aborted 时根本不用建监听/发命令，直接返回取消文案。
+  if (signal?.aborted) {
+    return '[已取消] 命令执行被中止（agent 运行被中断）。';
+  }
+
   const agentId = typeof args._agent_id === 'string' ? args._agent_id : undefined;
   /** Rust 侧 ledger job_id — started 响应到达前为 null（此窗口内 abort 无进程可杀） */
   let jobId: number | null = null;
@@ -49,6 +56,7 @@ export async function execStreamedShell(
   return await new Promise<string>((resolve) => {
     void (async () => {
       let fullOutput = '';
+      let streamTruncated = false;
       let timer: ReturnType<typeof setTimeout> | null = null;
       let settled = false;
       const cleanup = () => {
@@ -68,20 +76,32 @@ export async function execStreamedShell(
         cleanup();
         resolve(v);
       };
+      const appendOutput = (chunk: string) => {
+        fullOutput += chunk;
+        if (fullOutput.length > STREAM_OUTPUT_CAP) {
+          fullOutput = fullOutput.slice(-STREAM_OUTPUT_CAP);
+          streamTruncated = true;
+        }
+      };
+      const withTruncationNote = (body: string) =>
+        streamTruncated ? `[流式输出过长，只保留末尾 ${STREAM_OUTPUT_CAP} 字符]\n${body}` : body;
+
       const unOut = await listen<{ streamId: string; chunk: string }>('shell:output', (e) => {
         if (e.payload.streamId !== streamId) return;
-        fullOutput += e.payload.chunk;
+        appendOutput(e.payload.chunk);
         onProgress?.(e.payload.chunk);
       });
       const unDone = await listen<{ streamId: string; exitCode: number; error?: string }>('shell:done', (e) => {
         if (e.payload.streamId !== streamId) return;
-        if (e.payload.error) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}\n${e.payload.error}`);
-        else if (e.payload.exitCode !== 0) resolveOnce(`[exit ${e.payload.exitCode}]\n${fullOutput}`);
-        else resolveOnce(fullOutput || '(无输出)');
+        if (e.payload.error)
+          resolveOnce(withTruncationNote(`[exit ${e.payload.exitCode}]\n${fullOutput}\n${e.payload.error}`));
+        else if (e.payload.exitCode !== 0)
+          resolveOnce(withTruncationNote(`[exit ${e.payload.exitCode}]\n${fullOutput}`));
+        else resolveOnce(withTruncationNote(fullOutput || '(无输出)'));
       });
       _shellCleanups.set(streamId, [unOut, unDone]);
       timer = setTimeout(
-        () => resolveOnce(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)\n${fullOutput}`),
+        () => resolveOnce(withTruncationNote(`[exit -1] shell 超时 (${SHELL_TIMEOUT / 1000}s)\n${fullOutput}`)),
         SHELL_TIMEOUT,
       );
       // 中止语义（2026-08-17 修复，会话 223 事故）：
@@ -93,15 +113,20 @@ export async function execStreamedShell(
         if (jobId != null) {
           void agentInvoke('bash_kill', { jobId, agentId }).catch(() => {});
         }
-        resolveOnce('[已取消] 命令执行被中止（agent 运行被中断）。\n' + fullOutput);
+        resolveOnce(withTruncationNote(`[已取消] 命令执行被中止（agent 运行被中断）。\n${fullOutput}`));
       };
       signal?.addEventListener('abort', onAbort, { once: true });
+      // 如果信号在 addEventListener 前就已经 aborted（竞态窗口），手动补一次。
+      if (signal?.aborted) {
+        onAbort();
+      }
       try {
         const startedRaw = await agentInvoke<string>('exec_command', { ...args, streamToolId: streamId });
         jobId = parseStartedJobId(startedRaw);
-        // started 响应已返回：若此刻已 aborted（invoke 期间被中止），补一次 kill
+        // started 响应已返回：若此刻已 aborted（invoke 期间被中止），补一次 kill 并立即 resolve。
         if (signal?.aborted && jobId != null) {
           void agentInvoke('bash_kill', { jobId, agentId }).catch(() => {});
+          resolveOnce(withTruncationNote(`[已取消] 命令执行被中止（agent 运行被中断）。\n${fullOutput}`));
         }
       } catch (e: unknown) {
         resolveOnce('错误: ' + e);

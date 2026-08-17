@@ -531,20 +531,38 @@ pub mod imp {
     /// 解析捆绑 bash：resource_dir 必须含 vendor/usr/bin/bash.exe。
     /// 缺失时保留 None——resolve_shell 走回退阶梯并大声告警，不静默。
     pub fn init_bundled(app: &tauri::AppHandle) {
-        let resolved = app
+        // PATH 归一化（P3）：必须在首个 spawn 前完成
+        init_normalized_path();
+
+        let candidate = app
             .path()
             .resource_dir()
             .ok()
             .map(|d| d.join(BUNDLED_BASH_REL))
             .filter(|p| p.is_file());
-        if resolved.is_none() {
-            eprintln!(
-                "[hologram] bundled MSYS2 bash missing at resource {BUNDLED_BASH_REL} — falling back to system detection"
-            );
-        }
+        // 捆绑 bash 不能只看文件存在：损坏/被杀毒拦/缺 DLL 时若直接钉死，
+        // 所有 shell 命令会一直用坏解释器且不会回退到系统 Git Bash。
+        // 和系统 Git Bash 候选一样，先跑带超时的 `bash -c "exit 0"` 冒烟。
+        let resolved = match candidate {
+            Some(path) => {
+                if smoke_test_bash(&path.to_string_lossy()) {
+                    Some(path)
+                } else {
+                    eprintln!(
+                        "[hologram] bundled MSYS2 bash at {} exists but smoke test failed — falling back to system detection",
+                        path.display()
+                    );
+                    None
+                }
+            }
+            None => {
+                eprintln!(
+                    "[hologram] bundled MSYS2 bash missing at resource {BUNDLED_BASH_REL} — falling back to system detection"
+                );
+                None
+            }
+        };
         BUNDLED_BASH.get_or_init(|| resolved.clone());
-        // PATH 归一化（P3）：必须在首个 spawn 前完成
-        init_normalized_path();
         // 版本探针（带超时纪律，与 smoke_test_bash 同款）：
         // bash --version 可能卡住（杀毒/损坏），失败只影响 prompt 注入文本。
         if let Some(path) = resolved {
@@ -909,7 +927,14 @@ pub mod imp {
         // 这防止子进程（cargo → test 二进制）持有
         // 管道句柄打开，导致 read_to_end 永久阻塞。
         let (stdout_read, stdout_write) = create_non_inheritable_pipe()?;
-        let (stderr_read, stderr_write) = create_non_inheritable_pipe()?;
+        let (stderr_read, stderr_write) = match create_non_inheritable_pipe() {
+            Ok(v) => v,
+            Err(e) => {
+                // 第二个管道创建失败时关闭第一个管道的父端读句柄，避免句柄泄漏。
+                unsafe { CloseHandle(stdout_read); }
+                return Err(e);
+            }
+        };
 
         let mut c = std::process::Command::new(program);
         c.args(args)
@@ -926,7 +951,18 @@ pub mod imp {
         for (k, v) in envs {
             c.env(k, v);
         }
-        let mut child = c.spawn()?;
+        let spawned = c.spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(e) => {
+                // spawn 失败：父端读句柄尚未转成 OwnedHandle，必须手动关闭。
+                unsafe {
+                    CloseHandle(stdout_read);
+                    CloseHandle(stderr_read);
+                }
+                return Err(e);
+            }
+        };
 
         // 用我们的读取句柄替换子进程的 stdout/stderr。
         // Command::spawn 在使用自定义 Stdio 时会将 stdout/stderr 留为 None。

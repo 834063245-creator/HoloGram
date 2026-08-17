@@ -591,7 +591,7 @@ export class AgentRuntime implements RuntimePort {
         if (env && typeof env === 'object' && env.shell) {
           if (env.shell === 'bash') {
             shellEnvSection =
-              `- OS: ${env.os ?? 'unknown'} (Windows 环境)\n` +
+              `- OS: ${env.os ?? 'unknown'}${env.os === 'windows' ? ' (Windows 环境)' : ''}\n` +
               `- Shell: bash (Git Bash)\n` +
               `- 所有命令跑在 bash 上，用 Unix 语法：用 /dev/null 而不是 NUL、路径用正斜杠、用 ls 而不是 dir、变量用 $var`;
           } else {

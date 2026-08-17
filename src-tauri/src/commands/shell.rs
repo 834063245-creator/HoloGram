@@ -57,14 +57,19 @@ pub(crate) async fn exec_command(
     let lock_key = crate::utils::acquire_build_lock(&command, &physical_dir_str, job_id, agent_id.clone())?;
 
     if is_bg {
-        let id = crate::utils::spawn_bg(&command, &physical_dir_str, agent_id, lock_key)?;
+        let id = crate::utils::spawn_bg_with(job_id, &command, &physical_dir_str, shell_kind, agent_id, lock_key)?;
         return Ok(format!("[后台任务已启动, ID: {}]\n使用 bash_output({}) 查看输出, bash_wait({}) 等待完成, bash_kill({}) 终止任务", id, id, id, id));
     }
 
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000));
 
-    let mut child = crate::os_sandbox::spawn_shell_with(&command, &physical_dir_str, shell_kind)
-        .map_err(|e| format!("无法执行命令: {e}"))?;
+    let mut child = match crate::os_sandbox::spawn_shell_with(&command, &physical_dir_str, shell_kind) {
+        Ok(c) => c,
+        Err(e) => {
+            crate::utils::release_build_lock(&lock_key);
+            return Err(format!("无法执行命令: {e}"));
+        }
+    };
 
     // ── 流式路径：通过 Tauri 事件发送数据块 ──
     if let Some(stream_id) = stream_tool_id.clone() {
@@ -120,7 +125,7 @@ pub(crate) async fn exec_command(
                             "chunk": chunk,
                         }));
                     }
-                    crate::utils::lock_or_recover(&so_clone).extend_from_slice(&buf[..n]);
+                    crate::utils::append_shared_bounded(&mut *crate::utils::lock_or_recover(&so_clone), &buf[..n]);
                 }
                 // EOF：清空解码器残余（不完整序列 / GBK 尾）
                 let tail = dec.finish();
@@ -162,7 +167,7 @@ pub(crate) async fn exec_command(
                             "chunk": chunk,
                         }));
                     }
-                    crate::utils::lock_or_recover(&se_clone).extend_from_slice(&buf[..n]);
+                    crate::utils::append_shared_bounded(&mut *crate::utils::lock_or_recover(&se_clone), &buf[..n]);
                 }
                 let tail = dec.finish();
                 if !tail.is_empty() {
@@ -182,6 +187,7 @@ pub(crate) async fn exec_command(
         let shared = crate::utils::BgSharedOutput {
             stdout: Arc::clone(&shared_out),
             stderr: Arc::clone(&shared_err),
+            drain_done: Arc::clone(&drain_done),
         };
         crate::utils::register_fg_child(job_id, child, &label, shared, agent_id, lock_key);
 
@@ -294,6 +300,7 @@ pub(crate) async fn exec_command(
     let shared = crate::utils::BgSharedOutput {
         stdout: Arc::new(Mutex::new(Vec::new())),
         stderr: Arc::new(Mutex::new(Vec::new())),
+        drain_done: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let label: String = command.chars().take(80).collect();
     crate::utils::register_fg_child(job_id, child, &label, shared, agent_id, lock_key);
@@ -409,7 +416,7 @@ fn wait_child_blocking(
             Err(e) => {
                 crate::utils::lock_or_recover(&crate::utils::BG_JOBS)
                     .get_mut(&job_id)
-                    .and_then(|j| j.child.kill().ok());
+                    .and_then(|j| j.child.kill_tree().ok());
                 return Err(format!("命令执行异常: {e}"));
             }
         }
@@ -444,6 +451,7 @@ mod tests {
         crate::utils::BgSharedOutput {
             stdout: Arc::new(Mutex::new(Vec::new())),
             stderr: Arc::new(Mutex::new(Vec::new())),
+            drain_done: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 

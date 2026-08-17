@@ -169,12 +169,13 @@ export interface RpcContract {
       is_agent?: boolean;
       agent_id?: string;
       stream_tool_id?: string;
+      interpreter?: 'bash' | 'pwsh';
     };
-    result: string; // JSON
+    result: string; // text 或 JSON（流式 started 响应）
   };
-  bash_output: { params: { job_id: number }; result: string }; // JSON
-  bash_kill: { params: { job_id: number; agent_id?: string }; result: string }; // JSON
-  bash_wait: { params: { job_id: number; timeout_ms?: number }; result: string }; // JSON
+  bash_output: { params: { job_id: number }; result: string }; // text
+  bash_kill: { params: { job_id: number; agent_id?: string }; result: string }; // text
+  bash_wait: { params: { job_id: number; timeout_ms?: number }; result: string }; // text
   shell_env: { params: Record<string, never>; result: string }; // JSON
   drain_bg_notifications: { params: Record<string, never>; result: string }; // JSON
 
@@ -333,7 +334,7 @@ export interface EventContract {
   /** LSP 消息 */
   'lsp-message': { session_id: number; message: unknown };
   /** 前台 shell 输出流 */
-  'shell:output': { streamId: string; chunk: string };
+  'shell:output': { streamId: string; kind: 'stdout' | 'stderr'; chunk: string };
   /** 前台 shell 结束 */
   'shell:done': { streamId: string; exitCode: number; error?: string };
   /** 图变更摘要（workspace.rs 发射，分析完成后触发前端重载分页图） */

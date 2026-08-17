@@ -3,6 +3,7 @@
 // 后台任务系统 — 超时 + 后台 + 输出 + 终止（从 utils.rs 拆出）
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::os_sandbox;
@@ -22,6 +23,20 @@ use crate::utils::ipc_guard::lock_or_recover;
 pub(crate) struct BgSharedOutput {
     pub stdout: Arc<Mutex<Vec<u8>>>,
     pub stderr: Arc<Mutex<Vec<u8>>>,
+    /// drain 线程完成计数：0=none, 1=stdout, 2=stderr, 3=both。
+    /// 最终读取前需要等到 2（两个管道都排空），避免进程退出但管道尾部还没进 shared。
+    pub drain_done: Arc<AtomicUsize>,
+}
+
+/// 后台/流式共享缓冲区的有界追加：只保留最近 N 字节，防止长输出在内存里无限增长。
+const MAX_SHARED_OUTPUT_BYTES: usize = 1024 * 1024;
+
+pub(crate) fn append_shared_bounded(buf: &mut Vec<u8>, data: &[u8]) {
+    buf.extend_from_slice(data);
+    if buf.len() > MAX_SHARED_OUTPUT_BYTES {
+        let drop = buf.len() - MAX_SHARED_OUTPUT_BYTES;
+        buf.drain(..drop);
+    }
 }
 
 pub(crate) struct BgJob {
@@ -124,6 +139,10 @@ fn spawn_monitor(id: u32, label: String) {
 
             match job.child.try_wait() {
                 Ok(Some(status)) => {
+                    // 先释放构建锁：进程已结束，锁不应再被占用。job 仍保留供 bash_output 查输出。
+                    if let Some(k) = job.lock_key.take() {
+                        crate::utils::lock_or_recover(&BUILD_LOCKS).remove(&k);
+                    }
                     let elapsed = job.start_time.elapsed().as_secs();
                     let ec = status.code().unwrap_or(-1);
                     let msg = format!(
@@ -154,11 +173,36 @@ pub(crate) fn spawn_bg(cmd: &str, cwd: &str, owner: Option<String>, lock_key: Op
     let child = os_sandbox::spawn_shell(cmd, cwd)
         .map_err(|e| format!("无法启动后台命令: {e}"))?;
     let label: String = cmd.chars().take(80).collect();
-    spawn_bg_from_child(child, &label, owner, lock_key)
+    let id = next_job_id();
+    spawn_bg_from_child(id, child, &label, owner, lock_key)
+}
+
+/// 带调用方预留 job_id + 显式解释器的后台启动。
+/// exec_command 后台分支使用：job_id 必须与 acquire_build_lock 使用同一 id，
+/// 否则锁持有者 ID 和 BG_JOBS 里的 job ID 对不上。
+/// 若 spawn 失败，会释放 lock_key，避免幽灵 BuildLock。
+pub(crate) fn spawn_bg_with(
+    id: u32,
+    cmd: &str,
+    cwd: &str,
+    interpreter: crate::os_sandbox::ShellInterpreter,
+    owner: Option<String>,
+    lock_key: Option<LockKey>,
+) -> Result<u32, String> {
+    let child = match os_sandbox::spawn_shell_with(cmd, cwd, interpreter) {
+        Ok(c) => c,
+        Err(e) => {
+            crate::utils::build_lock::release_build_lock(&lock_key);
+            return Err(format!("无法启动后台命令: {e}"));
+        }
+    };
+    let label: String = cmd.chars().take(80).collect();
+    spawn_bg_from_child(id, child, &label, owner, lock_key)
 }
 
 /// 将已启动的 SandboxedChild 注册为后台任务。
-/// 由 spawn_bg（runInBackground 路径）调用；前台流式路径用 register_fg_child。
+/// 由 spawn_bg/spawn_bg_with（runInBackground 路径）调用；前台流式路径用 register_fg_child。
+/// id 由调用方传入——必须和 acquire_build_lock 使用同一个 id（见 spawn_bg_with）。
 ///
 /// 必须 take 管道并用 drain 线程排空到 shared Arc:
 ///  1) std 管道是阻塞模式且缓冲极小(Windows 匿名管道默认 4KB),后台任务
@@ -166,12 +210,12 @@ pub(crate) fn spawn_bg(cmd: &str, cwd: &str, owner: Option<String>, lock_key: Op
 ///  2) 读方(wait_bg/read_bg_output/kill_bg)只读 shared Arc 内存,永不阻塞——
 ///     shared 为 BgJob 必填字段,阻塞读管道分支已从类型上移除(P1-17)。
 pub(crate) fn spawn_bg_from_child(
+    id: u32,
     child: os_sandbox::SandboxedChild,
     label: &str,
     owner: Option<String>,
     lock_key: Option<LockKey>,
 ) -> Result<u32, String> {
-    let id = next_job_id();
     let now = std::time::Instant::now();
     let mut child = child;
 
@@ -182,8 +226,10 @@ pub(crate) fn spawn_bg_from_child(
     // 长任务运行中 bash_output 读不到增量。read_vectored 逐块可靠(191ms/23KB 实测)。
     let stdout_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
     let stderr_buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>> = Default::default();
+    let drain_done: std::sync::Arc<AtomicUsize> = Default::default();
     if let Some(mut reader) = child.take_stdout() {
         let buf = std::sync::Arc::clone(&stdout_buf);
+        let done = std::sync::Arc::clone(&drain_done);
         std::thread::spawn(move || {
             use std::io::{IoSliceMut, Read};
             let mut chunk = [0u8; 4096];
@@ -196,12 +242,16 @@ pub(crate) fn spawn_bg_from_child(
                         Err(_) => break,
                     }
                 };
-                crate::utils::lock_or_recover(&buf).extend_from_slice(&chunk[..n]);
+                crate::utils::append_shared_bounded(&mut *crate::utils::lock_or_recover(&buf), &chunk[..n]);
             }
+            done.fetch_add(1, Ordering::SeqCst);
         });
+    } else {
+        drain_done.fetch_add(1, Ordering::SeqCst);
     }
     if let Some(mut reader) = child.take_stderr() {
         let buf = std::sync::Arc::clone(&stderr_buf);
+        let done = std::sync::Arc::clone(&drain_done);
         std::thread::spawn(move || {
             use std::io::{IoSliceMut, Read};
             let mut chunk = [0u8; 4096];
@@ -214,9 +264,12 @@ pub(crate) fn spawn_bg_from_child(
                         Err(_) => break,
                     }
                 };
-                crate::utils::lock_or_recover(&buf).extend_from_slice(&chunk[..n]);
+                crate::utils::append_shared_bounded(&mut *crate::utils::lock_or_recover(&buf), &chunk[..n]);
             }
+            done.fetch_add(1, Ordering::SeqCst);
         });
+    } else {
+        drain_done.fetch_add(1, Ordering::SeqCst);
     }
 
     let job = BgJob {
@@ -226,7 +279,7 @@ pub(crate) fn spawn_bg_from_child(
         start_time: now,
         label: label.to_string(),
         last_output_time: now,
-        shared: BgSharedOutput { stdout: stdout_buf, stderr: stderr_buf },
+        shared: BgSharedOutput { stdout: stdout_buf, stderr: stderr_buf, drain_done },
         owner,
         lock_key,
     };
@@ -262,7 +315,30 @@ pub(crate) fn register_fg_child(
     crate::utils::lock_or_recover(&BG_JOBS).insert(id, job);
 }
 
+/// 有界等待 drain 线程收尾。最终读取前调用，避免“进程已退出但管道尾部还没进 shared”。
+fn wait_for_drain(done: &AtomicUsize, expected: usize, timeout: std::time::Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    while done.load(Ordering::SeqCst) < expected && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
+    // 先看是否已完成；若已完成，先等 drain 收尾再读最终输出。
+    let drain_to_wait = {
+        let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
+        let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
+        let status = job.child.try_wait().map_err(|e| format!("检查进程状态失败: {e}"))?;
+        if status.is_some() {
+            Some(std::sync::Arc::clone(&job.shared.drain_done))
+        } else {
+            None
+        }
+    };
+    if let Some(drain_done) = drain_to_wait {
+        wait_for_drain(&drain_done, 2, std::time::Duration::from_secs(3));
+    }
+
     let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
     let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
 
@@ -304,10 +380,20 @@ pub(crate) fn read_bg_output(id: u32) -> Result<String, String> {
 pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
-        let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
-        let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
-        match job.child.try_wait() {
-            Ok(Some(status)) => {
+        let (status, drain_done, started) = {
+            let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
+            let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
+            let status = job.child.try_wait().map_err(|e| format!("检查进程状态失败: {e}"))?;
+            let drain = std::sync::Arc::clone(&job.shared.drain_done);
+            let start = job.start_time;
+            (status, drain, start)
+        };
+        match status {
+            Some(status) => {
+                // 进程已退出：先等 drain 线程把管道尾部排进 shared，再读最终输出。
+                wait_for_drain(&drain_done, 2, std::time::Duration::from_secs(3));
+                let mut jobs = crate::utils::lock_or_recover(&BG_JOBS);
+                let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
                 // 只从共享 Arc 读取——不碰 child 管道，永不持锁阻塞（P1-17）
                 let (stdout_str, stderr_str) = {
                     let shared = &job.shared;
@@ -317,7 +403,7 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
                     let t = crate::utils::decode_shell_bytes(&se);
                     (s, t)
                 };
-                let elapsed = job.start_time.elapsed().as_secs();
+                let elapsed = started.elapsed().as_secs();
                 let ec = status.code().unwrap_or(-1);
                 let lock_key = job.lock_key.clone();
                 jobs.remove(&id);
@@ -328,21 +414,11 @@ pub(crate) fn wait_bg(id: u32, timeout_ms: u64) -> Result<String, String> {
                 let header = format!("[任务已完成, exit code: {}, 耗时: {}s]\n", ec, elapsed);
                 return Ok(format!("{header}{stdout_str}{stderr_str}"));
             }
-            Ok(None) => {
-                drop(jobs);
+            None => {
                 if std::time::Instant::now() >= deadline {
                     return Err(format!("等待超时 ({}ms)", timeout_ms));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            Err(e) => {
-                let lock_key = jobs.get(&id).and_then(|j| j.lock_key.clone());
-                jobs.remove(&id);
-                drop(jobs);
-                if let Some(k) = lock_key {
-                    crate::utils::lock_or_recover(&BUILD_LOCKS).remove(&k);
-                }
-                return Err(format!("检查进程状态失败: {e}"));
             }
         }
     }
@@ -423,6 +499,7 @@ mod tests {
                 shared: BgSharedOutput {
                     stdout: Default::default(),
                     stderr: Default::default(),
+                    drain_done: Default::default(),
                 },
                 owner: None,
                 lock_key: Some(k.clone()),
@@ -433,6 +510,41 @@ mod tests {
             !crate::utils::lock_or_recover(&BUILD_LOCKS).contains_key(&k),
             "remove_job 应释放构建锁"
         );
+    }
+
+    /// 后台 spawn 失败时（cwd 不存在 → spawn_shell_with 报错），
+    /// 之前已 acquire 的 BuildLock 必须被释放，否则变成幽灵锁卡死后续命令。
+    #[test]
+    fn spawn_bg_with_failure_releases_build_lock() {
+        let _g = BUILD_LOCK_TESTS.lock().expect("test lock");
+        let id = next_job_id();
+        let k = acquire_build_lock("cargo build", "C:/ws-bg-fail", id, None).unwrap().unwrap();
+        let r = spawn_bg_with(
+            id,
+            "cargo build",
+            r"C:\definitely-not-exist-hologram-test",
+            crate::os_sandbox::ShellInterpreter::Auto,
+            None,
+            Some(k.clone()),
+        );
+        assert!(r.is_err(), "不存在的 cwd 应导致 spawn 失败: {r:?}");
+        assert!(
+            !crate::utils::lock_or_recover(&BUILD_LOCKS).contains_key(&k),
+            "spawn 失败后 BuildLock 应已释放"
+        );
+        crate::utils::lock_or_recover(&BUILD_LOCKS).clear();
+    }
+
+    /// 后台 job 必须使用调用方预留的同一 job_id（与 acquire_build_lock 一致），
+    /// 否则锁持有者 ID 和 BG_JOBS 里的实际 job ID 对不上。
+    #[test]
+    fn spawn_bg_with_uses_given_job_id() {
+        let id = next_job_id();
+        let kid = spawn_bg_with(id, "echo bg-id-ok", ".", crate::os_sandbox::ShellInterpreter::Auto, None, None)
+            .expect("spawn_bg_with failed");
+        assert_eq!(kid, id, "后台 job_id 应与调用方预留 id 一致");
+        let out = wait_bg(id, 10_000).expect("wait_bg failed");
+        assert!(out.contains("bg-id-ok"), "unexpected output: {out}");
     }
 
 }

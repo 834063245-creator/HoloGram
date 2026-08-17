@@ -717,7 +717,7 @@ mod tests {
         let _g = BUILD_LOCK_TESTS.lock().expect("test lock");
         let id = next_job_id();
         let child = crate::os_sandbox::spawn_shell("sleep 30", ".").expect("spawn_shell failed");
-        register_fg_child(id, child, "sleep 30", BgSharedOutput { stdout: Default::default(), stderr: Default::default() }, Some("agent-a".into()), None);
+        register_fg_child(id, child, "sleep 30", BgSharedOutput { stdout: Default::default(), stderr: Default::default(), drain_done: Default::default() }, Some("agent-a".into()), None);
         // 其他 Agent 无权 kill
         let err = kill_bg(id, Some("agent-b")).unwrap_err();
         assert!(err.contains("无权终止"), "跨 Agent kill 应拒绝: {err}");
@@ -726,7 +726,7 @@ mod tests {
         // 用户任务（owner=None）：Agent 无权 kill
         let id2 = next_job_id();
         let child2 = crate::os_sandbox::spawn_shell("sleep 30", ".").expect("spawn_shell failed");
-        register_fg_child(id2, child2, "sleep 30", BgSharedOutput { stdout: Default::default(), stderr: Default::default() }, None, None);
+        register_fg_child(id2, child2, "sleep 30", BgSharedOutput { stdout: Default::default(), stderr: Default::default(), drain_done: Default::default() }, None, None);
         let err2 = kill_bg(id2, Some("agent-a")).unwrap_err();
         assert!(err2.contains("无权终止"), "用户任务 Agent 不可 kill: {err2}");
         // 用户（无 agent_id）可 kill 任何任务
