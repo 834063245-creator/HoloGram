@@ -56,7 +56,8 @@ impl McpManager {
         let child = {
             use std::os::windows::process::CommandExt;
             Command::new(engine_path)
-                .creation_flags(crate::utils::NO_WINDOW)
+                // engine serve 可能拉起子进程（子 Agent/工具）→ 需隐藏控制台继承
+                .creation_flags(crate::utils::HIDDEN_CONSOLE)
                 .current_dir(&root)
                 .args(["serve", "--project-root", project_root])
                 .stdin(Stdio::piped())

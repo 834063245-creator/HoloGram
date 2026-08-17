@@ -611,7 +611,7 @@ bash|9222|99
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(crate::utils::NO_WINDOW);
+            cmd.creation_flags(crate::utils::HIDDEN_CONSOLE);
         }
         let child = cmd.spawn().expect("spawn 哑进程");
 

@@ -5,13 +5,36 @@
 use std::process::Command;
 use tracing_appender::non_blocking::WorkerGuard;
 #[cfg(windows)] use std::os::windows::process::CommandExt;
-// CREATE_NO_WINDOW | DETACHED_PROCESS。
-// DETACHED 使子进程完全没有控制台——不派生 conhost.exe。
-// 2026-08-13 修复：纯 CREATE_NO_WINDOW 仍会创建隐藏控制台 + conhost；
-// 客户端被强杀时 conhost 可能空转/孤儿化（PTY 场景详见 pty_manager.rs
-// conhost_guard 注释），所有 NO_WINDOW 调用点均为 stdio 重定向程序
-// （git/LSP/MCP/Chrome），DETACHED 无副作用。
-#[cfg(windows)] pub(crate) const NO_WINDOW: u32 = 0x08000008;
+// ═══════════════════════════════════════════════════════════════
+// Windows 子进程窗口控制 — 语义化常量（2026-08-17 根治复发问题）。
+//
+// 历史教训（修过 8 次仍在弹窗）：窗口标志的选择不能用"一个全局常量
+// 盖所有调用点"。同一个数字对直接子进程和对「孙进程」的窗口行为相反：
+//
+//   CREATE_NO_WINDOW (0x08000000)：「隐藏控制台」—— 子进程有隐藏控制台，
+//   且该隐藏控制台会被孙进程继承 → 整棵进程树都不可见。
+//   DETACHED_PROCESS (0x00000008)：「无控制台」—— 子进程完全没有控制台，
+//   它再 spawn 的孙进程（cmd shim → node/git/cargo 等 CUI 程序）无控制台
+//   可继承 → Windows 给孙进程分配【可见新控制台窗口】→ 弹 cmd 黑窗。
+//   同时给两者时 CREATE_NO_WINDOW 被忽略（MSDN），实际等效 DETACHED。
+//
+// 判别标准：这个子进程**会不会再拉起 CUI 孙进程**？
+//   - 会（shell 解释器 bash/pwsh/cmd、.cmd shim、git、PowerShell 脚本）
+//     → 必须 HIDDEN_CONSOLE，隐藏控制台被子孙继承，全程静默。
+//   - 不会（一次性探测 reg/where/版本探针等 stdio 重定向短命令）
+//     → 可以 DETACHED_PROCESS，无控制台、无 conhost，零残留。
+//
+// 验证依据（D:/tmp/winprobe 实验探针实测）：
+//   cmd /c shim.cmd（cmd→cmd→ping 链，npm.cmd 同构）：
+//     0x08000000  → new_visible_console=0（静默 ✅）
+//     0x00000008  → new_visible_console=1（弹窗 ❌）
+//     0x08000008  → new_visible_console=1（组合等效 DETACHED，弹窗 ❌）
+//   PS: pty_manager 的 conhost 孤儿（8-13 动机）是 ConPTY 场景，由
+//   conhost_guard 看门狗兜底，与本常量无关，不要把 DETACHED 强行扩散。
+#[cfg(windows)]
+pub(crate) const HIDDEN_CONSOLE: u32 = 0x08000000; // CREATE_NO_WINDOW：隐藏控制台被子孙继承
+#[cfg(windows)]
+pub(crate) const DETACHED_PROCESS_FLAG: u32 = 0x00000008; // 仅一次性探测（不 spawn 孙进程）
 
 // ══════════════════════════════════════════════════════════════════════
 // 模块拆分（第三批任务 11a）— 按关注点拆出的子模块，
@@ -273,7 +296,8 @@ pub(crate) fn run_git_sync(dir: &str, args: &[String]) -> Result<String, String>
     let mut cmd = Command::new("git");
     #[cfg(windows)]
     {
-        cmd.creation_flags(NO_WINDOW);
+        // git 会经 shim/editor/hook 拉起孙进程 → 需隐藏控制台继承，不能 DETACHED
+        cmd.creation_flags(HIDDEN_CONSOLE);
     }
     let output = cmd
         .args(args)

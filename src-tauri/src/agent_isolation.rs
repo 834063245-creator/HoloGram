@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 pub(crate) fn git_cmd() -> std::process::Command {
     let mut c = std::process::Command::new("git");
     #[cfg(windows)]
-    { use std::os::windows::process::CommandExt; c.creation_flags(crate::utils::NO_WINDOW); }
+    { use std::os::windows::process::CommandExt; c.creation_flags(crate::utils::HIDDEN_CONSOLE); }
     c
 }
 

@@ -1243,7 +1243,7 @@ pub(crate) async fn cdp_launch(
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(crate::utils::NO_WINDOW);
+            cmd.creation_flags(crate::utils::HIDDEN_CONSOLE);
         }
         let child = cmd.spawn().map_err(|e| err(codes::INTERNAL, format!("启动 Chrome 失败: {e}")))?;
         sess.chrome_child = Some(child);
@@ -1715,7 +1715,8 @@ Get-CimInstance Win32_Process | ForEach-Object {
         ps.args(["-NoProfile", "-Command", script]);
         // 静默后台运行：不弹 PowerShell 窗口（discover 每次调用都会闪控制台）
         use std::os::windows::process::CommandExt;
-        ps.creation_flags(crate::utils::NO_WINDOW);
+        // PowerShell 脚本内部再跑 CUI 命令（tasklist 等）→ 需隐藏控制台继承
+        ps.creation_flags(crate::utils::HIDDEN_CONSOLE);
         let out = ps
             .output()
             .map_err(|e| err(codes::NETWORK, format!("discover: 查询进程表失败: {e}")))?;

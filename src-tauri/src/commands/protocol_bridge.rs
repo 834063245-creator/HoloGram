@@ -32,12 +32,20 @@ pub(crate) fn protocol_bridge_spawn(
     args: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let mut child = std::process::Command::new(&command)
-        .args(&args)
+    let mut cmd = std::process::Command::new(&command);
+    cmd.args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    // 2026-08-17 根治：外部 MCP/ACP server 常是 node/python 等 CUI 程序，
+    // 且会再拉起孙进程（node shim 链）。必须隐藏控制台继承，否则从 GUI 主进程
+    // spawn 会在桌面弹出可见 cmd 黑窗。
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(crate::utils::HIDDEN_CONSOLE);
+    }
+    let mut child = cmd.spawn()
         .map_err(|e| format!("protocol_bridge_spawn: {command} 启动失败: {e}"))?;
     let stdout = child
         .stdout

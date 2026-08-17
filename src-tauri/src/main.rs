@@ -31,6 +31,7 @@ mod rpc;
 mod lifecycle;
 mod cdp;
 mod desktop;
+mod uia;
 mod llm_proxy;
 
 use std::sync::Arc;
@@ -123,7 +124,7 @@ fn main() {
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null());
                         #[cfg(windows)]
-                        { mc.creation_flags(crate::utils::NO_WINDOW); }
+                        { mc.creation_flags(crate::utils::HIDDEN_CONSOLE); }
                         // 保留 Child 句柄供 ResourceLedger 在关闭时终止
                         if let Ok(child) = mc.spawn() {
                             *crate::utils::lock_or_recover(&commands::external::MEMORY_BUNDLE_CHILD) = Some(child);

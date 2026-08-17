@@ -83,11 +83,12 @@ pub async fn lsp_start(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // LSP 用 CREATE_NO_WINDOW（隐藏控制台），不用 DETACHED 的 NO_WINDOW：
+        // LSP 必须用 HIDDEN_CONSOLE（隐藏控制台），不能 DETACHED：
         // npm 语言服务器是 .cmd 批处理 shim，DETACHED 下 cmd.exe 无控制台时再拉起
         // node 孙进程会给它们分配可见的新控制台窗口（引擎侧同因，2026-08-13 回归）；
-        // CREATE_NO_WINDOW 的隐藏控制台会被孙进程继承，整棵进程树都不可见。
-        c.creation_flags(0x08000000);
+        // HIDDEN_CONSOLE 的隐藏控制台会被孙进程继承，整棵进程树都不可见。
+        // （2026-08-17 探针实验：cmd→cmd→ping 链 0x08000000 可见窗口=0，0x00000008=1）
+        c.creation_flags(crate::utils::HIDDEN_CONSOLE);
     }
     let mut child = c.spawn()
         .map_err(|e| format!("无法启动 LSP ({cmd}): {e}"))?;

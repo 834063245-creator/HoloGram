@@ -438,8 +438,13 @@ pub mod imp {
 
     // ── 常量 ──
 
-    const DETACHED_PROCESS: u32 = 0x00000008;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    // 窗口标志语义（2026-08-17 根治复发，探针实验验证）—— 单一权威源在 utils.rs：
+    //   utils::HIDDEN_CONSOLE (0x08000000)：隐藏控制台被子孙继承，全程静默。
+    //     用于【会再拉起 CUI 孙进程】的宿主：shell 解释器 bash/pwsh/cmd、.cmd shim、
+    //     git、PowerShell 脚本。
+    //   utils::DETACHED_PROCESS_FLAG (0x00000008)：无控制台，孙进程会弹可见窗口。
+    //     仅用于【不 spawn 孙进程】的一次性探测（reg/where/版本探针，stdio 重定向）。
+    // 此处不定义本地魔数，统一引用 utils（2026-08-13 全局改 DETACHED 连坐弹窗的教训）。
     const HANDLE_FLAG_INHERIT: u32 = 1;
 
     // Job Object 限制
@@ -531,9 +536,10 @@ pub mod imp {
 
     /// 探测 `bash --version` 首行，5s 超时，失败返回 None。
     fn probe_bash_version(bash_path: &std::path::Path) -> Option<String> {
+        // 一次性版本探测：stdio 重定向、不 spawn 孙进程 → DETACHED 无副作用（不派生 conhost）
         let out = std::process::Command::new(bash_path)
             .arg("--version")
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .creation_flags(crate::utils::DETACHED_PROCESS_FLAG)
             .output()
             .ok()?;
         if !out.status.success() {
@@ -606,9 +612,10 @@ pub mod imp {
 
     /// `reg query <key> /v Path` 并提取 REG_SZ/REG_EXPAND_SZ 值。
     fn reg_path_value(key: &str) -> Option<String> {
+        // 一次性注册表探测：stdio 重定向、不 spawn 孙进程 → DETACHED 无副作用
         let out = std::process::Command::new("reg")
             .args(["query", key, "/v", "Path"])
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .creation_flags(crate::utils::DETACHED_PROCESS_FLAG)
             .output()
             .ok()?;
         if !out.status.success() {
@@ -672,9 +679,10 @@ pub mod imp {
                     return Shell::Bash(path.to_string());
                 }
         }
+        // 一次性 PATH 探测：stdio 重定向、不 spawn 孙进程 → DETACHED 无副作用
         if let Ok(output) = std::process::Command::new("where")
             .arg("git")
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .creation_flags(crate::utils::DETACHED_PROCESS_FLAG)
             .output()
         {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -883,7 +891,12 @@ pub mod imp {
             .stdin(std::process::Stdio::null())
             .stdout(stdout_write)
             .stderr(stderr_write)
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+            // 核心修复（2026-08-17）：shell 解释器（bash/pwsh/cmd）一定会再拉起
+            // 孙进程（npm→cmd→node、cargo、git...）。必须 HIDDEN_CONSOLE：
+            // 隐藏控制台被孙进程继承 → 整棵进程树不可见。
+            // DETACHED（含 CREATE_NO_WINDOW|DETACHED 组合，后者被 MSDN 忽略等效 DETACHED）
+            // 会让孙进程获得可见新控制台窗口 → 弹 cmd 黑窗（探针实验实测 0x08000008 可见=1）。
+            .creation_flags(crate::utils::HIDDEN_CONSOLE);
         for (k, v) in envs {
             c.env(k, v);
         }
@@ -1213,6 +1226,140 @@ pub mod imp {
                     );
                 }
                 Shell::Cmd => {}
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // Windows 窗口回归测试（2026-08-17 根治复发）── 防弹窗语义倒退
+        // ═══════════════════════════════════════════════════════════
+        // 背景：2026-06-28 ~ 2026-08-17，弹窗问题修了 8 次。
+        // 根因：shell 解释器（bash/pwsh/cmd）必须用 pure CREATE_NO_WINDOW
+        // （utils::HIDDEN_CONSOLE）。若用 DETACHED（含 CREATE_NO_WINDOW|DETACHED
+        // 组合，组合的 CREATE_NO_WINDOW 被 MSDN 忽略等效 DETACHED），子进程
+        // 无控制台，它再拉起的孙进程（npm→cmd→node、cargo 等 CUI 程序）会
+        // 被 Windows 分配可见新控制台窗口 → 弹 cmd 黑窗。
+        // 本测试实测：spawn_argv 启动 bash 跑一条会拉起 cmd 孙进程的命令，
+        // 断言进程树结束后无新增可见 ConsoleWindowClass 窗口。
+        // （2026-08-17 探针实验：cmd→cmd→ping 链 0x08000000 可见窗口=0，
+        //   0x00000008 与 0x08000008 = 1，此为修复的实测依据。）
+        #[test]
+        fn windows_shell_grandchild_no_visible_console() {
+            use std::os::windows::process::CommandExt;
+            use std::collections::HashSet;
+            use std::sync::Mutex;
+            use std::time::{Duration, Instant};
+
+            // 串行化：并行测试同时测窗口会互相污染该断言
+            static LOCK: Mutex<()> = Mutex::new(());
+            let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+            // ── FFI：枚举可见控制台窗口 ──
+            extern "system" {
+                fn EnumWindows(
+                    lpEnumFunc: extern "system" fn(isize, isize) -> i32,
+                    lParam: isize,
+                ) -> i32;
+                fn IsWindowVisible(hWnd: isize) -> i32;
+                fn GetClassNameW(hWnd: isize, lpClassName: *mut u16, nMaxCount: i32) -> i32;
+            }
+            extern "system" fn enum_cb(hwnd: isize, lparam: isize) -> i32 {
+                unsafe {
+                    let v: &mut Vec<(isize, String)> =
+                        &mut *(lparam as *mut Vec<(isize, String)>);
+                    let mut buf = [0u16; 256];
+                    let n = GetClassNameW(hwnd, buf.as_mut_ptr(), 256);
+                    let class = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+                    v.push((hwnd, class));
+                }
+                1
+            }
+            fn visible_console_windows() -> HashSet<isize> {
+                unsafe {
+                    let mut v: Vec<(isize, String)> = Vec::new();
+                    EnumWindows(enum_cb, &mut v as *mut Vec<(isize, String)> as isize);
+                    v.into_iter()
+                        .filter(|(_, class)| class == "ConsoleWindowClass")
+                        .filter(|(hwnd, _)| IsWindowVisible(*hwnd) != 0)
+                        .map(|(hwnd, _)| hwnd)
+                        .collect()
+                }
+            }
+
+            // 找一个可用的 bash（捆绑 MSYS2 或系统 Git Bash）
+            let bash = match super::resolve_shell() {
+                Shell::Bash(p) => p,
+                Shell::Cmd => {
+                    eprintln!("[window-regression] 无 bash（shell=cmd）—— cmd 路径由 spawn_cmd_script 同层保护，跳过");
+                    return;
+                }
+            };
+
+            let envs: Vec<(&str, &str)> = vec![
+                ("MSYS2_ARG_CONV_EXCL", "*"),
+                ("LC_ALL", "C.UTF-8"),
+                ("NO_COLOR", "1"),
+            ];
+            let before = visible_console_windows();
+
+            // 用 spawn_argv 启动 bash -c 一条会拉起 cmd 孙进程的命令
+            let cmd = "cmd.exe /c echo grandchild-ok && ping -n 2 127.0.0.1 >nul".to_string();
+            let mut child = match super::spawn_argv(
+                &bash,
+                &[String::from("-c"), cmd],
+                ".",
+                &envs,
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    panic!("[window-regression] spawn_argv 失败: {e}");
+                }
+            };
+
+            // 排空输出（孙进程持管的隐藏控制台不破坏管道读取；8-17 曾担心 conhost 持管挂死，实测 HIDDEN_CONSOLE 下 EOF 正常到达）
+            if let Some(mut r) = child.take_stdout() {
+                use std::io::Read;
+                let mut buf = Vec::new();
+                let _ = r.read_to_end(&mut buf);
+                let out = String::from_utf8_lossy(&buf);
+                assert!(
+                    out.contains("grandchild-ok"),
+                    "cmd 孙进程输出应可捕获: {out:?}"
+                );
+            }
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {
+                        if Instant::now() > deadline {
+                            let _ = child.kill();
+                            panic!("[window-regression] bash 15s 内未退出");
+                        }
+                        std::thread::sleep(Duration::from_millis(30));
+                    }
+                    Err(e) => panic!("[window-regression] wait 失败: {e}"),
+                }
+            }
+            // drop child → 关闭 per-command job 句柄 → KILL_ON_JOB_CLOSE 灭绝整棵进程树
+            drop(child);
+            // 给窗口消息队列一点时间清理（最多 2s 轮询直到不再出现新可见控制台窗口）
+            let wait_until = Instant::now() + Duration::from_secs(2);
+            loop {
+                let after = visible_console_windows();
+                let new_visible: Vec<isize> = after
+                    .iter()
+                    .filter(|h| !before.contains(h))
+                    .cloned()
+                    .collect();
+                if new_visible.is_empty() {
+                    break;
+                }
+                if Instant::now() > wait_until {
+                    panic!(
+                        "[window-regression] shell 孙进程链产生了可见控制台窗口（HIDDEN_CONSOLE 语义回归）: 新增 {new_visible:?}"
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
 

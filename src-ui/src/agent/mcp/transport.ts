@@ -38,7 +38,7 @@ interface NodeChildLike {
   kill(): void;
 }
 interface NodeChildProcessModule {
-  spawn(command: string, args: string[], opts: { stdio: Array<'pipe' | 'inherit'> }): NodeChildLike;
+  spawn(command: string, args: string[], opts: { stdio: Array<'pipe' | 'inherit'>; windowsHide?: boolean }): NodeChildLike;
 }
 
 /** 解析 child_process 模块（Node）。webview / 非 Node 宿主 → null，调用方应注入 ProcIO。 */
@@ -63,7 +63,12 @@ export function createNodeStdioProc(command: string, args: string[]): ProcIO {
   if (!child_process) {
     throw new Error('child_process unavailable in this runtime — supply a ProcIO for non-Node hosts');
   }
-  const child = (child_process as NodeChildProcessModule).spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+  // windowsHide: true 防 Windows 弹窗（Node 宿主下本函数直接 spawn；
+  // Tauri webview 走 tauri-io → Rust protocol_bridge，那边已强制 HIDDEN_CONSOLE）
+  const child = (child_process as NodeChildProcessModule).spawn(command, args, {
+    stdio: ['pipe', 'pipe', 'inherit'],
+    windowsHide: true,
+  });
   const lineCbs: Array<(line: string) => void> = [];
   const exitCbs: Array<(code: number | null) => void> = [];
   let buf = '';

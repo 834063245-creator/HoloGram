@@ -55,6 +55,8 @@ pub(crate) struct WindowEntry {
     pub title: String,
     /// 是否可见:有非空标题 + 非零窗口句柄视为可见顶层窗口。
     pub visible: bool,
+    /// 窗口句柄（UIA 窗口定位 / 截图用）。
+    pub handle: u64,
 }
 
 /// 从 Get-Process 的 "pid|name|title|handle" 行解析窗口条目。
@@ -65,7 +67,7 @@ fn parse_window_line(line: &str) -> Option<WindowEntry> {
     let title = it.next()?.trim().to_string();
     let handle = it.next()?.trim().parse::<u64>().ok()?;
     if name.is_empty() || handle == 0 { return None; }
-    Some(WindowEntry { pid, name, title: title.clone(), visible: !title.is_empty() })
+    Some(WindowEntry { pid, name, title: title.clone(), visible: !title.is_empty(), handle })
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -105,7 +107,7 @@ pub(crate) fn desktop_probe() -> Result<String, String> {
             })).collect::<Vec<_>>(),
             "window_count": windows.len(),
             "windows": windows.iter().map(|w| json!({
-                "pid": w.pid, "name": w.name, "title": w.title, "visible": w.visible,
+                "pid": w.pid, "name": w.name, "title": w.title, "visible": w.visible, "hwnd": w.handle,
             })).collect::<Vec<_>>(),
             "visible_console_windows": visible_consoles,
             "note": "纯只读快照,不持续监控。默认仅进程名(不含命令行),可能含敏感信息的完整命令行不回显。",
@@ -174,7 +176,8 @@ try {
 }
 
 /// 运行一段 PowerShell 命令并返回 stdout。
-fn run_ps(script_body: &str) -> Result<String, String> {
+/// pub(crate) — 供 uia 模块复用（同一套静默无窗口姿势）。
+pub(crate) fn run_ps(script_body: &str) -> Result<String, String> {
     let script = format!("$ErrorActionPreference='SilentlyContinue'
 {script_body}");
     let mut ps = std::process::Command::new("powershell");
@@ -183,7 +186,7 @@ fn run_ps(script_body: &str) -> Result<String, String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        ps.creation_flags(crate::utils::NO_WINDOW);
+        ps.creation_flags(crate::utils::HIDDEN_CONSOLE);
     }
     let out = ps.output()
         .map_err(|e| format!("desktop probe: 执行 PowerShell 失败: {e}"))?;
