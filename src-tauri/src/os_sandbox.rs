@@ -510,6 +510,20 @@ pub mod imp {
     /// 捆绑资源内 bash.exe 的相对路径（tauri bundle.resources 带出）。
     const BUNDLED_BASH_REL: &str = "vendor/msys2/bin/bash.exe";
 
+    /// MSYS2 runtime 启动时会检查 POSIX 根下的 `/tmp`；缺失会向 stderr 打印
+    /// "bash.exe: warning: could not find /tmp, please create!"。
+    /// 每次 shell 调用都会新起一个 bash.exe，因此该 warning 会反复出现。
+    /// 正常打包已带 `vendor/msys2/tmp/`，这里兜底开发目录/旧安装包。
+    fn ensure_msys2_tmp(bash_path: &std::path::Path) -> io::Result<()> {
+        let root = bash_path
+            .parent()
+            .and_then(|p| p.parent())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "bundled bash path is too shallow")
+            })?;
+        std::fs::create_dir_all(root.join("tmp"))
+    }
+
     /// 解析捆绑 bash：resource_dir 必须含 vendor/msys2/bin/bash.exe。
     /// 缺失时保留 None——resolve_shell 走回退阶梯并大声告警，不静默。
     pub fn init_bundled(app: &tauri::AppHandle) {
@@ -530,6 +544,14 @@ pub mod imp {
         // 版本探针（带超时纪律，与 smoke_test_bash 同款）：
         // bash --version 可能卡住（杀毒/损坏），失败只影响 prompt 注入文本。
         if let Some(path) = resolved {
+            // 兜底：老安装包/开发目录若没有 vendor/msys2/tmp，先补上，
+            // 避免每次 bash 启动都向 stderr 打 "could not find /tmp" warning。
+            if let Err(e) = ensure_msys2_tmp(&path) {
+                eprintln!(
+                    "[hologram] warning: cannot create bundled MSYS2 /tmp near {}: {e}",
+                    path.display()
+                );
+            }
             BUNDLED_BASH_VERSION.get_or_init(|| probe_bash_version(&path));
         }
     }
@@ -943,12 +965,20 @@ pub mod imp {
     /// LC_ALL=C.UTF-8 钉死输出编码，NO_COLOR/PAGER/GIT_PAGER 消灭彩色转义与 pager 卡管道。
     pub fn spawn_bash(bash_path: &str, command: &str, cwd: &str) -> io::Result<super::SandboxedChild> {
         let arg = command.to_string();
+        // 临时目录钉死到真实存在的 Windows 用户临时目录，同时给 MSYS 侧一个 POSIX
+        // TMPDIR。避免捆绑 MSYS2 根目录只读时命令写 /tmp 失败，也避免 runtime 因
+        // 找不到 /tmp 每次启动都向 stderr 打 warning。
+        let temp_win = std::env::temp_dir().to_string_lossy().into_owned();
+        let temp_posix = windows_to_posix_path(&temp_win);
         let mut envs: Vec<(&str, String)> = vec![
             ("MSYS2_ARG_CONV_EXCL", "*".into()),
             ("LC_ALL", "C.UTF-8".into()),
             ("NO_COLOR", "1".into()),
             ("PAGER", "cat".into()),
             ("GIT_PAGER", "cat".into()),
+            ("TMP", temp_win.clone()),
+            ("TEMP", temp_win),
+            ("TMPDIR", temp_posix),
         ];
         // PATH 归一化（P3）：捆绑 bin 在前（coreutils 解析），用户工具目录在后
         if let Some(path) = bash_path_env() {
@@ -1227,6 +1257,27 @@ pub mod imp {
                 }
                 Shell::Cmd => {}
             }
+        }
+
+        #[test]
+        fn test_ensure_msys2_tmp_creates_dir() {
+            use std::fs;
+
+            let base = std::env::temp_dir().join(format!("holo_msys2_tmp_{}", std::process::id()));
+            let _ = fs::remove_dir_all(&base);
+            let bin = base.join("bin");
+            let bash = bin.join("bash.exe");
+            fs::create_dir_all(&bin).expect("create fake bin");
+            fs::write(&bash, "").expect("create fake bash");
+
+            super::ensure_msys2_tmp(&bash).expect("ensure_msys2_tmp should create tmp");
+
+            assert!(
+                base.join("tmp").is_dir(),
+                "MSYS2 /tmp must exist after ensure_msys2_tmp"
+            );
+
+            let _ = fs::remove_dir_all(&base);
         }
 
         // ═══════════════════════════════════════════════════════════
