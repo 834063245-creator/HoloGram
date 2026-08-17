@@ -690,13 +690,17 @@ export function createDesktopTools(): Tool[] {
     defineTool({
       name: 'desktop_uia_click',
       description:
-        'Click a control in a desktop window by its ref (from desktop_uia_tree/find). ' +
+        'Click a control in a desktop window. Locate by EITHER ref (from desktop_uia_tree/find, stable for this session) ' +
+        'OR by stable selector: name (exact, case-insensitive), automation_id (exact), control_type (e.g. Button) - any combination. ' +
+        'Selector mode is preferred for repeated actions (no need to re-read the tree). ' +
         'Triggers the control via InvokePattern/TogglePattern/SelectionItemPattern when available, else real mouse click at its center. ' +
         'Returns {done, method} where method reveals the mechanism used (invoke/toggle/selection/coords). ' +
-        'Requires approval - this injects a real click into the target app and may trigger save/send/delete side effects. ' +
-        'If the ref is stale, re-run desktop_uia_tree to get fresh refs.',
+        'Requires approval - this injects a real click into the target app and may trigger save/send/delete side effects.',
       schema: z.object({
-        ref: z.number().int().describe('Control ref from desktop_uia_tree/find'),
+        ref: z.number().int().optional().describe('Control ref from desktop_uia_tree/find (use instead of name/automation_id/control_type)'),
+        name: z.string().optional().describe('Control name, exact match case-insensitive (e.g. "Equals", "Seven")'),
+        automation_id: z.string().optional().describe('Exact automation id (e.g. "equalButton", "num7Button")'),
+        control_type: z.string().optional().describe('ControlType, e.g. Button, Edit, ListItem, MenuItem, CheckBox'),
         hwnd: z.number().int().optional().describe('Window handle (re-locate if tree changed)'),
         pid: z.number().int().optional().describe('Process id'),
         title: z.string().optional().describe('Window title substring'),
@@ -706,11 +710,15 @@ export function createDesktopTools(): Tool[] {
     defineTool({
       name: 'desktop_uia_right_click',
       description:
-        'Right-click a control in a desktop window by its ref - opens the context menu at the control center. ' +
+        'Right-click a control in a desktop window - opens the context menu at the control center. ' +
+        'Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). ' +
         'Requires approval (injects a real right-click; may trigger destructive/send actions from the context menu). ' +
         'Returns {done, method:"coords"}.',
       schema: z.object({
-        ref: z.number().int().describe('Control ref from desktop_uia_tree/find'),
+        ref: z.number().int().optional().describe('Control ref from desktop_uia_tree/find'),
+        name: z.string().optional().describe('Control name, exact match case-insensitive'),
+        automation_id: z.string().optional().describe('Exact automation id'),
+        control_type: z.string().optional().describe('ControlType, e.g. Button, Edit, ListItem'),
         hwnd: z.number().int().optional().describe('Window handle'),
         pid: z.number().int().optional().describe('Process id'),
         title: z.string().optional().describe('Window title substring'),
@@ -720,13 +728,16 @@ export function createDesktopTools(): Tool[] {
     defineTool({
       name: 'desktop_uia_type',
       description:
-        'Type text into a control in a desktop window by its ref. ' +
+        'Type text into a control in a desktop window. Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). ' +
         'Uses ValuePattern.SetValue when the control supports it (instant replace), else focuses the control and pastes via clipboard. ' +
         'Returns {done, method} (setvalue/sendkeys). Requires approval - text is really written into the target app and may be saved/sent. ' +
         'The clipboard is restored to its previous content afterwards.',
       schema: z.object({
-        ref: z.number().int().describe('Control ref (usually an Edit/ComboBox)'),
+        ref: z.number().int().optional().describe('Control ref (usually an Edit/ComboBox)'),
         text: z.string().describe('Text to type'),
+        name: z.string().optional().describe('Control name, exact match case-insensitive'),
+        automation_id: z.string().optional().describe('Exact automation id'),
+        control_type: z.string().optional().describe('ControlType, e.g. Edit, ComboBox'),
         hwnd: z.number().int().optional().describe('Window handle'),
         pid: z.number().int().optional().describe('Process id'),
         title: z.string().optional().describe('Window title substring'),
@@ -736,13 +747,16 @@ export function createDesktopTools(): Tool[] {
     defineTool({
       name: 'desktop_uia_scroll',
       description:
-        'Scroll a scrollable control in a desktop window by its ref. ' +
-        'Uses ScrollPattern when available (precise), else real mouse wheel at the control center (wheel/wheel for horizontal). ' +
+        'Scroll a scrollable control in a desktop window. Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). ' +
+        'Uses ScrollPattern when available (precise), else real mouse wheel at the control center (Wheel vertical / HWheel horizontal). ' +
         'Returns {done, method} (scrollpattern/wheel). Requires approval - moves the viewport of the target app.',
       schema: z.object({
-        ref: z.number().int().describe('Control ref (scrollable pane/list)'),
+        ref: z.number().int().optional().describe('Control ref (scrollable pane/list)'),
         direction: z.enum(['up', 'down', 'left', 'right']).describe('Scroll direction'),
         amount: z.number().optional().describe('Scroll amount (ScrollPattern units, or wheel ticks * 120); default 1'),
+        name: z.string().optional().describe('Control name, exact match case-insensitive'),
+        automation_id: z.string().optional().describe('Exact automation id'),
+        control_type: z.string().optional().describe('ControlType, e.g. Pane, List, ScrollBar'),
         hwnd: z.number().int().optional().describe('Window handle'),
         pid: z.number().int().optional().describe('Process id'),
         title: z.string().optional().describe('Window title substring'),

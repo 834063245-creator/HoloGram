@@ -562,7 +562,10 @@ pub(crate) async fn rpc(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
                 opt_u64(&params, "hwnd"),
-                req_u16(&params, "ref", "desktop_uia_click")? as u32,
+                opt_u32(&params, "ref").unwrap_or(0) as u32,
+                opt_str(&params, "name").as_deref(),
+                opt_str(&params, "automation_id").as_deref(),
+                opt_str(&params, "control_type").as_deref(),
             )
         }
         "desktop_uia_right_click" => {
@@ -577,7 +580,10 @@ pub(crate) async fn rpc(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
                 opt_u64(&params, "hwnd"),
-                req_u16(&params, "ref", "desktop_uia_right_click")? as u32,
+                opt_u32(&params, "ref").unwrap_or(0) as u32,
+                opt_str(&params, "name").as_deref(),
+                opt_str(&params, "automation_id").as_deref(),
+                opt_str(&params, "control_type").as_deref(),
             )
         }
         "desktop_uia_type" => {
@@ -592,8 +598,11 @@ pub(crate) async fn rpc(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
                 opt_u64(&params, "hwnd"),
-                req_u16(&params, "ref", "desktop_uia_type")? as u32,
+                opt_u32(&params, "ref").unwrap_or(0) as u32,
                 &req_str(&params, "text", "desktop_uia_type")?,
+                opt_str(&params, "name").as_deref(),
+                opt_str(&params, "automation_id").as_deref(),
+                opt_str(&params, "control_type").as_deref(),
             )
         }
         "desktop_uia_scroll" => {
@@ -608,9 +617,12 @@ pub(crate) async fn rpc(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
                 opt_u64(&params, "hwnd"),
-                req_u16(&params, "ref", "desktop_uia_scroll")? as u32,
+                opt_u32(&params, "ref").unwrap_or(0) as u32,
                 &req_str(&params, "direction", "desktop_uia_scroll")?,
                 opt_f64(&params, "amount"),
+                opt_str(&params, "name").as_deref(),
+                opt_str(&params, "automation_id").as_deref(),
+                opt_str(&params, "control_type").as_deref(),
             )
         }
         "desktop_uia_window_shot" => {

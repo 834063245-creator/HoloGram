@@ -394,7 +394,16 @@ pub(crate) fn uia_find(
     .to_string())
 }
 
-/// 操作前的公共 PowerShell 前缀：定位窗口 + 建 ref 映射 + 反查元素。
+/// 坐标计算段（供 ref 模式 / selector 模式复用）：以元素矩形中心为点击点。
+fn coords_calc_ps() -> &'static str {
+    "$__rect = $__el.Current.BoundingRectangle\n\
+     function __SafeInt([double]$v) { if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { 0 } else { [int]$v } }\n\
+     $__cx = __SafeInt ($__rect.X + $__rect.Width / 2)\n\
+     $__cy = __SafeInt ($__rect.Y + $__rect.Height / 2)\n\
+     if ($__rect.Width -le 0 -or $__rect.Height -le 0) { throw \"控件没有可点击区域（可能已隐藏或滚动出视口，请重新 desktop_uia_tree）\" }\n"
+}
+
+/// 操作前的公共 PowerShell 前缀（ref 模式）：定位窗口 + 建 ref 映射 + 反查元素。
 fn action_prefix_ps(
     title: Option<&str>,
     pid: Option<u32>,
@@ -403,16 +412,78 @@ fn action_prefix_ps(
 ) -> String {
     let loc = window_locator_ps(title, pid, hwnd);
     let bt = build_tree_ps(None);
-    let mut ps = format!("{loc}\n{bt}\n$ref = {ref_id}\n{}", ref_lookup_ps());
-    // 坐标计算（供兜底路径使用）：以元素矩形中心为点击点
+    format!("{loc}\n{bt}\n$ref = {ref_id}\n{}{}", ref_lookup_ps(), coords_calc_ps())
+}
+
+/// 操作前的公共 PowerShell 前缀（selector 模式）：
+/// 按 name / automation_id / control_type 组合 FindFirst 精确定位（不建全树），
+/// 命中元素塞进单元素 $__map（ref=0），后续脚本与 ref 模式完全复用。
+/// name/automation_id/control_type 至少给一个；name 精确匹配（IgnoreCase）。
+fn selector_prefix_ps(
+    title: Option<&str>,
+    pid: Option<u32>,
+    hwnd: Option<u64>,
+    name: Option<&str>,
+    automation_id: Option<&str>,
+    control_type: Option<&str>,
+) -> String {
+    let loc = window_locator_ps(title, pid, hwnd);
+    let mut ps = format!("{loc}\n");
+    ps.push_str("$__conds = New-Object System.Collections.ArrayList\n");
+    if let Some(n) = name {
+        let esc = n.replace('\'', "''");
+        ps.push_str(&format!(
+            "$__conds.Add((New-Object System.Windows.Automation.PropertyCondition(\
+             [System.Windows.Automation.AutomationElement]::NameProperty, '{esc}', \
+             [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase)))\n"
+        ));
+    }
+    if let Some(a) = automation_id {
+        let esc = a.replace('\'', "''");
+        ps.push_str(&format!(
+            "$__conds.Add((New-Object System.Windows.Automation.PropertyCondition(\
+             [System.Windows.Automation.AutomationElement]::AutomationIdProperty, '{esc}')))\n"
+        ));
+    }
+    if let Some(ct) = control_type {
+        let esc = ct.replace('\'', "''");
+        ps.push_str(&format!(
+            "$__ctProp = [System.Windows.Automation.ControlType].GetProperty('{esc}', [System.Reflection.BindingFlags]'Static,Public')\n\
+             if (-not $__ctProp) {{ throw '未知 ControlType: {esc}（常见: Button, Edit, Text, ListItem, MenuItem, CheckBox, ComboBox, Pane, Window, Group, Custom）' }}\n\
+             $__conds.Add((New-Object System.Windows.Automation.PropertyCondition(\
+             [System.Windows.Automation.AutomationElement]::ControlTypeProperty, $__ctProp.GetValue($null, $null))))\n"
+        ));
+    }
     ps.push_str(
-        "$__rect = $__el.Current.BoundingRectangle\n\
-         function __SafeInt([double]$v) { if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { 0 } else { [int]$v } }\n\
-         $__cx = __SafeInt ($__rect.X + $__rect.Width / 2)\n\
-         $__cy = __SafeInt ($__rect.Y + $__rect.Height / 2)\n\
-         if ($__rect.Width -le 0 -or $__rect.Height -le 0) { throw \"ref $ref 的控件没有可点击区域（可能已隐藏或滚动出视口，请重新 desktop_uia_tree）\" }\n",
+        "if ($__conds.Count -eq 0) { throw '至少要给一个定位条件（name / automation_id / control_type）' }\n\
+         $__condArr = [System.Windows.Automation.Condition[]]$__conds.ToArray()\n\
+         $__cond = if ($__conds.Count -eq 1) { $__conds[0] } else { New-Object System.Windows.Automation.AndCondition($__condArr) }\n\
+         $__el = $__win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $__cond)\n\
+         if (-not $__el) { throw '找不到匹配控件（name/automation_id/control_type 组合无命中，先 desktop_uia_tree 确认实际值）' }\n\
+         $__map = New-Object System.Collections.ArrayList\n\
+         [void]$__map.Add($__el)\n\
+         $ref = 0\n",
     );
+    ps.push_str(coords_calc_ps());
     ps
+}
+
+/// 统一前缀分发：给了 selector 条件（name/automation_id/control_type 任一）走 selector 模式，
+/// 否则走 ref 模式。
+fn action_prefix_dispatch(
+    title: Option<&str>,
+    pid: Option<u32>,
+    hwnd: Option<u64>,
+    ref_id: u32,
+    name: Option<&str>,
+    automation_id: Option<&str>,
+    control_type: Option<&str>,
+) -> String {
+    if name.is_some() || automation_id.is_some() || control_type.is_some() {
+        selector_prefix_ps(title, pid, hwnd, name, automation_id, control_type)
+    } else {
+        action_prefix_ps(title, pid, hwnd, ref_id)
+    }
 }
 
 /// 内联 C# 鼠标操作（SendInput 姿势）——坐标点击/右键/滚轮兜底。
@@ -458,14 +529,18 @@ fn click_impl_ps(right: bool) -> String {
     ps
 }
 
-/// desktop_uia_click — 按 ref 点击（Invoke/Toggle/Selection 优先，坐标兜底）。
+/// desktop_uia_click — 按 ref 或 name/automation_id/control_type 点击
+/// （Invoke/Toggle/Selection 优先，坐标兜底）。
 pub(crate) fn uia_click(
     title: Option<&str>,
     pid: Option<u32>,
     hwnd: Option<u64>,
     ref_id: u32,
+    name: Option<&str>,
+    automation_id: Option<&str>,
+    control_type: Option<&str>,
 ) -> Result<String, String> {
-    let prefix = action_prefix_ps(title, pid, hwnd, ref_id);
+    let prefix = action_prefix_dispatch(title, pid, hwnd, ref_id, name, automation_id, control_type);
     let script = format!("{prefix}\n{}", click_impl_ps(false));
     let out = run_ps_strict(&script)?;
     let method = out
@@ -476,14 +551,17 @@ pub(crate) fn uia_click(
     Ok(json!({ "done": true, "method": method, "ref": ref_id }).to_string())
 }
 
-/// desktop_uia_right_click — 按 ref 坐标右键（上下文菜单）。
+/// desktop_uia_right_click — 按 ref 或 selector 坐标右键（上下文菜单）。
 pub(crate) fn uia_right_click(
     title: Option<&str>,
     pid: Option<u32>,
     hwnd: Option<u64>,
     ref_id: u32,
+    name: Option<&str>,
+    automation_id: Option<&str>,
+    control_type: Option<&str>,
 ) -> Result<String, String> {
-    let prefix = action_prefix_ps(title, pid, hwnd, ref_id);
+    let prefix = action_prefix_dispatch(title, pid, hwnd, ref_id, name, automation_id, control_type);
     let script = format!("{prefix}\n{}", click_impl_ps(true));
     let out = run_ps_strict(&script)?;
     let method = out
@@ -494,15 +572,19 @@ pub(crate) fn uia_right_click(
     Ok(json!({ "done": true, "method": method, "ref": ref_id }).to_string())
 }
 
-/// desktop_uia_type — 按 ref 输入（ValuePattern.SetValue 优先，聚焦+SendKeys 兜底）。
+/// desktop_uia_type — 按 ref 或 selector 输入
+/// （ValuePattern.SetValue 优先，聚焦+SendKeys 兜底）。
 pub(crate) fn uia_type(
     title: Option<&str>,
     pid: Option<u32>,
     hwnd: Option<u64>,
     ref_id: u32,
     text: &str,
+    name: Option<&str>,
+    automation_id: Option<&str>,
+    control_type: Option<&str>,
 ) -> Result<String, String> {
-    let prefix = action_prefix_ps(title, pid, hwnd, ref_id);
+    let prefix = action_prefix_dispatch(title, pid, hwnd, ref_id, name, automation_id, control_type);
     let esc = text.replace('\'', "''");
     let mut ps = prefix;
     ps.push_str(&format!(
@@ -535,7 +617,7 @@ pub(crate) fn uia_type(
     Ok(json!({ "done": true, "method": method, "ref": ref_id }).to_string())
 }
 
-/// desktop_uia_scroll — 按 ref 滚动（ScrollPattern 优先，滚轮兜底）。
+/// desktop_uia_scroll — 按 ref 或 selector 滚动（ScrollPattern 优先，滚轮兜底）。
 pub(crate) fn uia_scroll(
     title: Option<&str>,
     pid: Option<u32>,
@@ -543,8 +625,11 @@ pub(crate) fn uia_scroll(
     ref_id: u32,
     direction: &str,
     amount: Option<f64>,
+    name: Option<&str>,
+    automation_id: Option<&str>,
+    control_type: Option<&str>,
 ) -> Result<String, String> {
-    let prefix = action_prefix_ps(title, pid, hwnd, ref_id);
+    let prefix = action_prefix_dispatch(title, pid, hwnd, ref_id, name, automation_id, control_type);
     let mut ps = prefix;
     let (hv, vv) = match direction {
         "left" => (-amount.unwrap_or(1.0), 0.0),
