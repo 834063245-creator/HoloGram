@@ -21,6 +21,7 @@ import type { AgentStore } from '../agent-store';
 import type { AgentEvent, AgentUINotifier, EventSink } from '../agent-types';
 import { EventKind } from '../agent-types';
 import { AgentBlueprint, type BlueprintScope } from '../blueprint';
+import type { Context } from '../../cordis';
 import type { SubAgentPool } from '../coordinator';
 import { createExecState, type ExecStateInstance } from '../execution-state';
 import type { GoalManager } from '../goal-manager';
@@ -180,9 +181,14 @@ export class AgentRuntime implements RuntimePort {
   private _agentSessions = new Map<string, string>();
   /** agentId → 该 Agent 实例专属的待办 TaskManager（每会话主 Agent 一个实例） */
   private _agentTaskManagers = new Map<string, TaskManager>();
+  /** cordis 挂载父 ctx（cordis-migration P2）— AgentContext 身份 fiber 的挂载点。 */
+  private _cordisParent?: Context;
 
-  constructor(projectPath?: string) {
+  constructor(projectPath?: string, cordisParent?: Context) {
     this._projectPath = projectPath ?? '';
+    // cordis-migration P2：Agent fiber 的挂载父（workspace 接线传工作区 fiber ctx）。
+    // 缺省（单测/无内核）→ AgentContext 不建 fiber，行为零变化。
+    this._cordisParent = cordisParent;
     if (projectPath) {
       const store = new JsonMessageStore(projectPath);
       this._bus = new MessageBus(undefined, store);
@@ -489,6 +495,7 @@ export class AgentRuntime implements RuntimePort {
         isolationId: config.isolationId,
         projectPath: config.projectPath,
         sessionId: config.sessionId,
+        cordisParent: this._cordisParent,
       },
       {
         provider: config.provider,

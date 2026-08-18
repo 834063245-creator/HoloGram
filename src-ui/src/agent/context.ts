@@ -15,6 +15,7 @@
 //   2. effect 注册的清理器逆序释放（复用 lifecycle.DisposerBag 契约）；
 //   3. child 隔离：独立 effect bag、身份按父子关系派生、继承表之外的服务不泄露。
 
+import type { Context, Fiber } from '../cordis';
 import type { Provider } from '../provider/types';
 import type { AgentStore } from './agent-store';
 import type { EventSink } from './agent-types';
@@ -89,6 +90,9 @@ export interface AgentContextInit {
   projectPath?: string;
   /** 会话隔离键 — 会话级 board 的路由键。缺省按父继承或 'default'（runtime 物化时解析）。 */
   sessionId?: string;
+  /** cordis 挂载父 ctx（cordis-migration P2）— 传入则本 Agent 在 cordis 树上获得身份
+   *  fiber；缺省（单测/无内核环境）完全脱离 cordis，行为零变化。 */
+  cordisParent?: Context;
 }
 
 /** child() 的派生覆盖项。身份只允许覆盖 agentId/isolationId，其余按父子关系派生。 */
@@ -102,6 +106,15 @@ export interface AgentChildOverrides {
 }
 
 // ── AgentContext ──
+
+/** Agent 身份 fiber 的插件定义（cordis-migration P2）。
+ *  apply 为空：fiber 只做树上的身份节点（可见性 + P3 挂载点），不承载清理——
+ *  清理所有权仍在 AgentContext._bag（DisposerBag 的同步快通道/串行逆序/聚合
+ *  抛错契约被 convergence specs 钉死，fiber unload 的异步并发语义不可替代它）。 */
+const agentFiberPlugin = {
+  name: 'hologram/agent',
+  apply() {},
+};
 
 export class AgentContext {
   /** Agent 唯一标识 — 模型可见，注册进 bus/board 的地址。 */
@@ -119,6 +132,12 @@ export class AgentContext {
 
   private readonly _services: Partial<AgentServices>;
   private readonly _bag: DisposerBag;
+  /** cordis 挂载父 ctx（构造时的 init.cordisParent）— child() 派生时继承它，
+   *  使子 Agent fiber 与本 Agent 平级（兄弟），见 child() 注释。 */
+  private readonly _cordisParent?: Context;
+  /** cordis 身份 fiber（cordis-migration P2）— 仅当构造时给了 cordisParent 才存在。
+   *  不承载清理（清理在 _bag，契约见类头注释）；dispose() 时一并从树上摘除。 */
+  private readonly _fiber?: Fiber;
 
   /** 构造 context。init 为身份，services 为初始服务表；二者之后均可经 set/effect 增补。 */
   constructor(init: AgentContextInit = {}, services: Partial<AgentServices> = {}) {
@@ -130,6 +149,16 @@ export class AgentContext {
     this.sessionId = init.sessionId;
     this._services = { ...services };
     this._bag = new DisposerBag();
+    // 身份 fiber 挂在 cordisParent 下（AgentRuntime 由 workspace 接线传入工作区 fiber ctx）。
+    // child() 继承同一 cordisParent → 子 Agent fiber 与父平级（兄弟）——
+    // 「父 dispose 不动子」的 effect 所有权独立契约（agent-context 规约 #3）由此保住。
+    this._cordisParent = init.cordisParent;
+    this._fiber = init.cordisParent?.plugin(agentFiberPlugin);
+  }
+
+  /** 本 Agent 的 cordis fiber ctx — P3 子系统挂载点。未接线 cordis 时为 undefined。 */
+  get cordisCtx(): Context | undefined {
+    return this._fiber?.ctx;
   }
 
   /** 生命周期是否已结束（dispose 后拒绝新注册/新服务）。 */
@@ -169,7 +198,9 @@ export class AgentContext {
   /** 派生子 Agent context。身份按父子关系派生（parentId=父 agentId、depth+1）；
    *  服务只继承白名单（provider/messageBus/agentStore — 与 spawnSubAgent 的
    *  继承语义一致），tools/eventSink/execState 等子 Agent 专属依赖经 overrides.services
-   *  显式注入，不复制父的全部字段。effect 所有权独立 — 父子互不代管清理。 */
+   *  显式注入，不复制父的全部字段。effect 所有权独立 — 父子互不代管清理。
+   *  cordis fiber 同样平级：child 继承的是 cordisParent（挂载父），子 fiber 与父 fiber
+   *  是兄弟 — 父 Agent dispose 不会连带子 Agent 的 fiber（树语义对齐 effect 契约）。 */
   child(overrides: AgentChildOverrides = {}): AgentContext {
     const inherited: Partial<AgentServices> = {
       provider: this._services.provider,
@@ -183,14 +214,18 @@ export class AgentContext {
         subagentDepth: this.subagentDepth + 1,
         isolationId: overrides.isolationId,
         projectPath: this.projectPath,
+        cordisParent: this._cordisParent,
       },
       { ...inherited, ...overrides.services },
     );
   }
 
   /** 逆序释放全部 effects 并结束生命周期。单次执行；单个失败不阻断后续（聚合抛出）。
-   *  Phase 3 仅提供契约（T1 钉住）；runtime 侧接线属 Phase 4。 */
+   *  Phase 3 仅提供契约（T1 钉住）；runtime 侧接线属 Phase 4。
+   *  cordis-migration P2：bag 释放后摘除身份 fiber（fiber 无清理载荷，dispose
+   *  即时 settle；bag 的同步快通道语义不受影响——bag 先行、fiber 收尾）。 */
   async dispose(): Promise<void> {
     await this._bag.dispose();
+    await this._fiber?.dispose();
   }
 }

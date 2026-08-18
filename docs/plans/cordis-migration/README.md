@@ -75,8 +75,36 @@ workspace-scope）同步换钉 fiber 机制；INVARIANTS #12、CONVENTIONS §1.1
 
 ### P2 — agent 装配迁移
 
-blueprint capability 表迁移为 fiber 装配；MCP client 插件化（对齐 DSH `inject: ['tools']` 模式）；
-AgentContext 与 cordis Context 的关系定案（保留外壳 or 直接替换）。
+**关系定案：保留 AgentContext 外壳，挂 cordis fiber 身份。** 摸底后修正原方案的三点：
+
+1. **AgentContext._bag 保留 DisposerBag，不换 fiber**。phase-4 T1 spec 钉死同步快通道
+   （`_disposeAgent` 注释原文：「effects 全 sync 链经 DisposerBag 同步快通道在返回前完成，
+   listAgents / bus 注册状态调用后立即可观测」）；cordis fiber unload 是异步跨微任务 + 并发，
+   直接替换会炸 spec 且语义降级。fiber 做**身份与挂树**，bag 继续做**有序清理**。
+2. **child() 平级挂载**。agent-context 规约钉死「effect 所有权独立——父 dispose 不动子」；
+   cordis fiber 树的父 dispose 连带子销毁。因此子 AgentContext 的 fiber 挂同一 cordisParent
+   （兄弟关系），不嵌套在父 fiber 下。
+3. **blueprint.ts 零改动**。capability 表序 = 工具面字节契约（Phase 6 立规），装配循环保持
+   同步顺序执行；capability 本就不是生命周期单元（Phase 6 铁律 3：teardown 留 ctx.effect）。
+   P2 的产出是：每个 Agent 的生命周期在 cordis 树上可见（fiber state LOADING→ACTIVE→DISPOSED），
+   为 P3 服务化提供挂载点。
+
+**MCP client 插件化：顺延**。摸底发现 `mcpClients` 是 agent-builder 的预留插口（生产路径
+不传、`new McpClient` 全仓零调用）——fiber 化一个未启用的死插口是投机设计，待真实启用时按
+DSH `inject: ['tools']` 模式与真实需求一起定。
+
+落地物（已实施）：AgentContext 增 `cordisParent?` 构造参 + `_fiber` 身份（plugin 名
+`hologram/agent`，共享插件对象）+ `cordisCtx` getter + dispose 桥接（bag 先行、fiber 收尾）；
+AgentRuntime 构造器增 `cordisParent?` 透传（`_contextFromConfig` 注入）；workspace 传
+`this._fiber.ctx`（Agent fiber 挂在工作区 fiber 下）。子 Agent 经 `child()` 继承 cordisParent
+→ 与父平级（兄弟 fiber），「父 dispose 不动子」契约保持。
+
+钉面调研（subagent 报告）确认的护城河，全部落实：
+- phase-4 T1 同步快通道 / dispose 聚合抛错 / 中文文案断言 → bag 保留，全部存活（**零测试修改**）；
+- phase-3 T0「AgentContext 公共成员必须有 JSDoc」→ `cordisCtx` getter 带 JSDoc；
+- 8 个 baseline 快照零漂移（specs 全绿实测）；wiring 提取器只看 `createAgent`/`_disposeAgent`
+  方法体——P2 不动这两处。
+
 **红线**：capability 表序字节不变（baseline 快照对拍守护）；`verify:convergence` 全绿。
 
 ### P3 — 面板/子系统 Service 化

@@ -780,7 +780,9 @@ export class Workspace {
     }
     // 清注入缓存登记在 runtime 之前 → 逆序释放时晚于 runtime.disposeAll（先拆 Agent 再清缓存）。
     teardown.add(() => resetAgentCaches(), 'reset-agent-caches');
-    const runtime = new AgentRuntime(this.path);
+    // cordis-migration P2：runtime 挂在工作区 fiber 下 — 每个 Agent 在 cordis 树上
+    // 获得身份 fiber（hologram/agent），生命周期随 AgentContext.dispose 摘除。
+    const runtime = new AgentRuntime(this.path, this._fiber.ctx);
     const adapter = createRuntimeAdapter(this._storeId);
     runtime.setNotifier(adapter);
     runtime.setDiagnosticsSource(getDiagnosticsForFile);
