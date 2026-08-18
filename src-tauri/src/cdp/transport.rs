@@ -5,7 +5,6 @@
 //! 从 cdp.rs 拆出（第四批工程债）：只做「连上、发命令、收响应」，
 //! 不持有会话状态；全链路超时仍由 WS_TIMEOUT 统一约束。
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -140,66 +139,6 @@ pub(super) async fn ws_command(
     tokio::time::timeout(WS_TIMEOUT, fut)
         .await
         .map_err(|_| err(codes::TIMEOUT, format!("CDP {method} 超时（{WS_TIMEOUT:?} 无响应）——页面主线程可能卡死")))?
-}
-
-/// 在一条 WS 连接上批量发送命令并收集全部响应。
-/// AX snapshot 需要给每个 backendNodeId 依次 resolveNode + callFunctionOn；
-/// 逐条走 ws_command 会反复建连，80 个节点就是 160 次握手。这里一次建连、
-/// 顺序发完、再按 id 收集，把 AX 路径的固定开销压到单次 WS 往返。
-pub(super) async fn ws_command_batch(
-    port: u16,
-    target_id: &str,
-    commands: Vec<(u64, String, Value)>,
-) -> Result<HashMap<u64, Value>, String> {
-    let expected = commands.len();
-    if expected == 0 {
-        return Ok(HashMap::new());
-    }
-    let fut = async {
-        let raw = list_targets_raw(port)?;
-        let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
-        let ws_url = arr
-            .iter()
-            .find(|t| t["id"].as_str() == Some(target_id))
-            .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
-            .ok_or_else(|| err(codes::TARGET_GONE, format!("target {target_id} 已消失（页面可能被关闭）")))?;
-
-        let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
-            .await
-            .map_err(|e| err(codes::NETWORK, format!("CDP WS 连接失败: {e}")))?;
-        for (id, method, params) in &commands {
-            let msg = json!({ "id": id, "method": method, "params": params }).to_string();
-            ws.send(Message::text(msg))
-                .await
-                .map_err(|e| err(codes::NETWORK, format!("CDP WS 批量发送失败: {e}")))?;
-        }
-
-        let mut replies: HashMap<u64, Value> = HashMap::new();
-        while replies.len() < expected {
-            let reply = ws
-                .next()
-                .await
-                .ok_or_else(|| err(codes::NETWORK, "CDP WS 连接关闭"))?
-                .map_err(|e| err(codes::NETWORK, format!("CDP WS 接收失败: {e}")))?;
-            match reply {
-                Message::Text(t) => {
-                    let v: Value = serde_json::from_str(&t)
-                        .map_err(|e| err(codes::INTERNAL, format!("CDP 响应解析失败: {e}")))?;
-                    if let Some(id) = v["id"].as_u64() {
-                        if commands.iter().any(|(cid, _, _)| *cid == id) {
-                            replies.insert(id, v);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        let _ = ws.close(None).await;
-        Ok::<HashMap<u64, Value>, String>(replies)
-    };
-    tokio::time::timeout(WS_TIMEOUT, fut)
-        .await
-        .map_err(|_| err(codes::TIMEOUT, "CDP 批量命令超时——页面主线程可能卡死".to_string()))?
 }
 
 /// 在一条 WS 连接上顺序执行命令：后一条命令的参数可以引用前一条的结果。

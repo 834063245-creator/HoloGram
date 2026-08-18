@@ -169,6 +169,7 @@ fn spawn_monitor(id: u32, label: String) {
     });
 }
 
+#[allow(dead_code)] // 当前仅测试消费；exec_command 后台路径已改走 spawn_bg_with（显式 job_id + 解释器）
 pub(crate) fn spawn_bg(cmd: &str, cwd: &str, owner: Option<String>, lock_key: Option<LockKey>) -> Result<u32, String> {
     let child = os_sandbox::spawn_shell(cmd, cwd)
         .map_err(|e| format!("无法启动后台命令: {e}"))?;

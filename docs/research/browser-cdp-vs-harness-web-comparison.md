@@ -88,12 +88,12 @@ providers：exa / perplexity / deepseek-official / http（fetch）
 |---|---|---|
 | 协议 | CDP（HTTP `/json` + WebSocket 命令/事件） | HTTP(S) fetch |
 | WS 库 | `tokio-tungstenite`（transport.rs:13） | 无 WS；平台 `fetch` |
-| 命令通道 | 短连接：连 → 发 id=1 → 读到匹配 id → 关（`ws_command` transport.rs:78-134）；批量版 `ws_command_batch`（transport.rs:140-194，AX resolveNode 压到单次往返） | 单次请求；重定向手工跟随（`provider.ts:55-101`） |
+| 命令通道 | 短连接：连 → 发 id=1 → 读到匹配 id → 关（`ws_command` transport.rs:78-134）；依赖链版 `ws_command_seq` 同连接顺序执行（AX resolveNode→callFunctionOn 压到单次往返） | 单次请求；重定向手工跟随（`provider.ts:55-101`） |
 | 事件通道 | attach 后**持久 WS 后台 task**（`start_observer` session.rs:459-603），订阅 Runtime/Log/Network/Page + 文件框拦截，环形缓冲 + `alive` 惰性重启 + 历史跨重启保留 | **无**（纯请求/响应，无事件流概念） |
 | 超时 | 分层：WS 命令 10s（transport.rs:16）、`Runtime.evaluate` 5s（session.rs:32）、actionability 5s（session.rs:35）、导航轮询 2s/5s、HTTP `/json` 2-5s | 单层 `deadline` 30s 默认（provider.ts:46-53），外加工具级 `timeoutMs` 由 tool-call-timeout-policy 强制（tool-web/src/index.ts:71-90） |
 | 进程控制 | spawn 受控 Chrome（session.rs:1207-1235）、connect 外部实例（session.rs:1318-1382）、kill 区分"杀进程 vs 只断开" | 无进程概念 |
 
-关键差距：harness 没有事件观察能力（console/network/错误流），也没有"页面主线程卡死"这类需要 WS 全链路超时兜底的场景；HoloGram 的 `ws_command_batch`（为 AX 80 节点 160 次握手压到 1 次）这种 CDP 特有优化在 harness 无对应物。反过来，harness 的超时归属更精细：**provider 超时 vs 外部取消 vs 网络错误**用 `timeoutOf(signal, 'WEB_FETCH_TIMEOUT')` 三分（provider.ts:235-239），HoloGram 的超时全部归并成同一条"CDP X 超时"错误。
+关键差距：harness 没有事件观察能力（console/network/错误流），也没有"页面主线程卡死"这类需要 WS 全链路超时兜底的场景；HoloGram 的 `ws_command_seq`（为 AX 80 节点 160 次握手压到 1 次）这种 CDP 特有优化在 harness 无对应物。反过来，harness 的超时归属更精细：**provider 超时 vs 外部取消 vs 网络错误**用 `timeoutOf(signal, 'WEB_FETCH_TIMEOUT')` 三分（provider.ts:235-239），HoloGram 的超时全部归并成同一条"CDP X 超时"错误。
 
 ---
 

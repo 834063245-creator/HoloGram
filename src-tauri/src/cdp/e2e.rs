@@ -16,7 +16,6 @@
 // 避开 app 的 9222 / 9223-9238。
 
 use super::*;
-use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -215,24 +214,21 @@ async fn e2e_connect_external_full_flow() {
     assert!(out.contains("\"connected\""), "connect 返回异常: {out}");
 
     // targets：应看到本地页面（页面加载可能滞后，轮询等）
-    let mut target_id: Option<String> = None;
-    {
+    let target_id = {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let t = cdp_targets(Some(agent)).expect("targets 应成功");
             let v: Value = serde_json::from_str(&t).expect("targets 返回应可解析");
             let pages = v["targets"].as_array().expect("targets 应含 targets 数组");
             if let Some(p) = pages.iter().find(|p| p["url"].as_str().unwrap_or("").contains("127.0.0.1")) {
-                target_id = Some(p["id"].as_str().unwrap_or("").to_string());
-                break;
+                break p["id"].as_str().unwrap_or("").to_string();
             }
             if Instant::now() > deadline {
                 panic!("外部实例应打开本地测试页面: {t}");
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
-    }
-    let target_id = target_id.expect("轮询应已取到 target id");
+    };
 
     // attach
     let a = cdp_attach(&target_id, Some(agent)).expect("attach 应成功");
@@ -241,15 +237,14 @@ async fn e2e_connect_external_full_flow() {
     // snapshot：本地页面有一个 "Learn more" 链接。不能硬编码 ref 0——
     // AX 树顺序里 body/容器可能排前面（原 example.com 恰好第一个交互元素是
     // 链接才碰巧成立）；真实 agent 行为是从 refs 里按 name 找目标再点。
-    let mut link_ref: Option<String> = None;
-    {
+    let link_ref = {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let s = cdp_snapshot(Some("body".into()), Some(20), Some(0), Some(agent))
                 .await
                 .expect("snapshot 应成功");
             let vs: Value = serde_json::from_str(&s).expect("snapshot 返回应可解析");
-            link_ref = vs["refs"]
+            let found = vs["refs"]
                 .as_array()
                 .and_then(|arr| {
                     arr.iter()
@@ -262,16 +257,15 @@ async fn e2e_connect_external_full_flow() {
                         .and_then(|r| r["ref"].as_i64())
                 })
                 .map(|r| r.to_string());
-            if link_ref.is_some() {
-                break;
+            if let Some(r) = found {
+                break r;
             }
             if Instant::now() > deadline {
                 panic!("snapshot 应含 Learn more 链接: {s}");
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
-    }
-    let link_ref = link_ref.expect("轮询应已取到 Learn more 链接 ref");
+    };
 
     // 等页面完全加载 + 启动期繁忙消退再点击——真实用户不会在页面加载中点击；
     // 冷启动 Chrome 若在启动任务繁忙时点链接，导航可能超 2s 轮询窗口（首测教训）。

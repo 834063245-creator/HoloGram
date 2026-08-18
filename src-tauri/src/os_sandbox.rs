@@ -238,6 +238,7 @@ pub(crate) fn candidate_pwsh_paths(program_files: &str, system_root: &str, path_
 }
 
 /// 在沙箱中启动 shell 命令（默认解释器阶梯，见 spawn_shell_with）。
+#[allow(dead_code)] // 当前仅测试消费；生产路径一律显式传解释器（spawn_shell_with）
 pub fn spawn_shell(command: &str, cwd: &str) -> io::Result<SandboxedChild> {
     spawn_shell_with(command, cwd, ShellInterpreter::Auto)
 }
@@ -1360,7 +1361,6 @@ pub mod imp {
         //   0x00000008 与 0x08000008 = 1，此为修复的实测依据。）
         #[test]
         fn windows_shell_grandchild_no_visible_console() {
-            use std::os::windows::process::CommandExt;
             use std::collections::HashSet;
             use std::sync::Mutex;
             use std::time::{Duration, Instant};
