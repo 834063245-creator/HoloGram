@@ -54,7 +54,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 │  │ Agent 循环│ │ 工具注册表 │ │多Agent池│ │ 3D 星图   │  │
 │  │ streaming│ │ ToolReg  │ │Coord.  │ │ Three.js  │  │
 │  └──────────┘ └──────────┘ └────────┘ └───────────┘  │
-│   Workspace (统一状态容器) + Zustand stores + React   │
+│   Workspace (cordis fiber 宿主) + Zustand + React     │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -68,7 +68,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 - **Engine 全局实例**：`engine::ENGINE`（`LazyLock<RwLock<Option<Engine>>>`）持有全部图状态；`engine_init / engine_read / engine_write / engine_analyze` 是唯一入口。Engine 用状态机管理生命周期：`Uninitialized → Loading → Ready ↔ Analyzing → Error`。
 - **WorkspaceHandle（Rust）**：持有单个打开项目的所有后端状态（权限上下文、watcher、审计），替代分散的 `ACTIVE_PROJECT / SANDBOX / AUDIT_LOGGER` 全局变量。
 - **ResourceLedger**：统一生命周期管理。所有有生命周期需求的后端服务（UnityEvent、LlmProxy、BgJobs、Mcp、Unity、Pty、Lsp、UiaWorker、Aura、MemoryBundle、Logging 共 11 个）实现 `LifecycleService` trait 并注册，退出时按序 drain（总预算 2s + 3s 强退）。
-- **Workspace（前端）**：统一状态容器，替代 18+ 个模块级全局变量；原子化工作区切换（`old.deactivate()` → `Workspace.open()` → 注入）。
+- **Workspace（前端）**：统一状态容器，替代 18+ 个模块级全局变量；原子化工作区切换（`old.deactivate()` → `Workspace.open()` → 注入）。生命周期原语已内核化为 vendored cordis（`src-ui/src/cordis/`，同 DSH 做法）：工作区级资源以 fiber effect 登记（获取点就地），Agent 挂身份 fiber（`hologram/agent`，清理仍走 DisposerBag 同步快通道），子系统以 Service 挂树（`LspService` 样板）；`deactivate()` = fiber dispose-to-quiescence + epoch 推进。epoch 代际防护永久保留——fiber 管所有权，epoch 管逃逸所有权的在途回调（详见 `docs/plans/cordis-migration/`）。
 
 ---
 
@@ -597,7 +597,7 @@ HoloGram/
 │   │   │   ├── tool.ts           # Tool 接口 + ToolRegistry
 │   │   │   ├── blueprint.ts      # AgentBlueprint capability 表驱动装配 (Phase 6)
 │   │   │   ├── session-log.ts    # SessionLog 事件溯源日志 (Phase 5)
-│   │   │   ├── lifecycle.ts      # Disposer 原语 (Phase 1/4) + Workspace._bag (DisposerBag)
+│   │   │   ├── lifecycle.ts      # Disposer/DisposerBag 原语 (AgentContext 同步快通道清理 + 顺序敏感拆除组)
 │   │   │   ├── hooks.ts          # Hook/PreflightHook 系统
 │   │   │   ├── goal-manager.ts   # 目标生命周期管理
 │   │   │   ├── skills.ts         # 技能热加载
@@ -612,8 +612,9 @@ HoloGram/
 │   │   │   ├── graph*.ts        # Three.js 星图渲染管线 (scene/renderers/shaders/layout)
 │   │   │   ├── events.ts        # EventBus (冻结——新 app 代码禁 import)
 │   │   │   └── *-store.ts       # Zustand stores (createScopedStore 注册表模式)
-│   │   ├── workspace.ts        # Workspace 统一状态容器 (替代 18+ 全局变量)
-│   │   ├── workspace-scope.ts  # workspace epoch 代际防护原语
+│   │   ├── cordis/            # vendored cordis 内核 (Context/Fiber/Service; 禁就地改, 见目录 README)
+│   │   ├── workspace.ts        # Workspace 统一状态容器 (替代 18+ 全局变量; 工作区 fiber 宿主)
+│   │   ├── workspace-scope.ts  # workspace epoch 代际防护原语 (永久保留: 管在途回调, 与 fiber 所有权互补)
 │   │   ├── bridge.ts           # Tauri IPC 桥接
 │   │   ├── lifecycle/          # WorkspaceStateMachine + timeout
 │   │   └── settings.ts         # 设置与凭证
