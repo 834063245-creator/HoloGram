@@ -176,12 +176,32 @@ pub(crate) async fn check_permission(
             }));
             let rx = register_ask(request_id.clone());
             match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
-                Ok(Ok(true)) => Ok(()),
-                Ok(Ok(false)) | Ok(Err(_)) => Err("用户拒绝了此操作".into()),
+                Ok(Ok(true)) => {
+                    // 异步 Ask→Allow 路径此前完全静默（探索报告确认）——补审计
+                    let target = tool
+                        .get_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    ctx.audit_allow(tool.name(), &target);
+                    Ok(())
+                }
+                Ok(Ok(false)) | Ok(Err(_)) => {
+                    let target = tool
+                        .get_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    ctx.audit_deny(tool.name(), &target, "用户在确认弹窗中拒绝");
+                    Err("用户拒绝了此操作".into())
+                }
                 Err(_) => {
                     // ⚡ 2026-08-04 状态治理：超时后移除残留的 Sender，
                     // 防止 PENDING_ASKS 只增不减地泄漏。
                     crate::permissions::remove_ask(&request_id);
+                    let target = tool
+                        .get_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    ctx.audit_deny(tool.name(), &target, "权限请求超时（300s）自动拒绝");
                     Err("权限请求超时".into())
                 }
             }

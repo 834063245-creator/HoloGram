@@ -1824,22 +1824,11 @@ pub(crate) async fn cdp_wait(
 // 敏感操作判定（ADR 0003 D6 L3）— rpc 层据此触发单独 Ask
 // ═══════════════════════════════════════════════════════════
 
-/// click 高危文本正则源（中文子串 + 英文单词边界）。Rust 单测与页面内 JS
-/// 共用这一份源字符串，避免两边单词清单漂移后「英文 Pay now 不触发 Ask」复发。
-pub(super) const SENSITIVE_CLICK_RE_SOURCE: &str = r"(确认|提交|支付|转账|购买|删除|注销|退订|清空|\b(pay(?:\s+now)?|payment|purchase|buy(?:\s+now)?|delete|confirm|unsubscribe|sign\s*out|log\s*out|transfer|checkout|clear|submit)\b)";
-
-/// 纯函数版高危文本判定（单测锁定英文词覆盖）。页面内 JS 用同一正则源。
+// 词表与纯函数判定已提取到 crate::sensitive（CDP 与 UIA 共享单一事实源）。
+// 页面内 JS 仍用 SENSITIVE_CLICK_RE_SOURCE 构造同源正则。
+pub(crate) use crate::sensitive::SENSITIVE_CLICK_RE_SOURCE;
 #[cfg(test)]
-use std::sync::LazyLock;
-
-#[cfg(test)]
-pub(super) fn is_sensitive_click_text(text: &str) -> bool {
-    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(&format!("(?i)({SENSITIVE_CLICK_RE_SOURCE})"))
-            .expect("SENSITIVE_CLICK_RE_SOURCE 是静态正则")
-    });
-    RE.is_match(text)
-}
+pub(crate) use crate::sensitive::is_sensitive_click_text;
 
 /// 判定目标是否为敏感操作：type 到已填值输入框/password 框；click 提交按钮、
 /// 下载链接、或文本含高危动词的元素。判定失败（未 attach 等）静默放行——

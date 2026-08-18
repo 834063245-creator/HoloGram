@@ -223,7 +223,7 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       'attach 用 targetId（来自 browser(targets) 的 CDP target id）。' +
       'connect 连接用户已启动的浏览器实例（端口由用户提供，或先 discover 选择），操作其真实数据；kill 只断开不杀该进程。' +
       '多账号：browser(launch, profile:"work") 创建独立持久登录态，browser(switch_session,"work") 切换，browser(sessions) 查看；不同 profile 的 cookie/登录态完全隔离。' +
-        '用户没给端口时先 discover 列实例让用户选（进程表查询，用户无需知道端口号）。',
+      '用户没给端口时先 discover 列实例让用户选（进程表查询，用户无需知道端口号）。',
     actions: {
       launch: 'browser_launch',
       connect: 'browser_connect',
@@ -262,25 +262,40 @@ export const DOMAIN_SPECS: DomainSpec[] = [
       eval: 'browser_eval',
       status: 'browser_status',
       wait: 'browser_wait',
+      fill: 'browser_fill',
+      navigate_snapshot: 'browser_navigate_snapshot',
     },
   },
   {
     name: 'desktop',
     description:
-      'Read-only desktop snapshot: probe current machine process tree + visible windows + visible console windows, ' +
-      'or capture a full-screen screenshot. Use desktop(probe) to detect whether a process has a visible console window ' +
-      '(e.g. a language server spawning a cmd window) or to see open desktop windows. desktop(screenshot) needs approval ' +
-      '(high privacy). Does not connect to a browser and does not do persistent monitoring.',
+      'Windows desktop control (in-process UIA COM, millisecond-latency): probe process tree + windows with channel routing advice ' +
+      '(cdp/uia/vision per window), read a window control tree (interactive-only by default, paginated), find/read controls, ' +
+      'and operate them by ref or selector (click/type/select/expand/scroll/keys/activate). ' +
+      'Write actions return world-change feedback (title/focus/value/toggle before→after). ' +
+      'Permission model: first takeover of a window asks once (then pattern actions flow); sensitive targets and physical input ' +
+      '(coordinate clicks/SendKeys/wheel) always ask separately; a global input lease serializes physical injection across agents. ' +
+      'desktop(audit) reviews what was done. desktop(screenshot) is high-privacy and asks every time. ' +
+      'Self-drawn apps (WeChat/QQ/DingTalk) expose empty trees — use desktop(uia_window_shot) + vision instead.',
     actions: {
       probe: 'desktop_probe',
       screenshot: 'desktop_screenshot',
       uia_tree: 'desktop_uia_tree',
       uia_find: 'desktop_uia_find',
+      uia_read: 'desktop_uia_read',
+      uia_wait: 'desktop_uia_wait',
       uia_click: 'desktop_uia_click',
       uia_right_click: 'desktop_uia_right_click',
       uia_type: 'desktop_uia_type',
+      uia_select: 'desktop_uia_select',
+      uia_expand: 'desktop_uia_expand',
       uia_scroll: 'desktop_uia_scroll',
+      uia_keys: 'desktop_uia_keys',
+      uia_activate: 'desktop_uia_activate',
+      uia_fill: 'desktop_uia_fill',
       uia_window_shot: 'desktop_uia_window_shot',
+      audit: 'desktop_audit',
+      status: 'desktop_status',
     },
   },
   {

@@ -250,6 +250,37 @@ io: 'input' 视图必须保留：让 defaulted 字段不进 required，
 
 ---
 
+## 13. 物理输入注入必须经 DesktopInputLease；UIA COM 只活在专用线程
+
+**文件**: `src-tauri/src/uia/grants.rs`（输入租约）、`src-tauri/src/uia/com.rs`（phys 模块）、`src-tauri/src/uia/worker.rs`（专用线程）
+
+```
+⚠️ INVARIANT：一切真实输入注入（SetCursorPos / SendInput 鼠标键盘 / 剪贴板写入 /
+   SetForegroundWindow 抢前台）必须先 acquire_input_lease 成功才能执行。
+   pattern 类动作（Invoke/SetValue/Select/Expand/Scroll）不需要租约也不抢焦点——
+   这是 desktop 工具面不骚扰用户物理桌面的根基。
+
+⚠️ INVARIANT：IUIAutomationElement 等 COM 对象绝不跨线程——只存活在 hologram-uia
+   专用线程内（worker.rs 调度）；跨线程传 COM 指针 = apartment 违规 + Send 不满足，
+   编译期就该拦住。新增 UIA 能力一律走 worker request 通道。
+
+⚠️ 权限配对纪律：物理输入路径的 allow_coords/allow_physical/allow_wheel 参数由
+   rpc 层（desktop_uia_write 分类后）传入——com.rs 不得自作主张走物理兜底，
+   否则「pattern 失败静默变坐标点击」= 绕过权限分层的静默提权。
+
+✅ 正确：rpc 分类 → DesktopTool{action:"uia_physical"} Ask → acquire_input_lease → phys::click
+❌ 错误：com.rs 里 pattern 拿不到就直接 SendInput；或绕过租约在 tokio 线程直接调 Win32
+```
+
+**炸过**: 无（2026-08-19 立规于 computer-use 改造，防患于未然——多 Agent 并发抢光标/
+错窗口静默点击是 UIA 自动化的经典事故形态）。
+
+**守护**: `uia/grants.rs::input_lease_serializes_and_reports_holder`（双任务竞争 +
+LEASE_BUSY 持有者上报）、`tools/mod.rs::desktop_permission_matrix`（uia_physical 必须
+Ask）、`uia/com.rs` NO_PATTERN 错误（未授权物理路径明确报错而非静默兜底）。
+
+---
+
 ## 使用方式
 
 每个 Agent prompt 模板里加一行：

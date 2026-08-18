@@ -76,6 +76,8 @@ fn parse_window_line(line: &str) -> Option<WindowEntry> {
 
 /// 枚举当前进程 + 顶层窗口 + 可见控制台窗口。返回序列化 JSON 字符串。
 /// 实现用 PowerShell 只读查询(与 cdp_discover 同模式),失败时返回错误。
+/// route 为每窗口的通道路由建议(chromium→cdp / UIA 探测→uia / 自绘→vision)，
+/// 由调用方(rpc 层)经 uia::probe_route 逐窗补充——本函数保持纯 PS 快照。
 pub(crate) fn desktop_probe() -> Result<String, String> {
     #[cfg(windows)]
     {

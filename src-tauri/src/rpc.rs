@@ -499,46 +499,79 @@ pub(crate) async fn rpc(
         }
         "desktop_probe" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "probe".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
+            desktop_check(&state, &app, &agent_id, "probe").await?;
             // 只读快照:进程/窗口/控制台可见性,纯查询
-            crate::desktop::desktop_probe()
+            let base = crate::desktop::desktop_probe()?;
+            // 通道路由建议：chromium 窗口→cdp；其余按 UIA interactive 探测→uia/vision
+            let route = opt_bool(&params, "route").unwrap_or(true);
+            if !route {
+                return Ok(base);
+            }
+            let mut v: serde_json::Value = serde_json::from_str(&base)
+                .map_err(|e| format!("desktop_probe: 解析快照失败: {e}"))?;
+            let proc_chromium: std::collections::HashMap<u64, bool> = v["processes"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|p| {
+                            let pid = p["pid"].as_u64()?;
+                            let is_c = p["is_chromium"].as_bool()?;
+                            Some((pid, is_c))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Some(wins) = v["windows"].as_array_mut() {
+                for w in wins.iter_mut() {
+                    let pid = w["pid"].as_u64().unwrap_or(0);
+                    let hwnd = w["hwnd"].as_u64().unwrap_or(0);
+                    if proc_chromium.get(&pid).copied().unwrap_or(false) {
+                        w["route"] = serde_json::json!({
+                            "channel": "cdp",
+                            "hint": "browser_discover → browser_connect（或 browser_launch 受控实例）",
+                        });
+                        continue;
+                    }
+                    // UIA 快速探测（预算 50ms/窗；失败归 vision，不阻塞 probe）
+                    let probe = if hwnd != 0 { crate::uia::probe_route(hwnd).await } else { Err("no hwnd".into()) };
+                    w["route"] = match probe {
+                        Ok(p) if p["interactive"].as_u64().unwrap_or(0) >= 3 => serde_json::json!({
+                            "channel": "uia",
+                            "hint": "desktop_uia_tree（标准控件可用，按 ref 操作）",
+                        }),
+                        _ => serde_json::json!({
+                            "channel": "vision",
+                            "hint": "自绘/无标准控件 → desktop_uia_window_shot + 多模态读图",
+                        }),
+                    };
+                }
+            }
+            Ok(v.to_string())
         }
         "desktop_screenshot" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "screenshot".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
-            // 全屏截图(高隐私面, 已 Ask);需交互桌面会话
+            // 高隐私面:DesktopTool 第 8 层 Ask(已从 read-only 移除)
+            desktop_check(&state, &app, &agent_id, "screenshot").await?;
             crate::desktop::desktop_screenshot()
         }
         "desktop_uia_tree" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "uia_tree".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
-            // 只读:窗口 UIA 控件树 + ref 清单(标准控件全覆盖;自绘控件为空树)
+            desktop_check(&state, &app, &agent_id, "uia_tree").await?;
+            // 只读:窗口 UIA 控件树 + ref 清单(默认 interactive-only,分页)
             crate::uia::uia_tree(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
                 opt_u64(&params, "hwnd"),
                 opt_u32(&params, "depth"),
+                opt_bool(&params, "all").unwrap_or(false),
+                opt_u64(&params, "offset").unwrap_or(0) as usize,
+                opt_u64(&params, "max_results").unwrap_or(0) as usize,
             )
+            .await
         }
         "desktop_uia_find" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "uia_find".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
+            desktop_check(&state, &app, &agent_id, "uia_find").await?;
             // 只读:按条件在窗口内查找控件
             crate::uia::uia_find(
                 opt_str(&params, "title").as_deref(),
@@ -549,124 +582,80 @@ pub(crate) async fn rpc(
                 opt_str(&params, "automation_id").as_deref(),
                 opt_bool(&params, "enabled"),
             )
+            .await
         }
-        "desktop_uia_click" => {
+        "desktop_uia_read" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "uia_click".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
-            // 写:向目标应用注入真实点击(Invoke/Toggle/Selection 优先,坐标兜底)
-            // 至少给一个定位条件(ref 或 name/automation_id/control_type),否则静默 ref=0 点到首个控件
-            if opt_str(&params, "name").is_none()
-                && opt_str(&params, "automation_id").is_none()
-                && opt_str(&params, "control_type").is_none()
-                && opt_u32(&params, "ref").is_none()
-            {
-                return Err("desktop_uia_click: 至少要给一个定位条件 (ref / name / automation_id / control_type)".into());
-            }
-            crate::uia::uia_click(
+            desktop_check(&state, &app, &agent_id, "uia_read").await?;
+            // 只读:单控件全量详情(value/toggle/expand/rect/patterns)
+            crate::uia::uia_read(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
                 opt_u64(&params, "hwnd"),
-                opt_u32(&params, "ref").unwrap_or(0) as u32,
+                opt_u32(&params, "ref"),
                 opt_str(&params, "name").as_deref(),
                 opt_str(&params, "automation_id").as_deref(),
                 opt_str(&params, "control_type").as_deref(),
             )
+            .await
         }
-        "desktop_uia_right_click" => {
+        "desktop_uia_wait" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "uia_right_click".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
-            // 写:向目标应用注入真实右键(上下文菜单)
-            if opt_str(&params, "name").is_none()
-                && opt_str(&params, "automation_id").is_none()
-                && opt_str(&params, "control_type").is_none()
-                && opt_u32(&params, "ref").is_none()
-            {
-                return Err("desktop_uia_right_click: 至少要给一个定位条件 (ref / name / automation_id / control_type)".into());
-            }
-            crate::uia::uia_right_click(
+            desktop_check(&state, &app, &agent_id, "uia_wait").await?;
+            // 只读:轮询等待控件出现/启用/值匹配(超时返回 found:false,不报错)
+            crate::uia::uia_wait(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
                 opt_u64(&params, "hwnd"),
-                opt_u32(&params, "ref").unwrap_or(0) as u32,
+                opt_u32(&params, "ref"),
                 opt_str(&params, "name").as_deref(),
                 opt_str(&params, "automation_id").as_deref(),
                 opt_str(&params, "control_type").as_deref(),
+                &req_str(&params, "until", "desktop_uia_wait")?,
+                opt_str(&params, "value").as_deref(),
+                opt_u64(&params, "timeout_ms").unwrap_or(10_000),
             )
+            .await
         }
-        "desktop_uia_type" => {
-            let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "uia_type".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
-            // 写:向目标应用输入文字(ValuePattern.SetValue 优先,剪贴板粘贴兜底)
-            if opt_str(&params, "name").is_none()
-                && opt_str(&params, "automation_id").is_none()
-                && opt_str(&params, "control_type").is_none()
-                && opt_u32(&params, "ref").is_none()
-            {
-                return Err("desktop_uia_type: 至少要给一个定位条件 (ref / name / automation_id / control_type)".into());
-            }
-            crate::uia::uia_type(
-                opt_str(&params, "title").as_deref(),
-                opt_u32(&params, "pid"),
-                opt_u64(&params, "hwnd"),
-                opt_u32(&params, "ref").unwrap_or(0) as u32,
-                &req_str(&params, "text", "desktop_uia_type")?,
-                opt_str(&params, "name").as_deref(),
-                opt_str(&params, "automation_id").as_deref(),
-                opt_str(&params, "control_type").as_deref(),
-            )
-        }
-        "desktop_uia_scroll" => {
-            let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "uia_scroll".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
-            // 写:滚动目标控件(ScrollPattern 优先,滚轮兜底)
-            if opt_str(&params, "name").is_none()
-                && opt_str(&params, "automation_id").is_none()
-                && opt_str(&params, "control_type").is_none()
-                && opt_u32(&params, "ref").is_none()
-            {
-                return Err("desktop_uia_scroll: 至少要给一个定位条件 (ref / name / automation_id / control_type)".into());
-            }
-            crate::uia::uia_scroll(
-                opt_str(&params, "title").as_deref(),
-                opt_u32(&params, "pid"),
-                opt_u64(&params, "hwnd"),
-                opt_u32(&params, "ref").unwrap_or(0) as u32,
-                &req_str(&params, "direction", "desktop_uia_scroll")?,
-                opt_f64(&params, "amount"),
-                opt_str(&params, "name").as_deref(),
-                opt_str(&params, "automation_id").as_deref(),
-                opt_str(&params, "control_type").as_deref(),
-            )
-        }
+        "desktop_uia_click" => desktop_uia_write(&state, &app, &params, "click").await,
+        "desktop_uia_right_click" => desktop_uia_write(&state, &app, &params, "right_click").await,
+        "desktop_uia_type" => desktop_uia_write(&state, &app, &params, "type").await,
+        "desktop_uia_scroll" => desktop_uia_write(&state, &app, &params, "scroll").await,
+        "desktop_uia_select" => desktop_uia_write(&state, &app, &params, "select").await,
+        "desktop_uia_expand" => desktop_uia_write(&state, &app, &params, "expand").await,
+        "desktop_uia_keys" => desktop_uia_keys(&state, &app, &params).await,
+        "desktop_uia_activate" => desktop_uia_activate(&state, &app, &params).await,
         "desktop_uia_window_shot" => {
             let agent_id = opt_str(&params, "_agent_id");
-            {
-                let ctx = crate::utils::get_ctx(&state)?;
-                let tool = crate::tools::DesktopTool { action: "uia_window_shot".into(), agent_id: agent_id.clone() };
-                crate::utils::check_permission(&tool, &ctx, &app).await?;
-            }
+            desktop_check(&state, &app, &agent_id, "uia_window_shot").await?;
             // 只读:按窗口矩形截图(非全屏,隐私面更小)
             crate::uia::uia_window_shot(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
                 opt_u64(&params, "hwnd"),
             )
+            .await
+        }
+        "desktop_audit" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            desktop_check(&state, &app, &agent_id, "audit").await?;
+            // 只读:desktop 操作审计查询(对齐 browser_audit)
+            Ok(crate::uia::desktop_audit_query(
+                agent_id.as_deref(),
+                opt_u64(&params, "limit").map(|l| l as usize),
+            ))
+        }
+        "desktop_status" => {
+            let agent_id = opt_str(&params, "_agent_id");
+            desktop_check(&state, &app, &agent_id, "probe").await?;
+            // 只读:窗口授权(grants) + 输入租约持有者 + worker 存活状态
+            Ok(serde_json::json!({
+                "grants": crate::uia::list_grants().iter()
+                    .map(|(a, h, ttl)| serde_json::json!({ "agent": a, "hwnd": h, "ttl_secs": ttl }))
+                    .collect::<Vec<_>>(),
+                "input_lease_holder": crate::uia::lease_holder(),
+            })
+            .to_string())
         }
         "browser_attach" => {
             let agent_id = opt_str(&params, "_agent_id");
@@ -1358,6 +1347,242 @@ pub(crate) async fn rpc(
 
         _ => Err(format!("rpc: unknown method '{}'", method)),
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// desktop/UIA 编排 — 六层权限 + 输入租约 + 逐动作审计
+// ═══════════════════════════════════════════════════════════
+// 只读动作（probe/tree/find/read/wait/window_shot/audit/screenshot-Ask）走
+// desktop_check；写动作先只读 resolve 拿分类信息（控件名/patterns/hwnd），
+// 按 tools/mod.rs DesktopTool 的分层模型构造 Tool 再 check_permission，
+// 批准接管时记录 DesktopGrant，物理路径执行前获取全局输入租约。
+
+/// 只读/直查动作的权限守卫（DesktopTool::is_read_only → Passthrough；
+/// screenshot 例外走 Ask）。
+async fn desktop_check(
+    state: &tauri::State<'_, crate::WorkspaceState>,
+    app: &tauri::AppHandle,
+    agent_id: &Option<String>,
+    action: &str,
+) -> Result<(), String> {
+    let ctx = crate::utils::get_ctx(state)?;
+    let tool = crate::tools::DesktopTool {
+        action: action.into(),
+        agent_id: agent_id.clone(),
+        hwnd: None,
+        window_title: None,
+    };
+    crate::utils::check_permission(&tool, &ctx, app).await
+}
+
+/// UIA 写动作统一编排（click/right_click/type/scroll/select/expand）。
+async fn desktop_uia_write(
+    state: &tauri::State<'_, crate::WorkspaceState>,
+    app: &tauri::AppHandle,
+    params: &serde_json::Value,
+    kind: &str,
+) -> Result<String, String> {
+    let agent_id = opt_str(params, "_agent_id");
+    let title = opt_str(params, "title");
+    let pid = opt_u32(params, "pid");
+    let hwnd = opt_u64(params, "hwnd");
+    let ref_id = opt_u32(params, "ref");
+    let name = opt_str(params, "name");
+    let aid = opt_str(params, "automation_id");
+    let ctype = opt_str(params, "control_type");
+
+    if ref_id.is_none() && name.is_none() && aid.is_none() && ctype.is_none() {
+        return Err(format!(
+            "desktop_uia_{kind}: 至少要给一个定位条件 (ref / name / automation_id / control_type)"
+        ));
+    }
+
+    // 只读解析（分类前置步骤，等同 tree 读取的权限面）
+    let res = crate::uia::resolve(
+        title.as_deref(), pid, hwnd, ref_id, name.as_deref(), aid.as_deref(), ctype.as_deref(),
+    )
+    .await?;
+    let res_name = res["name"].as_str().unwrap_or("").to_string();
+    let res_type = res["type"].as_str().unwrap_or("").to_string();
+    let res_aid = res["automation_id"].as_str().unwrap_or("").to_string();
+    let res_hwnd = res["hwnd"].as_u64();
+    let res_title = res["title"].as_str().unwrap_or("").to_string();
+    let password = res["password"].as_bool().unwrap_or(false);
+    let cur_value = res["value"].as_str().unwrap_or("");
+    let g = |k: &str| res[k].as_bool().unwrap_or(false);
+    let target_desc = format!(
+        "[{res_type}] \"{res_name}\"{} @ {}",
+        if res_aid.is_empty() { String::new() } else { format!(" id={res_aid}") },
+        res_hwnd.map(|h| format!("hwnd={h}")).unwrap_or_else(|| "window".into())
+    );
+
+    // 分类：敏感目标 > 物理路径 > 已授权 pattern > 首次接管
+    let sensitive = match kind {
+        "click" | "right_click" => crate::sensitive::is_sensitive_click_text(&res_name),
+        "type" => password || !cur_value.is_empty(),
+        _ => false,
+    };
+    let needs_physical = match kind {
+        "click" => !(g("has_invoke") || g("has_toggle") || g("has_select")),
+        "right_click" => true,
+        "type" => !g("has_value"),
+        "scroll" => !g("has_scroll"),
+        _ => false,
+    };
+    let granted = crate::uia::has_grant(agent_id.as_deref(), res_hwnd);
+    let tool_action = if sensitive {
+        if kind == "type" { "uia_type_sensitive" } else { "uia_click_sensitive" }
+    } else if needs_physical {
+        "uia_physical"
+    } else if granted {
+        "uia_pattern"
+    } else {
+        "uia_grant"
+    };
+
+    // 权限（Ask 由 check_permission 内部走异步确认）
+    {
+        let ctx = crate::utils::get_ctx(state)?;
+        let tool = crate::tools::DesktopTool {
+            action: tool_action.into(),
+            agent_id: agent_id.clone(),
+            hwnd: res_hwnd,
+            window_title: Some(res_title.clone()),
+        };
+        if let Err(e) = crate::utils::check_permission(&tool, &ctx, app).await {
+            crate::uia::desktop_audit_log(
+                agent_id.as_deref(),
+                &format!("desktop_uia_{kind}_denied"),
+                &target_desc,
+                &e,
+            );
+            return Err(e);
+        }
+    }
+    // 批准接管 → 记录 grant（该窗口后续 pattern 动作放行）
+    if tool_action == "uia_grant" {
+        if let Some(h) = res_hwnd {
+            crate::uia::grant(agent_id.as_deref(), h);
+        }
+    }
+    let allow_physical = matches!(tool_action, "uia_physical" | "uia_click_sensitive" | "uia_type_sensitive");
+
+    // 执行（物理兜底路径需先拿全局输入租约）
+    let text = if kind == "type" { Some(req_str(params, "text", "desktop_uia_type")?) } else { None };
+    let direction = if kind == "scroll" { Some(req_str(params, "direction", "desktop_uia_scroll")?) } else { None };
+    let amount = opt_f64(params, "amount");
+    let exec = async {
+        match kind {
+            "click" => {
+                crate::uia::uia_click(title.as_deref(), pid, hwnd, ref_id, name.as_deref(), aid.as_deref(), ctype.as_deref(), false, allow_physical).await
+            }
+            "right_click" => {
+                crate::uia::uia_click(title.as_deref(), pid, hwnd, ref_id, name.as_deref(), aid.as_deref(), ctype.as_deref(), true, allow_physical).await
+            }
+            "type" => {
+                crate::uia::uia_type(title.as_deref(), pid, hwnd, ref_id, text.as_deref().unwrap_or(""), name.as_deref(), aid.as_deref(), ctype.as_deref(), allow_physical).await
+            }
+            "scroll" => {
+                crate::uia::uia_scroll(title.as_deref(), pid, hwnd, ref_id, direction.as_deref().unwrap_or("down"), amount.unwrap_or(1.0), name.as_deref(), aid.as_deref(), ctype.as_deref(), allow_physical).await
+            }
+            "select" => {
+                crate::uia::uia_select(title.as_deref(), pid, hwnd, ref_id, name.as_deref(), aid.as_deref(), ctype.as_deref()).await
+            }
+            _ => {
+                crate::uia::uia_expand(title.as_deref(), pid, hwnd, ref_id, name.as_deref(), aid.as_deref(), ctype.as_deref()).await
+            }
+        }
+    };
+    let outcome = if needs_physical && allow_physical {
+        match crate::uia::acquire_input_lease(agent_id.as_deref(), std::time::Duration::from_secs(3)).await {
+            Ok(_lease) => exec.await,
+            Err(e) => Err(e),
+        }
+    } else {
+        exec.await
+    };
+
+    // 逐动作审计（成败都记）
+    match &outcome {
+        Ok(s) => crate::uia::desktop_audit_log(agent_id.as_deref(), &format!("desktop_uia_{kind}"), &target_desc, s),
+        Err(e) => crate::uia::desktop_audit_log(agent_id.as_deref(), &format!("desktop_uia_{kind}_failed"), &target_desc, e),
+    }
+    outcome
+}
+
+/// desktop_uia_keys — 热键（物理输入：Ask + 输入租约）。
+async fn desktop_uia_keys(
+    state: &tauri::State<'_, crate::WorkspaceState>,
+    app: &tauri::AppHandle,
+    params: &serde_json::Value,
+) -> Result<String, String> {
+    let agent_id = opt_str(params, "_agent_id");
+    let title = opt_str(params, "title");
+    let key = req_str(params, "key", "desktop_uia_keys")?;
+    let modifiers: Vec<String> = params
+        .get("modifiers")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    {
+        let ctx = crate::utils::get_ctx(state)?;
+        let tool = crate::tools::DesktopTool {
+            action: "uia_keys".into(),
+            agent_id: agent_id.clone(),
+            hwnd: opt_u64(params, "hwnd"),
+            window_title: title.clone(),
+        };
+        if let Err(e) = crate::utils::check_permission(&tool, &ctx, app).await {
+            crate::uia::desktop_audit_log(agent_id.as_deref(), "desktop_uia_keys_denied", &format!("key={key}"), &e);
+            return Err(e);
+        }
+    }
+    let lease = crate::uia::acquire_input_lease(agent_id.as_deref(), std::time::Duration::from_secs(3)).await;
+    let outcome = match lease {
+        Ok(_l) => {
+            crate::uia::uia_keys(title.as_deref(), opt_u32(params, "pid"), opt_u64(params, "hwnd"), modifiers.clone(), &key).await
+        }
+        Err(e) => Err(e),
+    };
+    match &outcome {
+        Ok(s) => crate::uia::desktop_audit_log(agent_id.as_deref(), "desktop_uia_keys", &format!("mods={modifiers:?} key={key}"), s),
+        Err(e) => crate::uia::desktop_audit_log(agent_id.as_deref(), "desktop_uia_keys_failed", &format!("mods={modifiers:?} key={key}"), e),
+    }
+    outcome
+}
+
+/// desktop_uia_activate — 窗口提前台（物理输入：Ask + 输入租约）。
+async fn desktop_uia_activate(
+    state: &tauri::State<'_, crate::WorkspaceState>,
+    app: &tauri::AppHandle,
+    params: &serde_json::Value,
+) -> Result<String, String> {
+    let agent_id = opt_str(params, "_agent_id");
+    let title = opt_str(params, "title");
+    let hwnd = opt_u64(params, "hwnd");
+    {
+        let ctx = crate::utils::get_ctx(state)?;
+        let tool = crate::tools::DesktopTool {
+            action: "uia_activate".into(),
+            agent_id: agent_id.clone(),
+            hwnd,
+            window_title: title.clone(),
+        };
+        if let Err(e) = crate::utils::check_permission(&tool, &ctx, app).await {
+            crate::uia::desktop_audit_log(agent_id.as_deref(), "desktop_uia_activate_denied", &format!("hwnd={hwnd:?}"), &e);
+            return Err(e);
+        }
+    }
+    let lease = crate::uia::acquire_input_lease(agent_id.as_deref(), std::time::Duration::from_secs(3)).await;
+    let outcome = match lease {
+        Ok(_l) => crate::uia::uia_activate(title.as_deref(), opt_u32(params, "pid"), hwnd).await,
+        Err(e) => Err(e),
+    };
+    match &outcome {
+        Ok(s) => crate::uia::desktop_audit_log(agent_id.as_deref(), "desktop_uia_activate", &format!("hwnd={hwnd:?}"), s),
+        Err(e) => crate::uia::desktop_audit_log(agent_id.as_deref(), "desktop_uia_activate_failed", &format!("hwnd={hwnd:?}"), e),
+    }
+    outcome
 }
 
 #[cfg(test)]

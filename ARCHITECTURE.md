@@ -67,7 +67,7 @@ HoloGram 不是一个单纯的"代码图谱可视化工具"。它的本质是一
 
 - **Engine 全局实例**：`engine::ENGINE`（`LazyLock<RwLock<Option<Engine>>>`）持有全部图状态；`engine_init / engine_read / engine_write / engine_analyze` 是唯一入口。Engine 用状态机管理生命周期：`Uninitialized → Loading → Ready ↔ Analyzing → Error`。
 - **WorkspaceHandle（Rust）**：持有单个打开项目的所有后端状态（权限上下文、watcher、审计），替代分散的 `ACTIVE_PROJECT / SANDBOX / AUDIT_LOGGER` 全局变量。
-- **ResourceLedger**：统一生命周期管理。所有有生命周期需求的后端服务（UnityEvent、LlmProxy、BgJobs、Mcp、Unity、Pty、Lsp、Aura、MemoryBundle、Logging 共 10 个）实现 `LifecycleService` trait 并注册，退出时按序 drain（总预算 2s + 3s 强退）。
+- **ResourceLedger**：统一生命周期管理。所有有生命周期需求的后端服务（UnityEvent、LlmProxy、BgJobs、Mcp、Unity、Pty、Lsp、UiaWorker、Aura、MemoryBundle、Logging 共 11 个）实现 `LifecycleService` trait 并注册，退出时按序 drain（总预算 2s + 3s 强退）。
 - **Workspace（前端）**：统一状态容器，替代 18+ 个模块级全局变量；原子化工作区切换（`old.deactivate()` → `Workspace.open()` → 注入）。
 
 ---
@@ -151,6 +151,24 @@ has_permission_to_use_tool(ctx, agent_id) → PermissionResult
 ### 3.6 技能系统 (Hot-Loading Skills)
 
 Agent 支持从 `.hologram/skills/<name>/SKILL.md` 热加载技能。技能格式为 YAML frontmatter + Markdown body，每次调用时重新加载（零依赖 frontmatter 解析器），无需重启即可新增技能。
+
+### 3.7 Computer-Use（CDP 浏览器 + UIA 桌面，2026-08 Agent 优先改造）
+
+两条通道共享同一套 Agent-first 交互范式：**snapshot/tree + ref 引用 → pattern 优先操作 → world-diff 反馈 → 分层授权 → 逐动作审计 + `[CODE]` 结构化错误**。
+
+**browser（CDP，src-tauri/src/cdp/）**：受控 Chrome 启动/外部实例连接、按 agent 键控多账号会话（slot + 空闲租约）、snapshot（AX 优先）+ ref、console/network/dialog 观察、世界变化反馈、敏感目标单独 Ask、审计 jsonl。
+
+**desktop（UIA，src-tauri/src/uia/）**：进程内 COM——`hologram-uia` 专用线程（MTA + catch_unwind + mpsc/oneshot + 15s 超时）独占全部 COM 对象；线程内树缓存（hwnd → generation + controls + 元素句柄），ref = 全量树下标，失效自动重建一次。
+
+- **反馈闭环**：写动作返回 world-diff（窗口标题/焦点/value/toggle/滚动百分比 前后对比）+ IsPassword 掩码
+- **读路径零打扰**：tree/find/read/wait 不抢前台不动光标；pattern 动作（Invoke/SetValue/Select/Expand/Scroll）同样无需前台
+- **权限分层**（tools/mod.rs DesktopTool）：只读放行 → 窗口级授权（DesktopGrant，agent+hwnd 键控滑动 TTL 10min，接管 Ask 一次后 pattern 放行）→ 敏感目标（sensitive.rs 共享词表）每次 Ask → 物理输入路径每次 Ask + 全局输入租约 → screenshot 高隐私 Ask
+- **DesktopInputLease**：SetCursorPos/SendInput/剪贴板/SetForegroundWindow 全进程串行化，拿不到回 `[UIA_LEASE_BUSY]` + 持有者（INVARIANTS #13）
+- **通道路由**：desktop_probe 每窗口带 route 建议——chromium→cdp / UIA 探测≥3 interactive→uia / 自绘→vision
+- **审计**：desktop 写动作逐条落 `hologram-desktop-audit-*.jsonl`（7 天轮转），desktop_audit 可查
+- **错误码**：`[UIA_WINDOW_NOT_FOUND/STALE_REF/NO_PATTERN/TIMEOUT/LEASE_BUSY/ACCESS_DENIED/ARG_INVALID/INTERNAL]`，TS 侧 parseStructuredError 与 browser 共用
+- **生命周期**：UiaService 注册 ResourceLedger（未用过不启动线程，退出 Quit + 带限 join）
+- **e2e**：`HOLOGRAM_UIA_E2E=1` + 交互桌面会话（记事本真实窗口全流程）
 
 ---
 
@@ -429,11 +447,11 @@ Engine 作为独立 MCP Server 运行，通过 JSON-RPC over stdin/stdout 对外
 
 ### 7.1 RPC 单一入口
 
-`rpc.rs` 一个 `#[tauri::command] rpc(method, params)` + 134 个方法分支是全部前端能力的单一 IPC 入口。分类（由 `scripts/gen-rpc-contract-md.cjs` 实测生成，以生成物 `docs/agents/frontend-rpc-contract.md` 为准；个别方法按 rpc.rs 物理位置归组）：Engine 调度(3)、Graph(5)、Git(16)、文件系统(12)、搜索(2)、Web(2)、CDP 浏览器控制(39，含 desktop 2)、Shell(10，含协议桥 3)、编辑器(1)、身份认证/权限(6)、Agent 隔离(6)、外部服务(6)、Hologram 遗留(3)、工作区(3)、会话持久化(2)、约束(2)、数据流(3)、Aura 记忆(7)、PTY(4)、LSP(2)。
+`rpc.rs` 一个 `#[tauri::command] rpc(method, params)` + 149 个方法分支是全部前端能力的单一 IPC 入口。分类（由生成物 `docs/agents/frontend-rpc-contract.md` 实测为准，`scripts/gen-rpc-contract-md.cjs` 再生）：Engine 调度(3)、Graph(5)、Git(16)、文件系统(12)、搜索(2)、Web(2)、CDP 浏览器控制(39，含 desktop 2)、Shell(10，含协议桥 3)、编辑器(1)、身份认证/权限(6)、Agent 隔离(6)、外部服务(6)、Hologram 遗留(3)、工作区(3)、会话持久化(2)、约束(2)、数据流(3)、Aura 记忆(7)、PTY(4)、LSP(2)、desktop/UIA(17：probe/screenshot/tree/find/read/wait/click/right_click/type/select/expand/scroll/keys/activate/window_shot/audit/status)。
 
 ### 7.2 ResourceLedger（统一生命周期）
 
-`lifecycle.rs`：`LifecycleService` trait + `ResourceLedger` 中央注册表。注册的服务：UnityEvent、LlmProxy、BgJobs、Mcp、Unity、Pty、Lsp、Aura、MemoryBundle、Logging 共 10 个。退出时按注册顺序 drain，每服务带截止时间（Clean / Forced / Failed / NotApplicable 状态）。替代 main.rs Destroyed 里分散的清理逻辑 + `process::exit(0)`。
+`lifecycle.rs`：`LifecycleService` trait + `ResourceLedger` 中央注册表。注册的服务：UnityEvent、LlmProxy、BgJobs、Mcp、Unity、Pty、Lsp、UiaWorker、Aura、MemoryBundle、Logging 共 11 个。退出时按注册顺序 drain，每服务带截止时间（Clean / Forced / Failed / NotApplicable 状态）。替代 main.rs Destroyed 里分散的清理逻辑 + `process::exit(0)`。
 
 ### 7.3 凭证与外部进程
 
@@ -549,7 +567,7 @@ HoloGram/
 │   │   ├── commands/            # 16 个命令模块 (engine_dispatch/graph/shell/filesystem/git/isolation/…)
 │   │   ├── permissions/         # 权限引擎 (mod: PermissionContext + rule + bash/filesystem/git/web/safety)
 │   │   ├── tools/               # Tool trait 实现 (Read/Edit/Bash/Git/WebFetch/Browser/Desktop)
-│   │   ├── lifecycle.rs         # ResourceLedger + LifecycleService (10 个服务)
+│   │   ├── lifecycle.rs         # ResourceLedger + LifecycleService (11 个服务)
 │   │   ├── workspace.rs         # WorkspaceHandle (权限上下文 + watcher + 审计)
 │   │   ├── agent_isolation.rs   # git worktree 生命周期管理
 │   │   ├── mcp_manager.rs       # MCP 子进程管理

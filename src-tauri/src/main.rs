@@ -32,6 +32,7 @@ mod lifecycle;
 mod cdp;
 mod desktop;
 mod uia;
+mod sensitive;
 mod llm_proxy;
 
 use std::sync::Arc;
@@ -142,6 +143,7 @@ fn main() {
             ledger.register(Box::new(lifecycle::UnityService));
             ledger.register(Box::new(lifecycle::PtyService));
             ledger.register(Box::new(lifecycle::LspService));
+            ledger.register(Box::new(lifecycle::UiaService));
             ledger.register(Box::new(lifecycle::AuraService));
             ledger.register(Box::new(lifecycle::MemoryBundleService));
             ledger.register(Box::new(lifecycle::LoggingService));

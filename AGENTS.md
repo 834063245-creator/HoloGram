@@ -74,6 +74,7 @@ flowchart LR
   - `graph`：symbols / neighbors / impact / preflight / cycles / coupling / fragile / flows / dataflow 等 24 个只读动作——**改代码前先问图**。
   - `ops`：analyze / validate / health / status / timeline / rename / import_scip。
   - `lsp`：resolve_call / infer_type / implementations / references。
+  - `browser` / `desktop`（2026-08 computer-use 改造）：desktop 为进程内 UIA COM（`src-tauri/src/uia/` 专用线程 + 树缓存），写动作返回 world-diff；权限分层=窗口接管 Ask 一次 + 敏感目标/物理输入单独 Ask + 全局输入租约（`INVARIANTS.md` 物理输入铁律）；`desktop(probe)` 每窗口带 cdp/uia/vision 通道路由建议；desktop 写动作全量审计（`desktop(audit)` 可查）；敏感词表在 `src-tauri/src/sensitive.rs`（browser/desktop 共享单一事实源）。
   - 旧细粒度名（`search_symbols`、`run_shell`、`write_file`、`git_*`、`agent_spawn` 等）保留但 `hide()`；模型调用会被 `retireRedirect` 拦截并给 `[已淘汰]` 重定向。内部代码/测试仍可直接用旧名。
 
 ## 5. 快速操作（Agent 视角）
@@ -128,10 +129,9 @@ flowchart LR
 | 层 | 命令 | 基线 |
 |---|---|---|
 | 引擎 | `cd engine && cargo test` | 697 tests（lib 669 + bin 27 + doc 1；696 passed / 1 ignored） |
-| 壳 | `cd src-tauri && cargo test` | 322 tests（bin 308 + 集成 14，全绿；pwsh 冒烟在无 pwsh 7 的环境自动跳过） |
-| 前端 | `cd src-ui && npx vitest run` | 1200 passed / 1 skipped（116 文件，共 1201） |
+| 壳 | `cd src-tauri && cargo test` | 338 tests（bin 全绿；cdp 真实 Chrome e2e 偶发 1 失败单跑通过；UIA 真实窗口 e2e 需 `HOLOGRAM_UIA_E2E=1`） || 前端 | `cd src-ui && npx vitest run` | 1213 passed / 1 skipped（117 文件；本机注意：父进程带 `NODE_ENV=production` 会使 npm omit=dev 剥掉 devDependencies → 收集阶段模块错误，装包/跑测试前清掉该变量） |
 | 前端构建 | `cd src-ui && npm run build` | tsc --noEmit + vite build 全绿 |
-| Agent 运行时 | `cd src-ui && npm run verify:convergence` | exit 0（T0 静态 + 全部 phase specs 对拍 8 baseline） |
+| Agent 运行时 | `cd src-ui && npm run verify:convergence` | exit 0（T0 静态 + 全部 phase specs 对拍 8 baseline）；baseline 变更走 `docs/plans/agent-core-convergence/baseline-change-request.md` 审批 |
 | 前端格式 | `cd src-ui && npx biome ci .` | 588 errors / 335 warnings 是存量基线，不要顺手清；改动文件零新增 |
 | 打包 | `cd src-tauri && cargo tauri build` | 发布构建；不要用 `cargo build --release` 代替 |
 

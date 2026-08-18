@@ -175,6 +175,22 @@ impl LifecycleService for LspService {
     }
 }
 
+/// UIA worker 线程 — 发 Quit 并在截止时间内等线程退出。
+/// 未用过（无任何 desktop_uia_* 调用）时不触发 LazyLock 启动，直接 Clean。
+pub struct UiaService;
+
+impl LifecycleService for UiaService {
+    fn name(&self) -> &'static str { "uia_worker" }
+
+    fn shutdown(&self, deadline: Instant) -> ShutdownStatus {
+        if crate::uia::shutdown_worker(deadline) {
+            ShutdownStatus::Clean
+        } else {
+            ShutdownStatus::Forced
+        }
+    }
+}
+
 /// AuraSDK 记忆引擎 — 关闭句柄并释放资源。
 pub struct AuraService;
 

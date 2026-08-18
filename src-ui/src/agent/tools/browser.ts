@@ -24,6 +24,7 @@ import { z } from 'zod';
 import type { Tool } from '../tool';
 import { agentInvoke } from '../tool';
 import { defineTool } from './define-tool';
+import { parseStructuredError } from './structured-error';
 
 // ═══════════════════════════════════════════════════════════
 // 工具定义
@@ -31,23 +32,19 @@ import { defineTool } from './define-tool';
 
 const MAX_RESULT_CHARS = 8000;
 
-function truncate(s: string): string {
+/** 截断提示的可选定制：只对支持分页/收窄参数的动作提示对应参数，避免误导。 */
+function truncate(s: string, pageHint?: string): string {
   if (s.length <= MAX_RESULT_CHARS) return s;
-  return `${s.slice(0, MAX_RESULT_CHARS)}\n...[已截断，共 ${s.length} 字符；用 offset/maxResults/limit 参数翻页或收窄目标获取更多]`;
+  const hint = pageHint ?? '用 offset/maxResults/limit 参数翻页或收窄目标获取更多';
+  return `${s.slice(0, MAX_RESULT_CHARS)}\n...[已截断，共 ${s.length} 字符；${hint}]`;
 }
-
-/** Rust 侧错误字符串携带的 `[CODE]` 前缀（cdp/errors.rs 构造）。 */
-const ERROR_CODE_RE = /^\[([A-Z][A-Z0-9_]*)\]\s*([\s\S]*)$/;
 
 /**
  * 解析 Rust 侧结构化错误：`[CODE] message` → `{ code, message }`。
  * 无前缀（旧错误/权限引擎错误）返回 null，调用方回退原文。
+ * （2026-08 泛化到 structured-error.ts，browser/desktop 共用；此别名防破坏既有导入。）
  */
-export function parseBrowserError(raw: string): { code: string; message: string } | null {
-  const m = ERROR_CODE_RE.exec(raw ?? '');
-  if (!m) return null;
-  return { code: m[1], message: m[2] };
-}
+export const parseBrowserError = parseStructuredError;
 
 /** 执行 browser 动作。self → webview 只读通道；外部 → 各 Agent CDP 会话。 */
 async function runBrowserAction(action: string, args: Record<string, unknown>): Promise<string> {
@@ -92,16 +89,20 @@ async function runBrowserAction(action: string, args: Record<string, unknown>): 
   };
   const cmd = nameMap[action];
   if (!cmd) return `[browser] unsupported action "${action}"`;
+  const pageHint =
+    action === 'snapshot'
+      ? '用 snapshot 的 offset/maxResults 翻页，或 scope 收窄范围'
+      : action === 'content'
+        ? '用 content 的 offset/maxChars 翻页'
+        : undefined;
   try {
     const result = await agentInvoke<string>(cmd, args);
-    return truncate(result ?? '');
+    return truncate(result ?? '', pageHint);
   } catch (e: any) {
     const raw = e?.message || String(e);
     const parsed = parseBrowserError(raw);
     // 结构化错误：模型读人话 message，code 保留在方括号内供测试/路由。
-    return parsed
-      ? `[browser] ${action} 失败 [${parsed.code}]: ${parsed.message}`
-      : `[browser] ${action} 失败: ${raw}`;
+    return parsed ? `[browser] ${action} 失败 [${parsed.code}]: ${parsed.message}` : `[browser] ${action} 失败: ${raw}`;
   }
 }
 
@@ -112,7 +113,7 @@ export function createBrowserTools(): Tool[] {
     defineTool({
       name: 'browser_launch',
       description:
-        'Launch a controlled Chrome/Edge instance (isolated profile, never touches the user\'s daily browser data). ' +
+        "Launch a controlled Chrome/Edge instance (isolated profile, never touches the user's daily browser data). " +
         'Use before inspecting/operating external pages. Returns the debug port. ' +
         'If already running with the same launch shape, reuses it; changing port/headless/windowSize/profile/proxy restarts with the new shape. ' +
         'Pass url to open a specific page. headless mode runs with no visible UI. ' +
@@ -121,7 +122,11 @@ export function createBrowserTools(): Tool[] {
         'proxy uses Chrome --proxy-server (e.g. "socks5://127.0.0.1:1080"); proxyBypass sets --proxy-bypass-list.',
       schema: z.object({
         url: z.string().optional().describe('Optional URL to open in the controlled browser'),
-        port: z.number().int().optional().describe('Debug port (default: auto-probe from 9223; 9222 is reserved for HoloGram webview)'),
+        port: z
+          .number()
+          .int()
+          .optional()
+          .describe('Debug port (default: auto-probe from 9223; 9222 is reserved for HoloGram webview)'),
         headless: z.boolean().optional().describe('Run Chrome without a visible window (default false)'),
         windowSize: z
           .object({
@@ -130,7 +135,11 @@ export function createBrowserTools(): Tool[] {
           })
           .optional()
           .describe('Launch window size (--window-size=width,height)'),
-        profile: z.string().max(48).optional().describe('Named persistent account profile/session slot (e.g. "work"); omit for temporary default profile'),
+        profile: z
+          .string()
+          .max(48)
+          .optional()
+          .describe('Named persistent account profile/session slot (e.g. "work"); omit for temporary default profile'),
         proxy: z.string().optional().describe('Chrome --proxy-server value (e.g. "socks5://127.0.0.1:1080")'),
         proxyBypass: z.string().optional().describe('Chrome --proxy-bypass-list value (e.g. "localhost;127.0.0.1")'),
       }),
@@ -148,7 +157,11 @@ export function createBrowserTools(): Tool[] {
         'kill only disconnects (never kills a browser this agent did not launch). 9222 is refused (HoloGram webview, read-only self channel).',
       schema: z.object({
         port: z.number().int().describe('Debug port of the running browser instance (e.g. 9223)'),
-        session: z.string().max(48).optional().describe('Optional account slot name to register this instance under (default: default)'),
+        session: z
+          .string()
+          .max(48)
+          .optional()
+          .describe('Optional account slot name to register this instance under (default: default)'),
       }),
       execute: (args) => run('connect', args),
     }),
@@ -185,7 +198,7 @@ export function createBrowserTools(): Tool[] {
     defineTool({
       name: 'browser_sessions',
       description:
-        'List this agent\'s browser account sessions (slots) and which one is active. ' +
+        "List this agent's browser account sessions (slots) and which one is active. " +
         'Each named profile launched with browser_launch(profile:...) is an isolated account session with its own cookies/logins. ' +
         'Returns {active, sessions:[{slot,active,port,chromeRunning,external,attached,headless,windowSize,proxy}]}.',
       schema: z.object({}),
@@ -212,7 +225,10 @@ export function createBrowserTools(): Tool[] {
         'Cookie values are truncated to 300 chars in list output; writing/deleting cookies changes login state and requires approval.',
       schema: z.object({
         op: z.enum(['list', 'set', 'delete']).describe('Cookie operation'),
-        urls: z.array(z.string()).optional().describe('list: only return cookies for these URLs (default all cookies in this browser context)'),
+        urls: z
+          .array(z.string())
+          .optional()
+          .describe('list: only return cookies for these URLs (default all cookies in this browser context)'),
         url: z.string().optional().describe('set/delete: cookie URL (either url or domain is required)'),
         name: z.string().optional().describe('set/delete: cookie name'),
         value: z.string().optional().describe('set: cookie value'),
@@ -269,13 +285,15 @@ export function createBrowserTools(): Tool[] {
     }),
     defineTool({
       name: 'browser_back',
-      description: 'Go back one entry in the attached page navigation history. Returns {navigated:"back", url, change}.',
+      description:
+        'Go back one entry in the attached page navigation history. Returns {navigated:"back", url, change}.',
       schema: z.object({}),
       execute: () => run('back', {}),
     }),
     defineTool({
       name: 'browser_forward',
-      description: 'Go forward one entry in the attached page navigation history. Returns {navigated:"forward", url, change}.',
+      description:
+        'Go forward one entry in the attached page navigation history. Returns {navigated:"forward", url, change}.',
       schema: z.object({}),
       execute: () => run('forward', {}),
     }),
@@ -299,10 +317,7 @@ export function createBrowserTools(): Tool[] {
         scope: z.string().optional().describe('Optional CSS selector to limit the snapshot (default: whole page)'),
         maxResults: z.number().int().optional().describe('Max elements per page (default 80)'),
         offset: z.number().int().optional().describe('Skip this many interactive elements (for paging; default 0)'),
-        target: z
-          .string()
-          .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('snapshot', args),
@@ -318,12 +333,20 @@ export function createBrowserTools(): Tool[] {
       schema: z.object({
         scope: z.string().optional().describe('Optional CSS selector to limit extraction (default: whole page)'),
         format: z.enum(['text', 'markdown']).optional().describe('Output format: text (default) or markdown'),
-        maxChars: z.number().int().min(1).max(20000).optional().describe('Max content characters per page (default 8000)'),
-        offset: z.number().int().min(0).optional().describe('Skip this many content characters (for paging; default 0)'),
-        target: z
-          .string()
+        maxChars: z
+          .number()
+          .int()
+          .min(1)
+          .max(20000)
           .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+          .describe('Max content characters per page (default 8000)'),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe('Skip this many content characters (for paging; default 0)'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('content', args),
@@ -339,10 +362,7 @@ export function createBrowserTools(): Tool[] {
         selector: z.string().describe('CSS selector (or ref number from snapshot) of element(s) to inspect'),
         props: z.array(z.string()).optional().describe('Optional subset: geometry/style/text/contrast'),
         maxResults: z.number().int().optional().describe('Max elements (default 20)'),
-        target: z
-          .string()
-          .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('inspect', args),
@@ -355,10 +375,7 @@ export function createBrowserTools(): Tool[] {
         'Use AFTER modifying UI code to self-review the rendered result.',
       schema: z.object({
         scope: z.string().optional().describe('Optional CSS selector to limit the scan (default: whole page)'),
-        target: z
-          .string()
-          .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('report', args),
@@ -370,10 +387,7 @@ export function createBrowserTools(): Tool[] {
         'Use after UI changes or operations to check for new errors. Returns {entries:[{type,text}]}.',
       schema: z.object({
         limit: z.number().int().optional().describe('Max entries (default 30)'),
-        target: z
-          .string()
-          .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('console', args),
@@ -387,10 +401,7 @@ export function createBrowserTools(): Tool[] {
         'Returns {entries:[{requestId,method,url,status,mimeType,resourceType,error}], paired:true}.',
       schema: z.object({
         limit: z.number().int().optional().describe('Max entries (default 30)'),
-        target: z
-          .string()
-          .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('network', args),
@@ -403,10 +414,7 @@ export function createBrowserTools(): Tool[] {
         'Only requests still inside the 200-entry event buffer are available. HAR export is not implemented yet.',
       schema: z.object({
         requestId: z.string().describe('requestId from browser(network) entries'),
-        target: z
-          .string()
-          .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('network_detail', args),
@@ -420,10 +428,7 @@ export function createBrowserTools(): Tool[] {
         'Use fs(read) or hand the path to the user when a full request archive is needed.',
       schema: z.object({
         limit: z.number().int().min(1).max(200).optional().describe('Max entries to export (default 100; max 200)'),
-        target: z
-          .string()
-          .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('network_har', args),
@@ -458,9 +463,14 @@ export function createBrowserTools(): Tool[] {
         'Set replace:true to clear the existing value first (dispatches input/change events). ' +
         'Typing into a pre-filled input or password field triggers a separate approval.',
       schema: z.object({
-        selector: z.string().describe('Ref number from snapshot or CSS selector of input/textarea/contenteditable to focus'),
+        selector: z
+          .string()
+          .describe('Ref number from snapshot or CSS selector of input/textarea/contenteditable to focus'),
         text: z.string().describe('Text to type'),
-        replace: z.boolean().optional().describe('Replace existing value before typing (clears then dispatches input/change events)'),
+        replace: z
+          .boolean()
+          .optional()
+          .describe('Replace existing value before typing (clears then dispatches input/change events)'),
       }),
       execute: (args) => run('type', args),
     }),
@@ -484,7 +494,10 @@ export function createBrowserTools(): Tool[] {
         'files are local absolute paths.',
       schema: z.object({
         files: z.array(z.string()).describe('Absolute local file paths to set'),
-        selector: z.string().optional().describe('CSS selector (or ref) of the file input, required if no recent file chooser event'),
+        selector: z
+          .string()
+          .optional()
+          .describe('CSS selector (or ref) of the file input, required if no recent file chooser event'),
       }),
       execute: (args) => run('upload', args),
     }),
@@ -507,7 +520,10 @@ export function createBrowserTools(): Tool[] {
         'Press a key in the attached page: Enter / Tab / Escape / Backspace / Arrow keys / single characters.',
       schema: z.object({
         key: z.string().describe('Key name (Enter/Tab/Escape/ArrowUp/ArrowDown/... or single char)'),
-        modifiers: z.array(z.enum(['ctrl', 'alt', 'shift', 'meta'])).optional().describe('Modifier keys held during the press (e.g. ["ctrl"] + key "a" = Ctrl+A)'),
+        modifiers: z
+          .array(z.enum(['ctrl', 'alt', 'shift', 'meta']))
+          .optional()
+          .describe('Modifier keys held during the press (e.g. ["ctrl"] + key "a" = Ctrl+A)'),
       }),
       execute: (args) => run('press', args),
     }),
@@ -534,6 +550,51 @@ export function createBrowserTools(): Tool[] {
         mobile: z.boolean().optional().describe('Emulate a mobile viewport (default false)'),
       }),
       execute: (args) => run('viewport', args),
+    }),
+    defineTool({
+      name: 'browser_fill',
+      description:
+        'Fill MULTIPLE inputs in one round on the attached page — fields: [{selector, text, replace?}]. ' +
+        'Each field follows browser_type semantics (ref number or CSS selector; replace clears first). ' +
+        'Returns per-field outcome. Use for forms/logins to save round-trips; ' +
+        'each field still honors sensitive-input approval (pre-filled/password fields ask separately).',
+      schema: z.object({
+        fields: z
+          .array(
+            z.object({
+              selector: z.string().describe('Ref number from snapshot or CSS selector of the input'),
+              text: z.string().describe('Text to type'),
+              replace: z.boolean().optional().describe('Replace existing value first (default false)'),
+            }),
+          )
+          .min(1)
+          .max(20)
+          .describe('Fields to fill, in order'),
+      }),
+      execute: async (a) => {
+        const results: string[] = [];
+        for (const f of a.fields) {
+          const r = await runBrowserAction('type', { selector: f.selector, text: f.text, replace: f.replace });
+          results.push(`[${f.selector}] ${r}`);
+        }
+        return `browser_fill 完成 ${a.fields.length} 个字段：\n${results.join('\n')}\n提示：用 browser_snapshot 复核表单状态。`;
+      },
+    }),
+    defineTool({
+      name: 'browser_navigate_snapshot',
+      description:
+        'Navigate the attached page to a URL and return the interactive-element snapshot of the resulting page in ONE round ' +
+        '(navigate settles → snapshot). Equivalent to browser_navigate followed by browser_snapshot, saving a turn. ' +
+        'Returns navigation feedback (URL/DOM changes) plus the ref list to act on.',
+      schema: z.object({
+        url: z.string().describe('URL to navigate to'),
+        maxResults: z.number().int().optional().describe('Max elements in the snapshot (default 80)'),
+      }),
+      execute: async (a) => {
+        const nav = await runBrowserAction('navigate', { url: a.url });
+        const snap = await runBrowserAction('snapshot', { maxResults: a.maxResults });
+        return `== navigation ==\n${nav}\n\n== snapshot ==\n${snap}`;
+      },
     }),
     defineTool({
       name: 'browser_wait',
@@ -567,10 +628,7 @@ export function createBrowserTools(): Tool[] {
       schema: z.object({
         fullPage: z.boolean().optional().describe('Capture beyond the viewport (full scrollable page, default false)'),
         inline: z.boolean().optional().describe('Return a base64 data URL directly when <= 3MB (default false)'),
-        target: z
-          .string()
-          .optional()
-          .describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
+        target: z.string().optional().describe('"self" = HoloGram webview（只读）；省略 = 已 attach 的外部页面'),
       }),
       readOnly: true,
       execute: (args) => run('screenshot', args),
@@ -588,7 +646,8 @@ export function createBrowserTools(): Tool[] {
     }),
     defineTool({
       name: 'browser_status',
-      description: 'Current browser session status — port, attached target, controlled Chrome running, observer alive, pending dialog/file chooser.',
+      description:
+        'Current browser session status — port, attached target, controlled Chrome running, observer alive, pending dialog/file chooser.',
       schema: z.object({}),
       readOnly: true,
       execute: () => run('status', {}),
@@ -609,21 +668,35 @@ const DESKTOP_ACTION_MAP: Record<string, string> = {
   screenshot: 'desktop_screenshot',
   uia_tree: 'desktop_uia_tree',
   uia_find: 'desktop_uia_find',
+  uia_read: 'desktop_uia_read',
+  uia_wait: 'desktop_uia_wait',
   uia_click: 'desktop_uia_click',
   uia_right_click: 'desktop_uia_right_click',
   uia_type: 'desktop_uia_type',
+  uia_select: 'desktop_uia_select',
+  uia_expand: 'desktop_uia_expand',
   uia_scroll: 'desktop_uia_scroll',
+  uia_keys: 'desktop_uia_keys',
+  uia_activate: 'desktop_uia_activate',
   uia_window_shot: 'desktop_uia_window_shot',
+  audit: 'desktop_audit',
+  status: 'desktop_status',
 };
 
 async function runDesktopAction(action: string, args: Record<string, unknown>): Promise<string> {
   const cmd = DESKTOP_ACTION_MAP[action];
   if (!cmd) return '[desktop] unsupported action "' + action + '"';
+  const pageHint =
+    action === 'uia_tree' ? '用 uia_tree 的 offset/max_results 翻页、depth 限层或 name 查找收窄' : undefined;
   try {
     const result = await agentInvoke<string>(cmd, { ...args, isAgent: true });
-    return truncate(result ?? '');
+    return truncate(result ?? '', pageHint);
   } catch (e: any) {
-    return '[desktop] ' + action + ' 失败: ' + (e?.message || String(e));
+    const raw = e?.message || String(e);
+    const parsed = parseBrowserError(raw);
+    return parsed
+      ? `[desktop] ${action} 失败 [${parsed.code}]: ${parsed.message}`
+      : '[desktop] ' + action + ' 失败: ' + raw;
   }
 }
 
@@ -633,21 +706,27 @@ export function createDesktopTools(): Tool[] {
     defineTool({
       name: 'desktop_probe',
       description:
-        'Snapshot current machine process tree + top-level windows + visible console windows (read-only, one-shot). ' +
-        'Returns {processes:[{pid,ppid,name,is_chromium}], windows:[{pid,name,title,visible}], visible_console_windows, process_count, window_count}. ' +
-        'Use to detect whether a process has a visible console window (e.g. a language server spawning a cmd window), ' +
-        'or to see what desktop windows are currently open. No persistent monitoring; purely a point-in-time query. ' +
-        'Privacy: only process names are returned (not full command lines); no cross-session/RDP probing.',
-      schema: z.object({}),
+        'Snapshot current machine process tree + top-level windows + visible console windows, WITH per-window channel routing advice ' +
+        '(route.channel: "cdp" for Chromium windows → browser tools; "uia" for standard-control windows → desktop_uia_*; "vision" for self-drawn apps → uia_window_shot + multimodal). ' +
+        'Returns {processes:[{pid,ppid,name,is_chromium}], windows:[{pid,name,title,visible,hwnd,route}], visible_console_windows}. ' +
+        'route:false param skips UIA probing for a faster bare snapshot. ' +
+        'Use to find which window to operate and HOW to operate it. Read-only; no persistent monitoring. ' +
+        'Privacy: only process names (not full command lines); no cross-session/RDP probing.',
+      schema: z.object({
+        route: z
+          .boolean()
+          .optional()
+          .describe('Attach per-window channel routing advice (default true); false = bare snapshot, faster'),
+      }),
       readOnly: true,
-      execute: () => run('probe', {}),
+      execute: (a) => run('probe', a),
     }),
     defineTool({
       name: 'desktop_screenshot',
       description:
         'Capture a full-screen screenshot of the current desktop (requires an interactive desktop session). ' +
         'Saved to a temp file; returns {path, bytes, note}. High-privacy: may contain arbitrary on-screen content, ' +
-        'so this requires a separate approval. With a text-only model the image is not visible; hand the path to the user for confirmation.',
+        'so this asks for approval EVERY time. With a text-only model the image is not visible; hand the path to the user for confirmation.',
       schema: z.object({}),
       readOnly: true,
       execute: () => run('screenshot', {}),
@@ -655,18 +734,24 @@ export function createDesktopTools(): Tool[] {
     defineTool({
       name: 'desktop_uia_tree',
       description:
-        'Read the Windows UI Automation control tree of a desktop window (standard controls only: buttons, inputs, lists, menus...). ' +
-        'Returns {window:{pid,title,hwnd}, refs:N, tree:"[ref] ControlType \\"Name\\"", controls:[{ref,name,type,automation_id,enabled,value,rect,depth}]}. ' +
-        'Locate the window by ONE of: hwnd (exact, from desktop_probe), pid (its main window), title (fuzzy, first match), or omit all to use the foreground window. ' +
-        'depth: omit for the full flat list (default), or pass depth=N to get only the first N levels as a real indented hierarchy (smaller output, faster). ' +
-        'Then act on controls by their ref with desktop_uia_click/type/scroll. refs are a snapshot: if the window changed between tree and action, ' +
-        'the action re-locates by control name when possible; otherwise re-read the tree. ' +
-        'Self-drawn controls (WeChat/QQ/DingTalk etc.) expose an empty tree - use desktop_uia_window_shot + a vision model instead.',
+        'Read the Windows UI Automation control tree of a desktop window — interactive controls only by default (buttons, inputs, lists, menus...), paginated. ' +
+        'Returns {window:{pid,title,hwnd}, refs, generation, total, offset, count, truncated, tree:"[ref] Type \\"Name\\"", controls:[{ref,name,type,automation_id,enabled,rect,depth}]}. ' +
+        'Locate the window by ONE of: hwnd (exact, from desktop_probe), pid, title (fuzzy), or omit all for the foreground window. ' +
+        'all:true includes non-interactive layout elements; depth:N limits tree levels; offset/max_results paginate (default 80/page). ' +
+        'refs index the FULL tree and stay reusable across actions and pages; if the window changed and a ref went stale, the action auto-refreshes once — ' +
+        'only re-read the tree when that fails. Reading never touches focus or cursor. ' +
+        'Self-drawn controls (WeChat/QQ/DingTalk etc.) expose an empty tree — use desktop_uia_window_shot + a vision model instead.',
       schema: z.object({
         hwnd: z.number().int().optional().describe('Window handle from desktop_probe (hwnd field)'),
         pid: z.number().int().optional().describe('Process id - resolves to its main window'),
         title: z.string().optional().describe('Window title substring (fuzzy, first match)'),
-        depth: z.number().int().optional().describe('Limit tree to N levels (real hierarchy with indentation); omit = full flat list'),
+        depth: z.number().int().optional().describe('Limit tree to N levels (real hierarchy with indentation)'),
+        all: z
+          .boolean()
+          .optional()
+          .describe('Include non-interactive layout elements (default false = interactive only)'),
+        offset: z.number().int().optional().describe('Skip this many listed controls (for paging; default 0)'),
+        max_results: z.number().int().optional().describe('Max controls per page (default 80)'),
       }),
       readOnly: true,
       execute: (a) => run('uia_tree', a),
@@ -675,8 +760,8 @@ export function createDesktopTools(): Tool[] {
       name: 'desktop_uia_find',
       description:
         'Find controls inside a desktop window by criteria (name fuzzy / control_type / automation_id / enabled). ' +
-        'Returns matching controls with their ref for later actions. Window located as in desktop_uia_tree. ' +
-        'Use instead of a full tree when you already know what kind of control you need.',
+        'Interactive controls only by default (all:true for everything). Returns matching controls with their refs for later actions. ' +
+        'Use instead of a full tree when you already know what kind of control you need — cheaper than uia_tree.',
       schema: z.object({
         hwnd: z.number().int().optional().describe('Window handle from desktop_probe'),
         pid: z.number().int().optional().describe('Process id'),
@@ -685,23 +770,69 @@ export function createDesktopTools(): Tool[] {
         control_type: z.string().optional().describe('e.g. Button, Edit, ListItem, MenuItem, CheckBox'),
         automation_id: z.string().optional().describe('Exact automation id'),
         enabled: z.boolean().optional().describe('Filter by enabled state'),
+        all: z.boolean().optional().describe('Include non-interactive elements (default false)'),
       }),
       readOnly: true,
       execute: (a) => run('uia_find', a),
     }),
     defineTool({
+      name: 'desktop_uia_read',
+      description:
+        'Read full detail of ONE control: value (password-masked), toggle state, expand state, scroll percents, rect, and the list of patterns it supports. ' +
+        'Use after an action to verify the result (feedback loop), or before acting to see which patterns are available. ' +
+        'Locate by ref or selector, same as the action tools. Read-only.',
+      schema: z.object({
+        ref: z.number().int().optional().describe('Control ref from desktop_uia_tree/find'),
+        name: z.string().optional().describe('Control name, exact match case-insensitive'),
+        automation_id: z.string().optional().describe('Exact automation id'),
+        control_type: z.string().optional().describe('ControlType, e.g. Button, Edit'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      readOnly: true,
+      execute: async (a) => {
+        if (a.ref === undefined && !a.name && !a.automation_id && !a.control_type) {
+          return '[desktop_uia_read] 至少要给一个定位条件: ref / name / automation_id / control_type';
+        }
+        return run('uia_read', a);
+      },
+    }),
+    defineTool({
+      name: 'desktop_uia_wait',
+      description:
+        'Wait until a control satisfies a condition: until "exists" (appears), "enabled", or "value" (equals the given value). ' +
+        'Polls every 150ms up to timeout_ms (default 10000, max 30000). Returns {found, until, waited_ms} — found:false on timeout is NOT an error. ' +
+        'Use after clicking async-triggering buttons (e.g. dialogs that take a moment).',
+      schema: z.object({
+        until: z.enum(['exists', 'enabled', 'value']).describe('Condition to wait for'),
+        value: z.string().optional().describe('Expected value (required when until=value)'),
+        timeout_ms: z.number().int().optional().describe('Max wait in ms (default 10000, max 30000)'),
+        ref: z.number().int().optional().describe('Control ref from desktop_uia_tree/find'),
+        name: z.string().optional().describe('Control name, exact match case-insensitive'),
+        automation_id: z.string().optional().describe('Exact automation id'),
+        control_type: z.string().optional().describe('ControlType'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      readOnly: true,
+      execute: (a) => run('uia_wait', a),
+    }),
+    defineTool({
       name: 'desktop_uia_click',
       description:
-        'Click a control in a desktop window. Locate by EITHER ref (from desktop_uia_tree/find, stable for this session) ' +
-        'OR by stable selector: name (exact, case-insensitive), automation_id (exact), control_type (e.g. Button) - any combination. ' +
-        'At least one locator (ref/name/automation_id/control_type) is required. ' +
-        'Selector mode is preferred for repeated actions (no need to re-read the tree). ' +
-        'The target window is brought to the foreground first so coordinate fallback never clicks into the wrong window. ' +
-        'Triggers the control via InvokePattern/TogglePattern/SelectionItemPattern when available, else real mouse click at its center. ' +
-        'Returns {done, method} where method reveals the mechanism used (invoke/toggle/selection/coords). ' +
-        'Requires approval - this injects a real click into the target app and may trigger save/send/delete side effects.',
+        'Click a control in a desktop window. Locate by EITHER ref (from desktop_uia_tree/find) OR selector: name/automation_id/control_type - any combination. ' +
+        'Triggers via InvokePattern/TogglePattern/SelectionItemPattern when available (no focus stealing), else real coordinate click (physical input). ' +
+        'Returns world-change feedback: {done, method, target, changed:{window_title/focused/value/toggle before→after}, hint}. ' +
+        'Permissions: first write into a window asks once (window takeover); sensitive targets (submit/pay/delete/confirm text) and coordinate clicks ask separately every time. ' +
+        'Check "changed" to verify the click did what you expected; use desktop_uia_read/wait to double-check.',
       schema: z.object({
-        ref: z.number().int().optional().describe('Control ref from desktop_uia_tree/find (use instead of name/automation_id/control_type)'),
+        ref: z
+          .number()
+          .int()
+          .optional()
+          .describe('Control ref from desktop_uia_tree/find (use instead of name/automation_id/control_type)'),
         name: z.string().optional().describe('Control name, exact match case-insensitive (e.g. "Equals", "Seven")'),
         automation_id: z.string().optional().describe('Exact automation id (e.g. "equalButton", "num7Button")'),
         control_type: z.string().optional().describe('ControlType, e.g. Button, Edit, ListItem, MenuItem, CheckBox'),
@@ -719,11 +850,8 @@ export function createDesktopTools(): Tool[] {
     defineTool({
       name: 'desktop_uia_right_click',
       description:
-        'Right-click a control in a desktop window - opens the context menu at the control center. ' +
-        'Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). At least one locator is required. ' +
-        'The target window is brought to the foreground first. ' +
-        'Requires approval (injects a real right-click; may trigger destructive/send actions from the context menu). ' +
-        'Returns {done, method:"coords"}.',
+        'Right-click a control — opens the context menu at the control center. Pure physical input (no UIA pattern for right-click), always asks. ' +
+        'Locate by ref or selector (see desktop_uia_click). After the menu opens, read it with desktop_uia_tree and click items by ref.',
       schema: z.object({
         ref: z.number().int().optional().describe('Control ref from desktop_uia_tree/find'),
         name: z.string().optional().describe('Control name, exact match case-insensitive'),
@@ -743,11 +871,9 @@ export function createDesktopTools(): Tool[] {
     defineTool({
       name: 'desktop_uia_type',
       description:
-        'Type text into a control in a desktop window. Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). At least one locator is required. ' +
-        'Uses ValuePattern.SetValue when the control supports it (instant replace), else focuses the control and pastes via clipboard. ' +
-        'The target window is brought to the foreground first so the paste lands in the right window. ' +
-        'Returns {done, method} (setvalue/sendkeys). Requires approval - text is really written into the target app and may be saved/sent. ' +
-        'The clipboard is restored to its previous content afterwards.',
+        'Type text into a control. ValuePattern.SetValue when supported (instant, no focus), else focus + clipboard paste (physical input, asks separately). ' +
+        'Returns world-change feedback incl. value before→after (password fields masked). ' +
+        'Typing into a pre-filled input or a password field is classified sensitive and asks separately.',
       schema: z.object({
         ref: z.number().int().optional().describe('Control ref (usually an Edit/ComboBox)'),
         text: z.string().describe('Text to type'),
@@ -766,16 +892,57 @@ export function createDesktopTools(): Tool[] {
       },
     }),
     defineTool({
+      name: 'desktop_uia_select',
+      description:
+        'Explicitly select a list item / tree item / tab (SelectionItemPattern.Select). Cleaner than clicking list entries — ' +
+        'use for ListItems, TreeItems, TabItems, radio-like items. Returns world-change feedback.',
+      schema: z.object({
+        ref: z.number().int().optional().describe('Control ref (the ListItem/TreeItem/TabItem to select)'),
+        name: z.string().optional().describe('Item name, exact match case-insensitive'),
+        automation_id: z.string().optional().describe('Exact automation id'),
+        control_type: z.string().optional().describe('ControlType: ListItem, TreeItem, TabItem...'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: async (a) => {
+        if (a.ref === undefined && !a.name && !a.automation_id && !a.control_type) {
+          return '[desktop_uia_select] 至少要给一个定位条件: ref / name / automation_id / control_type';
+        }
+        return run('uia_select', a);
+      },
+    }),
+    defineTool({
+      name: 'desktop_uia_expand',
+      description:
+        'Expand/collapse a ComboBox dropdown or tree node (ExpandCollapsePattern, idempotent toggle: expanded→collapse, collapsed→expand). ' +
+        'After expanding a combo, read the item list with desktop_uia_tree/find and select with desktop_uia_select. ' +
+        'Returns world-change feedback incl. expand state before→after.',
+      schema: z.object({
+        ref: z.number().int().optional().describe('Control ref (the ComboBox/TreeItem to toggle)'),
+        name: z.string().optional().describe('Control name, exact match case-insensitive'),
+        automation_id: z.string().optional().describe('Exact automation id'),
+        control_type: z.string().optional().describe('ControlType: ComboBox, TreeItem...'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: async (a) => {
+        if (a.ref === undefined && !a.name && !a.automation_id && !a.control_type) {
+          return '[desktop_uia_expand] 至少要给一个定位条件: ref / name / automation_id / control_type';
+        }
+        return run('uia_expand', a);
+      },
+    }),
+    defineTool({
       name: 'desktop_uia_scroll',
       description:
-        'Scroll a scrollable control in a desktop window. Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). At least one locator is required. ' +
-        'The target window is brought to the foreground first. ' +
-        'Uses ScrollPattern when available (precise), else real mouse wheel at the control center (Wheel vertical / HWheel horizontal). ' +
-        'Returns {done, method} (scrollpattern/wheel). Requires approval - moves the viewport of the target app.',
+        'Scroll a scrollable control (ScrollPattern when available, else mouse wheel — wheel is physical input and asks separately). ' +
+        'Returns world-change feedback incl. scroll percents before→after. Scroll itself is non-destructive; with window takeover granted it flows without asking.',
       schema: z.object({
         ref: z.number().int().optional().describe('Control ref (scrollable pane/list)'),
         direction: z.enum(['up', 'down', 'left', 'right']).describe('Scroll direction'),
-        amount: z.number().optional().describe('Scroll amount (ScrollPattern units, or wheel ticks * 120); default 1'),
+        amount: z.number().optional().describe('Scroll amount (>=1 large step, <1 small step; wheel ticks); default 1'),
         name: z.string().optional().describe('Control name, exact match case-insensitive'),
         automation_id: z.string().optional().describe('Exact automation id'),
         control_type: z.string().optional().describe('ControlType, e.g. Pane, List, ScrollBar'),
@@ -791,11 +958,80 @@ export function createDesktopTools(): Tool[] {
       },
     }),
     defineTool({
+      name: 'desktop_uia_keys',
+      description:
+        'Send a hotkey to a window (SendInput, real keyboard injection): key + modifiers (ctrl/alt/shift/meta). ' +
+        'Examples: Ctrl+A, Delete, Enter, F5. Physical input — asks every time and is serialized globally (input lease) so concurrent agents cannot interleave keystrokes. ' +
+        'Prefer pattern actions (click/type/select) whenever possible; use keys only for shortcuts UIA cannot reach.',
+      schema: z.object({
+        key: z.string().describe('Key name (Enter/Tab/Escape/Backspace/Delete/ArrowUp/F1-F12/single char)'),
+        modifiers: z
+          .array(z.enum(['ctrl', 'alt', 'shift', 'meta']))
+          .optional()
+          .describe('Modifier keys held (e.g. ["ctrl"] + key "a" = Ctrl+A)'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: (a) => run('uia_keys', a),
+    }),
+    defineTool({
+      name: 'desktop_uia_activate',
+      description:
+        'Bring a window to the foreground (restore if minimized + SetForegroundWindow). Physical input — asks every time. ' +
+        'Needed before coordinate clicks / clipboard paste into apps that require focus; pattern actions (Invoke/SetValue/Select) work without activation.',
+      schema: z.object({
+        hwnd: z.number().int().optional().describe('Window handle from desktop_probe'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: (a) => run('uia_activate', a),
+    }),
+    defineTool({
+      name: 'desktop_uia_fill',
+      description:
+        'Fill MULTIPLE desktop controls in one round — fields: [{ref/name/automation_id/control_type, text}]. ' +
+        'Each field follows desktop_uia_type semantics (ValuePattern.SetValue preferred, world-diff per field). ' +
+        'Window takeover asks once for the batch; pre-filled/password fields still ask separately. ' +
+        'Returns per-field outcome (value before→after, password-masked).',
+      schema: z.object({
+        fields: z
+          .array(
+            z.object({
+              ref: z.number().int().optional().describe('Control ref from desktop_uia_tree/find'),
+              name: z.string().optional().describe('Control name, exact match case-insensitive'),
+              automation_id: z.string().optional().describe('Exact automation id'),
+              control_type: z.string().optional().describe('ControlType, e.g. Edit'),
+              text: z.string().describe('Text to type'),
+            }),
+          )
+          .min(1)
+          .max(20)
+          .describe('Fields to fill, in order'),
+        hwnd: z.number().int().optional().describe('Window handle'),
+        pid: z.number().int().optional().describe('Process id'),
+        title: z.string().optional().describe('Window title substring'),
+      }),
+      execute: async (a) => {
+        const windowArgs = { hwnd: a.hwnd, pid: a.pid, title: a.title };
+        const results: string[] = [];
+        for (const f of a.fields) {
+          if (f.ref === undefined && !f.name && !f.automation_id && !f.control_type) {
+            results.push('[skip] 字段缺少定位条件 (ref/name/automation_id/control_type)');
+            continue;
+          }
+          const r = await runDesktopAction('uia_type', { ...windowArgs, ref: f.ref, name: f.name, automation_id: f.automation_id, control_type: f.control_type, text: f.text });
+          results.push(`[${f.ref ?? f.name ?? f.automation_id ?? f.control_type}] ${r}`);
+        }
+        return `desktop_uia_fill 完成 ${results.length} 个字段：\n${results.join('\n')}`;
+      },
+    }),
+    defineTool({
       name: 'desktop_uia_window_shot',
       description:
-        'Capture a screenshot of a single window rect (not the full screen) - smaller privacy surface than desktop_screenshot. ' +
+        'Capture a screenshot of a single window rect (not the full screen) - smaller privacy surface than desktop_screenshot, read-only. ' +
         'Locate window as in desktop_uia_tree (hwnd/pid/title/foreground). ' +
-        'Returns {path, bytes, rect}. With a text-only model hand the path to the user; with a vision model read the image to see self-drawn controls that UIA cannot see.',
+        'Returns {path, bytes, rect, window}. With a text-only model hand the path to the user; with a vision model read the image to see self-drawn controls that UIA cannot see.',
       schema: z.object({
         hwnd: z.number().int().optional().describe('Window handle from desktop_probe'),
         pid: z.number().int().optional().describe('Process id'),
@@ -803,6 +1039,26 @@ export function createDesktopTools(): Tool[] {
       }),
       readOnly: true,
       execute: (a) => run('uia_window_shot', a),
+    }),
+    defineTool({
+      name: 'desktop_audit',
+      description:
+        'Read the desktop operation audit log — which agent did what (click/type/keys/activate), when, against which control/window, and the outcome. ' +
+        'Mirrors browser_audit. Use to review what the Agent has done on the desktop.',
+      schema: z.object({
+        limit: z.number().int().optional().describe('Max entries (default 50)'),
+      }),
+      readOnly: true,
+      execute: (a) => run('audit', a),
+    }),
+    defineTool({
+      name: 'desktop_status',
+      description:
+        'Current desktop control state: active window-takeover grants per agent (with TTL) and the global input lease holder. ' +
+        'Use to check who is currently allowed to operate which windows, or who holds the physical input lease.',
+      schema: z.object({}),
+      readOnly: true,
+      execute: () => run('status', {}),
     }),
   ];
 }

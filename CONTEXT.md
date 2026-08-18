@@ -115,6 +115,14 @@ _Avoid_: 发现、note
 
 ### 状态（Status 簇）
 
+**DesktopGrant**:
+窗口级接管授权记录（agent + hwnd 键控、滑动 TTL）。用户批准一次窗口接管后，该 Agent 在该窗口上的 pattern 动作不再逐次确认；敏感目标与物理输入路径仍单独 Ask。
+_Avoid_: 授权、permission（泛指）、grant（裸用）
+
+**InputLease**:
+物理输入租约（进程级全局唯一）：SetCursorPos/SendInput/剪贴板/抢前台等真实输入注入必须先获取，跨 Agent 串行化；持有者对状态可见，抢不到回 `[UIA_LEASE_BUSY]`。
+_Avoid_: 锁、mutex（当指输入租约时）、lease（裸用）
+
 **ProbeOutcome**:
 ConnectionProbe 的结果：ok / fail。它是检查动作的产物，不是 Provider 的派生状态。
 _Avoid_: status（裸用）、testStatus

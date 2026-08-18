@@ -616,7 +616,9 @@
               "viewport",
               "eval",
               "status",
-              "wait"
+              "wait",
+              "fill",
+              "navigate_snapshot"
             ],
             "type": "string"
           },
@@ -641,6 +643,33 @@
           "expr": {
             "description": "JS expression to evaluate",
             "type": "string"
+          },
+          "fields": {
+            "description": "Fields to fill, in order",
+            "items": {
+              "properties": {
+                "replace": {
+                  "description": "Replace existing value first (default false)",
+                  "type": "boolean"
+                },
+                "selector": {
+                  "description": "Ref number from snapshot or CSS selector of the input",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "Text to type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "selector",
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
           },
           "files": {
             "description": "Absolute local file paths to set",
@@ -696,7 +725,7 @@
             "type": "integer"
           },
           "maxResults": {
-            "description": "Max elements per page (default 80) (action: snapshot); Max elements (default 20) (action: inspect)",
+            "description": "Max elements per page (default 80) (action: snapshot); Max elements (default 20) (action: inspect); Max elements in the snapshot (default 80) (action: navigate_snapshot)",
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
             "type": "integer"
@@ -824,7 +853,7 @@
             "type": "string"
           },
           "url": {
-            "description": "Optional URL to open in the controlled browser (action: launch); set/delete: cookie URL (either url or domain is required) (action: cookies); URL to open in the new tab (default about:blank) (action: new_tab); URL to navigate to (action: navigate)",
+            "description": "Optional URL to open in the controlled browser (action: launch); set/delete: cookie URL (either url or domain is required) (action: cookies); URL to open in the new tab (default about:blank) (action: new_tab); URL to navigate to (action: navigate); URL to navigate to (action: navigate_snapshot)",
             "type": "string"
           },
           "urls": {
@@ -874,7 +903,7 @@
       }
     },
     {
-      "description": "Read-only desktop snapshot: probe current machine process tree + visible windows + visible console windows, or capture a full-screen screenshot. Use desktop(probe) to detect whether a process has a visible console window (e.g. a language server spawning a cmd window) or to see open desktop windows. desktop(screenshot) needs approval (high privacy). Does not connect to a browser and does not do persistent monitoring.",
+      "description": "Windows desktop control (in-process UIA COM, millisecond-latency): probe process tree + windows with channel routing advice (cdp/uia/vision per window), read a window control tree (interactive-only by default, paginated), find/read controls, and operate them by ref or selector (click/type/select/expand/scroll/keys/activate). Write actions return world-change feedback (title/focus/value/toggle before→after). Permission model: first takeover of a window asks once (then pattern actions flow); sensitive targets and physical input (coordinate clicks/SendKeys/wheel) always ask separately; a global input lease serializes physical injection across agents. desktop(audit) reviews what was done. desktop(screenshot) is high-privacy and asks every time. Self-drawn apps (WeChat/QQ/DingTalk) expose empty trees — use desktop(uia_window_shot) + vision instead.",
       "name": "desktop",
       "parameters": {
         "properties": {
@@ -885,28 +914,41 @@
               "screenshot",
               "uia_tree",
               "uia_find",
+              "uia_read",
+              "uia_wait",
               "uia_click",
               "uia_right_click",
               "uia_type",
+              "uia_select",
+              "uia_expand",
               "uia_scroll",
-              "uia_window_shot"
+              "uia_keys",
+              "uia_activate",
+              "uia_fill",
+              "uia_window_shot",
+              "audit",
+              "status"
             ],
             "type": "string"
           },
+          "all": {
+            "description": "Include non-interactive layout elements (default false = interactive only) (action: uia_tree); Include non-interactive elements (default false) (action: uia_find)",
+            "type": "boolean"
+          },
           "amount": {
-            "description": "Scroll amount (ScrollPattern units, or wheel ticks * 120); default 1",
+            "description": "Scroll amount (>=1 large step, <1 small step; wheel ticks); default 1",
             "type": "number"
           },
           "automation_id": {
-            "description": "Exact automation id (action: uia_find); Exact automation id (e.g. \"equalButton\", \"num7Button\") (action: uia_click); Exact automation id (action: uia_right_click); Exact automation id (action: uia_type); Exact automation id (action: uia_scroll)",
+            "description": "Exact automation id (action: uia_find); Exact automation id (action: uia_read); Exact automation id (action: uia_wait); Exact automation id (e.g. \"equalButton\", \"num7Button\") (action: uia_click); Exact automation id (action: uia_right_click); Exact automation id (action: uia_type); Exact automation id (action: uia_select); Exact automation id (action: uia_expand); Exact automation id (action: uia_scroll)",
             "type": "string"
           },
           "control_type": {
-            "description": "e.g. Button, Edit, ListItem, MenuItem, CheckBox (action: uia_find); ControlType, e.g. Button, Edit, ListItem, MenuItem, CheckBox (action: uia_click); ControlType, e.g. Button, Edit, ListItem (action: uia_right_click); ControlType, e.g. Edit, ComboBox (action: uia_type); ControlType, e.g. Pane, List, ScrollBar (action: uia_scroll)",
+            "description": "e.g. Button, Edit, ListItem, MenuItem, CheckBox (action: uia_find); ControlType, e.g. Button, Edit (action: uia_read); ControlType (action: uia_wait); ControlType, e.g. Button, Edit, ListItem, MenuItem, CheckBox (action: uia_click); ControlType, e.g. Button, Edit, ListItem (action: uia_right_click); ControlType, e.g. Edit, ComboBox (action: uia_type); ControlType: ListItem, TreeItem, TabItem... (action: uia_select); ControlType: ComboBox, TreeItem... (action: uia_expand); ControlType, e.g. Pane, List, ScrollBar (action: uia_scroll)",
             "type": "string"
           },
           "depth": {
-            "description": "Limit tree to N levels (real hierarchy with indentation); omit = full flat list",
+            "description": "Limit tree to N levels (real hierarchy with indentation)",
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
             "type": "integer"
@@ -925,34 +967,128 @@
             "description": "Filter by enabled state",
             "type": "boolean"
           },
+          "fields": {
+            "description": "Fields to fill, in order",
+            "items": {
+              "properties": {
+                "automation_id": {
+                  "description": "Exact automation id",
+                  "type": "string"
+                },
+                "control_type": {
+                  "description": "ControlType, e.g. Edit",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "Control name, exact match case-insensitive",
+                  "type": "string"
+                },
+                "ref": {
+                  "description": "Control ref from desktop_uia_tree/find",
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "text": {
+                  "description": "Text to type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
           "hwnd": {
-            "description": "Window handle from desktop_probe (hwnd field) (action: uia_tree); Window handle from desktop_probe (action: uia_find); Window handle (re-locate if tree changed) (action: uia_click); Window handle (action: uia_right_click); Window handle (action: uia_type); Window handle (action: uia_scroll); Window handle from desktop_probe (action: uia_window_shot)",
+            "description": "Window handle from desktop_probe (hwnd field) (action: uia_tree); Window handle from desktop_probe (action: uia_find); Window handle (action: uia_read); Window handle (action: uia_wait); Window handle (re-locate if tree changed) (action: uia_click); Window handle (action: uia_right_click); Window handle (action: uia_type); Window handle (action: uia_select); Window handle (action: uia_expand); Window handle (action: uia_scroll); Window handle (action: uia_keys); Window handle from desktop_probe (action: uia_activate); Window handle (action: uia_fill); Window handle from desktop_probe (action: uia_window_shot)",
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
             "type": "integer"
           },
-          "name": {
-            "description": "Control name substring (case-insensitive) (action: uia_find); Control name, exact match case-insensitive (e.g. \"Equals\", \"Seven\") (action: uia_click); Control name, exact match case-insensitive (action: uia_right_click); Control name, exact match case-insensitive (action: uia_type); Control name, exact match case-insensitive (action: uia_scroll)",
+          "key": {
+            "description": "Key name (Enter/Tab/Escape/Backspace/Delete/ArrowUp/F1-F12/single char)",
             "type": "string"
           },
+          "limit": {
+            "description": "Max entries (default 50)",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "max_results": {
+            "description": "Max controls per page (default 80)",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "modifiers": {
+            "description": "Modifier keys held (e.g. [\"ctrl\"] + key \"a\" = Ctrl+A)",
+            "items": {
+              "enum": [
+                "ctrl",
+                "alt",
+                "shift",
+                "meta"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "Control name substring (case-insensitive) (action: uia_find); Control name, exact match case-insensitive (action: uia_read); Control name, exact match case-insensitive (action: uia_wait); Control name, exact match case-insensitive (e.g. \"Equals\", \"Seven\") (action: uia_click); Control name, exact match case-insensitive (action: uia_right_click); Control name, exact match case-insensitive (action: uia_type); Item name, exact match case-insensitive (action: uia_select); Control name, exact match case-insensitive (action: uia_expand); Control name, exact match case-insensitive (action: uia_scroll)",
+            "type": "string"
+          },
+          "offset": {
+            "description": "Skip this many listed controls (for paging; default 0)",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
           "pid": {
-            "description": "Process id - resolves to its main window (action: uia_tree); Process id (action: uia_find); Process id (action: uia_click); Process id (action: uia_right_click); Process id (action: uia_type); Process id (action: uia_scroll); Process id (action: uia_window_shot)",
+            "description": "Process id - resolves to its main window (action: uia_tree); Process id (action: uia_find); Process id (action: uia_read); Process id (action: uia_wait); Process id (action: uia_click); Process id (action: uia_right_click); Process id (action: uia_type); Process id (action: uia_select); Process id (action: uia_expand); Process id (action: uia_scroll); Process id (action: uia_keys); Process id (action: uia_activate); Process id (action: uia_fill); Process id (action: uia_window_shot)",
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
             "type": "integer"
           },
           "ref": {
-            "description": "Control ref from desktop_uia_tree/find (use instead of name/automation_id/control_type) (action: uia_click); Control ref from desktop_uia_tree/find (action: uia_right_click); Control ref (usually an Edit/ComboBox) (action: uia_type); Control ref (scrollable pane/list) (action: uia_scroll)",
+            "description": "Control ref from desktop_uia_tree/find (action: uia_read); Control ref from desktop_uia_tree/find (action: uia_wait); Control ref from desktop_uia_tree/find (use instead of name/automation_id/control_type) (action: uia_click); Control ref from desktop_uia_tree/find (action: uia_right_click); Control ref (usually an Edit/ComboBox) (action: uia_type); Control ref (the ListItem/TreeItem/TabItem to select) (action: uia_select); Control ref (the ComboBox/TreeItem to toggle) (action: uia_expand); Control ref (scrollable pane/list) (action: uia_scroll)",
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
             "type": "integer"
+          },
+          "route": {
+            "description": "Attach per-window channel routing advice (default true); false = bare snapshot, faster",
+            "type": "boolean"
           },
           "text": {
             "description": "Text to type",
             "type": "string"
           },
+          "timeout_ms": {
+            "description": "Max wait in ms (default 10000, max 30000)",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
           "title": {
-            "description": "Window title substring (fuzzy, first match) (action: uia_tree); Window title substring (action: uia_find); Window title substring (action: uia_click); Window title substring (action: uia_right_click); Window title substring (action: uia_type); Window title substring (action: uia_scroll); Window title substring (action: uia_window_shot)",
+            "description": "Window title substring (fuzzy, first match) (action: uia_tree); Window title substring (action: uia_find); Window title substring (action: uia_read); Window title substring (action: uia_wait); Window title substring (action: uia_click); Window title substring (action: uia_right_click); Window title substring (action: uia_type); Window title substring (action: uia_select); Window title substring (action: uia_expand); Window title substring (action: uia_scroll); Window title substring (action: uia_keys); Window title substring (action: uia_activate); Window title substring (action: uia_fill); Window title substring (action: uia_window_shot)",
+            "type": "string"
+          },
+          "until": {
+            "description": "Condition to wait for",
+            "enum": [
+              "exists",
+              "enabled",
+              "value"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "description": "Expected value (required when until=value)",
             "type": "string"
           }
         },
