@@ -367,6 +367,54 @@ impl Tool for DesktopTool {
     }
 }
 
+/// UIA 写动作分类的输入：目标控件能力（来自只读 resolve）。
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct UiaTargetCaps {
+    pub has_invoke: bool,
+    pub has_toggle: bool,
+    pub has_select: bool,
+    pub has_value: bool,
+    pub has_scroll: bool,
+}
+
+/// 分类：敏感目标 > 物理路径 > 已授权 pattern > 首次接管（优先级即安全收紧序）。
+/// 输出是 DesktopTool 的 action 名（check_permissions 的分层输入）。
+pub(crate) fn classify_uia_action(
+    kind: &str,
+    target_name: &str,
+    password: bool,
+    cur_value: &str,
+    caps: &UiaTargetCaps,
+    granted: bool,
+) -> &'static str {
+    let sensitive = match kind {
+        "click" | "right_click" => crate::sensitive::is_sensitive_click_text(target_name),
+        "type" => password || !cur_value.is_empty(),
+        _ => false,
+    };
+    if sensitive {
+        if kind == "type" { "uia_type_sensitive" } else { "uia_click_sensitive" }
+    } else if uia_action_needs_physical(kind, caps) {
+        "uia_physical"
+    } else if granted {
+        "uia_pattern"
+    } else {
+        "uia_grant"
+    }
+}
+
+/// 该动作在该控件上是否只能走物理输入路径（无可用 pattern）。
+/// rpc 层据此决定执行前是否获取全局输入租约。
+pub(crate) fn uia_action_needs_physical(kind: &str, caps: &UiaTargetCaps) -> bool {
+    match kind {
+        "click" => !(caps.has_invoke || caps.has_toggle || caps.has_select),
+        "right_click" => true,
+        "type" => !caps.has_value,
+        "scroll" => !caps.has_scroll,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod desktop_permission_tests {
     use super::*;
@@ -435,6 +483,40 @@ mod desktop_permission_tests {
         assert!(desktop("uia_tree").is_read_only());
         // uia_pattern 已授权但仍属真实写操作 —— is_destructive 保持 true（调度保守）
         assert!(desktop("uia_pattern").is_destructive());
+    }
+
+    /// 分类矩阵：敏感 > 物理 > 已授权 pattern > 首次接管。
+    /// 与 desktop_uia_write 的编排逻辑共享此纯函数，矩阵锁住优先级序。
+    #[test]
+    fn classify_uia_action_matrix() {
+        let full = UiaTargetCaps { has_invoke: true, has_toggle: true, has_select: true, has_value: true, has_scroll: true };
+        let bare = UiaTargetCaps::default();
+
+        // 普通控件 + 已授权 → pattern 放行
+        assert_eq!(classify_uia_action("click", "OK", false, "", &full, true), "uia_pattern");
+        // 普通控件 + 未授权 → 首次接管
+        assert_eq!(classify_uia_action("click", "OK", false, "", &full, false), "uia_grant");
+        // 敏感词点击：即使已授权也每次单独 Ask（优先级最高）
+        for name in ["确认支付", "Pay now", "Delete account"] {
+            assert_eq!(classify_uia_action("click", name, false, "", &full, true), "uia_click_sensitive", "{name}");
+        }
+        // 右键命中敏感词 → click_sensitive（物理性被敏感性覆盖）
+        assert_eq!(classify_uia_action("right_click", "删除", false, "", &bare, true), "uia_click_sensitive");
+        // type：密码框 / 已填值 → sensitive（优先于 has_value 判定）
+        assert_eq!(classify_uia_action("type", "Password", true, "", &full, true), "uia_type_sensitive");
+        assert_eq!(classify_uia_action("type", "搜索", false, "旧值", &full, true), "uia_type_sensitive");
+        // type：普通空输入框 + 已授权 → pattern
+        assert_eq!(classify_uia_action("type", "搜索", false, "", &full, true), "uia_pattern");
+        // 无 pattern 可用 → 物理（已授权也拦不住，执行前要租约）
+        assert_eq!(classify_uia_action("click", "OK", false, "", &bare, true), "uia_physical");
+        assert_eq!(classify_uia_action("right_click", "图标", false, "", &full, true), "uia_physical");
+        assert_eq!(classify_uia_action("type", "画布输入", false, "", &bare, true), "uia_physical");
+        assert_eq!(classify_uia_action("scroll", "列表", false, "", &bare, true), "uia_physical");
+        // select/expand：pattern-only，永不物理
+        assert_eq!(classify_uia_action("select", "列表项", false, "", &bare, true), "uia_pattern");
+        assert_eq!(classify_uia_action("expand", "组合框", false, "", &bare, false), "uia_grant");
+        assert!(!uia_action_needs_physical("select", &bare));
+        assert!(!uia_action_needs_physical("expand", &bare));
     }
 }
 

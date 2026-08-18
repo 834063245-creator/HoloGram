@@ -817,7 +817,12 @@ export function createDesktopTools(): Tool[] {
         title: z.string().optional().describe('Window title substring'),
       }),
       readOnly: true,
-      execute: (a) => run('uia_wait', a),
+      execute: async (a) => {
+        if (a.ref === undefined && !a.name && !a.automation_id && !a.control_type) {
+          return '[desktop_uia_wait] 至少要给一个定位条件: ref / name / automation_id / control_type';
+        }
+        return run('uia_wait', a);
+      },
     }),
     defineTool({
       name: 'desktop_uia_click',
@@ -1020,7 +1025,14 @@ export function createDesktopTools(): Tool[] {
             results.push('[skip] 字段缺少定位条件 (ref/name/automation_id/control_type)');
             continue;
           }
-          const r = await runDesktopAction('uia_type', { ...windowArgs, ref: f.ref, name: f.name, automation_id: f.automation_id, control_type: f.control_type, text: f.text });
+          const r = await runDesktopAction('uia_type', {
+            ...windowArgs,
+            ref: f.ref,
+            name: f.name,
+            automation_id: f.automation_id,
+            control_type: f.control_type,
+            text: f.text,
+          });
           results.push(`[${f.ref ?? f.name ?? f.automation_id ?? f.control_type}] ${r}`);
         }
         return `desktop_uia_fill 完成 ${results.length} 个字段：\n${results.join('\n')}`;

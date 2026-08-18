@@ -1416,29 +1416,17 @@ async fn desktop_uia_write(
         res_hwnd.map(|h| format!("hwnd={h}")).unwrap_or_else(|| "window".into())
     );
 
-    // 分类：敏感目标 > 物理路径 > 已授权 pattern > 首次接管
-    let sensitive = match kind {
-        "click" | "right_click" => crate::sensitive::is_sensitive_click_text(&res_name),
-        "type" => password || !cur_value.is_empty(),
-        _ => false,
-    };
-    let needs_physical = match kind {
-        "click" => !(g("has_invoke") || g("has_toggle") || g("has_select")),
-        "right_click" => true,
-        "type" => !g("has_value"),
-        "scroll" => !g("has_scroll"),
-        _ => false,
+    let caps = crate::tools::UiaTargetCaps {
+        has_invoke: g("has_invoke"),
+        has_toggle: g("has_toggle"),
+        has_select: g("has_select"),
+        has_value: g("has_value"),
+        has_scroll: g("has_scroll"),
     };
     let granted = crate::uia::has_grant(agent_id.as_deref(), res_hwnd);
-    let tool_action = if sensitive {
-        if kind == "type" { "uia_type_sensitive" } else { "uia_click_sensitive" }
-    } else if needs_physical {
-        "uia_physical"
-    } else if granted {
-        "uia_pattern"
-    } else {
-        "uia_grant"
-    };
+    let tool_action = crate::tools::classify_uia_action(
+        kind, &res_name, password, cur_value, &caps, granted,
+    );
 
     // 权限（Ask 由 check_permission 内部走异步确认）
     {
@@ -1493,7 +1481,7 @@ async fn desktop_uia_write(
             }
         }
     };
-    let outcome = if needs_physical && allow_physical {
+    let outcome = if crate::tools::uia_action_needs_physical(kind, &caps) && allow_physical {
         match crate::uia::acquire_input_lease(agent_id.as_deref(), std::time::Duration::from_secs(3)).await {
             Ok(_lease) => exec.await,
             Err(e) => Err(e),

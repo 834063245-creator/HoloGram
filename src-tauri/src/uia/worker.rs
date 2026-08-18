@@ -284,4 +284,67 @@ mod tests {
         .has_any(), "空白 name 不算定位条件");
         assert!(!Target::default().has_any());
     }
+
+    // ── 桥接层集成测试：真实 worker 线程 + COM 初始化 + 错误码回传 ──
+    // 不需要目标窗口存在（用无效 hwnd / 参数校验先行的路径），无桌面会话也可跑。
+    // 锁定「结构化错误码能穿透 mpsc/oneshot 全链路到达调用方」这一契约。
+
+    static BRIDGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[tokio::test]
+    async fn bridge_tree_invalid_hwnd_returns_structured_error() {
+        let _g = BRIDGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let e = request(|reply| UiaRequest::Tree {
+            loc: Locator { hwnd: Some(0xdead_beef), ..Default::default() },
+            all: false,
+            offset: 0,
+            max_results: 0,
+            reply,
+        })
+        .await
+        .unwrap_err();
+        assert!(e.starts_with("[UIA_WINDOW_NOT_FOUND]"), "无效 hwnd 应带结构化码: {e}");
+    }
+
+    #[tokio::test]
+    async fn bridge_find_unknown_control_type_rejected_before_window() {
+        let _g = BRIDGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 参数校验先于窗口定位（找不到窗口的机器上也应是 ARG_INVALID 而非 WINDOW_NOT_FOUND）
+        let e = request(|reply| UiaRequest::Find {
+            loc: Locator::default(),
+            all: false,
+            name: None,
+            ctype: Some("NopeType".into()),
+            aid: None,
+            enabled: None,
+            reply,
+        })
+        .await
+        .unwrap_err();
+        assert!(e.starts_with("[UIA_ARG_INVALID]"), "未知 ControlType 应先被参数校验拦下: {e}");
+    }
+
+    #[tokio::test]
+    async fn bridge_wait_invalid_until_rejected() {
+        let _g = BRIDGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let e = request(|reply| UiaRequest::Wait {
+            loc: Locator { hwnd: Some(0xdead_beef), ..Default::default() },
+            target: Target { name: Some("任意".into()), ..Default::default() },
+            until: "vanish".into(),
+            value: None,
+            timeout_ms: 1000,
+            reply,
+        })
+        .await
+        .unwrap_err();
+        assert!(e.starts_with("[UIA_ARG_INVALID]"), "非法 until 应带结构化码: {e}");
+    }
+
+    /// worker 15s 硬超时的可达性：对无响应场景的调用方兜底。
+    /// 这里不真实触发挂死（无法注入），只锁定超时错误的构造形状。
+    #[test]
+    fn timeout_error_shape() {
+        let e = errors::err(errors::codes::TIMEOUT, "UIA 操作超时（15s）— 目标窗口可能无响应或树过大；可用 all:false 缩小观察面");
+        assert!(e.starts_with("[UIA_TIMEOUT]"));
+    }
 }

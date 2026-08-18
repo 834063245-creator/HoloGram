@@ -129,7 +129,7 @@ flowchart LR
 | 层 | 命令 | 基线 |
 |---|---|---|
 | 引擎 | `cd engine && cargo test` | 697 tests（lib 669 + bin 27 + doc 1；696 passed / 1 ignored） |
-| 壳 | `cd src-tauri && cargo test` | 338 tests（bin 全绿；cdp 真实 Chrome e2e 偶发 1 失败单跑通过；UIA 真实窗口 e2e 需 `HOLOGRAM_UIA_E2E=1`） || 前端 | `cd src-ui && npx vitest run` | 1213 passed / 1 skipped（117 文件；本机注意：父进程带 `NODE_ENV=production` 会使 npm omit=dev 剥掉 devDependencies → 收集阶段模块错误，装包/跑测试前清掉该变量） |
+| 壳 | `cd src-tauri && cargo test` | 343 tests（bin 全绿；UIA 真实窗口 e2e 需 `HOLOGRAM_UIA_E2E=1`——WinForms 靶子窗口全流程 tree/find/type/read/click；cdp 真实 Chrome e2e 偶发 1 失败单跑通过） || 前端 | `cd src-ui && npx vitest run` | 1234 passed / 1 skipped（120 文件；本机注意：父进程带 `NODE_ENV=production` 会使 npm omit=dev 剥掉 devDependencies → 收集阶段模块错误，装包/跑测试前清掉该变量） |
 | 前端构建 | `cd src-ui && npm run build` | tsc --noEmit + vite build 全绿 |
 | Agent 运行时 | `cd src-ui && npm run verify:convergence` | exit 0（T0 静态 + 全部 phase specs 对拍 8 baseline）；baseline 变更走 `docs/plans/agent-core-convergence/baseline-change-request.md` 审批 |
 | 前端格式 | `cd src-ui && npx biome ci .` | 588 errors / 335 warnings 是存量基线，不要顺手清；改动文件零新增 |
