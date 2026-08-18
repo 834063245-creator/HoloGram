@@ -30,8 +30,8 @@ describe('forceClearState 紧急路径清理（H3）', () => {
     expect(dispose, 'forceClearState 必须调 disposeAll').toBeGreaterThan(-1);
     expect(detach).toBeGreaterThan(-1);
     expect(dispose, 'disposeAll 必须先于 runtime 解绑').toBeLessThan(detach);
-    // 其余清理（aura/cache）走 bag 单一机制 — forceClearState 委托 _bag.dispose()
-    expect(body).toContain('void this._bag.dispose()');
+    // 其余清理（aura/cache）走 fiber effect 单一机制 — forceClearState 委托 _fiber.dispose()
+    expect(body).toContain('void this._fiber.dispose()');
     expect(body).toContain('bumpWorkspaceEpoch()');
   });
 

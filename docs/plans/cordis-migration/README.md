@@ -48,11 +48,30 @@
 - `src-ui/tsconfig.json`：`lib: ES2022`（内核真实使用 `Object.hasOwn` ×4，声明 API 地板）。
 - `src-ui/biome.json`：vendor 文件显式清单豁免（formatter/linter/assist 全关，frozen 拷贝保持上游原样）。
 
-### P1 — Workspace 根容器 fiber 化
+### P1 — Workspace 根容器 fiber 化（已落地）
 
-`Workspace._bag`（DisposerBag）→ `ctx.effect`；deactivate 的 epoch guard → fiber
-dispose-to-quiescence；重写 INVARIANT #12 为 fiber 语义。验收：现有 workspace 测试全绿 +
-新增「dispose 后无残留监听/定时器」断言。
+**设计要点（落地时发现并修正的两点）**：
+
+1. **fiber unload 是并发的**（`_unload` 用 `Promise.all` 跑清理器，上游 cordis 4.x 改过
+   这个语义），而 HoloGram 的拆除链有文档化的顺序依赖（先拆 runtime 再清缓存、aura 晚于
+   runtime、timers 最后清）。因此不能把 17 个 bag 条目平铺成 17 个平级 effect：
+   - constructor/open 的**独立**清理器（checkTimer / 快照刷新 / 两个监听器）→ 直接 effect；
+   - setupAgent 的**有序**拆除组（9 条）→ 每次调用打包一个 DisposerBag、作为**单个**
+     effect 登记（组内串行逆序契约原样保留）。
+2. **epoch 保留**（原设想「epoch → fiber dispose-to-quiescence」修正）：epoch 管的是
+   逃逸所有权的在途回调，消费方含冻结文件 chat-session.ts（P4 才解冻）——fiber 管所有权、
+   epoch 管代际，两者不重叠。deactivate/forceClearState 仍 bumpWorkspaceEpoch()。
+
+落地物：Workspace._fiber（constructor 经 `initCordisKernel().plugin(workspaceScopePlugin)`
+创建，placeholder 也持有）+ `cordisCtx` getter（P2/P3 挂子 fiber 的入口）；
+deactivate → `await fiber.dispose()`（dispose-to-quiescence）；forceClearState →
+`void fiber.dispose()`（快通道，sync 清理器首个微任务内执行完）。
+
+验收（2026-08-18 实测）：tsc 全绿；workspace 三件套 17/17（新增
+`tests/workspace-fiber.test.ts` 4 运行时用例：Context 品牌 / 快通道释放+epoch 推进 /
+deactivate quiescence / dispose 后拒绝新增 effect）；T0 静态断言（workspace-lifecycle /
+workspace-scope）同步换钉 fiber 机制；INVARIANTS #12、CONVENTIONS §1.10、AGENTS.md §6
+同步改写。
 
 ### P2 — agent 装配迁移
 

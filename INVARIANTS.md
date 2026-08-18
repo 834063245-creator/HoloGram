@@ -227,24 +227,30 @@ io: 'input' 视图必须保留：让 defaulted 字段不进 required，
 
 ---
 
-## 12. 工作区级资源必须登记进 bag；跨工作区 fire-and-forget 必带 epoch 校验
+## 12. 工作区级资源必须登记进 fiber；跨工作区 fire-and-forget 必带 epoch 校验
 
-**文件**: `src-ui/src/workspace.ts`（Workspace._bag）、`src-ui/src/workspace-scope.ts`（epoch）、`src-ui/src/agent/lifecycle.ts`（DisposerBag）
+**文件**: `src-ui/src/workspace.ts`（Workspace._fiber — cordis fiber）、`src-ui/src/workspace-scope.ts`（epoch）、`src-ui/src/agent/lifecycle.ts`（DisposerBag — setupAgent 有序组引擎）
 
 ```
-⚠️ INVARIANT：工作区存活的全局/跨作用域资源，必须登记进 Workspace._bag（DisposerBag 单一 owner），
-   deactivate/forceClearState 只调 _bag.dispose() + bumpWorkspaceEpoch()，绝不靠人肉枚举清理。
+⚠️ INVARIANT：工作区存活的全局/跨作用域资源，必须以 effect 登记进 Workspace fiber
+   （获取点就地 this._fiber.ctx.effect(() => disposer, 'label')；setupAgent 的有序拆除组
+   打包为 DisposerBag 作单个 effect — 组内「先拆 runtime 再清缓存」等串行逆序契约不变）。
+   deactivate/forceClearState 只调 fiber.dispose() + bumpWorkspaceEpoch()，
+   绝不靠人肉枚举清理。（cordis-migration P1：_bag → fiber，fiber unload 是并发的，
+   顺序依赖必须进有序组，不许拆成平级 effect。）
 
 ⚠️ INVARIANT：跨工作区的 fire-and-forget 写共享态（async resolve 后写 store / 表 / 缓存），
    入口必须 getWorkspaceEpoch() 记下、resolve 后 isCurrentEpoch() 校验，过期即丢弃。
+   （epoch 不随 fiber 化消失：fiber 管所有权，epoch 管逃逸所有权的在途回调 —
+   冻结文件 chat-session.ts 等仍是消费方，cordis-migration P4 统一收口。）
 
-✅ 正确：获取点就地 _bag.add(disposer, 'label')；在途写前 isCurrentEpoch(epoch)
+✅ 正确：获取点就地 effect 登记（顺序敏感组用 teardown bag）；在途写前 isCurrentEpoch(epoch)
 ❌ 错误：模块级 let 存跨工作区全局态 + 切换靠手写清理清单 + 在途 resolve 不校验代际
 ```
 
 **炸过**: 本家族已炸 N 次 —— chat store ×6（INVARIANTS #1）、cache-store（`176f4873`）、LSP diagnosticsCache / 会话表（H1/H2）、runCheck 在途写 dock（H4）、forceClearState 漏 disposeAll（H3）、autoRestore/autoSave 旧项目串写（H5）、Aura init 竞态（M3）、agent panel 2s 轮询旧 runtime（M1）。
 
-**守护**: `tests/workspace-lifecycle.test.ts`（T0：forceClearState/disposeAll/bag）、`tests/workspace-scope.test.ts`（epoch 语义 + bag 标签 T0）、`tests/lsp-diagnostics.test.ts` / `tests/lsp-session.test.ts`（LSP 在途）、`tests/chat-epoch-guard.test.ts`（会话 epoch 外科手术）
+**守护**: `tests/workspace-lifecycle.test.ts`（T0：forceClearState/disposeAll/fiber）、`tests/workspace-scope.test.ts`（epoch 语义 + fiber 标签 T0）、`tests/workspace-fiber.test.ts`（P1 运行时：effect 释放/quiescence/停注册）、`tests/lsp-diagnostics.test.ts` / `tests/lsp-session.test.ts`（LSP 在途）、`tests/chat-epoch-guard.test.ts`（会话 epoch 外科手术）
 
 **落地**: 本族全部拆雷 Commit 序列 —— `d4a800e6`（H3）、`1926cf73`（H4）、`f0f38731`（H1）、`e29f072e`（workspace-scope 原语）、`e4abde23`（获取点登记制）、`ede255d1`（H2）、`462b2ea1`（H5+中危#5）。
 

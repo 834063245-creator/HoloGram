@@ -39,6 +39,8 @@ import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from './agent/
 import { TaskManager } from './agent/task';
 import type { Tool, ToolRegistry } from './agent/tool';
 import type { ChatCore } from './app/chat/chat-core';
+import type { Context, Fiber } from './cordis';
+import { initCordisKernel } from './cordis/boot';
 import { withTimeout } from './lifecycle/timeout';
 import { createProvider } from './provider';
 import { getModel, mergeDynamicModels } from './provider/catalog';
@@ -107,6 +109,13 @@ interface GraphUpdatedSummary {
   diff?: GraphDiffJson;
 }
 
+/** 工作区 scope fiber 的插件定义（cordis-migration P1）。
+ *  apply 为空：资源登记发生在 fiber ctx 上（获取点就地 effect），不走插件闭包。 */
+const workspaceScopePlugin = {
+  name: 'hologram/workspace',
+  apply() {},
+};
+
 export class Workspace {
   // ── 标识 ──
   readonly path: string;
@@ -151,10 +160,12 @@ export class Workspace {
 
   // ── 内部状态 ──
   private _active: boolean = false;
-  /** 工作区级清理器 — 获取点必须登记进 bag（deactivate/forceClearState 统一释放）。
-   *  逆序、单次执行、sync 快通道（agent/lifecycle.ts DisposerBag）。
-   *  事件监听器（graph-updated / tool-done / runtime-msg）也登记于此 — 不再有独立数组。 */
-  private readonly _bag = new DisposerBag();
+  /** 工作区生命周期 = 根 Context 上的一个 cordis fiber（cordis-migration P1）。
+   *  全部工作区级资源以 effect 登记在 fiber 上：constructor/open 的独立清理器直接
+   *  effect（LIFO 释放）；setupAgent 的有序拆除组（先拆 runtime 再清缓存等顺序契约）
+   *  每次调用打包为一个 DisposerBag、作为单个 effect 登记（组内串行逆序不变）。
+   *  deactivate/forceClearState 统一走 fiber.dispose()（dispose-to-quiescence）。 */
+  private readonly _fiber: Fiber;
 
   /** 冷启动后台分析的健康状态。 */
   _health: 'unknown' | 'ready' | 'degraded' = 'unknown';
@@ -174,23 +185,35 @@ export class Workspace {
     return this._active;
   }
 
+  /** 工作区 fiber 的 ctx — P2/P3 子系统（agent 装配、面板 Service）从这里挂子 fiber。 */
+  get cordisCtx(): Context {
+    return this._fiber.ctx;
+  }
+
   // ── UI 回调（由 main.ts 设置）──
   onStatusChange: ((msg: string) => void) | null = null;
   onLoadingChange: ((loading: boolean) => void) | null = null;
 
   private constructor(path: string) {
     this.path = path;
+    // 工作区 scope fiber — 挂在根 Context 上（initCordisKernel 幂等：生产路径
+    // main.ts 已引导，复用既有根；测试路径首次调用自动建根）。
+    this._fiber = initCordisKernel().plugin(workspaceScopePlugin);
     // 构造即登记"恒在的清理器"（无获取点、工作区一建就存在）：
     // - checkTimer：停用时清掉防抖 timer；
     // - cancelEngineSnapshotRefresh：停用时取消在途引擎快照刷新。
-    //   （DisposerBag 逆序释放：注册在前的后释放，timers/快照最后清，与旧 deactivate 顺序一致。）
-    this._bag.add(() => {
-      if (this.checkTimer) {
-        clearTimeout(this.checkTimer);
-        this.checkTimer = null;
-      }
-    }, 'checkTimer-clear');
-    this._bag.add(() => cancelEngineSnapshotRefresh(), 'engine-snapshot-refresh-cancel');
+    //   （fiber effect：setup 立即执行、返回值即清理器；LIFO 释放 — 注册在前的
+    //   后释放，timers/快照最后清，与旧 deactivate 顺序一致。）
+    this._fiber.ctx.effect(
+      () => () => {
+        if (this.checkTimer) {
+          clearTimeout(this.checkTimer);
+          this.checkTimer = null;
+        }
+      },
+      'checkTimer-clear',
+    );
+    this._fiber.ctx.effect(() => () => cancelEngineSnapshotRefresh(), 'engine-snapshot-refresh-cancel');
   }
 
   /** 创建仅 Agent 模式的占位工作区（未加载项目）。永不激活。 */
@@ -413,7 +436,7 @@ export class Workspace {
           /* 忽略 */
         }
       });
-      ws._bag.add(unlistenGraphUpdated, 'listener:graph-updated');
+      ws._fiber.ctx.effect(() => unlistenGraphUpdated, 'listener:graph-updated');
 
       // Agent 工具完成 → 文件可能变更时自动触发简报
       const FILE_MODIFY_TOOLS = new Set([
@@ -440,7 +463,7 @@ export class Workspace {
         }
       };
       bus.on('agent:tool-done', onToolDone);
-      ws._bag.add(() => bus.off('agent:tool-done', onToolDone), 'listener:tool-done');
+      ws._fiber.ctx.effect(() => () => bus.off('agent:tool-done', onToolDone), 'listener:tool-done');
 
       // 清理进度监听器（仅在初始分析期间存活）
       unlistenProgress();
@@ -481,13 +504,14 @@ export class Workspace {
       /* 忽略 */
     }
 
-    // 统一释放 bag 内登记的全部工作区级清理器（逆序、async 串行等待）。
-    // 所有获取点（open/setupAgent）在获取时就地登记，deactivate 不靠人肉枚举。
-    // 失败必须可见（不静默）— 聚合错误记 warn，但不阻断工作区切换。
+    // 统一释放 fiber 上登记的全部工作区级清理器（dispose-to-quiescence：等待
+    // 全部清理器 settle）。所有获取点（open/setupAgent）在获取时就地 effect 登记，
+    // deactivate 不靠人肉枚举。失败必须可见（不静默）— setupAgent 有序组内部聚合
+    // 记 warn；独立 effect 的失败走 cordis logger.error；均不阻断工作区切换。
     try {
-      await this._bag.dispose();
+      await this._fiber.dispose();
     } catch (err) {
-      console.warn('[Workspace.deactivate] bag.dispose 部分清理失败:', err);
+      console.warn('[Workspace.deactivate] fiber.dispose 部分清理失败:', err);
     }
     // 推进工作区代际 — 使在途的旧项目 fire-and-forget 写共享态过期丢弃。
     bumpWorkspaceEpoch();
@@ -506,10 +530,10 @@ export class Workspace {
       this.runtime.disposeAll();
       this.runtime = null;
     }
-    // 同步快通道释放 bag 内登记的清理器（sync 清理器立即执行；async 清理器
-    // fire-and-forget — 紧急路径不等）。runtime 已在上面同步 disposeAll，
-    // bag 内 runtime disposer 因 this.runtime === null 而 no-op。
-    void this._bag.dispose();
+    // 快通道释放 fiber 上登记的清理器（不等 settle：sync 清理器在首个微任务内
+    // 执行完毕，async 清理器 fire-and-forget — 紧急路径不等）。runtime 已在上面
+    // 同步 disposeAll（H3），有序组内 runtime disposer 因 this.runtime === null 而 no-op。
+    void this._fiber.dispose();
     // 推进工作区代际 — 使在途的旧项目 fire-and-forget 写共享态过期丢弃。
     bumpWorkspaceEpoch();
   }
@@ -673,12 +697,28 @@ export class Workspace {
     } catch {
       /* 忽略 */
     }
+    // setupAgent 有序拆除组（cordis-migration P1）：每次调用一个 DisposerBag，
+    // 作为单个 fiber effect 登记。组内保持 DisposerBag 的串行逆序契约 —
+    // 「先拆 runtime 再清缓存」「aura 晚于 runtime 拆除」等顺序依赖不变。
+    // 组创建即登记 effect（而非收集完再登记）：setupAgent 中途异常时已登记的
+    // 部分清理器同样随 fiber dispose 释放（与旧 _bag 行为一致）。
+    const teardown = new DisposerBag();
+    this._fiber.ctx.effect(
+      () => async () => {
+        try {
+          await teardown.dispose();
+        } catch (err) {
+          console.warn('[Workspace] setupAgent teardown 部分清理失败:', err);
+        }
+      },
+      'setupAgent-teardown',
+    );
     this.memoryManager = new MemoryManager(this.path, globalDir);
     // 获取即登记：停用时释放记忆 + 关闭 Aura 全局单例（逆序释放时晚于 runtime disposeAll）。
-    this._bag.add(() => {
+    teardown.add(() => {
       this.memoryManager = null;
     }, 'memory-manager-null');
-    this._bag.add(async () => {
+    teardown.add(async () => {
       try {
         await auraShutdown();
       } catch {
@@ -739,17 +779,17 @@ export class Workspace {
       this.runtime = null;
     }
     // 清注入缓存登记在 runtime 之前 → 逆序释放时晚于 runtime.disposeAll（先拆 Agent 再清缓存）。
-    this._bag.add(() => resetAgentCaches(), 'reset-agent-caches');
+    teardown.add(() => resetAgentCaches(), 'reset-agent-caches');
     const runtime = new AgentRuntime(this.path);
     const adapter = createRuntimeAdapter(this._storeId);
     runtime.setNotifier(adapter);
     runtime.setDiagnosticsSource(getDiagnosticsForFile);
     this.runtime = runtime;
     // 获取即登记：runtime 销毁（flush 看板 → disposeAll → 解引用）。
-    // async 清理器在 deactivate（await bag.dispose）串行等待；forceClearState 走
-    // 同步快通道 — runtime 已在 forceClear 顶部同步 disposeAll，此处因 this.runtime
-    // 已为 null 而 no-op。
-    this._bag.add(async () => {
+    // async 清理器在 deactivate（await fiber.dispose → 组内串行）等待；forceClearState
+    // 走快通道（不等 settle）— runtime 已在 forceClear 顶部同步 disposeAll，此处因
+    // this.runtime 已为 null 而 no-op。
+    teardown.add(async () => {
       if (!this.runtime) return;
       try {
         await this.runtime.flushAllBoards();
@@ -759,20 +799,22 @@ export class Workspace {
       this.runtime.disposeAll();
       this.runtime = null;
     }, 'runtime-dispose');
-    this._bag.add(() => { this.subAgentPool.stopAll(); }, 'subagent-pool-stop');
-    this._bag.add(() => {
+    teardown.add(() => {
+      this.subAgentPool.stopAll();
+    }, 'subagent-pool-stop');
+    teardown.add(() => {
       this.agent = null;
     }, 'agent-null');
     // agentSessionState 解除本面板的全部会话句柄（dispose + 清表）— 拆 audit 中危：
     // 清理不再挂在下一个 setupAgent 上。
-    this._bag.add(() => agentSessionState.clearPanelState(this._storeId), 'session-state-clear');
+    teardown.add(() => agentSessionState.clearPanelState(this._storeId), 'session-state-clear');
 
     // ── 初始化 Agent 面板数据 + 订阅消息流 ──
     useAgentPanelStore.getState().setRuntime(runtime);
     useAgentPanelStore.getState().refresh(runtime);
     // 获取即登记：停用时清面板 runtime 引用 + currentSessionId（拆 audit 中危#3：
     // 2s 轮询打旧 runtime 建错位 board）+ 清看板列表。
-    this._bag.add(() => {
+    teardown.add(() => {
       const p = useAgentPanelStore.getState();
       p.setAgents([]);
       p.setTaskBoard([]);
@@ -783,7 +825,7 @@ export class Workspace {
     const unsubMsg = runtime.getBus().subscribe({}, (msg) => {
       useAgentPanelStore.getState().pushMessage(msg);
     });
-    this._bag.add(unsubMsg, 'listener:runtime-msg');
+    teardown.add(unsubMsg, 'listener:runtime-msg');
 
     // ── 构建图谱上下文 ──
     const graphCtx = buildGraphContextFromData(this.graphData);

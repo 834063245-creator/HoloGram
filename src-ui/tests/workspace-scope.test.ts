@@ -6,7 +6,8 @@
 //
 // 回归背景：工作区"存活期"没有结构体，切换时靠人肉枚举清理。本套原语让
 //  - epoch 代际：跨工作区 fire-and-forget 写共享态前记 epoch、resolve 后校验；
-//  - Workspace._bag（DisposerBag）：所有获取点登记清理，deactivate/forceClearState 统一释放。
+//  - Workspace fiber（cordis-migration P1）：所有获取点以 effect 登记清理，
+//    deactivate/forceClearState 统一走 fiber.dispose()。
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -38,9 +39,9 @@ describe('Workspace bag 接线（T0 静态断言）', () => {
     return src.slice(i, i + span);
   }
 
-  it('deactivate 尾部含 bag.dispose 且 catch 可见性（不静默）', () => {
+  it('deactivate 尾部含 fiber.dispose 且 catch 可见性（不静默）', () => {
     const body = windowOf('async deactivate(');
-    const disposeIdx = body.indexOf('this._bag.dispose()');
+    const disposeIdx = body.indexOf('this._fiber.dispose()');
     expect(disposeIdx).toBeGreaterThan(-1);
     // 聚合错误不静默 — 必须 catch 并 log.warn
     expect(body.slice(disposeIdx, disposeIdx + 800)).toContain('console.warn');
@@ -52,21 +53,22 @@ describe('Workspace bag 接线（T0 静态断言）', () => {
     expect(bumpIdx).toBeGreaterThan(-1);
   });
 
-  it('forceClearState 含 bag.dispose（同步快通道）', () => {
+  it('forceClearState 含 fiber.dispose（快通道，不等 settle）', () => {
     const body = windowOf('forceClearState(): void {');
-    expect(body).toContain('void this._bag.dispose()');
+    expect(body).toContain('void this._fiber.dispose()');
     expect(body).toContain('bumpWorkspaceEpoch()');
   });
 
-  it('Workspace 类声明 _bag（DisposerBag 单一 owner）', () => {
-    expect(src).toContain('private readonly _bag = new DisposerBag()');
+  it('Workspace 类声明 cordis fiber（生命周期单一 owner）', () => {
+    expect(src).toContain('private readonly _fiber: Fiber;');
+    expect(src).toContain('initCordisKernel().plugin(workspaceScopePlugin)');
   });
 
-  it('deactivate 不再人肉枚举清理 — 只委托 bag + bump（无 _unlisteners 数组）', () => {
+  it('deactivate 不再人肉枚举清理 — 只委托 fiber + bump（无 _unlisteners 数组）', () => {
     const body = windowOf('async deactivate(');
     expect(src).not.toContain('_unlisteners');
-    expect(body).toContain('await this._bag.dispose()');
-    // 关键资源清理都是 bag 登记的标签（获取点登记制 — review 可见）
+    expect(body).toContain('await this._fiber.dispose()');
+    // 关键资源清理都是 fiber effect/有序组登记的标签（获取点登记制 — review 可见）
     for (const label of [
       "'listener:graph-updated'",
       "'listener:tool-done'",
