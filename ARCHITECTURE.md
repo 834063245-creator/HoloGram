@@ -291,7 +291,7 @@ NetBenefit = |R|·c_in·(T-1) − |S|·c_out − L·avg_turn_cost
 
 - **声明式装配（Phase 6）**：`agent/blueprint.ts` 的 `AgentBlueprint` capability 表驱动装配——新增模型工具/hook 走 capability 组合，**`AgentConfig` 冻结 31 字段**不再扩张；capability 表序 = 工具面字节契约（DeepSeek 前缀缓存与 effective 快照依赖此序）；teardown 走 `ctx.effect`
 - **会话事件溯源（Phase 5）**：`session-log.ts` 事件日志 + session 变异三入口（`_appendMessage` / `_replaceSession` / `_retractSessionRange`）；工具折叠逻辑同步 `derivePayload`
-- **生命周期原语（Phase 1–4）**：`Disposer` / `startOwned` / `DisposerBag`（`Workspace._bag`）+ workspace-scope epoch（`getWorkspaceEpoch()` / `bumpWorkspaceEpoch()`）——资源获取即登记进 bag，工作区切换/退出只调 `_bag.dispose()` + epoch bump，杜绝跨项目串台
+- **生命周期内核（cordis-migration P0–P4）**：vendored cordis（`src/cordis/`）+ workspace-scope epoch（`getWorkspaceEpoch()` / `bumpWorkspaceEpoch()`，**永久保留**——fiber 管所有权，epoch 管逃逸所有权的在途回调）。资源获取点就地 `fiber.ctx.effect()` 登记（顺序敏感拆除组打包 DisposerBag 单 effect 保串行），工作区切换/退出只调 `fiber.dispose()` + epoch bump，杜绝跨项目串台；Agent 挂身份 fiber（清理走 DisposerBag 同步快通道），子系统以 Service 挂树（`LspService` 样板）
 - **门禁**：`npm run verify:convergence`（T0 静态断言 + 8 个 frozen baseline 对拍）失败即返工；record 需显式 `CONVERGENCE_RECORD=1`，baseline 变更走审批
 
 ---
