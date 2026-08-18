@@ -25,8 +25,13 @@ function walk(dir: string): string[] {
 
 // import ... from '../ui/...' or '../../ui/...'
 const UI_IMPORT_RE = /from\s+['"][^'"]*\.\.\/ui\//;
-// browser-only APIs that would make the core un-runnable headless
-const BROWSER_API_RE = /\b(requestAnimationFrame|document\.|window\.)/;
+// browser-only APIs that would make the core un-runnable headless.
+// 只命中"真正调用"形态，避免把英文描述文案里的 "the ... window."（自然语言）
+// 误判成浏览器 API（UIA 工具描述里大量出现，曾导致误报）。匹配：
+//   - requestAnimationFrame(  调用
+//   - window./document. 后紧跟标识符（真实属性访问，如 window.addEventListener）
+//   - window[...] / document[...] 括号访问
+const BROWSER_API_RE = /requestAnimationFrame\(|\b(?:window|document)\.[A-Za-z_$]|\b(?:window|document)\[/;
 
 describe('agent → ui one-way boundary', () => {
   const files = walk(AGENT_DIR);

@@ -903,8 +903,77 @@
             "description": "Which operation to perform.",
             "enum": [
               "probe",
-              "screenshot"
+              "screenshot",
+              "uia_tree",
+              "uia_find",
+              "uia_click",
+              "uia_right_click",
+              "uia_type",
+              "uia_scroll",
+              "uia_window_shot"
             ],
+            "type": "string"
+          },
+          "amount": {
+            "description": "Scroll amount (ScrollPattern units, or wheel ticks * 120); default 1",
+            "type": "number"
+          },
+          "automation_id": {
+            "description": "Exact automation id (action: uia_find); Exact automation id (e.g. \"equalButton\", \"num7Button\") (action: uia_click); Exact automation id (action: uia_right_click); Exact automation id (action: uia_type); Exact automation id (action: uia_scroll)",
+            "type": "string"
+          },
+          "control_type": {
+            "description": "e.g. Button, Edit, ListItem, MenuItem, CheckBox (action: uia_find); ControlType, e.g. Button, Edit, ListItem, MenuItem, CheckBox (action: uia_click); ControlType, e.g. Button, Edit, ListItem (action: uia_right_click); ControlType, e.g. Edit, ComboBox (action: uia_type); ControlType, e.g. Pane, List, ScrollBar (action: uia_scroll)",
+            "type": "string"
+          },
+          "depth": {
+            "description": "Limit tree to N levels (real hierarchy with indentation); omit = full flat list",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "direction": {
+            "description": "Scroll direction",
+            "enum": [
+              "up",
+              "down",
+              "left",
+              "right"
+            ],
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Filter by enabled state",
+            "type": "boolean"
+          },
+          "hwnd": {
+            "description": "Window handle from desktop_probe (hwnd field) (action: uia_tree); Window handle from desktop_probe (action: uia_find); Window handle (re-locate if tree changed) (action: uia_click); Window handle (action: uia_right_click); Window handle (action: uia_type); Window handle (action: uia_scroll); Window handle from desktop_probe (action: uia_window_shot)",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Control name substring (case-insensitive) (action: uia_find); Control name, exact match case-insensitive (e.g. \"Equals\", \"Seven\") (action: uia_click); Control name, exact match case-insensitive (action: uia_right_click); Control name, exact match case-insensitive (action: uia_type); Control name, exact match case-insensitive (action: uia_scroll)",
+            "type": "string"
+          },
+          "pid": {
+            "description": "Process id - resolves to its main window (action: uia_tree); Process id (action: uia_find); Process id (action: uia_click); Process id (action: uia_right_click); Process id (action: uia_type); Process id (action: uia_scroll); Process id (action: uia_window_shot)",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "ref": {
+            "description": "Control ref from desktop_uia_tree/find (use instead of name/automation_id/control_type) (action: uia_click); Control ref from desktop_uia_tree/find (action: uia_right_click); Control ref (usually an Edit/ComboBox) (action: uia_type); Control ref (scrollable pane/list) (action: uia_scroll)",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "text": {
+            "description": "Text to type",
+            "type": "string"
+          },
+          "title": {
+            "description": "Window title substring (fuzzy, first match) (action: uia_tree); Window title substring (action: uia_find); Window title substring (action: uia_click); Window title substring (action: uia_right_click); Window title substring (action: uia_type); Window title substring (action: uia_scroll); Window title substring (action: uia_window_shot)",
             "type": "string"
           }
         },

@@ -1,68 +1,60 @@
-# Baseline 变更申请 — phase-0/create-agent.wiring.txt（行尾归一 + 提取器修复）
+# Baseline 变更申请 — phase-0/tool-schemas.{full,plan}.json（desktop 域新增 UIA 动作枚举）
 
-> ⚠️ 状态：**已批准并执行完毕**（2026-08-16）——用户在对话中批准（"那就整"）。
+> ⚠️ 状态：**已批准并执行完毕**（2026-08-18）——用户在对话中批准（"两个都修 + 生成 baseline-change-request.md"）。
 > 本文件同时是后续申请的模板：既有快照漂移时，按本格式重写此文件（对象/理由/
 > 证据/拟议内容/落地步骤），停工等用户审批。
-> 前例：Phase 4 申请（freeze `45f328a2`）原文见 git 历史。
+> 前例：create-agent.wiring.txt 行尾归一申请（2026-08-16）原文见 git 历史。
 
-> 申请日期：2026-08-16 · 申请人：Kimi Code CLI（状态注入缓存生命周期修复期间发现）
+> 申请日期：2026-08-18 · 申请人：编码助手（CDP/e2e 修复期间跑全量 vitest 发现）
 
 ## 1. 变更对象
 
-- `src-ui/tests/convergence/baseline/phase-0/create-agent.wiring.txt`：
-  dispose 段第 23-24 行 `- handle ` → `- handle`（去掉尾空格），仅此 2 行。
-- `src-ui/tests/convergence/helpers/wiring.ts`：提取器读取 runtime.ts 时归一
-  `\r\n` → `\n`（1 处，见 §2）。
-- **模型可见表面零变化**：同一次 record 其余全部快照逐字节一致（git diff
-  仅本文件 2 行）。
+- `src-ui/tests/convergence/baseline/phase-0/tool-schemas.full.json`
+- `src-ui/tests/convergence/baseline/phase-0/tool-schemas.plan.json`
+- 变更内容：`desktop` 领域工具的 `action` 枚举由 `["probe","screenshot"]` 扩展为
+  `["probe","screenshot","uia_tree","uia_find","uia_click","uia_right_click","uia_type","uia_scroll","uia_window_shot"]`
+  （新增 7 个 UIA 动作）；同时随各 `uia_*` 工具参数并入 desktop 域 schema 的合并属性，
+  以及 browser.ts 对 uia 工具 description/depth 语义的更新，一并反映在快照里。
+- **模型可见表面：确有计划性变更**（新增桌面 UIA 自动化工具面），非行尾/时序伪漂移。
 
 ## 2. 为什么必须变
 
-提取器（wiring.ts `extractWiringFromSource`）对 `_disposeAgent` 语句做
-`st.getText(sf).split('\n')[0].replace(/\s+/g, ' ')`。对跨行语句
-（`handle\n._getAgent()...`），CRLF 源码的首行末尾带 `\r`，被 `\s+→' '`
-压成**尾空格**写进快照——快照内容随工作区行尾漂移：
-
-- Phase 4 freeze（`45f328a2`）在 CRLF 工作区（Windows + `core.autocrlf=true`）
-  录制，尾空格 artifact 被冻进 baseline；
-- LF 工作区（编辑器/biome 落盘未重归一化）下提取结果无尾空格 → 比对必挂；
-- 单行语句文本内部不含换行符，天然免疫——所以只有 2 行漂移。
-
-**该测试在纯 HEAD 上就失败**（与任何未提交改动无关），且 CI 不跑 src-ui
-vitest（ci.yml 前端只有 build），漂移长期未暴露。
+- UIA 桌面自动化通道（commit `e33d6204` 起 + 后续修复提交 + 2026-08-18 的 locator 必填校验 /
+  depth 语义 / 前台置顶增强）在 convergence baseline 冻结（2026-08-17）**之后**落盘；
+- baseline 的 tool-schemas.full.json 中 `uia_` 关键词出现次数 = 0（实测），说明快照冻结
+  早于全部 UIA 工具面；
+- 领域工具契约（CONVENTIONS.md §1.7 / AGENTS.md §7）要求新领域动作同步 `DOMAIN_SPECS` +
+  `collectHiddenToolNames()` + 本文件——diff 与实代码一致，属工具面变更的正常审批路径。
 
 ## 3. 证据
 
-- 纯 HEAD runtime.ts（LF）跑 phase-0：1 failed（wiring 第 23 行 `handle ` vs `handle`）；
-- 同一份 HEAD 内容转 CRLF 再跑：**9 passed 全绿**——结果是行尾的纯函数；
-- 修复提取器后 `npm run record:convergence`：`git diff` 仅 create-agent.wiring.txt
-  2 行尾空格删除，其余 6 个 baseline 文件零变化。
+- `npm run verify:convergence`（vitest phase-0）报 tool-schemas.full.json 首个差异在第 906 行：
+  `"screenshot"` → `"screenshot",`（枚举项后补逗号）起，随后 `enum` 新增
+  `uia_tree / uia_find / uia_click / ...`；tool-schemas.plan.json 首个差异在第 885 行同型；
+- `DOMAIN_SPECS` 的 desktop.actions 现有 9 个动作（probe / screenshot / uia_*×7），
+  `tests/agent-boundary.test.ts` 的 BROWSER_API_RE 误报已独立修复（74 tests 全绿），
+  与本次 baseline 变更无耦合。
 
 ## 4. 拟议变更（record 已生成的内容）
 
-```text
-  - handle        （原：`- handle ` 带尾空格 ×2 行）
-```
-
-提取器修复（wiring.ts）：
-
-```ts
-return extractWiringFromSource(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'), methodNames);
-```
-
-修复后快照对 LF/CRLF 工作区均确定，同类漂移不会复发。
+- 重新生成 `phase-0/tool-schemas.full.json` 与 `phase-0/tool-schemas.plan.json`，
+  使 desktop 域 `action` 枚举及合并属性与当前 `buildToolRegistry` / `planRegistry`
+  输出逐字节一致；
+- record 后 `git diff` 应只含这两个文件（其余 6 个 baseline 文件零变化）。
 
 ## 5. 落地步骤（已执行）
 
-1. 提取器归一修复（wiring.ts）+ 本文件重写 —— 随实现改动提交；
-2. `npm run record:convergence` 重录 baseline（diff 仅 2 行）；
-3. `npm run verify:convergence` + 全量 vitest 复跑全绿；
-4. CRLF 鲁棒性验证：runtime.ts 转 CRLF 后 gate check 仍全绿（确定性证明）。
+1. 修复 `tests/agent-boundary.test.ts` 的 `BROWSER_API_RE`（缩小为 "window./document." 后跟
+   标识符 / 括号访问 / `requestAnimationFrame(` 的真实调用形态，消除英文描述文案误报）——
+   独立于本变更的防自证修复；
+2. 本文件按格式重写；
+3. `npm run record:convergence` 重录 baseline（diff 应只含 tool-schemas.{full,plan}.json）；
+4. `npm run verify:convergence` 全绿 + 全量 vitest 复跑全绿；
+5. `npx biome check --write` 改动文件（增量：agent-boundary.test.ts / 本文件无样式内容）。
 
 ## 6. 遗留观察（不在本次范围）
 
-- `gate.mjs` T0 与各 phase spec 的静态断言也用 `readFileSync` 读源码做子串/正则
-  匹配（gate.mjs:34/52/80/95、specs/phase-{1,3,4,5,6}）。子串匹配对行尾不敏感，
-  目前两种行尾下均绿，未动；若未来引入跨行 `\n` 字面量断言需同样归一。
-- 根治可选项：`.gitattributes` 给 `*.ts` 钉 `text eol=lf`——全仓级影响，需单独评估，
-  本次不动。
+- 本漂移由 UIA 功能提交在 baseline 冻结后引入；CI 前端只跑 build 不跑 vitest（ci.yml），
+  漂移长期未暴露，与 src-tauri CDP/e2e 修复无耦合。
+- 全量 vitest 的 `desktop-tools.test.ts` 已由用户今晚更新并通过；browser.ts 描述文案与
+  `--obs-*` 无关，属模型可见面内容，计入本快照。
