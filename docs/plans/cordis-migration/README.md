@@ -1,6 +1,6 @@
 # Cordis 内核化改造（cordis-migration）
 
-> 立项：2026-08-18 · 状态：**In progress — P0 已落地**
+> 立项：2026-08-18 · 完工：2026-08-18 · 状态：**Done — P0-P4 全部落地**
 > 关联工程：[agent-core-convergence](../agent-core-convergence/)（HoloGram 自有运行时已收敛到四原语，本工程是它的内核归宗）
 
 ## 一句话
@@ -143,9 +143,30 @@ dock/settings/graph 的状态本就在 zustand（唯一状态层的架构决策�
 
 ### P4 — 冻结四件套迁移 + 文档收口
 
-冻结四件套（chat-session / chat-stream / part-mutator / execution-state）的迁移评估与
-执行；CONVENTIONS / INVARIANTS / AGENTS.md 更新（新增 src/cordis 目录说明、双范式条款清除）；
-全仓 grep 双范式残留清零。baseline 变更此时按 change request 流程申请重录。
+**评估结论（2026-08-18 实测）：四件套零改动；双范式真实残留已在 P1-P3 清零。**
+
+- **part-mutator（140 行）/ execution-state（187 行）**：零模块级可变态；后者已是
+  zustand 工厂模式（createExecState）——即目标形态，无迁移需求。
+- **chat-session（1216 行）**：唯一模块态 `_autoSaveTimers`（storeId 键控防抖表）+
+  epoch ×2 守卫在途 autoSave。epoch 防护完整，冻结解除无必要——它是历史炸点集中地
+  （INVARIANTS #1/#2/#3），动它的收益（挪一张防抖表）远小于风险。
+- **chat-stream（460 行）**：唯一模块态 `_recentNotices`（storeId:text → 时间戳，纯
+  去抖缓存，无回调无泄漏路径）。
+
+**全仓残留扫描（44 处模块级可变态，全部有据保留）**：常量表 5（STOPWORDS/DOMAIN_NAMES
+等同族）· 进程级基础设施 25（bridge/catalog/i18n/logger/main 等，生命周期=进程）·
+键控自清理 6（streamId/agentId/storeId 键控对称清理）· 已收编 3（agent-builder 快照
+timer 由 P1 fiber effect 持有；lsp-client 状态 P3 已进 Service）· 内核自有 2。
+分级条款固化进 CONVENTIONS §1.10（模块态四级归属）。
+
+**epoch 定案：永久保留**。3 个消费方（lsp-client startLsp / agent memory / chat-session
+autoSave）全部是已出发的在途 promise 链，fiber dispose 无法撤销——代际校验是唯一正确
+防护，与 fiber 所有权不重叠（P1 论证经 P4 复核成立）。
+
+**baseline**：全程零漂移（8 快照未动），无需 change request。
+
+文档收口：CONVENTIONS §1.10（epoch 定案 + 模块态四级归属）、AGENTS.md（目录树加
+src/cordis、§6 补 Service 样板）、本 README、docs/plans/README.md 状态表。
 
 ## Vendor 纪律（`src-ui/src/cordis/README.md` 是权威细节）
 

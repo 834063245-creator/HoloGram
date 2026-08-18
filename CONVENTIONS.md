@@ -184,12 +184,24 @@ DOM 所有权按层划分，不要跨层抢 DOM：
 
 ❌ 禁止：新增工作区级全局状态却不登记进 fiber（切换后必泄漏/串味）。
 
+✅ 模块级可变态四级归属（cordis-migration P4 立规，新模块态必须归入其一并在声明处注释）：
+   1. **fiber effect / cordis Service** — 工作区级资源（样板：Workspace 获取点就地 effect、
+      `ui/lsp-client.ts` 的 LspService）；
+   2. **epoch 守卫** — 逃逸所有权的在途回调（见上）；
+   3. **键控自清理 / 进程级单例** — 生命周期=进程或键控对称清理（bridge、catalog、
+      i18n、queued-shell 的 streamId 表、subagent-activity 的 agentId 表），无跨工作区
+      所有权问题；
+   4. **冻结常量表** — 初始化后只读（STOPWORDS / DOMAIN_NAMES 等）。
+   不属于任何一类的模块级 `let`/`Map`/`Set` = review 拦截对象。
+
 ✅ 跨工作区的 fire-and-forget 写共享态必须 epoch 校验：
    入口记 getWorkspaceEpoch()，async resolve 后 isCurrentEpoch(epoch) 校验，
    过期立即丢弃（LSP 在途 / autoRestore / autoSave / initAura / runCheck 同族）。
    Workspace 停用/强清时 bumpWorkspaceEpoch() 让所有在途回调生效过期。
    （epoch 不随 fiber 化消失：fiber 管所有权，epoch 管逃逸所有权的在途回调 —
-   冻结文件 chat-session.ts 仍是消费方，cordis-migration P4 统一收口。）
+   cordis-migration P4 收口定案：epoch 为**永久互补机制**，消费方 = lsp-client
+   startLsp / agent memory / chat-session autoSave，全部是已出发的在途 promise 链，
+   fiber dispose 无法撤销，代际校验是唯一正确防护。）
 ```
 
 ## 2. 后端 Rust（`engine/` + `src-tauri/`）

@@ -25,6 +25,7 @@ HoloGram/
 ├── src-ui/            TypeScript 前端（React 19 + Three.js + Monaco + Zustand 5）
 │   ├── src/app/       新观测台壳（单 React 根；新 UI 落这里）
 │   ├── src/ui/        星图 scene + 领域 stores + 旧 React 岛
+│   ├── src/cordis/    vendored cordis 内核（Context/Fiber/Service；禁就地改，见目录 README）
 │   └── src/agent/     Agent 运行时、工具层、多 Agent、goal/plan
 ├── docs/              架构/ADR/交接/研究；archive/ 是历史，勿作现状依据
 ├── assets/            图标、UI 原型
@@ -97,7 +98,7 @@ flowchart LR
 - 聊天消息原地 mutate 后必须 `touchMessage / touchMessageContaining`——裸 `bump()` 或展开数组会静默卡 UI（`INVARIANTS #1/#2/#3`）。
 - 冻结文件：`ui/chat-session.ts`、`ui/chat-stream.ts`、`ui/part-mutator.ts`、`agent/execution-state.ts`。
 - 样式只写 `--obs-*` token；不引入新 CSS 方案；DOM 所有权按层划分（React UI 不自建游离 DOM，星图 scene / Monaco 宿主是既有 imperative-DOM 所有者）。
-- 工作区级资源两原语（详情 CONVENTIONS.md §1.10 + INVARIANTS #12；2026-08-18 cordis-migration P1 起登记原语为 fiber effect）：**获取必须以 `Workspace._fiber.ctx.effect(() => disposer, 'label')` 登记**（setupAgent 顺序敏感组打包 DisposerBag 作单个 effect）；**跨工作区 fire-and-forget 写共享态必须 `getWorkspaceEpoch()/isCurrentEpoch()` 校验**。deactivate/forceClearState 只调 `fiber.dispose()` + `bumpWorkspaceEpoch()`。
+- 工作区级资源两原语（详情 CONVENTIONS.md §1.10 + INVARIANTS #12；2026-08-18 cordis-migration P1 起登记原语为 fiber effect）：**获取必须以 `Workspace._fiber.ctx.effect(() => disposer, 'label')` 登记**（setupAgent 顺序敏感组打包 DisposerBag 作单个 effect）；**跨工作区 fire-and-forget 写共享态必须 `getWorkspaceEpoch()/isCurrentEpoch()` 校验**。deactivate/forceClearState 只调 `fiber.dispose()` + `bumpWorkspaceEpoch()`；P3 起子系统服务化样板 = `ui/lsp-client.ts` LspService（状态收进 Service 挂工作区 fiber，模块函数薄转发保消费面）。
 
 ## 7. RPC 与工具契约（详情见 CONVENTIONS.md + INVARIANTS #7-#10）
 
