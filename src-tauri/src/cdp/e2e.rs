@@ -17,7 +17,7 @@
 
 use super::*;
 use std::io::Read;
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -60,6 +60,11 @@ impl ExternalChrome {
             .arg(format!("--user-data-dir={}", profile.to_string_lossy()))
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
+            // 测试进程下可见窗口可能被 Chrome 判为 occluded/backgrounded →
+            // 渲染进程被节流，合成点击被丢弃（e2e-1 整租跑实测 ~50% 点击不导航）。
+            // 禁掉这两个节流，保证渲染进程始终活跃接收输入。
+            .arg("--disable-backgrounding-occluded-windows")
+            .arg("--disable-renderer-backgrounding")
             .arg(url);
         // 刻意不设 NO_WINDOW：模拟"用户自己的浏览器"= 可见窗口。
         // （隐藏窗口里链接激活可能被吞——见 e2e 测试注释。）
@@ -70,8 +75,8 @@ impl ExternalChrome {
 
 impl Drop for ExternalChrome {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // 整树终止：只杀主进程会留孤儿子进程锁住 profile（e2e 残留目录根因）
+        kill_chrome_tree(&mut self.child);
         let _ = std::fs::remove_dir_all(&self.profile);
     }
 }
@@ -89,7 +94,9 @@ fn wait_port_up(port: u16, timeout: Duration) -> bool {
 }
 
 /// 本地 HTTP 服务：给 round3 e2e 提供可观察的真实网络事件。
-/// 非阻塞 accept + stop 原子标志；每连接只读第一段请求并立即响应。
+/// 逐连接读完整请求头再响应；单连接错误只丢弃该连接，绝不拖垮服务器
+/// （Chrome 投机/分片连接一发 RST 就 break，会让后续导航 ERR_CONNECTION_ABORTED
+///  或页面 DOM 空——external/round3 曾在整租跑时相继挂掉）。
 fn spawn_local_http_server() -> (u16, std::thread::JoinHandle<()>, Arc<AtomicBool>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind 本地 e2e HTTP 端口");
     listener.set_nonblocking(true).expect("set nonblocking");
@@ -99,42 +106,81 @@ fn spawn_local_http_server() -> (u16, std::thread::JoinHandle<()>, Arc<AtomicBoo
     let handle = std::thread::spawn(move || {
         while !stop2.load(Ordering::SeqCst) {
             match listener.accept() {
-                Ok((mut stream, _)) => {
-                    let mut buf = [0u8; 4096];
-                    let n = stream.read(&mut buf).unwrap_or(0);
-                    let head = String::from_utf8_lossy(&buf[..n]);
-                    let path = head.split_whitespace().nth(1).unwrap_or("/");
-                    let (status, content_type, body): (&str, &str, &str) = match path {
-                        "/api.json" => ("200 OK", "application/json", r#"{"ok":true}"#),
-                        "/favicon.ico" => ("204 No Content", "text/plain", ""),
-                        _ => (
-                            "200 OK",
-                            "text/html; charset=utf-8",
-                            r#"<!doctype html><html><head><meta charset="utf-8"><title>Round3 E2E</title>
+                Ok((mut stream, _)) => serve_local_http(&mut stream),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => {
+                    // accept 层面错误（本地 listener 上极罕见）：退避重试而不是
+                    // break 退出——服务器一死后续导航全部失败。
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+    });
+    (port, handle, stop)
+}
+
+/// 读完整请求头（到空行）再响应。Windows 上 accept 出的 socket 继承监听
+/// socket 的非阻塞态：单次 read 可能只拿回一部分请求头或直接 WouldBlock，
+/// 必须循环累积到 `\r\n\r\n`；Chrome 投机连接的 RST 只丢弃本连接。
+fn serve_local_http(stream: &mut TcpStream) {
+    use std::io::{ErrorKind, Read, Write};
+    // 客户端迟迟不把请求头发完（投机连接常见）就给个上限，别把服务器拖死。
+    let deadline = Instant::now() + Duration::from_millis(1000);
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 2048];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break, // 客户端关闭
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n")
+                    || buf.windows(2).any(|w| w == b"\n\n")
+                {
+                    break; // 请求头读完
+                }
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {} // 还没发来，继续等
+            Err(_) => break,                                      // RST 等 → 丢弃本连接
+        }
+        if Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let head = String::from_utf8_lossy(&buf);
+    let path = head.split_whitespace().nth(1).unwrap_or("/");
+    let (status, content_type, body): (&str, &str, &str) = match path {
+        "/api.json" => ("200 OK", "application/json", r#"{"ok":true}"#),
+        "/favicon.ico" => ("204 No Content", "text/plain", ""),
+        // /page2：供 external 全流程测试点击链接后导航（替代真实外网站点，
+        // 消除 example.com/iana.org 的网络依赖——外网慢/被墙会让 URL 变化
+        // 检测在窗口内失败，测试变脆）。
+        "/page2" => (
+            "200 OK",
+            "text/html; charset=utf-8",
+            r#"<!doctype html><html><head><meta charset="utf-8"><title>External E2E Page 2</title></head><body><h1>Page Two</h1></body></html>"#,
+        ),
+        _ => (
+            "200 OK",
+            "text/html; charset=utf-8",
+            r#"<!doctype html><html><head><meta charset="utf-8"><title>Round3 E2E</title>
 <script>window.addEventListener('load', () => { fetch('/api.json').then((r) => r.json()).then(() => { window.__fetched = true; }); });</script>
-</head><body><button id="icon-btn" aria-label="AX icon button">⚙</button></body></html>"#,
-                        ),
-                    };
-                    use std::io::Write;
-                    let resp = format!(
-                        "HTTP/1.1 {status}
+</head><body><button id="icon-btn" aria-label="AX icon button">⚙</button>
+<a href="/page2">Learn more</a></body></html>"#,
+        ),
+    };
+    let resp = format!(
+        "HTTP/1.1 {status}
 Content-Type: {content_type}
 Content-Length: {}
 Connection: close
 
 {body}",
-                        body.len()
-                    );
-                    let _ = stream.write_all(resp.as_bytes());
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    (port, handle, stop)
+        body.len()
+    );
+    let _ = stream.write_all(resp.as_bytes());
 }
 
 /// E2E-1：connect 外部实例全链路。
@@ -151,7 +197,9 @@ async fn e2e_connect_external_full_flow() {
         eprintln!("[cdp-e2e] 跳过：端口 {E2E_EXTERNAL_PORT} 已被占用（上次崩溃残留？）");
         return;
     }
-    let Some(mut ext) = ExternalChrome::spawn("https://example.com/") else {
+    let (http_port, _server, _stop) = spawn_local_http_server();
+    let external_url = format!("http://127.0.0.1:{http_port}/");
+    let Some(mut ext) = ExternalChrome::spawn(&external_url) else {
         eprintln!("[cdp-e2e] 跳过：外部 Chrome 启动失败");
         return;
     };
@@ -166,7 +214,7 @@ async fn e2e_connect_external_full_flow() {
     let out = cdp_connect(E2E_EXTERNAL_PORT, None, Some(agent)).expect("connect 应成功");
     assert!(out.contains("\"connected\""), "connect 返回异常: {out}");
 
-    // targets：应看到 example.com 页面（页面加载可能滞后，轮询等）
+    // targets：应看到本地页面（页面加载可能滞后，轮询等）
     let mut target_id: Option<String> = None;
     {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -174,12 +222,12 @@ async fn e2e_connect_external_full_flow() {
             let t = cdp_targets(Some(agent)).expect("targets 应成功");
             let v: Value = serde_json::from_str(&t).expect("targets 返回应可解析");
             let pages = v["targets"].as_array().expect("targets 应含 targets 数组");
-            if let Some(p) = pages.iter().find(|p| p["url"].as_str().unwrap_or("").contains("example.com")) {
+            if let Some(p) = pages.iter().find(|p| p["url"].as_str().unwrap_or("").contains("127.0.0.1")) {
                 target_id = Some(p["id"].as_str().unwrap_or("").to_string());
                 break;
             }
             if Instant::now() > deadline {
-                panic!("外部实例应打开 example.com 页面: {t}");
+                panic!("外部实例应打开本地测试页面: {t}");
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
@@ -190,22 +238,40 @@ async fn e2e_connect_external_full_flow() {
     let a = cdp_attach(&target_id, Some(agent)).expect("attach 应成功");
     assert!(a.contains("\"attached\":true"), "attach 返回异常: {a}");
 
-    // snapshot：example.com 有一个 "Learn more" 链接（页面可能还在加载，轮询等）
+    // snapshot：本地页面有一个 "Learn more" 链接。不能硬编码 ref 0——
+    // AX 树顺序里 body/容器可能排前面（原 example.com 恰好第一个交互元素是
+    // 链接才碰巧成立）；真实 agent 行为是从 refs 里按 name 找目标再点。
+    let mut link_ref: Option<String> = None;
     {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let s = cdp_snapshot(Some("body".into()), Some(20), Some(0), Some(agent))
                 .await
                 .expect("snapshot 应成功");
-            if s.contains("\"ref\":0") {
+            let vs: Value = serde_json::from_str(&s).expect("snapshot 返回应可解析");
+            link_ref = vs["refs"]
+                .as_array()
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|r| {
+                            r["name"]
+                                .as_str()
+                                .map(|n| n.contains("Learn more"))
+                                .unwrap_or(false)
+                        })
+                        .and_then(|r| r["ref"].as_i64())
+                })
+                .map(|r| r.to_string());
+            if link_ref.is_some() {
                 break;
             }
             if Instant::now() > deadline {
-                panic!("snapshot 应含 ref 0（Learn more 链接）: {s}");
+                panic!("snapshot 应含 Learn more 链接: {s}");
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
     }
+    let link_ref = link_ref.expect("轮询应已取到 Learn more 链接 ref");
 
     // 等页面完全加载 + 启动期繁忙消退再点击——真实用户不会在页面加载中点击；
     // 冷启动 Chrome 若在启动任务繁忙时点链接，导航可能超 2s 轮询窗口（首测教训）。
@@ -227,14 +293,25 @@ async fn e2e_connect_external_full_flow() {
         tokio::time::sleep(Duration::from_millis(500)).await; // 加载完成后的额外 settle
     }
 
-    // click ref 0 → 导航到 iana.org，世界反馈必须报 URL 变化
-    let c = cdp_click("0", Some(agent)).await.expect("click 应成功");
-    // 诊断：失败时附上点击后的实际 URL 状态，便于区分「导航慢」与「反馈管线坏」
-    if !c.contains("URL 变化") {
-        let t = cdp_targets(Some(agent)).unwrap_or_else(|e| format!("targets 查询失败: {e}"));
-        panic!(
-            "click 世界反馈应报 URL 变化（回归 e1679a0/bfbcd95）: {c}\n点击后 targets 状态: {t}"
-        );
+    // click ref → 导航到 /page2，世界反馈必须报 URL 变化。
+    // 满载/冷启动时渲染进程可能吞掉合成点击（整租跑实测偶发），cdp_click
+    // 一次没触发导航就重试；重试后仍无 URL 变化才判失败（回归 e1679a0/bfbcd95）。
+    let mut click_attempt = 0;
+    loop {
+        click_attempt += 1;
+        let c = cdp_click(&link_ref, Some(agent)).await.expect("click 应成功");
+        if c.contains("URL 变化") {
+            break;
+        }
+        if click_attempt >= 3 {
+            let t =
+                cdp_targets(Some(agent)).unwrap_or_else(|e| format!("targets 查询失败: {e}"));
+            panic!(
+                "click 世界反馈应报 URL 变化（回归 e1679a0/bfbcd95，{click_attempt} 次点击仍无导航）: {c}\n点击后 targets 状态: {t}"
+            );
+        }
+        // 重试前给系统一个喘息；页面没动过，data-hg-ref 仍指向链接。
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     // kill：外部实例只断开、绝不杀用户进程
@@ -296,9 +373,11 @@ async fn e2e_launch_controlled_kill_and_profile_cleanup() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    // profile 目录随会话回收（Windows 文件锁可能滞后，重试删除）
+    // profile 目录随会话回收（Windows 文件锁可能滞后：kill 只杀主进程，
+    // renderer/gpu/crashpad 子进程异步退出，句柄释放需要时间——重试删除，
+    // 窗口放宽到 10s）。
     let dir = profile_dir_for(E2E_LAUNCH_PORT);
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if !dir.exists() {
             break;
@@ -596,7 +675,9 @@ window.addEventListener('load', () => { document.getElementById('hover-zone').ad
     assert_eq!(marker_after.as_str(), Some("undefined"), "reload 后旧 JS 变量应消失");
 
     // tab 管理：新开 tab 自动 attach；关闭当前 attach tab 后会话回到未 attach。
-    let nt = cdp_new_tab(Some(page_a_url.clone()), Some(agent)).expect("new_tab 应成功");
+    let nt = cdp_new_tab(Some(page_a_url.clone()), Some(agent))
+        .await
+        .expect("new_tab 应成功");
     let vnt: Value = serde_json::from_str(&nt).expect("new_tab 返回应可解析");
     let new_tab_id = vnt["targetId"].as_str().expect("new_tab 应返回 targetId").to_string();
     wait_page_ready(agent).await;
@@ -698,13 +779,19 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
     assert!(a.contains("\"attached\":true"), "attach 返回异常: {a}");
 
     // attach 后再导航一次：保证网络事件发生在 observer 已订阅之后。
-    let n = cdp_navigate(&page_url, Some(agent)).await.expect("navigate 应成功");
-    assert!(n.contains("URL"), "navigate 返回异常: {n}");
+    // 同一 URL 的导航 Chrome 可能去重/静默跳过（不重新触发 load → 无网络事件，
+    // observer 缓冲为空的整租跑实测），用带 cache-bust 查询的 URL 强制真导航；
+    // 页面内 fetch('/api.json') 是绝对路径，不受页面查询串影响。
+    let busted = format!("{page_url}?hg_e2e_reload={}", std::process::id());
+    let n = cdp_navigate(&busted, Some(agent)).await.expect("navigate 应成功");
+    assert!(n.contains("navigated"), "navigate 应返回本次导航目标: {n}");
     wait_page_ready(agent).await;
 
     // 等页面 fetch 完成；然后 network 查询必须能按 requestId 拿到配对详情。
+    // 窗口放宽到 20s：满载/冷启动时页面 reload + fetch 可能明显慢于 10s
+    // （整租跑实测踩过 10s 卡线）。
     {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let fetched = runtime_evaluate("window.__fetched === true", Some(agent))
                 .await
@@ -714,13 +801,13 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
                 break;
             }
             if Instant::now() > deadline {
-                panic!("页面 fetch 未在 10s 内完成");
+                panic!("页面 fetch 未在 20s 内完成");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
     let (request_id, request_url) = {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             let net = cdp_network(Some(agent), Some(50));
             let vn: Value = serde_json::from_str(&net).expect("network 返回应可解析");
@@ -734,7 +821,7 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
                 );
             }
             if Instant::now() > deadline {
-                panic!("network 缓冲应在 10s 内观察到 /api.json 请求: {net}");
+                panic!("network 缓冲应在 15s 内观察到 /api.json 请求: {net}");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -797,12 +884,23 @@ async fn e2e_headless_window_network_and_ax_snapshot() {
         .await
         .expect("viewport 应成功");
     assert!(vp.contains(r#""width":640"#), "viewport 返回异常: {vp}");
-    let inner = runtime_evaluate("({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio })", Some(agent))
-        .await
-        .expect("读覆盖后视口应成功");
-    assert_eq!(inner["w"].as_i64(), Some(640), "Emulation 后 innerWidth 应为 640: {inner}");
-    assert_eq!(inner["h"].as_i64(), Some(480), "Emulation 后 innerHeight 应为 480: {inner}");
-    assert_eq!(inner["dpr"].as_f64(), Some(2.0), "Emulation 后 devicePixelRatio 应为 2: {inner}");
+    // DPR 生效比 w/h 慢一拍：devicePixelRatio 由合成器重算，命令返回后立即读
+    // 会拿旧值（1.0）——Chrome 151 headless 实测。轮询等到 2，w/h 每轮都断言。
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let inner = runtime_evaluate("({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio })", Some(agent))
+            .await
+            .expect("读覆盖后视口应成功");
+        assert_eq!(inner["w"].as_i64(), Some(640), "Emulation 后 innerWidth 应为 640: {inner}");
+        assert_eq!(inner["h"].as_i64(), Some(480), "Emulation 后 innerHeight 应为 480: {inner}");
+        if inner["dpr"].as_f64() == Some(2.0) {
+            break;
+        }
+        if Instant::now() > deadline {
+            panic!("Emulation 后 devicePixelRatio 应在 5s 内轮询到 2: {inner}");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 
     let k = cdp_kill(Some(agent)).expect("kill 应成功");
     assert!(k.contains("已终止"), "受控 Chrome kill 应报终止: {k}");

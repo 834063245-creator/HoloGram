@@ -19,7 +19,7 @@ use super::session::{
     NETWORK_BUF_MAX, POST_ACTION_SETTLE, SELF_AGENT_ID, SHOT_DIR_NAME, SHOT_FILE_PREFIX,
     WEBVIEW_DEBUG_PORT,
 };
-use super::transport::{list_targets_raw, ws_command, ws_command_batch};
+use super::transport::{list_targets_raw, ws_command, ws_command_seq};
 
 // ═══════════════════════════════════════════════════════════
 // target 发现与 attach
@@ -174,6 +174,42 @@ pub(super) fn ensure_observer(agent_id: Option<&str>) -> Option<Observer> {
         ensure_observer_started(sess, sess.port, &tid);
     }
     sess.observer.clone()
+}
+
+/// 执行一条必须与 observer 同 session 的 CDP 命令。
+///
+/// Chrome 151 起 domain 状态绑定「Page.enable/Runtime.enable 的 session」：
+/// 短连接（ws_command）上发 `Emulation.setDeviceMetricsOverride`，width/height
+/// 生效但 deviceScaleFactor 被静默丢弃（devicePixelRatio 恒 1）——实测 observer
+/// 连接 dpr=2、新连接 dpr=1（e2e-4）。dialog/file chooser 早已按同一规律改造。
+/// observer 不可用/发送失败时回退新连接（老 Chrome 行为）。
+pub(super) async fn observer_command(
+    port: u16,
+    tid: &str,
+    agent_id: Option<&str>,
+    method: &str,
+    params: Value,
+) -> Result<(), String> {
+    if let Some(obs) = observer_of(agent_id) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<Value, String>>();
+        if obs
+            .cmd_tx
+            .send(super::session::ObserverCmd {
+                method: method.to_string(),
+                params: params.clone(),
+                reply: tx,
+            })
+            .is_ok()
+        {
+            return match rx.await {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(e)) => Err(format!("CDP {method} 错误: {e}")),
+                Err(_) => Err("observer 命令通道中断".to_string()),
+            };
+        }
+    }
+    ws_command(port, tid, method, params).await?;
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -361,6 +397,18 @@ pub(super) fn ax_role_is_interactive(role: &str) -> bool {
     )
 }
 
+/// AX 树根/文档容器角色：不可作为点击目标。
+/// RootWebArea resolve 成 HTMLDocument（没有 setAttribute），真实 agent 也
+/// 不会去点"整个文档"——DOM 兜底路径同样不产出 document 条目。把这些角色
+/// 从候选里剔掉，否则 callFunctionOn 打 data-hg-ref 失败会整体回退 DOM
+/// （Chrome 151 的焦点态把 root 也标成 focusable，命运性放大此坑）。
+pub(super) fn ax_role_is_document_container(role: &str) -> bool {
+    matches!(
+        role.to_ascii_lowercase().as_str(),
+        "rootwebarea" | "webarea" // 旧版 Chromium 用过 WebArea
+    )
+}
+
 /// 清掉页面（含 same-origin iframe / open shadow root）里残留的 data-hg-ref。
 pub(super) const CLEAR_HG_REFS_EXPR: &str = r#"(() => { const seen = new Set(); const clearRoot = (root) => { if (!root || seen.has(root)) return; seen.add(root); if (root.querySelectorAll) { root.querySelectorAll('[data-hg-ref]').forEach((el) => el.removeAttribute('data-hg-ref')); } if (root.querySelectorAll) { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) clearRoot(el.shadowRoot); } for (const f of root.querySelectorAll('iframe, frame')) { try { if (f.contentDocument) clearRoot(f.contentDocument); } catch (e) {} } } }; clearRoot(document); return true; })()"#;
 
@@ -374,10 +422,31 @@ pub(super) async fn try_ax_snapshot(
     max_results: usize,
     offset: usize,
 ) -> Result<Option<String>, String> {
-    let resp = match ws_command(port, target_id, "Accessibility.getFullAXTree", json!({})).await {
+    let mut resp = match ws_command(port, target_id, "Accessibility.getFullAXTree", json!({})).await {
         Ok(v) => v,
         Err(_) => return Ok(None), // 旧版 Chromium / 非浏览器 target 没有 AX domain → 回退探针
     };
+    // Chrome 151 起 AX 树是惰性构建：新连接首次 getFullAXTree 常只回 RootWebArea
+    // （解析成 HTMLDocument）。此时若把 document 当候选做 callFunctionOn 会报
+    // "Could not find object with given id" / TypeError 而整体回退 DOM——AX 路径在
+    // 这版 Chrome 上稳定失效（e2e-4 实测首拉 1 节点、~200ms 后全树）。
+    // 树稀疏（无可用候选且节点仍是根裸树）时小延迟重试逼出全树；真没有可交互
+    // 元素的页面在树长全（>2 节点）后自然退出重试。
+    for _ in 0..3 {
+        let nodes_here = resp["result"]["nodes"].as_array().cloned().unwrap_or_default();
+        let has_candidate = nodes_here.iter().filter_map(ax_node_from_value).any(|n| {
+            (ax_role_is_interactive(&n.role) || n.focusable)
+                && !ax_role_is_document_container(&n.role)
+        });
+        if has_candidate || nodes_here.is_empty() || nodes_here.len() > 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        match ws_command(port, target_id, "Accessibility.getFullAXTree", json!({})).await {
+            Ok(v) => resp = v,
+            Err(_) => break,
+        }
+    }
     let nodes = resp["result"]["nodes"]
         .as_array()
         .cloned()
@@ -385,10 +454,15 @@ pub(super) async fn try_ax_snapshot(
     if nodes.is_empty() {
         return Ok(None);
     }
+    // 排除 AX 根/文档容器（RootWebArea/WebArea）：它们 resolve 成 HTMLDocument，
+    // 没有 setAttribute 可打 ref；真实 agent 也不点"整个文档"。
     let candidates: Vec<AxNode> = nodes
         .iter()
         .filter_map(ax_node_from_value)
-        .filter(|n| ax_role_is_interactive(&n.role) || n.focusable)
+        .filter(|n| {
+            !ax_role_is_document_container(&n.role)
+                && (ax_role_is_interactive(&n.role) || n.focusable)
+        })
         .collect();
     let total = candidates.len();
     let selected: Vec<&AxNode> = candidates.iter().skip(offset).take(max_results).collect();
@@ -408,7 +482,7 @@ pub(super) async fn try_ax_snapshot(
         ));
     }
 
-    // 清残留 ref，再批量 resolve backendNodeId → objectId。
+    // 清残留 ref。
     if ws_command(
         port,
         target_id,
@@ -421,65 +495,49 @@ pub(super) async fn try_ax_snapshot(
         return Ok(None);
     }
 
-    let resolve_cmds: Vec<(u64, String, Value)> = selected
-        .iter()
-        .enumerate()
-        .map(|(i, n)| {
-            (
-                i as u64 + 1,
-                "DOM.resolveNode".to_string(),
-                json!({ "backendNodeId": n.backend_node_id }),
-            )
-        })
-        .collect();
-    let resolve_replies = match ws_command_batch(port, target_id, resolve_cmds).await {
-        Ok(r) => r,
-        Err(_) => return Ok(None),
-    };
-
-    // 只保留 resolve 成功的节点；ref 从 0 连续编号。
-    let mut resolved: Vec<(&AxNode, String)> = Vec::new();
+    // resolve + mark 必须走同一条 WS 连接：DOM.resolveNode 返回的 objectId 是
+    // 会话（连接）本地状态，拆成两次 ws_command_batch 会各建一条连接，第二条
+    // 连接上 callFunctionOn(objectId) 报 "Could not find object with given id"
+    // （Chrome 151 实测，AX 路径在此整体回退 DOM）。用 ws_command_seq 在同一条
+    // 连接上交错执行 resolve[i] → callFunctionOn[i]。
+    const MARK_ELEMENT_FN: &str = "function(ref){ this.setAttribute('data-hg-ref', ref); return { tag: this.tagName ? this.tagName.toLowerCase() : '', id: this.id || '', type: (this.tagName === 'INPUT' || this.tagName === 'BUTTON') ? (this.type || '') : '' }; }";
+    let mut commands: Vec<Box<dyn Fn(&Value) -> (String, Value) + Send + Sync>> = Vec::new();
     for (i, node) in selected.iter().enumerate() {
-        let object_id = resolve_replies
-            .get(&(i as u64 + 1))
-            .and_then(|v| v["result"]["object"]["objectId"].as_str())
-            .map(String::from);
-        if let Some(object_id) = object_id {
-            resolved.push((node, object_id));
-        }
-    }
-    if resolved.is_empty() {
-        return Ok(None);
-    }
-
-    let mark_cmds: Vec<(u64, String, Value)> = resolved
-        .iter()
-        .enumerate()
-        .map(|(i, (_, object_id))| {
+        let backend = node.backend_node_id;
+        commands.push(Box::new(move |_| {
             (
-                i as u64 + 1,
+                "DOM.resolveNode".to_string(),
+                json!({ "backendNodeId": backend }),
+            )
+        }));
+        commands.push(Box::new(move |prev| {
+            let object_id = prev["result"]["object"]["objectId"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            (
                 "Runtime.callFunctionOn".to_string(),
                 json!({
                     "objectId": object_id,
-                    "functionDeclaration": "function(ref){ this.setAttribute('data-hg-ref', ref); return { tag: this.tagName ? this.tagName.toLowerCase() : '', id: this.id || '', type: (this.tagName === 'INPUT' || this.tagName === 'BUTTON') ? (this.type || '') : '' }; }",
+                    "functionDeclaration": MARK_ELEMENT_FN,
                     "arguments": [{ "value": i.to_string() }],
                     "returnByValue": true,
                 }),
             )
-        })
-        .collect();
-    let mark_replies = match ws_command_batch(port, target_id, mark_cmds).await {
+        }));
+    }
+    // 返回按顺序排满：偶数索引是 resolve、奇数索引是对应的 callFunctionOn。
+    let replies = match ws_command_seq(port, target_id, commands).await {
         Ok(r) => r,
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(None), // resolve/mark 任一步失败 → 回退 DOM 口径
     };
 
-    // 标记失败会造成 ref 缺口/错位（属性里写的是 resolved 下标，输出若跳过
-    // 失败项就会对不上）。AX 路径只是优先路径——任一条标记失败就整体回退
-    // DOM 探针，由探针清标重打，保证 ref 与 data-hg-ref 永远一致。
+    // 标记失败会造成 ref 缺口/错位（属性里写的是 i，输出若跳过失败项就对不上）。
+    // AX 只是优先路径——任一条标记失败就整体回退 DOM 探针，由探针清标重打。
     let mut refs: Vec<Value> = Vec::new();
-    for (i, (node, _)) in resolved.iter().enumerate() {
-        let Some(info) = mark_replies
-            .get(&(i as u64 + 1))
+    for (i, node) in selected.iter().enumerate() {
+        let Some(info) = replies
+            .get(2 * i + 1)
             .and_then(|v| v["result"]["result"]["value"].as_object())
             .cloned()
         else {
@@ -967,7 +1025,40 @@ pub(crate) async fn cdp_handle_dialog(
     if let Some(t) = prompt_text {
         params["promptText"] = json!(t);
     }
-    ws_command(port, &tid, "Page.handleJavaScriptDialog", params).await?;
+    // Chrome 151 起 dialog 状态绑定「Page.enable 的 session」：新连接上
+    // Page.handleJavaScriptDialog 报 "No dialog is showing"。必须走捕获事件的
+    // observer 连接（同 session）执行；observer 不可用时回退 ws_command。
+    let method = "Page.handleJavaScriptDialog";
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Value, String>>();
+    let sent = match observer_of(agent_id) {
+        Some(obs) => obs
+            .cmd_tx
+            .send(super::session::ObserverCmd {
+                method: method.to_string(),
+                params: params.clone(),
+                reply: tx,
+            })
+            .is_ok(),
+        None => false,
+    };
+    if sent {
+        return match rx.await {
+            Ok(Ok(_)) => {
+                set_dialog_open(agent_id, false);
+                audit_log(
+                    agent_id,
+                    if accept { "dialog_accept" } else { "dialog_dismiss" },
+                    "",
+                    "ok",
+                );
+                Ok(json!({ "handled": true, "accept": accept, "via": "observer" }).to_string())
+            }
+            Ok(Err(e)) => Err(format!("CDP {method} 错误: {e}")),
+            Err(_) => Err("observer 命令通道中断".to_string()),
+        };
+    }
+    // 回退：observer 不可用（未 attach 等）→ 新连接直发（老 Chrome 行为）。
+    ws_command(port, &tid, method, params).await?;
     set_dialog_open(agent_id, false);
     audit_log(
         agent_id,
@@ -1287,6 +1378,10 @@ pub(crate) async fn cdp_click(target: &str, agent_id: Option<&str>) -> Result<St
     // 会被吞（e2e 实测：启动后 ~18s 内点击不触发导航，bringToFront 后立即生效）。
     // 对用户自己的浏览器也符合预期——Agent 操作时页面到前台。
     let _ = ws_command(port, &tid, "Page.bringToFront", json!({})).await;
+    // bringToFront 是异步的：命令返回 ≠ 激活已落地。满载/冷启动时立刻派发
+    // 点击可能被渲染进程丢弃（e2e-1 整租跑实测 click 秒打不导航），留一个
+    // 短 settle 让激活传播到渲染进程再派发。
+    tokio::time::sleep(Duration::from_millis(150)).await;
     let base = json!({ "x": x, "y": y, "button": "left", "clickCount": 1 });
     let mut pressed = base.clone();
     pressed["type"] = json!("mousePressed");
@@ -1466,35 +1561,50 @@ pub(crate) async fn cdp_upload(
         }
     }
 
-    // 路径 B：selector → DOM.getDocument + DOM.querySelector。
+    // 路径 B：selector → DOM.getDocument + DOM.querySelector + DOM.setFileInputFiles。
+    // 三条命令必须在同一条 WS 连接上顺序执行：DOM nodeId 是会话（连接）本地状态，
+    // 跨连接必失效（Chromium 报 "Could not find node with given id"）。
     let Some(sel) = selector.filter(|s| !s.trim().is_empty()) else {
         return Err("upload: 需要 selector 参数（或先在页面触发 file chooser 事件）".into());
     };
     let sel = ref_to_selector(&sel);
-    let doc = ws_command(port, &tid, "DOM.getDocument", json!({ "depth": -1 })).await?;
-    let root_node_id = doc["result"]["root"]["nodeId"]
-        .as_i64()
-        .ok_or("upload: DOM.getDocument 未返回 root.nodeId")?;
-    let found = ws_command(
+    let results = ws_command_seq(
         port,
         &tid,
-        "DOM.querySelector",
-        json!({ "nodeId": root_node_id, "selector": sel }),
+        vec![
+            Box::new(|_| ("DOM.getDocument".to_string(), json!({ "depth": -1 }))),
+            {
+                let sel = sel.clone();
+                Box::new(move |prev| {
+                    let root = prev["result"]["root"]["nodeId"]
+                        .as_i64()
+                        .unwrap_or(0);
+                    (
+                        "DOM.querySelector".to_string(),
+                        json!({ "nodeId": root, "selector": sel }),
+                    )
+                })
+            },
+            {
+                let files = files.clone();
+                Box::new(move |prev| {
+                    let node = prev["result"]["nodeId"].as_i64().unwrap_or(0);
+                    (
+                        "DOM.setFileInputFiles".to_string(),
+                        json!({ "files": files, "nodeId": node }),
+                    )
+                })
+            },
+        ],
     )
     .await?;
-    let node_id = found["result"]["nodeId"]
-        .as_i64()
-        .ok_or("upload: DOM.querySelector 未返回 nodeId")?;
-    if node_id == 0 {
+    // 校验 querySelector 结果：nodeId 为 0 表示无匹配。
+    let qs = results
+        .get(1)
+        .ok_or("upload: DOM.querySelector 无响应")?;
+    if qs["result"]["nodeId"].as_i64().unwrap_or(0) == 0 {
         return Err(format!("upload: selector 无匹配: {sel}"));
     }
-    ws_command(
-        port,
-        &tid,
-        "DOM.setFileInputFiles",
-        json!({ "files": files, "nodeId": node_id }),
-    )
-    .await?;
     set_file_chooser_open(agent_id, false);
     audit_log(agent_id, "upload", &sel, "ok");
     Ok(json!({ "uploaded": file_count, "via": "selector", "selector": sel }).to_string())
@@ -1781,9 +1891,13 @@ pub(crate) async fn cdp_set_viewport(
         return Err("viewport: deviceScaleFactor 必须在 0.5-3 之间".into());
     }
     let (port, tid) = require_target(agent_id)?;
-    ws_command(
+    // Chrome 151 起 Emulation 状态跟 dialog 一样绑定 observer 的 session：
+    // 走新连接发 setDeviceMetricsOverride 时 deviceScaleFactor 被丢弃（DPR 恒 1），
+    // 必须经 observer_command 在 observer 连接上执行。
+    observer_command(
         port,
         &tid,
+        agent_id,
         "Emulation.setDeviceMetricsOverride",
         json!({
             "width": width,

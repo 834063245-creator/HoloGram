@@ -62,7 +62,7 @@ use session::{
     named_profile_dir, network_on_failed, network_on_request, network_on_response,
     normalize_slot_name, parse_discover_process_lines, profile_dir_for, remove_profile_dir,
     session_key, session_key_for, set_active_slot, validate_proxy_arg, is_expired_file_time,
-    session_lease, CdpSession, EventBuffers, NetworkEntry,
+    kill_chrome_tree, session_lease, CdpSession, EventBuffers, NetworkEntry,
 };
 #[cfg(test)]
 use transport::{http_close_tab, http_new_tab, list_targets_raw};

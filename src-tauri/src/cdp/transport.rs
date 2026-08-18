@@ -201,3 +201,76 @@ pub(super) async fn ws_command_batch(
         .await
         .map_err(|_| err(codes::TIMEOUT, "CDP 批量命令超时——页面主线程可能卡死".to_string()))?
 }
+
+/// 在一条 WS 连接上顺序执行命令：后一条命令的参数可以引用前一条的结果。
+/// 每条命令由闭包构造：入参是上一条的完整响应（首条为 Value::Null），返回
+/// (method, params)。
+///
+/// 为什么需要：CDP 的 DOM nodeId 是「会话（连接）本地」状态，跨连接必失效
+/// （Chromium 报 "Could not find node with given id"）。getDocument →
+/// querySelector → setFileInputFiles 这类依赖链必须同连接执行，不能逐条走
+/// ws_command（每次新建连接）。backendNodeId 才是全局稳定的（AX 路径用后者）。
+pub(super) async fn ws_command_seq(
+    port: u16,
+    target_id: &str,
+    commands: Vec<Box<dyn Fn(&Value) -> (String, Value) + Send + Sync>>,
+) -> Result<Vec<Value>, String> {
+    if commands.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fut = async {
+        let raw = list_targets_raw(port)?;
+        let arr = raw.as_array().ok_or("CDP /json 返回非数组")?;
+        let ws_url = arr
+            .iter()
+            .find(|t| t["id"].as_str() == Some(target_id))
+            .and_then(|t| t["webSocketDebuggerUrl"].as_str().map(String::from))
+            .ok_or_else(|| err(codes::TARGET_GONE, format!("target {target_id} 已消失（页面可能被关闭）")))?;
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+            .await
+            .map_err(|e| err(codes::NETWORK, format!("CDP WS 连接失败: {e}")))?;
+
+        let mut prev = Value::Null;
+        let mut results: Vec<Value> = Vec::with_capacity(commands.len());
+        for (i, cmd) in commands.iter().enumerate() {
+            let id = (i + 1) as u64;
+            let (method, params) = cmd(&prev);
+            let msg = json!({ "id": id, "method": method, "params": params }).to_string();
+            ws.send(Message::text(msg))
+                .await
+                .map_err(|e| err(codes::NETWORK, format!("CDP WS 发送失败: {e}")))?;
+            loop {
+                let reply = ws
+                    .next()
+                    .await
+                    .ok_or_else(|| err(codes::NETWORK, "CDP WS 连接关闭"))?
+                    .map_err(|e| err(codes::NETWORK, format!("CDP WS 接收失败: {e}")))?;
+                match reply {
+                    Message::Text(t) => {
+                        let v: Value = serde_json::from_str(&t)
+                            .map_err(|e| err(codes::INTERNAL, format!("CDP 响应解析失败: {e}")))?;
+                        if v["id"].as_u64() == Some(id) {
+                            if let Some(cdp_err) = v["error"].as_object() {
+                                let msg2 = cdp_err
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("unknown");
+                                return Err(err(codes::INTERNAL, format!("CDP {method} 错误: {msg2}")));
+                            }
+                            prev = v.clone();
+                            results.push(v);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let _ = ws.close(None).await;
+        Ok::<Vec<Value>, String>(results)
+    };
+    tokio::time::timeout(WS_TIMEOUT, fut)
+        .await
+        .map_err(|_| err(codes::TIMEOUT, "CDP 顺序命令超时——页面主线程可能卡死".to_string()))?
+}

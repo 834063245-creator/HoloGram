@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::errors::{codes, err};
-use super::transport::{http_close_tab, http_new_tab, list_targets_raw};
+use super::transport::{http_close_tab, http_new_tab, list_targets_raw, ws_command};
 
 // ═══════════════════════════════════════════════════════════
 // 常量
@@ -97,8 +98,44 @@ pub(super) fn normalize_slot_name(slot: &str) -> Result<String, String> {
 }
 
 /// 尽力删除 profile 目录（Chrome 残留句柄可能致失败——静默，清理是尽力而为）。
-pub(super) fn remove_profile_dir(dir: &std::path::Path) {
-    let _ = std::fs::remove_dir_all(dir);
+/// 返回是否删除成功，供调用方决定是否轮询重试。
+pub(super) fn remove_profile_dir(dir: &std::path::Path) -> bool {
+    std::fs::remove_dir_all(dir).is_ok()
+}
+
+/// 终止整个 Chrome 进程树。
+///
+/// `std::process::Child::kill` 在 Windows 上只 TerminateProcess 主进程；Chrome
+/// 自带子进程树（renderer/gpu/crashpad …）会变成孤儿继续存活，并锁住
+/// user-data-dir —— profile 目录永远删不掉（e2e-2 实测：kill 后孤儿树挂 10s+，
+/// `remove_dir_all` 持续失败；这是"修一个又冒一个"的真根因，不是等待时间不够）。
+///
+/// Windows：趁 main 还活着用 `taskkill /T /F` 按父链枚举整树强杀（main 死了
+/// 之后 taskkill 找不到父链会漏杀孤儿子进程），兜底再 `child.kill()` 收割主进程。
+/// 其他平台 POSIX kill 会广播给进程组，直接 `child.kill()`。
+pub(super) fn kill_chrome_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        let pid = child.id();
+        let taskkill = std::env::var("SystemRoot")
+            .map(|r| std::path::PathBuf::from(r).join("System32/taskkill.exe"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("taskkill.exe"));
+        // taskkill 失败（进程已退出等）无害——下面兜底 kill 主进程。
+        let _ = std::process::Command::new(taskkill)
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    #[cfg(windows)]
+    {
+        // TerminateProcess/taskkill 异步生效：给进程树留窗口释放 profile 句柄；
+        // 目录删除由调用方的轮询重试收敛（见 cdp_kill / e2e-2）。
+        std::thread::sleep(Duration::from_millis(300));
+    }
 }
 
 /// 清扫遗留 profile 目录：只动本套件前缀的目录，跳过仍被存活会话引用的。
@@ -329,13 +366,26 @@ pub(super) struct EventBuffers {
     pub(super) file_chooser_open: bool,
 }
 
+/// 经 observer 连接执行一条 CDP 命令（同 session —— 见 Observer.cmd_tx 注释）。
+pub(super) struct ObserverCmd {
+    pub(super) method: String,
+    pub(super) params: Value,
+    pub(super) reply: oneshot::Sender<Result<Value, String>>,
+}
+
 /// 事件观察句柄。alive 标志由后台 task 维护：
 /// 连接建立成功 → true；WS 断开/task 退出 → false。
 /// 命令执行前检查 alive，false 且 target 还在则惰性重启。
+///
+/// cmd_tx：把命令注入 observer 的长连接执行。2026-08-18 起 Chrome 151 把
+/// dialog/file chooser 等状态绑定到「Page.enable 的 session」——新连接上
+/// Page.handleJavaScriptDialog 报 "No dialog is showing"。必须走捕获事件的
+/// 同一条连接（observer）才能处理。
 #[derive(Clone)]
 pub(super) struct Observer {
     pub(super) buffers: Arc<Mutex<EventBuffers>>,
     pub(super) alive: Arc<AtomicBool>,
+    pub(super) cmd_tx: mpsc::UnboundedSender<ObserverCmd>,
 }
 
 pub(super) fn push_capped(buf: &mut VecDeque<String>, entry: String, cap: usize) {
@@ -467,6 +517,7 @@ pub(super) fn start_observer(
 ) -> Observer {
     let buffers = reuse_buffers.unwrap_or_else(|| Arc::new(Mutex::new(EventBuffers::default())));
     let alive = Arc::new(AtomicBool::new(false));
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<ObserverCmd>();
     let (b2, a2, tid) = (buffers.clone(), alive.clone(), target_id.to_string());
     tokio::spawn(async move {
         let ws_url = tokio::task::spawn_blocking(move || -> Result<String, String> {
@@ -511,18 +562,23 @@ pub(super) fn start_observer(
             }
         }
         a2.store(true, Ordering::SeqCst);
-        while let Some(Ok(msg)) = ws.next().await {
-            let Message::Text(t) = msg else { continue };
-            let Ok(v) = serde_json::from_str::<Value>(&t) else {
-                continue;
-            };
-            if v["id"].as_u64().is_some() {
-                continue; // 命令响应，不属于事件流
-            }
-            let method = v["method"].as_str().unwrap_or("");
-            let params = &v["params"];
-            let mut bufs = crate::utils::lock_or_recover(&b2);
-            match method {
+        // 命令通道的命令 id 从 2000 起（与订阅 id 1000-1004 区分）。
+        let mut cmd_seq: u64 = 2000;
+        loop {
+            tokio::select! {
+                msg = ws.next() => {
+                    let Some(Ok(msg)) = msg else { break };
+                    let Message::Text(t) = msg else { continue };
+                    let Ok(v) = serde_json::from_str::<Value>(&t) else {
+                        continue;
+                    };
+                    if v["id"].as_u64().is_some() {
+                        continue; // 命令响应，不属于事件流
+                    }
+                    let method = v["method"].as_str().unwrap_or("");
+                    let params = &v["params"];
+                    let mut bufs = crate::utils::lock_or_recover(&b2);
+                    match method {
                 "Runtime.consoleAPICalled" => {
                     let ctype = params["type"].as_str().unwrap_or("log");
                     let text = params["args"]
@@ -600,10 +656,66 @@ pub(super) fn start_observer(
                 }
                 _ => {}
             }
+                }
+                cmd = cmd_rx.recv() => {
+                    let Some(cmd) = cmd else { break };
+                    // 在 observer 连接上执行命令并等响应（同 session 语义）。
+                    // reply 用 Option 持有：oneshot::Sender::send 会 move 自身，
+                    // 循环内多个返回点只允许 send 一次，take 后保证唯一所有权。
+                    let mut reply = Some(cmd.reply);
+                    let id = cmd_seq;
+                    cmd_seq += 1;
+                    let msg = json!({ "id": id, "method": cmd.method, "params": cmd.params }).to_string();
+                    if ws.send(Message::text(msg)).await.is_err() {
+                        if let Some(r) = reply.take() {
+                            let _ = r.send(Err("observer 连接发送失败".to_string()));
+                        }
+                        break;
+                    }
+                    // 等待本命令的响应；期间的事件消息继续被忽略（id 匹配才收）。
+                    // 用超时保护：连接假死时不能卡死整个 observer。
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+                    let mut result: Option<Result<Value, String>> = None;
+                    while result.is_none() {
+                        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                        if remaining.is_zero() {
+                            result = Some(Err("observer 命令超时".to_string()));
+                            break;
+                        }
+                        match tokio::time::timeout(remaining, ws.next()).await {
+                            Ok(Some(Ok(Message::Text(t)))) => {
+                                let Ok(v) = serde_json::from_str::<Value>(&t) else { continue };
+                                if v["id"].as_u64() == Some(id) {
+                                    result = Some(
+                                        if let Some(cdp_err) = v["error"].as_object() {
+                                            Err(cdp_err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown").to_string())
+                                        } else {
+                                            Ok(v)
+                                        },
+                                    );
+                                }
+                            }
+                            Ok(Some(Ok(_))) => {}
+                            Ok(Some(Err(e))) => {
+                                result = Some(Err(format!("observer 连接错误: {e}")));
+                            }
+                            Ok(None) => {
+                                result = Some(Err("observer 连接关闭".to_string()));
+                            }
+                            Err(_) => {
+                                result = Some(Err("observer 命令超时".to_string()));
+                            }
+                        }
+                    }
+                    if let Some(r) = reply.take() {
+                        let _ = r.send(result.unwrap_or_else(|| Err("observer 命令无结果".to_string())));
+                    }
+                }
+            }
         }
         a2.store(false, Ordering::SeqCst);
     });
-    Observer { buffers, alive }
+    Observer { buffers, alive, cmd_tx }
 }
 
 /// 启动/重启会话观察任务（统一入口，A4 修复）。
@@ -765,8 +877,7 @@ pub(super) fn enforce_lease() {
         }
         if sess.chrome_child.is_some() && sess.last_active.elapsed() > session_lease() {
             if let Some(mut child) = sess.chrome_child.take() {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_chrome_tree(&mut child);
             }
             if sess.profile_ephemeral {
                 if let Some(dir) = sess.profile_dir.take() {
@@ -1199,8 +1310,7 @@ pub(crate) async fn cdp_launch(
         if let Some(mut old) = sess.chrome_child.take() {
             let exited = old.try_wait().map(|s| s.is_some()).unwrap_or(false);
             if !exited {
-                let _ = old.kill();
-                let _ = old.wait();
+                kill_chrome_tree(&mut old);
             }
         }
         if sess.profile_ephemeral {
@@ -1284,12 +1394,25 @@ pub(crate) fn cdp_kill(agent_id: Option<&str>) -> Result<String, String> {
     let had_conn = sess.port != 0;
     let kept_profile = had_child && !sess.profile_ephemeral;
     if let Some(mut child) = sess.chrome_child.take() {
-        let _ = child.kill();
-        let _ = child.wait();
+        // 整树终止（taskkill /T /F）：只杀主进程会留孤儿子进程锁住 profile 目录
+        kill_chrome_tree(&mut child);
     }
     if sess.profile_ephemeral {
         if let Some(dir) = sess.profile_dir.take() {
-            remove_profile_dir(&dir);
+            // Chrome 是进程树：kill 只杀主进程，renderer/gpu/crashpad 子进程
+            // 异步退出，句柄释放滞后于主进程——目录删除必须轮询等待，
+            // 一次 remove_dir_all 在 Windows 上大概率撞文件锁失败。
+            // 最多等 6s（kill 是清理路径，多等几秒可接受）。
+            let deadline = Instant::now() + Duration::from_secs(6);
+            loop {
+                if remove_profile_dir(&dir) {
+                    break;
+                }
+                if Instant::now() > deadline {
+                    break; // 尽力而为：仍失败就留给下次 launch 的清理
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
         }
     } else {
         sess.profile_dir = None;
@@ -1360,8 +1483,7 @@ pub(crate) fn cdp_connect(
     if let Some(mut old) = sess.chrome_child.take() {
         let exited = old.try_wait().map(|s| s.is_some()).unwrap_or(false);
         if !exited {
-            let _ = old.kill();
-            let _ = old.wait();
+            kill_chrome_tree(&mut old);
         }
     }
     if sess.profile_ephemeral {
@@ -1581,21 +1703,53 @@ pub(crate) fn cdp_switch_session(
 
 /// 新开 tab（Chrome 调试 HTTP /json/new），并自动 attach 到新 tab。
 /// 受控 launch 与外部 connect 的会话都可用；后续操作立即作用于新 tab。
-pub(crate) fn cdp_new_tab(url: Option<String>, agent_id: Option<&str>) -> Result<String, String> {
+///
+/// Chrome 151 起实测：/json/new?url=X 只创建 about:blank 的空白 tab，
+/// **不再导航到 X**（http/file 都如此）。因此创建后补一次 Page.navigate；
+/// 老 Chrome 已导航时先查 location.href，一致则跳过，避免双加载。
+pub(crate) async fn cdp_new_tab(url: Option<String>, agent_id: Option<&str>) -> Result<String, String> {
     let url = url.unwrap_or_else(|| "about:blank".into());
-    let mut sessions = session_mut(agent_id);
-    let sess = sessions.entry(active_session_key(agent_id)).or_default();
-    if sess.port == 0 {
-        return Err(err(codes::SESSION, "尚未 launch/connect 浏览器"));
+    // 会话锁只在同步段持有：创建 tab + 更新 target_id 后立即释放，
+    // 后面的 WS 命令跨 await，不能持有非 Send 的 MutexGuard。
+    let (port, target_id) = {
+        let mut sessions = session_mut(agent_id);
+        let sess = sessions.entry(active_session_key(agent_id)).or_default();
+        if sess.port == 0 {
+            return Err(err(codes::SESSION, "尚未 launch/connect 浏览器"));
+        }
+        let port = sess.port;
+        let created = http_new_tab(port, &url)?;
+        let target_id = created["id"]
+            .as_str()
+            .ok_or("CDP /json/new 未返回 target id")?
+            .to_string();
+        sess.target_id = Some(target_id.clone());
+        ensure_observer_started(sess, port, &target_id);
+        (port, target_id)
+    };
+    // 确保新 tab 真导航到目标 URL（Chrome 151 不导航的补偿，见函数注释）。
+    if url != "about:blank" {
+        let already_there = ws_command(
+            port,
+            &target_id,
+            "Runtime.evaluate",
+            json!({
+                "expression": "location.href",
+                "returnByValue": true,
+            }),
+        )
+        .await
+        .map(|v| {
+            v["result"]["result"]["value"]
+                .as_str()
+                .map(|s| s == url)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+        if !already_there {
+            ws_command(port, &target_id, "Page.navigate", json!({ "url": url.clone() })).await?;
+        }
     }
-    let port = sess.port;
-    let created = http_new_tab(port, &url)?;
-    let target_id = created["id"]
-        .as_str()
-        .ok_or("CDP /json/new 未返回 target id")?
-        .to_string();
-    sess.target_id = Some(target_id.clone());
-    ensure_observer_started(sess, port, &target_id);
     audit_log(agent_id, "new_tab", &url, &target_id);
     Ok(json!({
         "created": true,
@@ -1662,7 +1816,10 @@ pub(crate) fn cdp_discover() -> Result<String, String> {
             }
             continue;
         }
-        seen.push(port);
+        // 要求端口有调试服务才登记：Chrome 主进程死后同端口会有渲染进程仍在
+        // 进程表里（共享同一调试端口）。先 list_targets_raw 成功、建好 instance
+        // 再 push seen——旧实现先 push seen，端口失效时 continue，同端口再现就
+        // 命中 instances[idx] 越界（len 0 index 0，全量 e2e 实测 panic）。
         let Ok(raw) = list_targets_raw(port) else {
             continue;
         };
@@ -1681,6 +1838,7 @@ pub(crate) fn cdp_discover() -> Result<String, String> {
                     .collect()
             })
             .unwrap_or_default();
+        seen.push(port);
         instances.push(json!({
             "browser": name,
             "port": port,
