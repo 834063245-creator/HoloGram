@@ -54,7 +54,7 @@ import { useDockStore } from './ui/dock-store';
 import { type AgentConfigChangeReason, bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
 import type { CommunityData, GraphDiffJson, GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
-import { getDiagnosticsForFile } from './ui/lsp-client';
+import { getDiagnosticsForFile, LspService } from './ui/lsp-client';
 import { getPanelStore } from './ui/panel-store';
 import type { CheckResult } from './ui/react/CheckPanel';
 import { createBuilderDeps, createRuntimeAdapter } from './ui/runtime-adapter';
@@ -166,6 +166,8 @@ export class Workspace {
    *  每次调用打包为一个 DisposerBag、作为单个 effect 登记（组内串行逆序不变）。
    *  deactivate/forceClearState 统一走 fiber.dispose()（dispose-to-quiescence）。 */
   private readonly _fiber: Fiber;
+  /** LSP 子系统服务（cordis-migration P3）— 状态与生命周期挂工作区 fiber。 */
+  private readonly _lspService: LspService;
 
   /** 冷启动后台分析的健康状态。 */
   _health: 'unknown' | 'ready' | 'degraded' = 'unknown';
@@ -190,6 +192,11 @@ export class Workspace {
     return this._fiber.ctx;
   }
 
+  /** LSP 子系统服务（cordis-migration P3）— 等价 cordisCtx.lsp 的便捷入口。 */
+  get lsp(): LspService {
+    return this._lspService;
+  }
+
   // ── UI 回调（由 main.ts 设置）──
   onStatusChange: ((msg: string) => void) | null = null;
   onLoadingChange: ((loading: boolean) => void) | null = null;
@@ -199,6 +206,9 @@ export class Workspace {
     // 工作区 scope fiber — 挂在根 Context 上（initCordisKernel 幂等：生产路径
     // main.ts 已引导，复用既有根；测试路径首次调用自动建根）。
     this._fiber = initCordisKernel().plugin(workspaceScopePlugin);
+    // cordis-migration P3：LSP 子系统服务挂工作区 fiber — 状态收进服务实例，
+    // 生命周期随 fiber（deactivate/forceClear → provider/监听器/缓存/会话全清）。
+    this._lspService = new LspService(this._fiber.ctx);
     // 构造即登记"恒在的清理器"（无获取点、工作区一建就存在）：
     // - checkTimer：停用时清掉防抖 timer；
     // - cancelEngineSnapshotRefresh：停用时取消在途引擎快照刷新。

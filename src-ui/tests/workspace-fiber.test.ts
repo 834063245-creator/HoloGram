@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatCore } from '../src/app/chat/chat-core';
 import { Context } from '../src/cordis';
+import { LspService } from '../src/ui/lsp-client';
 import { Workspace } from '../src/workspace';
 import { getWorkspaceEpoch } from '../src/workspace-scope';
 
@@ -67,5 +68,13 @@ describe('Workspace fiber 生命周期（P1）', () => {
     ws.forceClearState();
     await flush();
     expect(() => ws.cordisCtx.effect(() => {}, 'late')).toThrow();
+  });
+
+  it('LSP 子系统服务挂工作区 fiber（P3）— 随 fiber 生命周期收尾', async () => {
+    const ws = Workspace.placeholder();
+    expect(ws.lsp).toBeInstanceOf(LspService);
+    await ws.deactivate(fakeChatPanel());
+    // 服务随工作区 fiber dispose 收尾（H1：旧项目诊断缓存不带入新工作区）
+    expect(ws.lsp.disposed).toBe(true);
   });
 });

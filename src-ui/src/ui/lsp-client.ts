@@ -9,18 +9,26 @@
 //     提取 `result` 字段 → 返回给调用方。
 //   通知（didOpen/didChange）→ 发后即忘。
 //   服务端推送通知（publishDiagnostics）→ lsp-message 事件。
+//
+// cordis-migration P3：状态收进 LspService（extends cordis Service，服务名 'lsp'），
+// 由 Workspace 挂在工作区 fiber 上 — 生命周期随 fiber（deactivate/forceClear →
+// provider 释放、监听器注销、缓存清空、lsp_stop 发后即忘）。下方模块级导出函数
+// 保留为薄转发（file-viewer / workspace / agent-builder 消费面零改动）；未挂服务时
+// （单测/无工作区路径）惰性建游离实例，行为与旧模块全局态等价。
+// epoch 代际防护（H2）保持不变 — fiber 管所有权，epoch 管在途回调（INVARIANTS #12）。
 
 import type { editor, IDisposable, IRange, languages } from 'monaco-editor';
 import { listen } from '../bridge';
+import { Context, Service } from '../cordis';
 import { typedRpc } from '../rpc-contract';
 import { getWorkspaceEpoch, isCurrentEpoch } from '../workspace-scope';
 
-const lspSessions = new Map<string, number>(); // 语言 → session_id
-let completionProviders: IDisposable[] = [];
-let hoverProviders: IDisposable[] = [];
-let definitionProviders: IDisposable[] = [];
-let referenceProviders: IDisposable[] = [];
-let unlistenDiagnostics: (() => void) | null = null; // 诊断监听器 — 重复注册先注销（H1 幂等化）
+declare module '../cordis/context' {
+  /** LSP 子系统服务（cordis-migration P3）— 状态挂 cordis 树，随工作区 fiber 生命周期。 */
+  interface Context {
+    lsp: LspService;
+  }
+}
 
 // ── 诊断缓存 — 由 LSP 推送填充，供 agent 状态钩子查询 ──
 
@@ -35,30 +43,12 @@ export interface LspDiagnostic {
   code?: string | number;
 }
 
-const diagnosticsCache = new Map<string, LspDiagnostic[]>();
-
 /** 将 URI 或文件路径归一到全路径形式（去掉 file:// 前缀 + 统一斜杠）用于精确比较。 */
 function normalizeDiagnosticPath(p: string): string {
   return p
     .replace(/^file:\/\//i, '')
     .replace(/\\/g, '/')
     .replace(/^\/+/, '');
-}
-
-/** 获取文件的缓存 LSP 诊断（URI 或文件路径）。 */
-export function getDiagnosticsForFile(fileUriOrPath: string): LspDiagnostic[] {
-  // 先尝试精确匹配，再全路径归一比较。不做 basename 尾匹配 ——
-  // 同名不同目录文件会跨项目串味（landmine-map H1）。
-  if (diagnosticsCache.has(fileUriOrPath)) {
-    return diagnosticsCache.get(fileUriOrPath)!;
-  }
-  const normalized = normalizeDiagnosticPath(fileUriOrPath);
-  for (const [key, val] of diagnosticsCache) {
-    if (normalizeDiagnosticPath(key) === normalized) {
-      return val;
-    }
-  }
-  return [];
 }
 
 // ── LSP → Monaco CompletionItemKind 映射 ──
@@ -172,344 +162,493 @@ function mapCompletionItem(item: LspCompletionItem, monaco: typeof import('monac
   } as languages.CompletionItem;
 }
 
-const lspWarned = new Set<string>();
+// ── LspService（cordis-migration P3）──
 
-/** 查询某语言的 LSP 会话 ID（单一事实源 — file-viewer 不再自建第二张会话表，H2）。
- *  返回 undefined 表示该语言当前无会话（未启动 / 已被 stopAllLsp 清掉）。 */
+/** 活跃 LSP 服务指针 — 最近构造者胜。生产路径 Workspace 构造先于任何 LSP 调用，
+ *  恒为工作区挂载实例；服务随挂载 fiber dispose 时摘除（见 _teardown）。 */
+let activeLsp: LspService | null = null;
+/** 游离兜底 fiber（单测/无工作区路径）— 进程生命周期，永不 dispose。 */
+let fallbackFiber: ReturnType<Context['plugin']> | null = null;
+/** 游离兜底服务实例（复用，避免多次 provide 叠加）。 */
+let fallbackSvc: LspService | null = null;
+
+/** LSP 子系统服务 — 原 lsp-client 的模块级可变单例状态（会话表/provider 数组/
+ *  诊断缓存/监听器）收进服务实例，由 Workspace 挂在工作区 fiber 上。
+ *  生命周期：挂载 fiber dispose（deactivate/forceClear）→ _teardown 同步收尾。
+ *  模块级导出函数经 ensureLspService() 路由到本类实例（消费面零改动）。 */
+export class LspService extends Service {
+  private lspSessions = new Map<string, number>(); // 语言 → session_id
+  private completionProviders: IDisposable[] = [];
+  private hoverProviders: IDisposable[] = [];
+  private definitionProviders: IDisposable[] = [];
+  private referenceProviders: IDisposable[] = [];
+  private unlistenDiagnostics: (() => void) | null = null; // 诊断监听器 — 重复注册先注销（H1 幂等化）
+  private diagnosticsCache = new Map<string, LspDiagnostic[]>();
+  private lspWarned = new Set<string>();
+  private _disposed = false;
+
+  constructor(ctx: Context) {
+    super(ctx, 'lsp');
+    activeLsp = this;
+    // 清理登记在挂载 fiber 上（获取点就地 effect）：fiber dispose → 释放全部
+    // provider/监听器、清缓存与会话表（lsp_stop 发后即忘，不阻塞 dispose）、
+    // 摘除 activeLsp 指针。epoch 仍管在途回调代际（INVARIANTS #12）。
+    this.ctx.effect(
+      () => () => {
+        this._teardown();
+      },
+      'lsp-service',
+    );
+  }
+
+  /** 服务是否已随挂载 fiber 释放（游离兜底实例永为 false）。 */
+  get disposed(): boolean {
+    return this._disposed;
+  }
+
+  /** 挂载 fiber dispose 时的同步收尾（lsp_stop 发后即忘）。 */
+  private _teardown(): void {
+    this._disposed = true;
+    if (activeLsp === this) activeLsp = null;
+    for (const p of this.completionProviders) p.dispose();
+    for (const p of this.hoverProviders) p.dispose();
+    for (const p of this.definitionProviders) p.dispose();
+    for (const p of this.referenceProviders) p.dispose();
+    this.completionProviders = [];
+    this.hoverProviders = [];
+    this.definitionProviders = [];
+    this.referenceProviders = [];
+    this.unlistenDiagnostics?.();
+    this.unlistenDiagnostics = null;
+    this.diagnosticsCache.clear();
+    this.lspWarned.clear();
+    for (const [, sid] of this.lspSessions) {
+      void typedRpc('lsp_stop', { session_id: sid }).catch(() => {});
+    }
+    this.lspSessions.clear();
+  }
+
+  /** 查询某语言的 LSP 会话 ID（单一事实源 — file-viewer 不再自建第二张会话表，H2）。
+   *  返回 undefined 表示该语言当前无会话（未启动 / 已被 stopAll 清掉）。 */
+  getLspSession(language: string): number | undefined {
+    return this.lspSessions.get(language);
+  }
+
+  async startLsp(language: string, rootUri: string): Promise<number | null> {
+    if (this.lspSessions.has(language)) return this.lspSessions.get(language)!;
+    // 代际防护（H2）：startLsp 在途期间可能切换工作区 —
+    // 过期 resolve 的 sid 属于旧项目，直接 lsp_stop 丢弃，防把 A 项目文件发进 B 的 tsserver。
+    const epoch = getWorkspaceEpoch();
+    try {
+      const sid = Number(await typedRpc('lsp_start', { language, root_uri: rootUri }));
+      if (!isCurrentEpoch(epoch)) {
+        await typedRpc('lsp_stop', { session_id: sid }).catch(() => {});
+        return null;
+      }
+      this.lspSessions.set(language, sid);
+      return sid;
+    } catch {
+      if (!this.lspWarned.has(language)) {
+        this.lspWarned.add(language);
+        console.warn(`[LSP] 未安装 ${language} language server（已静默后续同类提示）`);
+      }
+      return null;
+    }
+  }
+
+  /** 通知 LSP 文档已打开。在 Monaco 中打开文件时调用。 */
+  didOpen(sessionId: number, uri: string, language: string, text: string): void {
+    typedRpc('lsp_request', {
+      session_id: sessionId,
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: { uri, languageId: language, version: 1, text },
+      },
+    }).catch(() => {});
+  }
+
+  /** 通知 LSP 文档已变更。从 model.onDidChangeContent 调用。 */
+  didChange(sessionId: number, uri: string, text: string): void {
+    typedRpc('lsp_request', {
+      session_id: sessionId,
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri, version: Date.now() },
+        contentChanges: [{ text }],
+      },
+    }).catch(() => {});
+  }
+
+  /** 通知 LSP 文档已关闭。关闭标签页时调用。 */
+  didClose(sessionId: number, uri: string): void {
+    typedRpc('lsp_request', {
+      session_id: sessionId,
+      method: 'textDocument/didClose',
+      params: { textDocument: { uri } },
+    }).catch(() => {});
+  }
+
+  /** 停止所有 LSP 会话并释放 provider。切换工作区时调用。 */
+  async stopAll(): Promise<void> {
+    for (const p of this.completionProviders) p.dispose();
+    for (const p of this.hoverProviders) p.dispose();
+    for (const p of this.definitionProviders) p.dispose();
+    for (const p of this.referenceProviders) p.dispose();
+    this.completionProviders = [];
+    this.hoverProviders = [];
+    this.definitionProviders = [];
+    this.referenceProviders = [];
+    for (const [, sid] of this.lspSessions) {
+      await typedRpc('lsp_stop', { session_id: sid }).catch(() => {});
+    }
+    this.lspSessions.clear();
+    // 切换工作区后旧项目的诊断缓存/静默提示不得带入新项目（landmine-map H1）
+    this.diagnosticsCache.clear();
+    this.lspWarned.clear();
+  }
+
+  /** 注册由 LSP 支持的 Monaco 补全 provider（同步响应）。 */
+  registerCompletionProvider(lang: string, sessionId: number, monaco: typeof import('monaco-editor')): void {
+    const provider = monaco.languages.registerCompletionItemProvider(lang, {
+      triggerCharacters: ['.', ':', '"', "'", '/', ' '],
+      provideCompletionItems: async (model, position) => {
+        try {
+          // 注：Rust 侧 lsp_request 经 ok_json 返回 JSON 字符串，此处按对象消费是既有行为
+          // （潜在 parse 缺失属 LSP 功能专项，不在本批次行为改动范围）
+          const result = lspPayload<LspCompletionItem[] | LspCompletionList>(
+            await typedRpc('lsp_request', {
+              session_id: sessionId,
+              method: 'textDocument/completion',
+              params: {
+                textDocument: { uri: model.uri.toString() },
+                position: { line: position.lineNumber - 1, character: position.column - 1 },
+              },
+            }),
+          );
+          // result 是 JSON-RPC 的 `result` 字段 — CompletionItem[] 或 CompletionList
+          if (!result) return { suggestions: [] };
+
+          const items: LspCompletionItem[] = Array.isArray(result) ? result : result.items || [];
+          const isIncomplete = !Array.isArray(result) ? result.isIncomplete : undefined;
+
+          return {
+            suggestions: items.map((item) => mapCompletionItem(item, monaco)),
+            incomplete: isIncomplete,
+          };
+        } catch (e) {
+          console.warn('[LSP] completion error:', e);
+          return { suggestions: [] };
+        }
+      },
+    });
+    this.completionProviders.push(provider);
+  }
+
+  /** 注册由 LSP 支持的 Monaco hover provider。 */
+  registerHoverProvider(lang: string, sessionId: number, monaco: typeof import('monaco-editor')): void {
+    const provider = monaco.languages.registerHoverProvider(lang, {
+      provideHover: async (model, position) => {
+        try {
+          const result = lspPayload<{
+            contents?: string | LspMarkupContent | LspMarkupContent[];
+            range?: LspRange;
+          }>(
+            await typedRpc('lsp_request', {
+              session_id: sessionId,
+              method: 'textDocument/hover',
+              params: {
+                textDocument: { uri: model.uri.toString() },
+                position: { line: position.lineNumber - 1, character: position.column - 1 },
+              },
+            }),
+          );
+          // result 是 LSP Hover 结果：{ contents: ..., range: ... }
+          if (result?.contents) {
+            let value: string;
+            if (typeof result.contents === 'string') {
+              value = result.contents;
+            } else if (!Array.isArray(result.contents) && result.contents.value) {
+              value = result.contents.value;
+            } else if (Array.isArray(result.contents)) {
+              // MarkupContent[]
+              value = result.contents.map((c) => c.value || '').join('\n\n---\n\n');
+            } else {
+              value = JSON.stringify(result.contents);
+            }
+            const hoverRange = result.range
+              ? new monaco.Range(
+                  result.range.start.line + 1,
+                  result.range.start.character + 1,
+                  result.range.end.line + 1,
+                  result.range.end.character + 1,
+                )
+              : undefined;
+            return { contents: [{ value }], range: hoverRange };
+          }
+        } catch (e) {
+          console.warn('[LSP] hover error:', e);
+        }
+        return null;
+      },
+    });
+    this.hoverProviders.push(provider);
+  }
+
+  /** 注册由 LSP 支持的 Monaco 定义跳转 provider。 */
+  registerDefinitionProvider(lang: string, sessionId: number, monaco: typeof import('monaco-editor')): void {
+    const provider = monaco.languages.registerDefinitionProvider(lang, {
+      provideDefinition: async (model, position) => {
+        try {
+          const result = lspPayload<LspLocation | LspLocation[] | null>(
+            await typedRpc('lsp_request', {
+              session_id: sessionId,
+              method: 'textDocument/definition',
+              params: {
+                textDocument: { uri: model.uri.toString() },
+                position: { line: position.lineNumber - 1, character: position.column - 1 },
+              },
+            }),
+          );
+          // LSP 定义结果：Location | Location[] | null
+          if (!result) return null;
+
+          const locations: LspLocation[] = Array.isArray(result) ? result : [result];
+          const links: languages.Location[] = [];
+          for (const loc of locations) {
+            if (!loc?.uri) continue;
+            const range = loc.range;
+            links.push({
+              uri: monaco.Uri.parse(loc.uri),
+              range: range
+                ? new monaco.Range(
+                    range.start.line + 1,
+                    range.start.character + 1,
+                    range.end.line + 1,
+                    range.end.character + 1,
+                  )
+                : new monaco.Range(1, 1, 1, 1),
+            });
+          }
+          return links.length > 0 ? links : null;
+        } catch (e) {
+          console.warn('[LSP] definition error:', e);
+        }
+        return null;
+      },
+    });
+    this.definitionProviders.push(provider);
+  }
+
+  /** 注册由 LSP 支持的 Monaco 引用查找 provider。 */
+  registerReferencesProvider(lang: string, sessionId: number, monaco: typeof import('monaco-editor')): void {
+    const provider = monaco.languages.registerReferenceProvider(lang, {
+      provideReferences: async (model, position, _context) => {
+        try {
+          const result = lspPayload<LspLocation[] | null>(
+            await typedRpc('lsp_request', {
+              session_id: sessionId,
+              method: 'textDocument/references',
+              params: {
+                textDocument: { uri: model.uri.toString() },
+                position: { line: position.lineNumber - 1, character: position.column - 1 },
+                context: { includeDeclaration: true },
+              },
+            }),
+          );
+          if (!result || !Array.isArray(result)) return null;
+
+          const locations: languages.Location[] = [];
+          for (const loc of result) {
+            if (!loc?.uri) continue;
+            const range = loc.range;
+            locations.push({
+              uri: monaco.Uri.parse(loc.uri),
+              range: range
+                ? new monaco.Range(
+                    range.start.line + 1,
+                    range.start.character + 1,
+                    range.end.line + 1,
+                    range.end.character + 1,
+                  )
+                : new monaco.Range(1, 1, 1, 1),
+            });
+          }
+          return locations.length > 0 ? locations : null;
+        } catch (e) {
+          console.warn('[LSP] references error:', e);
+        }
+        return null;
+      },
+    });
+    this.referenceProviders.push(provider);
+  }
+
+  /** 监听 LSP 诊断并应用到编辑器标记。 */
+  listenForDiagnostics(_monacoEditor: editor.IStandaloneCodeEditor, monaco: typeof import('monaco-editor')): void {
+    // 幂等化：编辑器随面板重建会重复调用本函数，重复注册会让监听器叠加（H1）。
+    // 重新注册前先注销旧监听器。
+    this.unlistenDiagnostics?.();
+    this.unlistenDiagnostics = null;
+    void listen<{
+      session_id: number;
+      message: { method?: string; params?: { uri: string; diagnostics: LspDiagnosticPayload[] } };
+    }>('lsp-message', (event) => {
+      const msg = event.payload.message;
+      if (msg?.method !== 'textDocument/publishDiagnostics') return;
+      const params = msg.params;
+      if (!params?.uri || !params?.diagnostics) return;
+
+      const markers: editor.IMarkerData[] = params.diagnostics.map((d) => ({
+        severity:
+          d.severity === 1
+            ? monaco.MarkerSeverity.Error
+            : d.severity === 2
+              ? monaco.MarkerSeverity.Warning
+              : d.severity === 3
+                ? monaco.MarkerSeverity.Info
+                : monaco.MarkerSeverity.Hint,
+        message: d.message,
+        startLineNumber: (d.range.start.line || 0) + 1,
+        startColumn: (d.range.start.character || 0) + 1,
+        endLineNumber: (d.range.end.line || 0) + 1,
+        endColumn: (d.range.end.character || 0) + 1,
+      }));
+
+      // 填充诊断缓存供 agent 状态钩子使用（发后即忘）
+      this.diagnosticsCache.set(
+        params.uri,
+        params.diagnostics.map((d) => ({
+          severity: (d.severity === 1
+            ? 'error'
+            : d.severity === 2
+              ? 'warning'
+              : d.severity === 3
+                ? 'info'
+                : 'hint') as LspDiagnostic['severity'],
+          message: d.message,
+          startLine: d.range.start.line || 0,
+          startColumn: d.range.start.character || 0,
+          endLine: d.range.end.line || 0,
+          endColumn: d.range.end.character || 0,
+          source: d.source,
+          code: d.code,
+        })),
+      );
+
+      const uri = monaco.Uri.parse(params.uri);
+      const model = monaco.editor.getModel(uri);
+      if (model) {
+        monaco.editor.setModelMarkers(model, 'lsp', markers);
+      }
+    })
+      .then((unlisten) => {
+        this.unlistenDiagnostics = unlisten;
+      })
+      .catch(() => {});
+  }
+
+  /** 获取文件的缓存 LSP 诊断（URI 或文件路径）。 */
+  getDiagnosticsForFile(fileUriOrPath: string): LspDiagnostic[] {
+    // 先尝试精确匹配，再全路径归一比较。不做 basename 尾匹配 ——
+    // 同名不同目录文件会跨项目串味（landmine-map H1）。
+    if (this.diagnosticsCache.has(fileUriOrPath)) {
+      return this.diagnosticsCache.get(fileUriOrPath)!;
+    }
+    const normalized = normalizeDiagnosticPath(fileUriOrPath);
+    for (const [key, val] of this.diagnosticsCache) {
+      if (normalizeDiagnosticPath(key) === normalized) {
+        return val;
+      }
+    }
+    return [];
+  }
+
+  /** 释放所有已注册的 provider。 */
+  disposeProviders(): void {
+    for (const p of this.completionProviders) p.dispose();
+    this.completionProviders = [];
+  }
+}
+
+// ── 模块级薄转发（兼容面：消费方零改动）──
+
+/** 取活跃 LSP 服务：工作区挂载实例优先；无挂载时惰性建/复用游离兜底实例
+ *  （单测路径 — 行为与旧模块全局态等价，进程生命周期）。 */
+function ensureLspService(): LspService {
+  if (activeLsp && !activeLsp.disposed) return activeLsp;
+  if (fallbackSvc && !fallbackSvc.disposed) {
+    activeLsp = fallbackSvc;
+    return fallbackSvc;
+  }
+  fallbackFiber ??= new Context().plugin({ name: 'hologram/lsp-fallback', apply() {} });
+  fallbackSvc = new LspService(fallbackFiber.ctx);
+  activeLsp = fallbackSvc;
+  return fallbackSvc;
+}
+
 export function getLspSession(language: string): number | undefined {
-  return lspSessions.get(language);
+  return ensureLspService().getLspSession(language);
 }
 
 export async function startLsp(language: string, rootUri: string): Promise<number | null> {
-  if (lspSessions.has(language)) return lspSessions.get(language)!;
-  // 代际防护（H2）：startLsp 在途期间可能切换工作区 —
-  // 过期 resolve 的 sid 属于旧项目，直接 lsp_stop 丢弃，防把 A 项目文件发进 B 的 tsserver。
-  const epoch = getWorkspaceEpoch();
-  try {
-    const sid = Number(await typedRpc('lsp_start', { language, root_uri: rootUri }));
-    if (!isCurrentEpoch(epoch)) {
-      await typedRpc('lsp_stop', { session_id: sid }).catch(() => {});
-      return null;
-    }
-    lspSessions.set(language, sid);
-    return sid;
-  } catch {
-    if (!lspWarned.has(language)) {
-      lspWarned.add(language);
-      console.warn(`[LSP] 未安装 ${language} language server（已静默后续同类提示）`);
-    }
-    return null;
-  }
+  return ensureLspService().startLsp(language, rootUri);
 }
 
-/** 通知 LSP 文档已打开。在 Monaco 中打开文件时调用。 */
 export function didOpen(sessionId: number, uri: string, language: string, text: string): void {
-  typedRpc('lsp_request', {
-    session_id: sessionId,
-    method: 'textDocument/didOpen',
-    params: {
-      textDocument: { uri, languageId: language, version: 1, text },
-    },
-  }).catch(() => {});
+  ensureLspService().didOpen(sessionId, uri, language, text);
 }
 
-/** 通知 LSP 文档已变更。从 model.onDidChangeContent 调用。 */
 export function didChange(sessionId: number, uri: string, text: string): void {
-  typedRpc('lsp_request', {
-    session_id: sessionId,
-    method: 'textDocument/didChange',
-    params: {
-      textDocument: { uri, version: Date.now() },
-      contentChanges: [{ text }],
-    },
-  }).catch(() => {});
+  ensureLspService().didChange(sessionId, uri, text);
 }
 
-/** 通知 LSP 文档已关闭。关闭标签页时调用。 */
 export function didClose(sessionId: number, uri: string): void {
-  typedRpc('lsp_request', {
-    session_id: sessionId,
-    method: 'textDocument/didClose',
-    params: { textDocument: { uri } },
-  }).catch(() => {});
+  ensureLspService().didClose(sessionId, uri);
 }
 
-/** 停止所有 LSP 会话并释放 provider。切换工作区时调用。 */
 export async function stopAllLsp(): Promise<void> {
-  for (const p of completionProviders) p.dispose();
-  for (const p of hoverProviders) p.dispose();
-  for (const p of definitionProviders) p.dispose();
-  for (const p of referenceProviders) p.dispose();
-  completionProviders = [];
-  hoverProviders = [];
-  definitionProviders = [];
-  referenceProviders = [];
-  for (const [_language, sid] of lspSessions) {
-    await typedRpc('lsp_stop', { session_id: sid }).catch(() => {});
-  }
-  lspSessions.clear();
-  // 切换工作区后旧项目的诊断缓存/静默提示不得带入新项目（landmine-map H1）
-  diagnosticsCache.clear();
-  lspWarned.clear();
+  await ensureLspService().stopAll();
 }
 
-/** 注册由 LSP 支持的 Monaco 补全 provider（同步响应）。 */
 export function registerCompletionProvider(
   lang: string,
   sessionId: number,
   monaco: typeof import('monaco-editor'),
 ): void {
-  const provider = monaco.languages.registerCompletionItemProvider(lang, {
-    triggerCharacters: ['.', ':', '"', "'", '/', ' '],
-    provideCompletionItems: async (model, position) => {
-      try {
-        // 注：Rust 侧 lsp_request 经 ok_json 返回 JSON 字符串，此处按对象消费是既有行为
-        // （潜在 parse 缺失属 LSP 功能专项，不在本批次行为改动范围）
-        const result = lspPayload<LspCompletionItem[] | LspCompletionList>(
-          await typedRpc('lsp_request', {
-            session_id: sessionId,
-            method: 'textDocument/completion',
-            params: {
-              textDocument: { uri: model.uri.toString() },
-              position: { line: position.lineNumber - 1, character: position.column - 1 },
-            },
-          }),
-        );
-        // result 是 JSON-RPC 的 `result` 字段 — CompletionItem[] 或 CompletionList
-        if (!result) return { suggestions: [] };
-
-        const items: LspCompletionItem[] = Array.isArray(result) ? result : result.items || [];
-        const isIncomplete = !Array.isArray(result) ? result.isIncomplete : undefined;
-
-        return {
-          suggestions: items.map((item) => mapCompletionItem(item, monaco)),
-          incomplete: isIncomplete,
-        };
-      } catch (e) {
-        console.warn('[LSP] completion error:', e);
-        return { suggestions: [] };
-      }
-    },
-  });
-  completionProviders.push(provider);
+  ensureLspService().registerCompletionProvider(lang, sessionId, monaco);
 }
 
-/** 注册由 LSP 支持的 Monaco hover provider。 */
 export function registerHoverProvider(lang: string, sessionId: number, monaco: typeof import('monaco-editor')): void {
-  const provider = monaco.languages.registerHoverProvider(lang, {
-    provideHover: async (model, position) => {
-      try {
-        const result = lspPayload<{
-          contents?: string | LspMarkupContent | LspMarkupContent[];
-          range?: LspRange;
-        }>(
-          await typedRpc('lsp_request', {
-            session_id: sessionId,
-            method: 'textDocument/hover',
-            params: {
-              textDocument: { uri: model.uri.toString() },
-              position: { line: position.lineNumber - 1, character: position.column - 1 },
-            },
-          }),
-        );
-        // result 是 LSP Hover 结果：{ contents: ..., range: ... }
-        if (result?.contents) {
-          let value: string;
-          if (typeof result.contents === 'string') {
-            value = result.contents;
-          } else if (!Array.isArray(result.contents) && result.contents.value) {
-            value = result.contents.value;
-          } else if (Array.isArray(result.contents)) {
-            // MarkupContent[]
-            value = result.contents.map((c) => c.value || '').join('\n\n---\n\n');
-          } else {
-            value = JSON.stringify(result.contents);
-          }
-          const hoverRange = result.range
-            ? new monaco.Range(
-                result.range.start.line + 1,
-                result.range.start.character + 1,
-                result.range.end.line + 1,
-                result.range.end.character + 1,
-              )
-            : undefined;
-          return { contents: [{ value }], range: hoverRange };
-        }
-      } catch (e) {
-        console.warn('[LSP] hover error:', e);
-      }
-      return null;
-    },
-  });
-  hoverProviders.push(provider);
+  ensureLspService().registerHoverProvider(lang, sessionId, monaco);
 }
 
-/** 注册由 LSP 支持的 Monaco 定义跳转 provider。 */
 export function registerDefinitionProvider(
   lang: string,
   sessionId: number,
   monaco: typeof import('monaco-editor'),
 ): void {
-  const provider = monaco.languages.registerDefinitionProvider(lang, {
-    provideDefinition: async (model, position) => {
-      try {
-        const result = lspPayload<LspLocation | LspLocation[] | null>(
-          await typedRpc('lsp_request', {
-            session_id: sessionId,
-            method: 'textDocument/definition',
-            params: {
-              textDocument: { uri: model.uri.toString() },
-              position: { line: position.lineNumber - 1, character: position.column - 1 },
-            },
-          }),
-        );
-        // LSP 定义结果：Location | Location[] | null
-        if (!result) return null;
-
-        const locations: LspLocation[] = Array.isArray(result) ? result : [result];
-        const links: languages.Location[] = [];
-        for (const loc of locations) {
-          if (!loc?.uri) continue;
-          const range = loc.range;
-          links.push({
-            uri: monaco.Uri.parse(loc.uri),
-            range: range
-              ? new monaco.Range(
-                  range.start.line + 1,
-                  range.start.character + 1,
-                  range.end.line + 1,
-                  range.end.character + 1,
-                )
-              : new monaco.Range(1, 1, 1, 1),
-          });
-        }
-        return links.length > 0 ? links : null;
-      } catch (e) {
-        console.warn('[LSP] definition error:', e);
-      }
-      return null;
-    },
-  });
-  definitionProviders.push(provider);
+  ensureLspService().registerDefinitionProvider(lang, sessionId, monaco);
 }
 
-/** 注册由 LSP 支持的 Monaco 引用查找 provider。 */
 export function registerReferencesProvider(
   lang: string,
   sessionId: number,
   monaco: typeof import('monaco-editor'),
 ): void {
-  const provider = monaco.languages.registerReferenceProvider(lang, {
-    provideReferences: async (model, position, _context) => {
-      try {
-        const result = lspPayload<LspLocation[] | null>(
-          await typedRpc('lsp_request', {
-            session_id: sessionId,
-            method: 'textDocument/references',
-            params: {
-              textDocument: { uri: model.uri.toString() },
-              position: { line: position.lineNumber - 1, character: position.column - 1 },
-              context: { includeDeclaration: true },
-            },
-          }),
-        );
-        if (!result || !Array.isArray(result)) return null;
-
-        const locations: languages.Location[] = [];
-        for (const loc of result) {
-          if (!loc?.uri) continue;
-          const range = loc.range;
-          locations.push({
-            uri: monaco.Uri.parse(loc.uri),
-            range: range
-              ? new monaco.Range(
-                  range.start.line + 1,
-                  range.start.character + 1,
-                  range.end.line + 1,
-                  range.end.character + 1,
-                )
-              : new monaco.Range(1, 1, 1, 1),
-          });
-        }
-        return locations.length > 0 ? locations : null;
-      } catch (e) {
-        console.warn('[LSP] references error:', e);
-      }
-      return null;
-    },
-  });
-  referenceProviders.push(provider);
+  ensureLspService().registerReferencesProvider(lang, sessionId, monaco);
 }
 
-/** 监听 LSP 诊断并应用到编辑器标记。 */
 export function listenForDiagnostics(
   _monacoEditor: editor.IStandaloneCodeEditor,
   monaco: typeof import('monaco-editor'),
 ): void {
-  // 幂等化：编辑器随面板重建会重复调用本函数，重复注册会让监听器叠加（H1）。
-  // 重新注册前先注销旧监听器。
-  unlistenDiagnostics?.();
-  unlistenDiagnostics = null;
-  void listen<{
-    session_id: number;
-    message: { method?: string; params?: { uri: string; diagnostics: LspDiagnosticPayload[] } };
-  }>('lsp-message', (event) => {
-    const msg = event.payload.message;
-    if (msg?.method !== 'textDocument/publishDiagnostics') return;
-    const params = msg.params;
-    if (!params?.uri || !params?.diagnostics) return;
-
-    const markers: editor.IMarkerData[] = params.diagnostics.map((d) => ({
-      severity:
-        d.severity === 1
-          ? monaco.MarkerSeverity.Error
-          : d.severity === 2
-            ? monaco.MarkerSeverity.Warning
-            : d.severity === 3
-              ? monaco.MarkerSeverity.Info
-              : monaco.MarkerSeverity.Hint,
-      message: d.message,
-      startLineNumber: (d.range.start.line || 0) + 1,
-      startColumn: (d.range.start.character || 0) + 1,
-      endLineNumber: (d.range.end.line || 0) + 1,
-      endColumn: (d.range.end.character || 0) + 1,
-    }));
-
-    // 填充诊断缓存供 agent 状态钩子使用（发后即忘）
-    diagnosticsCache.set(
-      params.uri,
-      params.diagnostics.map((d) => ({
-        severity: (d.severity === 1
-          ? 'error'
-          : d.severity === 2
-            ? 'warning'
-            : d.severity === 3
-              ? 'info'
-              : 'hint') as LspDiagnostic['severity'],
-        message: d.message,
-        startLine: d.range.start.line || 0,
-        startColumn: d.range.start.character || 0,
-        endLine: d.range.end.line || 0,
-        endColumn: d.range.end.character || 0,
-        source: d.source,
-        code: d.code,
-      })),
-    );
-
-    const uri = monaco.Uri.parse(params.uri);
-    const model = monaco.editor.getModel(uri);
-    if (model) {
-      monaco.editor.setModelMarkers(model, 'lsp', markers);
-    }
-  })
-    .then((unlisten) => {
-      unlistenDiagnostics = unlisten;
-    })
-    .catch(() => {});
+  ensureLspService().listenForDiagnostics(_monacoEditor, monaco);
 }
 
-/** 释放所有已注册的 provider。 */
+export function getDiagnosticsForFile(fileUriOrPath: string): LspDiagnostic[] {
+  return ensureLspService().getDiagnosticsForFile(fileUriOrPath);
+}
+
 export function disposeProviders(): void {
-  for (const p of completionProviders) p.dispose();
-  completionProviders = [];
+  ensureLspService().disposeProviders();
 }

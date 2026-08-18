@@ -109,8 +109,37 @@ AgentRuntime 构造器增 `cordisParent?` 透传（`_contextFromConfig` 注入�
 
 ### P3 — 面板/子系统 Service 化
 
-dock 面板、settings、graph 服务按 `Service extends` 模式挂到根 Context。zustand 仍是
-唯一状态层（Service 不持 UI 状态）。验收：各面板既有测试全绿。
+**代表性落地：`ui/lsp-client.ts` → `LspService`（服务名 `'lsp'`）。** 摸底修正了原设想：
+dock/settings/graph 的状态本就在 zustand（唯一状态层的架构决策不动），真正的双范式
+残留是 lsp-client 的**模块级可变单例**（会话表/4 组 provider 数组/诊断缓存/监听器全是
+模块全局，生命周期靠 file-viewer 人肉 stopAllLsp）。
+
+设计（状态进服务、函数面薄转发）：
+
+1. 全部可变状态收进 `LspService extends Service` 私有字段；13 个模块级导出函数保留为
+   薄转发（file-viewer 10 处调用 / workspace / agent-builder 消费面**零改动**，两个既有
+   LSP 测试**零改动**全绿 = 转发等价性实证）。
+2. Workspace 构造时 `new LspService(this._fiber.ctx)` 挂工作区 fiber — 生命周期随
+   fiber（deactivate/forceClear → provider/监听器释放、缓存清空、lsp_stop 发后即忘），
+   `Workspace.lsp` 便捷入口。未挂载时（单测）惰性建游离兜底实例，行为与旧模块态等价。
+3. epoch 代际防护（H2）不动 — fiber 管所有权、epoch 管在途回调（INVARIANTS #12，P4 前不动）。
+
+踩坑记录（cordis 内核语义，对后续 P3+ 消费方都是必修知识）：
+
+- **fiber ctx 访问服务名必须声明 `inject`**（reflect.ts：防隐式依赖，否则抛
+  "cannot get property without inject"）；**根 ctx 宽松**（无 runtime 走 optional 查找）。
+- **服务可见性 = 挂载 fiber 的子树**（兄弟 fiber 互相不可见）。P2 的 agent fiber 挂在
+  workspace fiber 下 → 未来 agent 侧声明 `inject: ['lsp']` 即可消费。
+- **fiber 加载是异步的**：`ctx.plugin()` 返回后需 `await fiber` 才完成依赖解析
+  （对齐 P0 冒烟姿势）。
+- **`ctx.lsp` 出口是 traceable 包装**（方法调用看到 caller ctx 的设计）：原生
+  `instanceof` 通过、身份 `!==` 原实例；vitest 匹配器（toBe/toBeInstanceOf）探测
+  `asymmetricMatch` 会触发 shadow 路由误炸 — 测试用间接断言（`x instanceof Y` 先求值
+  再 toBe(true)）。
+
+验收：tsc 全绿；lsp 全家 16/16（新增 `tests/lsp-service.test.ts` 4 用例 + workspace-fiber
+挂载断言）；biome 零新增。后续同模式候选（goal-manager / memory-bundle-client 等）按需
+逐个迁，不追求一次性全量。
 
 ### P4 — 冻结四件套迁移 + 文档收口
 
