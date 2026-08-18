@@ -56,6 +56,30 @@
   "overrides": [
     {
       "includes": [
+        "src/cordis/context.ts",
+        "src/cordis/events.ts",
+        "src/cordis/fiber.ts",
+        "src/cordis/index.ts",
+        "src/cordis/logger.ts",
+        "src/cordis/reflect.ts",
+        "src/cordis/registry.ts",
+        "src/cordis/service.ts",
+        "src/cordis/utils.ts",
+        "src/cordis/cosmokit.ts",
+        "src/cordis/standard-schema.ts"
+      ],
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "enabled": false
+      },
+      "assist": {
+        "enabled": false
+      }
+    },
+    {
+      "includes": [
         "src/app/foundation.css",
         "src/app/graph-chrome.css",
         "src/app/chat/chat.css",

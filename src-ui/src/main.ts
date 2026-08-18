@@ -28,6 +28,7 @@ import { ChatCore } from './app/chat/chat-core';
 import { useCoreStore } from './app/chat/core-instance';
 import { useShellStore } from './app/shell-store';
 import { isMockMode } from './bridge';
+import { initCordisKernel } from './cordis/boot';
 import { setLang } from './i18n';
 import { streamWithIdleTimeout } from './provider/idle-stream';
 import { ChunkType } from './provider/types';
@@ -887,6 +888,9 @@ async function init(): Promise<void> {
   // Linux 无边框窗口无 WM 边缘缩放 — 铺 Tauri 缩放热区（内部自检平台）
   installResizeZones();
 }
+
+// ── Cordis 内核引导（cordis-migration P0：根 Context 先于 React 壳与 init）──
+initCordisKernel();
 
 // ── React 壳引导（P1：CommandBar/DockRail/StatusBar/命令面板/快捷键浮层）──
 createRoot(document.getElementById('app-root')!).render(createElement(App));
