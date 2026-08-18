@@ -106,38 +106,62 @@ fn window_locator_ps(title: Option<&str>, pid: Option<u32>, hwnd: Option<u64>) -
          try { $__whwnd = $__win.Current.NativeWindowHandle } catch { $__whwnd = 0 }\n\
          Write-Output \"__WIN__=$__wpid|$__wtitle|$__whwnd\"\n",
     );
+    // 把目标窗口提到前台并聚焦 —— 坐标兜底/剪贴板粘贴的强制前置条件：
+    // 窗口不在前台（被遮挡/最小化）时 SetCursorPos+SendInput 会错点在挡在最上面的
+    // 窗口上、SendKeys 会打进错误的焦点窗口，造成静默错点。这里统一激活一次，
+    // 动作（点击/输入/滚动）真正落进目标窗口。
+    ps.push_str(
+        "Add-Type -AssemblyName System.Windows.Forms\n\
+         try { $__win.SetFocus() } catch {}\n\
+         try {\n\
+           $__fgH = [System.Windows.Forms.Form]::ActiveForm\n\
+           $__sf = Add-Type -MemberDefinition '\n\
+             [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);\n\
+             [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);\n\
+             [DllImport(\"user32.dll\")] public static extern bool IsIconic(IntPtr hWnd);\n\
+           ' -Name UiaFg -Namespace Win32 -PassThru\n\
+           if ([Win32.UiaFg]::IsIconic([IntPtr]$__whwnd)) { [Win32.UiaFg]::ShowWindow([IntPtr]$__whwnd, 9) }  # SW_RESTORE\n\
+           [Win32.UiaFg]::SetForegroundWindow([IntPtr]$__whwnd) | Out-Null\n\
+           Start-Sleep -Milliseconds 120\n\
+         } catch {}\n\
+         try { $__win.SetFocus() } catch {}\n",
+    );
     ps
 }
 
 /// 将「ref 编号 → AutomationElement」的查找脚本片段。
 /// 需要前置变量 $__win（窗口元素）。树遍历已预先构建（$__map 数组按 ref 索引）。
+/// ref 是当下树的一份快照索引；实际 ref 引用的元素在树发生变化后可能不再等于数组下标。
+/// 因此用「ref 只作第一优先的候选；其后按 name/ControlType 回溯偏移重定位」的策略：
+/// 命中即用；名称不符说明树已漂移，按名称反查 IndexOf；再失败切回候选原元素
+/// （单层容器里属性和位置通常仍有效），仍然失败才抛错提示重建树。
 fn ref_lookup_ps() -> &'static str {
     "if ($null -eq $__map) { throw '内部错误: 控件索引未构建（请先调用 desktop_uia_tree 重建）' }\n\
      if ($ref -ge $__map.Count) { throw \"ref 不存在: $ref（控件列表已变化，请重新 desktop_uia_tree 获取新 ref）\" }\n\
-     $__el = $__map[$ref]\n\
-     if ($null -eq $__el) { throw \"ref $ref 已失效（控件可能已销毁，请重新 desktop_uia_tree）\" }\n"
+     $__el = $__map[$ref]; $__cand = $__el; $__candName = ''\n\
+     try { $__candName = $__cand.Current.Name } catch { $__candName = '' }\n\
+     if ($__candName -ne '' -and $__wantName -ne '' -and $__candName -cne $__wantName) {\n\
+       # 树已漂移：按名称回溯重定位（首个匹配），兜底保留原候选\n\
+       $__reloc = $__map | Where-Object { try { $_.Current.Name -ceq $__wantName } catch { $false } } | Select-Object -First 1\n\
+       if ($null -ne $__reloc) { $__el = $__reloc; $__cand = $__reloc }\n\
+     }\n\
+     if ($null -eq $__cand) { throw \"ref $ref 已失效（控件可能已销毁，请重新 desktop_uia_tree）\" }\n"
 }
 
 /// 构建 ref → 控件映射（PowerShell 端）。
-/// 在窗口元素上 FindAll Descendants，每节点一行输出，同时把元素存进 $__map 数组
-/// （ref = 数组下标，与输出行一一对应）。
-fn build_tree_ps(_depth: Option<u32>) -> String {
+/// 在窗口元素上遍历控件树（DFS 先序），每节点一行输出，同时把元素存进 $__map 数组
+/// （ref = 数组下标，与输出行一一对应）。行带 d= 深度字段（根的子级=1），
+/// Rust 端据此输出缩进式树。
+/// depth: None/0 = 全量（FindAll Descendants 一次取齐，比递归快）；
+///         Some(n>=1) = 递归 Children 到 n 层（n=1 只列直接子级，行数可控）。
+fn build_tree_ps(depth: Option<u32>) -> String {
     let mut ps = String::from("Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes\n");
-    // 定位窗口
-    // （由调用方拼接 window_locator_ps）
-    // 树遍历：FindAll(Descendants) 一次性取齐（比递归快；深度过滤在 PowerShell 端做）
-    ps.push_str(
-        "$__all = $__win.FindAll([System.Windows.Automation.TreeScope]::Descendants, \
-         [System.Windows.Automation.Condition]::TrueCondition)\n\
-         $__map = New-Object System.Collections.ArrayList\n\
+    let header = "$__map = New-Object System.Collections.ArrayList\n\
          $__out = New-Object System.Text.StringBuilder\n\
-         $__count = $__all.Count\n\
          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n\
          # BoundingRectangle 可能返回 ±Infinity（隐藏/虚拟化控件）——安全转 int，非法值兜底 0\n\
          function __SafeInt([double]$v) { if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { 0 } else { [int]$v } }\n\
-         for ($i = 0; $i -lt $__count; $i++) {\n\
-           $e = $__all.Item($i)\n\
-           if ($null -eq $e) { continue }\n\
+         function __EmitLine($e, $d) {\n\
            try { $__ct = $e.Current.ControlType.ProgrammaticName } catch { $__ct = '' }\n\
            if ($__ct -like 'ControlType.*') { $__ct = $__ct.Substring(12) }\n\
            try { $__nm = $e.Current.Name } catch { $__nm = '' }\n\
@@ -153,17 +177,51 @@ fn build_tree_ps(_depth: Option<u32>) -> String {
            $__nm2 = $__nm -replace \"[\\r\\n]\", ' '\n\
            $__aid2 = $__aid -replace \"[\\r\\n]\", ' '\n\
            $__val2 = $__val -replace \"[\\r\\n]\", ' '\n\
-           [void]$__out.AppendLine(\"ref=$__ref|type=$__ct|name=$__nm2|id=$__aid2|enabled=$__en|value=$__val2|rect=$__x,$__y,$__w,$__h\")\n\
-         }\n\
-         $__treeStr = $__out.ToString()\n\
-         Write-Output \"__REFS__=$($__map.Count)\"\n\
-         Write-Output $__treeStr\n",
-    );
+           [void]$__out.AppendLine(\"ref=$__ref|type=$__ct|name=$__nm2|id=$__aid2|enabled=$__en|value=$__val2|rect=$__x,$__y,$__w,$__h|d=$d\")\n\
+         }\n";
+    let traversal = match depth {
+        Some(n) if n >= 1 => {
+            // 递归 Children 到 n 层（DFS 先序 → 父在前子在后，天然层级）
+            let d = n;
+            format!(
+                "function __Walk($node, $d) {{\n\
+                   if ($d -ge {d}) {{ return }}\n\
+                   try {{ $kids = $node.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition) }} catch {{ return }}\n\
+                   for ($i = 0; $i -lt $kids.Count; $i++) {{\n\
+                     $e = $kids.Item($i)\n\
+                     if ($null -eq $e) {{ continue }}\n\
+                     __EmitLine $e ($d + 1)\n\
+                     __Walk $e ($d + 1)\n\
+                   }}\n\
+                 }}\n\
+                 __Walk $__win 0\n\
+                 Write-Output \"__REFS__=$($__map.Count)\"\n\
+                 Write-Output $__out.ToString()\n"
+            )
+        }
+        _ => {
+            // 全量：FindAll(Descendants) 一次性取齐（比递归快）。深度视为 1 层（扁平，无层级信息）。
+            String::from(
+                "$__all = $__win.FindAll([System.Windows.Automation.TreeScope]::Descendants, \
+                 [System.Windows.Automation.Condition]::TrueCondition)\n\
+                 $__count = $__all.Count\n\
+                 for ($i = 0; $i -lt $__count; $i++) {\n\
+                   $e = $__all.Item($i)\n\
+                   if ($null -eq $e) { continue }\n\
+                   __EmitLine $e 1\n\
+                 }\n\
+                 Write-Output \"__REFS__=$($__map.Count)\"\n\
+                 Write-Output $__out.ToString()\n",
+            )
+        }
+    };
+    ps.push_str(&header);
+    ps.push_str(&traversal);
     ps
 }
 
 /// 输出树行 → 解析成控件记录。行格式：
-/// ref=0|type=Button|name=OK|id=btn1|enabled=True|value=|rect=10,20,80,30
+/// ref=0|type=Button|name=OK|id=btn1|enabled=True|value=|rect=10,20,80,30|d=1
 #[derive(Debug, Clone)]
 pub(crate) struct UiControl {
     pub ref_id: usize,
@@ -173,6 +231,7 @@ pub(crate) struct UiControl {
     pub enabled: bool,
     pub value: String,
     pub rect: (i32, i32, i32, i32), // x, y, w, h
+    pub depth: u32,                 // 树深度（根的子级=1；扁平全量模式=1）
 }
 
 fn parse_control_line(line: &str) -> Option<UiControl> {
@@ -183,6 +242,7 @@ fn parse_control_line(line: &str) -> Option<UiControl> {
     let mut enabled = true;
     let mut value = String::new();
     let mut rect = (0, 0, 0, 0);
+    let mut depth = 1u32;
     for part in line.split('|') {
         let (k, v) = part.split_once('=')?;
         match k {
@@ -192,6 +252,7 @@ fn parse_control_line(line: &str) -> Option<UiControl> {
             "id" => automation_id = v.to_string(),
             "enabled" => enabled = v.eq_ignore_ascii_case("true"),
             "value" => value = v.to_string(),
+            "d" => depth = v.trim().parse().unwrap_or(1),
             "rect" => {
                 let mut it = v.split(',');
                 let x = it.next()?.trim().parse().ok()?;
@@ -211,6 +272,7 @@ fn parse_control_line(line: &str) -> Option<UiControl> {
         enabled,
         value,
         rect,
+        depth,
     })
 }
 
@@ -245,8 +307,7 @@ fn control_matches(
     true
 }
 
-/// 生成缩进式树文本（按 rect 的 x/y 估一层缩进——UIA 树是扁平的
-/// Descendants，没有父子信息；改用输出顺序 + 每行前缀序号保证可读）。
+/// 生成缩进式树文本（按 d= 深度字段缩进；全量模式无层级信息，退化为每行一控件）。
 fn tree_text(controls: &[UiControl]) -> String {
     let mut s = String::new();
     for c in controls {
@@ -256,8 +317,9 @@ fn tree_text(controls: &[UiControl]) -> String {
         } else {
             format!(" value={}", c.value)
         };
+        let indent = "  ".repeat(c.depth.saturating_sub(1) as usize);
         s.push_str(&format!(
-            "[{}] {}{}{}{}\n",
+            "{indent}[{}] {}{}{}{}\n",
             c.ref_id,
             c.ctype,
             if c.name.is_empty() {
@@ -277,15 +339,15 @@ fn tree_text(controls: &[UiControl]) -> String {
 // ═══════════════════════════════════════════════════════════
 
 /// desktop_uia_tree — 窗口控件树 + ref 清单。
-/// params: title?/pid?/hwnd?（窗口定位）；depth?（预留，当前全量返回）。
+/// params: title?/pid?/hwnd?（窗口定位）；depth?（1=只列直接子级，缺省全量扁平）。
 pub(crate) fn uia_tree(
     title: Option<&str>,
     pid: Option<u32>,
     hwnd: Option<u64>,
-    _depth: Option<u32>,
+    depth: Option<u32>,
 ) -> Result<String, String> {
     let loc = window_locator_ps(title, pid, hwnd);
-    let bt = build_tree_ps(_depth);
+    let bt = build_tree_ps(depth);
     let script = format!("{loc}\n{bt}");
     let out = run_ps_strict(&script)?;
     // 解析：先 __REFS__ 行 / __WIN__ 行，再逐控件行
@@ -331,8 +393,9 @@ pub(crate) fn uia_tree(
             "enabled": c.enabled,
             "value": c.value,
             "rect": format!("{},{},{},{}", c.rect.0, c.rect.1, c.rect.2, c.rect.3),
+            "depth": c.depth,
         })).collect::<Vec<_>>(),
-        "note": "标准控件全覆盖；自绘控件(QQ/微信/钉钉等)树可能为空，用 desktop_uia_window_shot + 视觉兜底。",
+        "note": "标准控件全覆盖；自绘控件(QQ/微信/钉钉等)树可能为空，用 desktop_uia_window_shot + 视觉兜底。depth>=1 时输出真实层级缩进树。",
     }).to_string())
 }
 
@@ -369,6 +432,7 @@ pub(crate) fn uia_find(
                             let h = it.next()?.trim().parse().ok()?;
                             (x, y, w, h)
                         },
+                        depth: c["depth"].as_u64().unwrap_or(1) as u32,
                     })
                 })
                 .collect()
@@ -389,6 +453,7 @@ pub(crate) fn uia_find(
             "enabled": c.enabled,
             "value": c.value,
             "rect": format!("{},{},{},{}", c.rect.0, c.rect.1, c.rect.2, c.rect.3),
+            "depth": c.depth,
         })).collect::<Vec<_>>(),
     })
     .to_string())
@@ -404,6 +469,7 @@ fn coords_calc_ps() -> &'static str {
 }
 
 /// 操作前的公共 PowerShell 前缀（ref 模式）：定位窗口 + 建 ref 映射 + 反查元素。
+/// $__wantName 取 ref 当前指向元素的 Name，供 ref_lookup_ps 做树漂移回溯重定位。
 fn action_prefix_ps(
     title: Option<&str>,
     pid: Option<u32>,
@@ -412,7 +478,14 @@ fn action_prefix_ps(
 ) -> String {
     let loc = window_locator_ps(title, pid, hwnd);
     let bt = build_tree_ps(None);
-    format!("{loc}\n{bt}\n$ref = {ref_id}\n{}{}", ref_lookup_ps(), coords_calc_ps())
+    format!(
+        "{loc}\n{bt}\n$ref = {ref_id}\n\
+         $__wantName = ''\n\
+         try {{ $__wantName = $__map[$ref].Current.Name }} catch {{ $__wantName = '' }}\n\
+         {}{}",
+        ref_lookup_ps(),
+        coords_calc_ps()
+    )
 }
 
 /// 操作前的公共 PowerShell 前缀（selector 模式）：
@@ -694,7 +767,10 @@ pub(crate) fn uia_window_shot(
          $b.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)\n\
          $g.Dispose(); $b.Dispose()\n\
          Write-Output $out\n\
-         Write-Output \"__RECT__=$(__SafeInt $__r.X),(__SafeInt $__r.Y),(__SafeInt $__r.Width),(__SafeInt $__r.Height)\"\n",
+         # 注意：字符串插值里 $__r.X 会被解析成变量 $__r + 字面量 .X（成员访问不生效），\n\
+         # 必须先用命令调用形式算进局部变量再插值，否则 rect 元数据输出损坏。\n\
+         $__rx = __SafeInt $__r.X; $__ry = __SafeInt $__r.Y; $__rw = __SafeInt $__r.Width; $__rh = __SafeInt $__r.Height\n\
+         Write-Output \"__RECT__=$__rx,$__ry,$__rw,$__rh\"\n",
     );
     let out = run_ps_strict(&script)?;
     let path = out
@@ -741,7 +817,7 @@ mod tests {
     #[test]
     fn parse_control_line_full() {
         let c = parse_control_line(
-            "ref=3|type=Button|name=OK|id=btn1|enabled=True|value=|rect=10,20,80,30",
+            "ref=3|type=Button|name=OK|id=btn1|enabled=True|value=|rect=10,20,80,30|d=2",
         )
         .unwrap();
         assert_eq!(c.ref_id, 3);
@@ -751,6 +827,7 @@ mod tests {
         assert!(c.enabled);
         assert_eq!(c.value, "");
         assert_eq!(c.rect, (10, 20, 80, 30));
+        assert_eq!(c.depth, 2);
     }
 
     #[test]
@@ -764,6 +841,7 @@ mod tests {
         assert!(!c.enabled);
         assert_eq!(c.value, "abc");
         assert_eq!(c.rect, (0, 0, 100, 20));
+        assert_eq!(c.depth, 1, "无 d 字段时默认 1");
     }
 
     #[test]
@@ -790,6 +868,7 @@ mod tests {
             enabled: true,
             value: String::new(),
             rect: (0, 0, 10, 10),
+            depth: 1,
         };
         assert!(control_matches(&c, Some("save"), None, None, None));
         assert!(control_matches(&c, None, Some("button"), None, None));
@@ -821,6 +900,7 @@ mod tests {
                 enabled: true,
                 value: "hello".into(),
                 rect: (0, 0, 1, 1),
+                depth: 1,
             },
             UiControl {
                 ref_id: 1,
@@ -830,11 +910,12 @@ mod tests {
                 enabled: false,
                 value: String::new(),
                 rect: (0, 0, 1, 1),
+                depth: 2,
             },
         ];
         let t = tree_text(&controls);
         assert!(t.contains("[0] Edit value=hello"));
-        assert!(t.contains("[1] Button \"OK\" (disabled)"));
+        assert!(t.contains("  [1] Button \"OK\" (disabled)"), "depth=2 应缩进: {t}");
     }
 }
 

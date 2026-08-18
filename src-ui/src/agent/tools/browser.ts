@@ -656,15 +656,17 @@ export function createDesktopTools(): Tool[] {
       name: 'desktop_uia_tree',
       description:
         'Read the Windows UI Automation control tree of a desktop window (standard controls only: buttons, inputs, lists, menus...). ' +
-        'Returns {window:{pid,title,hwnd}, refs:N, tree:"[ref] ControlType \\"Name\\"", controls:[{ref,name,type,automation_id,enabled,value,rect}]}. ' +
+        'Returns {window:{pid,title,hwnd}, refs:N, tree:"[ref] ControlType \\"Name\\"", controls:[{ref,name,type,automation_id,enabled,value,rect,depth}]}. ' +
         'Locate the window by ONE of: hwnd (exact, from desktop_probe), pid (its main window), title (fuzzy, first match), or omit all to use the foreground window. ' +
-        'Then act on controls by their ref with desktop_uia_click/type/scroll. ' +
+        'depth: omit for the full flat list (default), or pass depth=N to get only the first N levels as a real indented hierarchy (smaller output, faster). ' +
+        'Then act on controls by their ref with desktop_uia_click/type/scroll. refs are a snapshot: if the window changed between tree and action, ' +
+        'the action re-locates by control name when possible; otherwise re-read the tree. ' +
         'Self-drawn controls (WeChat/QQ/DingTalk etc.) expose an empty tree - use desktop_uia_window_shot + a vision model instead.',
       schema: z.object({
         hwnd: z.number().int().optional().describe('Window handle from desktop_probe (hwnd field)'),
         pid: z.number().int().optional().describe('Process id - resolves to its main window'),
         title: z.string().optional().describe('Window title substring (fuzzy, first match)'),
-        depth: z.number().int().optional().describe('Reserved'),
+        depth: z.number().int().optional().describe('Limit tree to N levels (real hierarchy with indentation); omit = full flat list'),
       }),
       readOnly: true,
       execute: (a) => run('uia_tree', a),
@@ -692,7 +694,9 @@ export function createDesktopTools(): Tool[] {
       description:
         'Click a control in a desktop window. Locate by EITHER ref (from desktop_uia_tree/find, stable for this session) ' +
         'OR by stable selector: name (exact, case-insensitive), automation_id (exact), control_type (e.g. Button) - any combination. ' +
+        'At least one locator (ref/name/automation_id/control_type) is required. ' +
         'Selector mode is preferred for repeated actions (no need to re-read the tree). ' +
+        'The target window is brought to the foreground first so coordinate fallback never clicks into the wrong window. ' +
         'Triggers the control via InvokePattern/TogglePattern/SelectionItemPattern when available, else real mouse click at its center. ' +
         'Returns {done, method} where method reveals the mechanism used (invoke/toggle/selection/coords). ' +
         'Requires approval - this injects a real click into the target app and may trigger save/send/delete side effects.',
@@ -705,13 +709,19 @@ export function createDesktopTools(): Tool[] {
         pid: z.number().int().optional().describe('Process id'),
         title: z.string().optional().describe('Window title substring'),
       }),
-      execute: (a) => run('uia_click', a),
+      execute: async (a) => {
+        if (a.ref === undefined && !a.name && !a.automation_id && !a.control_type) {
+          return '[desktop_uia_click] 至少要给一个定位条件: ref / name / automation_id / control_type';
+        }
+        return run('uia_click', a);
+      },
     }),
     defineTool({
       name: 'desktop_uia_right_click',
       description:
         'Right-click a control in a desktop window - opens the context menu at the control center. ' +
-        'Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). ' +
+        'Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). At least one locator is required. ' +
+        'The target window is brought to the foreground first. ' +
         'Requires approval (injects a real right-click; may trigger destructive/send actions from the context menu). ' +
         'Returns {done, method:"coords"}.',
       schema: z.object({
@@ -723,13 +733,19 @@ export function createDesktopTools(): Tool[] {
         pid: z.number().int().optional().describe('Process id'),
         title: z.string().optional().describe('Window title substring'),
       }),
-      execute: (a) => run('uia_right_click', a),
+      execute: async (a) => {
+        if (a.ref === undefined && !a.name && !a.automation_id && !a.control_type) {
+          return '[desktop_uia_right_click] 至少要给一个定位条件: ref / name / automation_id / control_type';
+        }
+        return run('uia_right_click', a);
+      },
     }),
     defineTool({
       name: 'desktop_uia_type',
       description:
-        'Type text into a control in a desktop window. Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). ' +
+        'Type text into a control in a desktop window. Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). At least one locator is required. ' +
         'Uses ValuePattern.SetValue when the control supports it (instant replace), else focuses the control and pastes via clipboard. ' +
+        'The target window is brought to the foreground first so the paste lands in the right window. ' +
         'Returns {done, method} (setvalue/sendkeys). Requires approval - text is really written into the target app and may be saved/sent. ' +
         'The clipboard is restored to its previous content afterwards.',
       schema: z.object({
@@ -742,12 +758,18 @@ export function createDesktopTools(): Tool[] {
         pid: z.number().int().optional().describe('Process id'),
         title: z.string().optional().describe('Window title substring'),
       }),
-      execute: (a) => run('uia_type', a),
+      execute: async (a) => {
+        if (a.ref === undefined && !a.name && !a.automation_id && !a.control_type) {
+          return '[desktop_uia_type] 至少要给一个定位条件: ref / name / automation_id / control_type';
+        }
+        return run('uia_type', a);
+      },
     }),
     defineTool({
       name: 'desktop_uia_scroll',
       description:
-        'Scroll a scrollable control in a desktop window. Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). ' +
+        'Scroll a scrollable control in a desktop window. Locate by EITHER ref OR name/automation_id/control_type (see desktop_uia_click). At least one locator is required. ' +
+        'The target window is brought to the foreground first. ' +
         'Uses ScrollPattern when available (precise), else real mouse wheel at the control center (Wheel vertical / HWheel horizontal). ' +
         'Returns {done, method} (scrollpattern/wheel). Requires approval - moves the viewport of the target app.',
       schema: z.object({
@@ -761,7 +783,12 @@ export function createDesktopTools(): Tool[] {
         pid: z.number().int().optional().describe('Process id'),
         title: z.string().optional().describe('Window title substring'),
       }),
-      execute: (a) => run('uia_scroll', a),
+      execute: async (a) => {
+        if (a.ref === undefined && !a.name && !a.automation_id && !a.control_type) {
+          return '[desktop_uia_scroll] 至少要给一个定位条件: ref / name / automation_id / control_type';
+        }
+        return run('uia_scroll', a);
+      },
     }),
     defineTool({
       name: 'desktop_uia_window_shot',

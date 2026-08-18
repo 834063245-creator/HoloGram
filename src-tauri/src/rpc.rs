@@ -558,6 +558,14 @@ pub(crate) async fn rpc(
                 crate::utils::check_permission(&tool, &ctx, &app).await?;
             }
             // 写:向目标应用注入真实点击(Invoke/Toggle/Selection 优先,坐标兜底)
+            // 至少给一个定位条件(ref 或 name/automation_id/control_type),否则静默 ref=0 点到首个控件
+            if opt_str(&params, "name").is_none()
+                && opt_str(&params, "automation_id").is_none()
+                && opt_str(&params, "control_type").is_none()
+                && opt_u32(&params, "ref").is_none()
+            {
+                return Err("desktop_uia_click: 至少要给一个定位条件 (ref / name / automation_id / control_type)".into());
+            }
             crate::uia::uia_click(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
@@ -576,6 +584,13 @@ pub(crate) async fn rpc(
                 crate::utils::check_permission(&tool, &ctx, &app).await?;
             }
             // 写:向目标应用注入真实右键(上下文菜单)
+            if opt_str(&params, "name").is_none()
+                && opt_str(&params, "automation_id").is_none()
+                && opt_str(&params, "control_type").is_none()
+                && opt_u32(&params, "ref").is_none()
+            {
+                return Err("desktop_uia_right_click: 至少要给一个定位条件 (ref / name / automation_id / control_type)".into());
+            }
             crate::uia::uia_right_click(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
@@ -594,6 +609,13 @@ pub(crate) async fn rpc(
                 crate::utils::check_permission(&tool, &ctx, &app).await?;
             }
             // 写:向目标应用输入文字(ValuePattern.SetValue 优先,剪贴板粘贴兜底)
+            if opt_str(&params, "name").is_none()
+                && opt_str(&params, "automation_id").is_none()
+                && opt_str(&params, "control_type").is_none()
+                && opt_u32(&params, "ref").is_none()
+            {
+                return Err("desktop_uia_type: 至少要给一个定位条件 (ref / name / automation_id / control_type)".into());
+            }
             crate::uia::uia_type(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
@@ -613,6 +635,13 @@ pub(crate) async fn rpc(
                 crate::utils::check_permission(&tool, &ctx, &app).await?;
             }
             // 写:滚动目标控件(ScrollPattern 优先,滚轮兜底)
+            if opt_str(&params, "name").is_none()
+                && opt_str(&params, "automation_id").is_none()
+                && opt_str(&params, "control_type").is_none()
+                && opt_u32(&params, "ref").is_none()
+            {
+                return Err("desktop_uia_scroll: 至少要给一个定位条件 (ref / name / automation_id / control_type)".into());
+            }
             crate::uia::uia_scroll(
                 opt_str(&params, "title").as_deref(),
                 opt_u32(&params, "pid"),
@@ -818,7 +847,7 @@ pub(crate) async fn rpc(
             }
             check_browser_permission("new_tab", agent_id.as_deref(), &state, &app).await?;
             let url = opt_str(&params, "url");
-            crate::cdp::cdp_new_tab(url, agent_id.as_deref())
+            crate::cdp::cdp_new_tab(url, agent_id.as_deref()).await
         }
         "browser_close_tab" => {
             let agent_id = self_or_agent(&params);
