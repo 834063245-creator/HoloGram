@@ -559,6 +559,9 @@
 }
 
 /* ── 面板内确认弹窗 ── */
+/* ⚠️ 弹层高度约束：#settings-panel 是 overflow:hidden 的定高面板（620px / 88vh），
+   弹体（cd-sheet）必须自带 max-height + 内部滚动。否则「添加信号源」这类高弹层
+   在 font-scale>1 或矮视口下会上下同时被面板裁断，底部按钮不可达（2026-08 修复）。 */
 .cd-overlay {
   position: absolute;
   inset: 0;
@@ -566,19 +569,31 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 弹体与面板边缘留呼吸空间，同时保证 max-height:100% 不顶到面板边框 */
+  padding: 14px;
   background: rgba(3, 7, 14, 0.62);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
 }
 .cd-sheet {
   width: 420px;
-  max-width: 90%;
+  max-width: 100%; /* overlay padding 已提供左右边距，避免双重收缩 */
+  max-height: 100%; /* 弹体高度永不超出面板可视区 */
+  overflow-y: auto; /* 内容超高时弹体内部滚动，底部操作按钮始终可达 */
+  overscroll-behavior: contain; /* 弹体内滚动不穿透到背后的 .sp-content */
   border: 1px solid var(--obs-line);
   border-radius: 10px;
   background: rgba(9, 16, 28, 0.97);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65);
   padding: 15px 16px;
   animation: pp-rise 0.18s ease;
+}
+.cd-sheet::-webkit-scrollbar {
+  width: 4px;
+}
+.cd-sheet::-webkit-scrollbar-thumb {
+  background: rgba(120, 140, 185, 0.22);
+  border-radius: 2px;
 }
 .cd-danger {
   border-color: rgba(217, 99, 95, 0.4);
