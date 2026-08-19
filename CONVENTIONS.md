@@ -58,6 +58,10 @@
    tests/ui-react-retirement.test.ts。总线缩编为 11 事件——lang/agent:config/agent:status/
    timeline/dataflow 五事件改为 zustand 信号 store（i18n.useLangStore / ui/agent-config-store /
    agent-panel-store 的 statusTick/toolDoneTick / ui/timeline-store / ui/dataflow-store）
+🔒 总线归零 + ui/ 拆分立项（2026-08-19，docs/plans/eventbus-zero-and-ui-split-plan.md）：
+   events.ts 事件只减不增（守护 tests/eventbus-zero-and-ui-split.test.ts）；ui/ 目录只减不增——
+   新建信号 store 一律落 src/state/（P1 起该目录为状态层新家），新组件落 src/app/**；
+   执行窗口：下一个新窗口（P1 事件归零 → P2 拆 scene/+state/ → P3 收口）
 
 ❌ 禁止：window.dispatchEvent / CustomEvent / 自己 new EventEmitter
 ```
