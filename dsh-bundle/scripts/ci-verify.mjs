@@ -28,9 +28,12 @@ for (const f of required) {
 const assets = join(ROOT, 'viewer', 'dist', 'assets')
 check(existsSync(assets) && readdirSync(assets).some(f => f.endsWith('.js')), 'viewer dist/assets must contain at least one JS chunk')
 
+// Windows 本机 npm 是 npm.cmd，不走 shell 会 spawnSync ENOENT（CI 的 ubuntu 不受影响）。
+// 参数全是固定字面量，无注入面；开 shell 让本机也能直接把本脚本当本地门禁跑。
 const packJson = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
   cwd: ROOT,
   encoding: 'utf8',
+  shell: process.platform === 'win32',
 })
 const [pack] = JSON.parse(packJson)
 const packed = new Set(pack.files.map(f => f.path))
@@ -44,10 +47,17 @@ for (const f of ['lib/client.js', 'lib/client.js.map']) {
 // 2. 壳包必须保持轻量（引擎二进制/大样例不进 npm 包）
 check(pack.unpackedSize < 5_000_000, `package too large: ${pack.unpackedSize} bytes (engine binary must live in GitHub Release)`)
 
-// 3. 版本一致性：install.mjs 的 fallback 版本必须等于 package.json.version
+// 3. 版本单一真源：install.mjs 必须从包根 package.json 读版本，禁止硬编码 semver fallback。
+//    （曾两次漂移：10.2.0、10.3.0 发版忘改 fallback，CI 连红——此检查防复发）
 const install = readFileSync(join(ROOT, 'scripts', 'install.mjs'), 'utf8')
-const fallback = install.match(/const PKG_VERSION = process\.env\.npm_package_version \?\? '([^']+)'/)?.[1]
-check(fallback === pkg.version, `install.mjs fallback version ${fallback} != package.json version ${pkg.version}`)
+check(
+  install.includes("readFileSync(join(BUNDLE_ROOT, 'package.json')"),
+  'install.mjs must resolve PKG_VERSION from package.json (single source of truth)',
+)
+check(
+  !/'\d+\.\d+\.\d+'/.test(install),
+  "install.mjs hardcodes a semver string literal — it will drift on the next version bump; read package.json instead",
+)
 
 // 4. exports 指向的文件必须存在
 for (const [spec, target] of Object.entries(pkg.exports ?? {})) {

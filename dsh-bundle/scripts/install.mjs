@@ -9,9 +9,9 @@
 //
 // 下载源：https://github.com/834063245-creator/HoloGram/releases/download/<tag>/<asset>
 // tag 与 npm 版本对应：发布流程 = 打 v<version> tag（触发 CI 构建引擎传 Release）→ npm publish
-// （install 脚本用 npm_package_version 拼 tag，保证二进制与包版本一致）
+// （install 脚本读包根 package.json 的 version 拼 tag，保证二进制与包版本一致）
 
-import { createWriteStream, existsSync, mkdirSync, rmSync, statSync, renameSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, renameSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { get as httpsGet } from 'node:https'
@@ -19,7 +19,9 @@ import { get as httpsGet } from 'node:https'
 // new URL('..', scripts/install.mjs) 已指向包根，不要再 dirname
 const BUNDLE_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const BIN_DIR = join(BUNDLE_ROOT, 'bin')
-const PKG_VERSION = process.env.npm_package_version ?? '10.2.0'
+// 版本唯一真源 = 包根 package.json（engine 侧用 CARGO_PKG_VERSION 是同一模式）。
+// 历史教训：硬编码 fallback 在 10.2.0 与 10.3.0 两次发版时忘改，CI 连红——不要再加回来。
+const PKG_VERSION = JSON.parse(readFileSync(join(BUNDLE_ROOT, 'package.json'), 'utf8')).version
 const REPO = '834063245-creator/HoloGram'
 const TAG = 'v' + PKG_VERSION
 
