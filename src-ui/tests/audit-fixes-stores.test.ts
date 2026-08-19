@@ -94,10 +94,10 @@ describe('#3 message ID uniqueness across sessions', () => {
 
 describe('#8 store disposal', () => {
   it('disposePanelStores removes panel + per-session message stores', async () => {
-    const { getMessagesStore } = await import('../src/ui/messages-store');
-    const { getSessionStore } = await import('../src/ui/session-store');
-    const { getPanelStore } = await import('../src/ui/panel-store');
-    const { getInputStore } = await import('../src/ui/input-store');
+    const { getMessagesStore } = await import('../src/state/messages-store');
+    const { getSessionStore } = await import('../src/state/session-store');
+    const { getPanelStore } = await import('../src/state/panel-store');
+    const { getInputStore } = await import('../src/state/input-store');
     const { disposePanelStores } = await import('../src/ui/chat-store');
 
     const storeId = 'disposal-test-panel';
@@ -132,7 +132,7 @@ describe('#8 store disposal', () => {
   });
 
   it('disposePanelStores does NOT affect other panels', async () => {
-    const { getMessagesStore } = await import('../src/ui/messages-store');
+    const { getMessagesStore } = await import('../src/state/messages-store');
     const { disposePanelStores } = await import('../src/ui/chat-store');
 
     const panelA = 'keep-panel';

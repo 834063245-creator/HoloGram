@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 // P3：dock 面板注册表 — DockRail（轨道按钮）与 DockPanel（面板容器）的唯一清单。
-// 增删面板只改这里；开合状态在 ui/dock-store，不在本表。
+// 增删面板只改这里；开合状态在 state/dock-store，不在本表。
 
 import type { ComponentType } from 'react';
-import type { DockPanelId } from '../../ui/dock-store';
+import type { DockPanelId } from '../../state/dock-store';
 import { AgentsPanel } from './AgentsPanel';
 import { CheckPanel } from './CheckPanel';
 import { ConstraintsPanel } from './ConstraintsPanel';

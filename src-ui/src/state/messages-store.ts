@@ -5,8 +5,8 @@
 // 从 chat-store.ts 拆分（god store → 领域存储）。
 
 import { create } from 'zustand';
+import type { AssistantMessage, ChatMessage, MessageId } from '../ui/message-model';
 import { createScopedStore } from './scoped-store';
-import type { AssistantMessage, ChatMessage, MessageId } from './message-model';
 
 interface MessagesStore {
   messages: ChatMessage[];

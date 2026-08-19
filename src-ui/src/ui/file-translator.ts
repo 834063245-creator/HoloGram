@@ -6,7 +6,7 @@
 // P3：不再自建 React root —— 渲染会话写入 overlay-store，
 // 由 App 树的 FileTranslatorPortal 经 createPortal 挂到 _panelEl（挂载点不变）。
 
-import { useOverlayStore } from './overlay-store';
+import { useOverlayStore } from '../state/overlay-store';
 
 export class FileTranslator {
   private _panelEl: HTMLDivElement;
@@ -16,7 +16,11 @@ export class FileTranslator {
   private _onLayoutChange: () => void;
   private _getEditorContent: () => string | null;
 
-  constructor(parentEl: HTMLElement, onLayoutChange: () => void, getEditor: () => { getModel(): { getValue(): string } | null } | null) {
+  constructor(
+    parentEl: HTMLElement,
+    onLayoutChange: () => void,
+    getEditor: () => { getModel(): { getValue(): string } | null } | null,
+  ) {
     this._onLayoutChange = onLayoutChange;
     this._getEditorContent = () => {
       try {

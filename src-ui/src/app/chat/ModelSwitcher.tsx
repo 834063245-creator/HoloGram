@@ -16,7 +16,7 @@ import {
   saveSettings,
   updateProvider,
 } from '../../settings';
-import { type AgentConfigChangeReason, notifyAgentConfigChanged } from '../../ui/agent-config-store';
+import { type AgentConfigChangeReason, notifyAgentConfigChanged } from '../../state/agent-config-store';
 import { iconHtml } from '../../ui/icons';
 import { protocolLabel } from '../panels/settings/protocol';
 

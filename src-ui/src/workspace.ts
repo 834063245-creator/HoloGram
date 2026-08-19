@@ -48,19 +48,19 @@ import { getModel, mergeDynamicModels } from './provider/catalog';
 import { withThinkingDisabled } from './provider/thinking';
 import type { Provider } from './provider/types';
 import { typedListen, typedRpc } from './rpc-contract';
+import type { StarGraph } from './scene/graph';
+import type { CommunityData, GraphDiffJson, GraphEdge, GraphJSON, GraphNode } from './scene/graph-types';
 import { type AppSettings, defaultPricing, getActiveProvider, loadSettingsWithSecrets } from './settings';
+import type { AgentConfigChangeReason } from './state/agent-config-store';
+import type { CheckResult } from './state/dock-store';
+import { useDockStore } from './state/dock-store';
 import { broadcastGoalRecord } from './state/goal-store';
-import type { AgentConfigChangeReason } from './ui/agent-config-store';
+import { getPanelStore } from './state/panel-store';
+import { bumpTimelineRefresh } from './state/timeline-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
 import { stripLineNumbers } from './ui/chat-session';
-import type { CheckResult } from './ui/dock-store';
-import { useDockStore } from './ui/dock-store';
-import type { StarGraph } from './ui/graph';
-import type { CommunityData, GraphDiffJson, GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
 import { getDiagnosticsForFile, LspService } from './ui/lsp-client';
-import { getPanelStore } from './ui/panel-store';
 import { createBuilderDeps, createRuntimeAdapter } from './ui/runtime-adapter';
-import { bumpTimelineRefresh } from './ui/timeline-store';
 import { resolveSemanticToolName } from './ui/tool-semantics';
 import { bumpWorkspaceEpoch } from './workspace-scope';
 
@@ -568,7 +568,7 @@ export class Workspace {
   }
 
   /**
-   * Agent 配置变更统一入口（由 ui/agent-config-store 信号驱动）。
+   * Agent 配置变更统一入口（由 state/agent-config-store 信号驱动）。
    * 所有变更一律热切换，不重建 Agent：
    *  - provider（模型/信号源/协议）变了 → 换 provider 引用 + 定价（setProvider）
    *  - thinking / contextWindow → 热同步（setThinking / setContextWindow）

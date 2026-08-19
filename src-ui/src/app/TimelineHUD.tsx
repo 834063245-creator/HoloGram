@@ -7,10 +7,10 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { typedRpc } from '../rpc-contract';
+import { useTimelineStore } from '../state/timeline-store';
 import { askAgent } from '../ui/agent-visualizer';
 import { shell } from '../ui/app-shell';
 import { iconHtml } from '../ui/icons';
-import { useTimelineStore } from '../ui/timeline-store';
 import { useShellStore } from './shell-store';
 
 interface TimelineEvent {

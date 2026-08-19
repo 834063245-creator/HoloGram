@@ -7,16 +7,16 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { typedRpc } from '../../rpc-contract';
+import { useDockStore } from '../../state/dock-store';
 import { askAgent } from '../../ui/agent-visualizer';
 import { shell } from '../../ui/app-shell';
-import { useDockStore } from '../../ui/dock-store';
 import { iconHtml } from '../../ui/icons';
 import { basename } from './helpers';
 
 // 类型随状态走（P2）：CheckResult/Violation 定义在 dock-store（checkResult 的单一事实源）
-export type { CheckResult, Violation } from '../../ui/dock-store';
+export type { CheckResult, Violation } from '../../state/dock-store';
 
-import type { CheckResult, Violation } from '../../ui/dock-store';
+import type { CheckResult, Violation } from '../../state/dock-store';
 
 interface HistoryEvent {
   timestamp: string;

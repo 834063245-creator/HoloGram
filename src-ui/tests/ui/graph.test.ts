@@ -381,7 +381,7 @@ vi.mock('three', () => {
 
 // ── Mock app-level imports ──
 
-vi.mock('../../src/ui/gpu-layout', () => ({
+vi.mock('../../src/scene/gpu-layout', () => ({
   gpuLayout: {
     ready: false,
     init: async () => false,
@@ -391,8 +391,8 @@ vi.mock('../../src/ui/gpu-layout', () => ({
 
 // relaxNewNodes 打桩为 no-op — 让 _appendNodes 的初始落位（质心锚定）
 // 在测试中可直接观测，不被局部松弛掩盖。
-vi.mock('../../src/ui/graph-layout', async (importActual) => {
-  const actual = await importActual<typeof import('../../src/ui/graph-layout')>();
+vi.mock('../../src/scene/graph-layout', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/scene/graph-layout')>();
   return { ...actual, relaxNewNodes: vi.fn(async () => {}) };
 });
 
@@ -424,7 +424,7 @@ vi.mock('../../src/i18n', () => ({
   useLangStore: { subscribe: vi.fn(() => () => {}) },
 }));
 
-import { StarGraph } from '../../src/ui/graph';
+import { StarGraph } from '../../src/scene/graph';
 
 // ── Mock Canvas 2D context (jsdom doesn't implement it) ─────
 function mockCtx2D(): CanvasRenderingContext2D {

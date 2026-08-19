@@ -6,7 +6,7 @@
 // 挂载点不变（FileViewer 内、.fv-grip 之前），独立 React root 由此移除。
 
 import { createPortal } from 'react-dom';
-import { useOverlayStore } from '../../ui/overlay-store';
+import { useOverlayStore } from '../../state/overlay-store';
 import { FileTranslatorApp } from './FileTranslatorPanel';
 
 export function FileTranslatorPortal() {

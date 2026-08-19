@@ -8,7 +8,7 @@
 // 直接测 input-store 层的 save/restore/clear primitives（纯 zustand，无需 DOM/Agent）。
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getInputStore } from '../src/ui/input-store';
+import { getInputStore } from '../src/state/input-store';
 
 // 新面板 id，避免用例间被 createScopedStore 复用到旧 store
 let panelSeq = 0;

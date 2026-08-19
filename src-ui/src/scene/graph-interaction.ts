@@ -6,7 +6,7 @@
 // 不改 Agent 循环。纯增量。
 
 import { type GraphNodeClicked, useSceneSignalStore } from '../state/scene-signal-store';
-import { dbg } from './debug';
+import { dbg } from '../ui/debug';
 
 export class GraphInteraction {
   constructor() {

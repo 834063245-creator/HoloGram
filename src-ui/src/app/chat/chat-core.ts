@@ -20,6 +20,7 @@ import { GoalManager, type GoalRecord } from '../../agent/goal-manager';
 import type { RuntimePort } from '../../agent/runtime/types';
 import { useShellStore } from '../../app/shell-store';
 import type { ToolSchema } from '../../provider/types';
+import type { StarGraph } from '../../scene/graph';
 import { useAskStore } from '../../state/ask-store';
 import { useChatContextStore } from '../../state/chat-context-store';
 import { broadcastGoalRecord, useGoalStore } from '../../state/goal-store';
@@ -38,7 +39,6 @@ import {
 } from '../../ui/chat-store';
 import * as Stream from '../../ui/chat-stream';
 import { type CommandDef, CommandRegistry, DEFAULT_COMMANDS } from '../../ui/command-registry';
-import type { StarGraph } from '../../ui/graph';
 import { type AssistantMessage, type ChatMessage, resetMsgIdCounter, type UserMessage } from '../../ui/message-model';
 import { getWorkspaceEpoch, isCurrentEpoch } from '../../workspace-scope';
 import type { AtAutocompleteHandle } from './AtAutocomplete';

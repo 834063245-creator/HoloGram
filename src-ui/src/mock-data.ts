@@ -4,7 +4,7 @@
 // Mock 数据 — 浏览器开发模式下的真实依赖图
 // 模拟一个虚构的 "Nebula" Web 框架项目，约 40 个节点
 
-import type { GraphEdge } from './ui/graph-types';
+import type { GraphEdge } from './scene/graph-types';
 
 // ── 图节点 ──
 const MOCK_NODES = [
@@ -397,10 +397,7 @@ const MOCK_DIFF = {
 };
 
 // ── Agent 工具 mock 响应 ──
-type MockToolResponse =
-  | string
-  | unknown[]
-  | ((args?: Record<string, unknown>) => unknown);
+type MockToolResponse = string | unknown[] | ((args?: Record<string, unknown>) => unknown);
 const MOCK_TOOL_RESPONSES: Record<string, MockToolResponse> = {
   analyze_project: JSON.stringify({
     nodes: MOCK_NODES.length,

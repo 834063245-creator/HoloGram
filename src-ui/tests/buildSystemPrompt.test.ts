@@ -60,7 +60,7 @@ vi.mock('../src/ui/chat-store', () => ({
 }));
 vi.mock('../src/ui/chat-session', () => ({ rebuildMessagesFromMessages: vi.fn() }));
 vi.mock('../src/ui/lsp-client', () => ({ getDiagnosticsForFile: vi.fn() }));
-vi.mock('../src/ui/panel-store', () => ({ getPanelStore: () => ({ getState: () => ({}) }) }));
+vi.mock('../src/state/panel-store', () => ({ getPanelStore: () => ({ getState: () => ({}) }) }));
 vi.mock('../src/ui/subagent-sink', () => ({ createSubAgentSink: vi.fn() }));
 vi.mock('../src/ui/message-model', () => ({}));
 

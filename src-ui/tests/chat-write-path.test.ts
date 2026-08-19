@@ -34,12 +34,12 @@ vi.mock('gsap', () => {
 
 import type { AgentEvent } from '../src/agent/agent-types';
 import { EventKind } from '../src/agent/agent-types';
+import { getSessionStore } from '../src/state/session-store';
 import { rebuildMessagesFromMessages } from '../src/ui/chat-session';
 import { msgStoreFor, msgStoreForActive } from '../src/ui/chat-store';
 import type { StreamContext } from '../src/ui/chat-stream';
 import { appendUserBubble, finishTurn, renderEvent } from '../src/ui/chat-stream';
 import type { AssistantMessage, ChatMessage, MessageId, SubAgentPart } from '../src/ui/message-model';
-import { getSessionStore } from '../src/ui/session-store';
 
 const STORE_ID = 'test-write-path';
 const SESSION_A = 1;

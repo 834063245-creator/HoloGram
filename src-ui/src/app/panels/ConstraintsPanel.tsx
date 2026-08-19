@@ -7,8 +7,8 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { typedRpc } from '../../rpc-contract';
+import { useDockStore } from '../../state/dock-store';
 import { askAgent } from '../../ui/agent-visualizer';
-import { useDockStore } from '../../ui/dock-store';
 import { iconHtml } from '../../ui/icons';
 import { useShellStore } from '../shell-store';
 

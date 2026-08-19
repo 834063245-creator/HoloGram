@@ -7,7 +7,7 @@
 // 3. No NaN / no extreme positions
 
 import { describe, expect, it } from 'vitest';
-import { fibonacciSphere, layout3D, repelCommunityCentroids } from '../../src/ui/graph-layout';
+import { fibonacciSphere, layout3D, repelCommunityCentroids } from '../../src/scene/graph-layout';
 
 function makeFixture(n: number, comms: number): { nodeComm: number[]; edgePairs: [number, number][] } {
   const nodeComm = Array.from({ length: n }, (_, i) => i % comms);

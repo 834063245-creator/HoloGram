@@ -5,7 +5,7 @@
 // unmountOnClose 的面板（dataflow/settings）关闭即卸载（对齐旧 Controller 的
 // close=unmount 语义）；其余常驻挂载，组件内部用 class 切换保 CSS 过渡。
 
-import { useDockStore } from '../../ui/dock-store';
+import { useDockStore } from '../../state/dock-store';
 import { PANEL_DEFS, type PanelDef } from './panel-def';
 
 function PanelSlot({ def }: { def: PanelDef }) {

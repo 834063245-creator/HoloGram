@@ -10,10 +10,10 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { agentSessionState } from '../../agent/agent-session-state';
 import type { Task, TaskStatus } from '../../agent/task';
+import { useDockStore } from '../../state/dock-store';
+import { getSessionStore } from '../../state/session-store';
 import { useAgentPanelStore } from '../../ui/agent-panel-store';
-import { useDockStore } from '../../ui/dock-store';
 import { iconHtml } from '../../ui/icons';
-import { getSessionStore } from '../../ui/session-store';
 import { useCoreStore } from '../chat/core-instance';
 import './TasksPanel.css';
 

@@ -33,11 +33,11 @@ vi.mock('gsap', () => {
 });
 
 import { EventKind } from '../src/agent/agent-types';
+import { getSessionStore } from '../src/state/session-store';
 import { msgStoreFor, msgStoreForActive } from '../src/ui/chat-store';
 import type { StreamContext } from '../src/ui/chat-stream';
 import { renderEvent } from '../src/ui/chat-stream';
 import type { AssistantMessage, ChatMessage, MessageId, ToolCallPart } from '../src/ui/message-model';
-import { getSessionStore } from '../src/ui/session-store';
 
 const STORE_ID = 'test-panel';
 const SESSION_A = 1;

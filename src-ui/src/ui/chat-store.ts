@@ -10,7 +10,7 @@
 //
 // 每个都是真实的 Zustand store。getState() 返回实时内部状态。
 
-import { disposeInputStore, getInputStore, type InputStoreApi } from './input-store';
+import { disposeInputStore, getInputStore, type InputStoreApi } from '../state/input-store';
 import {
   getExpandedReasoningSet as _msg_expandedReasoning,
   getUserScrolledUp as _msg_scrolledUp,
@@ -19,9 +19,9 @@ import {
   disposeMessagesStores,
   getMessagesStore,
   type MessagesStoreApi,
-} from './messages-store';
-import { disposePanelStore, getPanelStore, type PanelStoreApi } from './panel-store';
-import { disposeSessionStore, getSessionStore, nextMsgId, type SessionStoreApi } from './session-store';
+} from '../state/messages-store';
+import { disposePanelStore, getPanelStore, type PanelStoreApi } from '../state/panel-store';
+import { disposeSessionStore, getSessionStore, nextMsgId, type SessionStoreApi } from '../state/session-store';
 
 // ── ChatStore 句柄 — 直接访问子 store ──
 

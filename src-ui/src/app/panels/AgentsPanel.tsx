@@ -9,13 +9,13 @@ import { useEffect, useMemo, useState } from 'react';
 import type { DiscoveryEntry } from '../../agent/discovery-board';
 import type { AgentStatus, AgentSummary } from '../../agent/runtime/types';
 import type { BoardEntry, BoardStatus } from '../../agent/task-board';
+import { useDockStore } from '../../state/dock-store';
 import {
   type AgentPanelEntry,
   type LifecycleAlert,
   type MessageFlowEntry,
   useAgentPanelStore,
 } from '../../ui/agent-panel-store';
-import { useDockStore } from '../../ui/dock-store';
 import { iconHtml } from '../../ui/icons';
 import { BrowserActivityPanel } from './BrowserActivityPanel';
 import './AgentsPanel.css';

@@ -1,7 +1,7 @@
 # 事件总线归零 + ui/ 层拆分计划
 
 > 立项：2026-08-19（岛层退休收口当日立项；执行窗口：下一个新窗口）
-> 状态：**P0 ✅ · P1 ✅（2026-08-19 本窗口完成：11 事件全退役 + events.ts 删除）· P2-P3 待执行**
+> 状态：**P0 ✅ · P1 ✅ · P2 ✅（2026-08-19 本窗口完成：state/ 11 文件 + scene/ 23 文件物理拆分）· P3 待执行**
 > 守护：`tests/eventbus-zero-and-ui-split.test.ts`（三重只减不增门禁 + 终态断言）
 > 前置：docs/plans/ui-react-island-retirement-plan.md（Done，2026-08-19）
 
@@ -126,7 +126,22 @@ tests/ask-store.test.ts（pending 期 chat-core 重建），events.ts 整文件�
 9. 删 events.ts 整文件（EventBus 类 + bus + BusEvents）；INVARIANTS #4 加退役旁注
 10. 每步后：npx tsc --noEmit 零错 + 相关测试文件单跑
 
-### P2 物理拆分（纯 git mv + import 路径，零逻辑改动）
+### P2 ✅（2026-08-19，本窗口）物理拆分（纯 git mv + import 路径，零逻辑改动）
+
+实际执行记录：Batch S 先行（11 store git mv → src/state/，消费方 30 处路径改写，
+内部引用仅 messages-store→ui/message-model 与 dock-config→graph 两处跨目录），
+Batch G 随后（23 文件 git mv → src/scene/，ui/graph.ts 置换 3 行 shim，scene 内部
+仅 4 文件 6 处指向 ui/ 残余的引用需改：icons/debug/app-shell）。深度表确认同级移动
+红利：'../agent'、'../app'、'../i18n'、'../state' 前缀全部不变。测试侧同步改写
+值导入与绑定 mock（graph.test.ts 的 gpu-layout/graph-layout mock 必须随模块 ID
+同步，否则 mock 失效）；10 个 type-only 预防性 vi.mock '../src/ui/graph' 保留原路径
+（拦 shim，语义不变）。CSS 审计：唯一 ui/ CSS 引用（FileTranslatorPanel →
+file-translator.css）留守不动。终态：scene 23 / state 17（11+P1 六信号）/ ui 残余 25。
+执行差异：①扫描发现两处动态 await import('../src/ui/session-store'|...) 计划未列
+（audit-fixes-render/stores），一并改写；②agent-builder/runtime 的旧路径注释属 agent/**
+禁触面，保留。事故与修复：Batch S 脚本的 PowerShell 单元素数组自动展开把替换 token
+降级成字符对（String.Replace(char,char)）导致两文件全局 f→r 损坏，git show HEAD
+恢复后重放正确的 import 改动，全仓扫描确认零残留。
 
 - Batch S（state/）：11 文件 → src/state/；消费方改路径（app/**、ui/ 残余、main/workspace）
 - Batch G（scene/）：23 文件 → src/scene/；ui/graph.ts 置换为 1 行 shim；

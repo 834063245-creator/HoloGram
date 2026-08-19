@@ -5,7 +5,7 @@
 // P3：面板清单改读 panel-def 注册表；开合状态改读 dock-store（原 shell-store.panels 快照链已删）。
 // 行为对齐旧 updateTabs：本侧有面板打开时整条轨道隐藏；按钮激活态跟面板开合。
 
-import { useDockStore } from '../ui/dock-store';
+import { useDockStore } from '../state/dock-store';
 import { runAction } from './actions';
 import { Icon } from './Icon';
 import { PANEL_DEFS } from './panels/panel-def';

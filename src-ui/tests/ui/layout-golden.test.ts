@@ -9,7 +9,7 @@
 // Tier-A 质心弛豫，全程无 Math.random（spiralGalaxies 不在 layout3D 调用链上）。
 
 import { describe, expect, it } from 'vitest';
-import { fibonacciSphere, layout3D } from '../../src/ui/graph-layout';
+import { fibonacciSphere, layout3D } from '../../src/scene/graph-layout';
 
 // ── 固定种子图（fixture 即种子，无 RNG）──────────────────────
 

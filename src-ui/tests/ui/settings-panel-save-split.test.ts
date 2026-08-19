@@ -20,7 +20,7 @@ vi.mock('../../src/bridge', () => ({
   rpc: (...args: unknown[]) => mockRpc(...args),
 }));
 vi.mock('../../src/i18n', () => ({ setLang: vi.fn() }));
-vi.mock('../../src/ui/agent-config-store', () => ({
+vi.mock('../../src/state/agent-config-store', () => ({
   notifyAgentConfigChanged: (...args: unknown[]) => mockConfigChanged(...args),
 }));
 vi.mock('../../src/ui/icons', () => ({ iconHtml: () => '' }));

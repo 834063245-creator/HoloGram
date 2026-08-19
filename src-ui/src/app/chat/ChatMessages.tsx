@@ -14,6 +14,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useStore } from 'zustand';
+import { getMessagesStore } from '../../state/messages-store';
+import { getSessionStore } from '../../state/session-store';
 import { computeSimpleDiff, formatToolResult } from '../../ui/chat-utils';
 import { iconSvg } from '../../ui/icons';
 import { estimateMessageHeight, getMessageGap } from '../../ui/message-height';
@@ -27,8 +29,6 @@ import type {
   ToolCallPart,
   UserMessage,
 } from '../../ui/message-model';
-import { getMessagesStore } from '../../ui/messages-store';
-import { getSessionStore } from '../../ui/session-store';
 import { displayToolName, resolveSemanticToolName } from '../../ui/tool-semantics';
 
 // ── 常量 ──

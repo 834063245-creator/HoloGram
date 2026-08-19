@@ -12,11 +12,11 @@ import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js
 import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { t } from '../i18n';
+import { iconHtml } from '../ui/icons';
 import { edgeColorByType } from './graph-colors';
 import type { GraphFold } from './graph-fold';
 import type { EdgeData, GraphNode } from './graph-types';
 import { buildFocusBanner } from './graph-ui';
-import { iconHtml } from './icons';
 
 // ── FocusHost — GraphFocusController 需要从 StarGraph 访问的成员 ──
 

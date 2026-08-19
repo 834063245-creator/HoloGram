@@ -14,10 +14,10 @@ import type { AgentEvent, EventSink } from '../agent/agent-types';
 import type { AgentStatus, RuntimeNotifier } from '../agent/runtime/types';
 import type { Message } from '../provider/types';
 import { pushAsk } from '../state/ask-store';
+import { bumpDataflowSaved } from '../state/dataflow-store';
 import { useAgentPanelStore } from './agent-panel-store';
 import { rebuildMessagesFromMessages } from './chat-session';
 import { getChatStore, msgStoreFor } from './chat-store';
-import { bumpDataflowSaved } from './dataflow-store';
 import type { AssistantMessage, SubAgentPart } from './message-model';
 import { createSubAgentSink } from './subagent-sink';
 

@@ -7,9 +7,9 @@
 // Step 2: 重构为类。订阅 'agent:tool-done' → 单入口更新图，
 // 消除 main.ts / chat.ts 中的三重 visualizeAgentTool() 调用。
 
+import type { StarGraph } from '../scene/graph';
 import { useAgentPanelStore } from './agent-panel-store';
 import { shell } from './app-shell';
-import type { StarGraph } from './graph';
 
 /**
  * 共享辅助函数 — 向 Agent 发送问题（若聊天面板未打开则自动打开）。

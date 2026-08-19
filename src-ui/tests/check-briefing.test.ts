@@ -1,6 +1,6 @@
 // 守护简报系统 — CheckPanel 渲染 + Workspace.runCheck() invoke 契约。
 // 任何改工具名/CheckResult 形状的提交直接挂 — 必须同步修。
-// P3：CheckPanel 已是纯组件（Controller 包装已删），开合/数据走 ui/dock-store。
+// P3：CheckPanel 已是纯组件（Controller 包装已删），开合/数据走 state/dock-store。
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock layer ──
@@ -20,7 +20,7 @@ vi.mock('../src/ui/agent-visualizer', () => ({ askAgent: vi.fn() }));
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CheckPanel, type CheckResult } from '../src/app/panels/CheckPanel';
-import { useDockStore } from '../src/ui/dock-store';
+import { useDockStore } from '../src/state/dock-store';
 
 function resetDock(): void {
   useDockStore.setState({

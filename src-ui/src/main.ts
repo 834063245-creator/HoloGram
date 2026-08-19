@@ -35,19 +35,19 @@ import { withTimeout } from './lifecycle/timeout';
 import { streamWithIdleTimeout } from './provider/idle-stream';
 import { ChunkType } from './provider/types';
 import { typedListen, typedRpc } from './rpc-contract';
+import { StarGraph } from './scene/graph';
+import { GraphInteraction } from './scene/graph-interaction';
+import type { GraphEdge, GraphJSON, GraphNode } from './scene/graph-types';
 import { loadSettings } from './settings';
+import { useAgentConfigStore } from './state/agent-config-store';
+import { setDataflowQueryParser, setDockStarGraph } from './state/dock-config';
+import type { CheckResult } from './state/dock-store';
+import { useDockStore } from './state/dock-store';
+import { getPanelStore } from './state/panel-store';
 import { useTurnDoneStore } from './state/turn-done-store';
 import { bumpWorkspaceSwitched } from './state/workspace-switch-store';
-import { useAgentConfigStore } from './ui/agent-config-store';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
-import { setDataflowQueryParser, setDockStarGraph } from './ui/dock-config';
-import type { CheckResult } from './ui/dock-store';
-import { useDockStore } from './ui/dock-store';
-import { StarGraph } from './ui/graph';
-import { GraphInteraction } from './ui/graph-interaction';
-import type { GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
-import { getPanelStore } from './ui/panel-store';
 import { installResizeZones } from './ui/resize-zones';
 import { type CachedGraphMeta, isSamePath, loadGraphPages, Workspace } from './workspace';
 
@@ -111,7 +111,7 @@ let agentViz: AgentVisualizer | null = null;
 // 守卫所有工作区转换（打开、停用、切换、重新分析）。
 const wsMachine = new WorkspaceStateMachine();
 
-// Panel singletons（dock 面板已收编进 App 树 — 开合/数据走 ui/dock-store）
+// Panel singletons（dock 面板已收编进 App 树 — 开合/数据走 state/dock-store）
 let chatPanel: ChatCore;
 
 // ── 文件夹选择器 ──

@@ -10,10 +10,10 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } fro
 import { useStore } from 'zustand';
 import { typedRpc } from '../../rpc-contract';
 import { type AppSettings, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
-import { notifyAgentConfigChanged } from '../../ui/agent-config-store';
+import { notifyAgentConfigChanged } from '../../state/agent-config-store';
+import type { CollaborationMode, PermissionMode } from '../../state/panel-store';
 import { getChatStore } from '../../ui/chat-store';
 import { iconHtml } from '../../ui/icons';
-import type { CollaborationMode, PermissionMode } from '../../ui/panel-store';
 import { useShellStore } from '../shell-store';
 import { ModelSwitcher } from './ModelSwitcher';
 

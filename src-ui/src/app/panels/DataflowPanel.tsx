@@ -8,9 +8,9 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { typedRpc } from '../../rpc-contract';
-import { useDataflowStore } from '../../ui/dataflow-store';
-import { getDataflowQueryParser } from '../../ui/dock-config';
-import { useDockStore } from '../../ui/dock-store';
+import { useDataflowStore } from '../../state/dataflow-store';
+import { getDataflowQueryParser } from '../../state/dock-config';
+import { useDockStore } from '../../state/dock-store';
 import { iconHtml } from '../../ui/icons';
 import { useShellStore } from '../shell-store';
 import { escapeHtml } from './helpers';
