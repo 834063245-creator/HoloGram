@@ -15,7 +15,7 @@
 | [`v4-pro-minimal-ab-test-plan.md`](v4-pro-minimal-ab-test-plan.md) | Draft | Linux 环境执行 |
 | [`ui-react-island-retirement-plan.md`](ui-react-island-retirement-plan.md) | **Done**（2026-08-19：ui/react/ 目录删除、5 总线事件退役迁 store、32 文件全量迁入 app/**；终态守护测试常驻） | — |
 | [`eventbus-zero-and-ui-split-plan.md`](eventbus-zero-and-ui-split-plan.md) | P0 ✅ · P1 ✅（2026-08-19：11 事件全退役迁 store、events.ts 删除、bridge-adapters 删除） | P2 物理拆分 state/+scene/（git mv + import 路径）→ P3 终态收口（COMPLETE 翻真 + 文档回写） |
-| [`agent-plugin-architecture-plan.md`](agent-plugin-architecture-plan.md) | Proposed（方向性立项：DSH 源码实证对标——执行原语 + 工具面单一真源 + cordis Service 收口 + 插件边界） | P1 工具面文档生成（半天，独立收益）随时可做；P2 执行原语建议在总线归零后开 |
+| [`agent-plugin-architecture-plan.md`](agent-plugin-architecture-plan.md) | Proposed（方向性立项：DSH 源码实证对标——执行原语 + 工具面单一真源 + cordis Service 收口 + 插件边界；**生态跟随观望中**：P4 门控于 DSH 官方接口稳定信号，P1-P3 纯自研独立成立，见 D8） | P1 工具面文档生成（半天，独立收益）随时可做；P2 执行原语建议在总线归零后开；P4a 契约调研（纯侦察）可先行 |
 
 ## 已归档计划
 

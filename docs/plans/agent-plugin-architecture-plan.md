@@ -2,6 +2,8 @@
 
 > 立项：2026-08-19（岛层退休 + 总线归零立项当日）
 > 状态：**Proposed（方向性立项，执行窗口未定——建议在 eventbus-zero-and-ui-split 完成后开）**
+> 战略决策（2026-08-19 定）：**生态跟随走「观望 DSH」路线**——P4 的前提是 DSH 官方把服务接口
+> 当公开契约维护；在此之前只做自研（P1-P3 全部独立于 DSH 生态成立）。见 §4 D8。
 > 性质：本计划是能力建设（capability plan），不是还债（debt plan）——每阶段独立可停，
 > P1 半天即可单独兑现收益。
 > 参照系：DeepSeek Harness 源码（D:\useful\deepseek-harness，下称 DSH）；所有「DSH 实证」
@@ -32,6 +34,23 @@ cordis 解决的是**开发者侧组装**（Service 注册/依赖注入/生命�
 
 即：cordis 化不是白做，它是插件化的**装配层**；本计划补的是它上面缺的两块——执行腰和
 文档发电机。HoloGram vendored 的 cordis 与 DSH 同宗，模式可以直接平移。
+
+### 生态赌注的诚实分析（2026-08-19 补，决定 P4 走向）
+
+「往 cordis 靠拢就能吃到 DSH 插件生态」是**必要不充分**。DSH 插件的真实依赖面以
+tool-workflow 为例：`dependencies` 仅 schemastery，但 `peerDependencies` 是 **8 个包**
+（dsh-agent / dsh-invariants / dsh-llm / dsh-session / dsh-system-prompt / dsh-tools /
+dsh-workflow / cordis）——cordis 只占八分之一。全仓 80+ 文件做 declaration merge，
+DSH 实际是「cordis 地基 + 一整圈服务契约」（ctx.tools/session/llm/shell/fs/sandbox/…）。
+**生态跟随的单位是服务契约，不是内核**（历史印证：koishi 插件生态同样长在 ctx.database
+/ctx.router 上，不长在裸 cordis 上）。
+
+但契约是分层的：L1 纯工具类（挂 ctx.tools）+ L2 工具+prompt section——插件生态的大头
+恰好在这两层，且 HoloGram 的 Tool 接口形状与之同构。若 DSH 稳定接口，跟随成本集中在
+「最小服务契约子集 + dsh-compat 装载层」，而非重实现平台。
+
+**当前不做跟随的理由**：DSH 的 peer deps 全是 `workspace:^`（monorepo 内部协议），尚无
+「接口是对外稳定契约」的官方承诺。此刻跟随=追跑无版本纪律的移动目标。观望信号见 D8。
 
 ## 2. DSH 实证速查（执行者先读这五个文件）
 
@@ -73,7 +92,9 @@ HoloGram 单进程内暂不需要，P4 插件边界时再评估。
 ### P4 插件边界（远期，判据到时再细化）
 | # | 判据 |
 |---|---|
-| C11 | 第三方插件 = manifest + 工具声明（zod schema 可序列化形态）+ capability 表项，运行时挂载无需重编译；权限声明接入 permissions.json 体系 |
+| C11 | 路线 B：第三方插件 = manifest + 工具声明（zod schema 可序列化形态）+ capability 表项，运行时挂载无需重编译；权限声明接入 permissions.json 体系；声明形状与 DSH L1 契约同构 |
+| C12 | 路线 A：dsh-compat 装载层能加载一个真实 L1 工具类 DSH 插件（e2e），含 peer 版本协商与漂移检测 |
+| C13 | P4a 契约调研笔记存在且覆盖最小子集 + 依赖面分布（两条路线共用输入） |
 
 ## 4. 设计决策
 
@@ -99,6 +120,13 @@ HoloGram 单进程内暂不需要，P4 插件边界时再评估。
   最好在 ui/ 拆分尘埃落定后做（避免两场大迁移叠 diff）。P1/P2 无此约束，随时可做。
 - **D7 蓝图序即字节契约**：code_execution capability 插入位置显式选定（Phase 6 铁律），
   生效快照与缓存依赖表序，不追加到表尾了事。
+- **D8 生态观望，不预支跟随（2026-08-19 拍板）**：P1-P3 是纯自研收益（执行腰 + 文档
+  发电机 + cordis 收口），**无论 DSH 生态走向如何都成立**；P4 的 DSH 契约跟随**仅在
+  观望信号点亮后启动**：① DSH 对服务包（dsh-tools 等）开始 semver；② 出现官方插件
+  开发文档/插件市场；③ 承诺接口稳定性。在此之前 P4 若做，走**自研插件边界**（自有
+  manifest + 权限体系），设计与 DSH 服务契约**形状兼容但零依赖**——将来 DSH 真开放时
+  写 compat 装载层即可衔接，现在不为一厢情愿的生态付追跑成本。战略底牌：cordis 化
+  已完成，两条路（跟随/自研）的装配层同一套，赌注最小化。
 
 ## 5. 阶段
 
@@ -125,10 +153,24 @@ HoloGram 单进程内暂不需要，P4 插件边界时再评估。
 2. 领域工具装配改 ctx 查询；blueprint 加 capability 项
 3. 文档回写：CONVENTIONS/AGENTS/ARCHITECTURE 插件化叙事
 
-### P4 插件边界（远期方向，不排期）
-- manifest 形态、zod schema 序列化、第三方加载沙箱（届时评估 sidecar/engine 嵌入）
-- MCP 客户端方向：HoloGram 引擎已是 MCP server；反向消费外部 MCP 工具并入 registry，
-  是比自造插件格式更标准的开放路径——两者可并存
+### P4 插件边界（远期，**门控于 DSH 观望信号**，见 D8）
+
+**前置 P4a 契约调研（不写码，纯侦察，可随时做）**：把 DSH 那圈服务契约清单化——
+最小子集（ctx.tools 的 ToolDefinition 形状 + ctx.systemPrompt 的 section 注册表）、
+L1/L2 插件的真实依赖面分布、peer deps 版本策略。产出一页 dsh-contract-notes 进本仓库，
+后续无论走哪条路都用得上。
+
+**路线 A（DSH 信号点亮后）**：在自有 cordis 容器实现最小服务契约子集 + dsh-compat
+装载层（npm 包加载 + peer 版本协商 + 契约漂移检测），吃 L1/L2 工具类插件生态；
+L3 深集成插件明确放弃（=重实现半个 DSH，不现实）。
+
+**路线 B（信号始终不亮 / DSH 停止维护接口）**：自研插件边界——自有 manifest + zod
+schema 可序列化 + capability 表项 + permissions.json 接入；**形状与 DSH 契约兼容**
+（ToolDefinition 同构、prompt section 同构），保留将来写 compat 层衔接的可能。
+
+**并行开放路径**：MCP 客户端——HoloGram 引擎已是 MCP server；反向消费外部 MCP 工具
+并入 registry 是比任何自造插件格式更标准的开放路径，与 A/B 均可并存，且不受 DSH
+态度影响。
 
 ## 6. 风险表
 
