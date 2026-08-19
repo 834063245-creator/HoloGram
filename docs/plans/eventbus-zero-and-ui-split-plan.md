@@ -1,7 +1,7 @@
 # 事件总线归零 + ui/ 层拆分计划
 
 > 立项：2026-08-19（岛层退休收口当日立项；执行窗口：下一个新窗口）
-> 状态：**P0 ✅ · P1 ✅ · P2 ✅（2026-08-19 本窗口完成：state/ 11 文件 + scene/ 23 文件物理拆分）· P3 待执行**
+> 状态：**Done（P0-P3 全竣工，2026-08-19）：P1 事件归零 + P2 物理拆分 + P3 终态收口（守护 COMPLETE=true）**
 > 守护：`tests/eventbus-zero-and-ui-split.test.ts`（三重只减不增门禁 + 终态断言）
 > 前置：docs/plans/ui-react-island-retirement-plan.md（Done，2026-08-19）
 
@@ -150,11 +150,16 @@ file-translator.css）留守不动。终态：scene 23 / state 17（11+P1 六信
   （ui/ 内仅 file-translator.css 一枚，不随批次走）
 - 高 fan-in 大文件（graph.ts / graph-scene.ts）改前先跑 preflight
 
-### P3 终态收口
+### P3 ✅（2026-08-19，本窗口）终态收口
 
-- 守护测试翻 COMPLETE=true（终态断言生效）
-- 文档回写：CONVENTIONS bus 段改写、AGENTS §6、app/README、ui/ 残余 README、
-  INVARIANTS #4 旁注、本计划 Done、plans/README
+- 守护测试翻 COMPLETE=true（终态断言生效：events.ts 已删 / bridge-adapters 已删 /
+  scene ≥23 / state ≥11 / graph.ts shim ≤3 行 / ui/ 收窄；ui 计数断言按计划清单
+  精确化为 25 + README——原文「~24」是 .css 折算估算值；UI_MANIFEST 追加登记
+  README.md，目录定位文档属 P3 回写项非代码封口违规）
+- 文档回写：CONVENTIONS §1.2/1.3/1.4/1.9 路径收口 + 总线段终态化、AGENTS 目录树
+  + §6、CLAUDE 硬约束、app/README（bus 段/表格/布局参数路径）、ui/state/scene
+  三目录 README（ui/ 定位=chat 编排域核心 + 旧层命令式基础设施，分簇表 + 依赖方向）、
+  INVARIANTS #4 旁注补 P0-P3 竣工、本计划 Done、plans/README
 - 全量门禁：npm run build + npx vitest run + biome 规则级对照零新增
 
 ## 6. 执行方法论（岛层退休实战教训，直接复用）

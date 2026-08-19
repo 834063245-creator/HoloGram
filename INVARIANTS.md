@@ -65,7 +65,7 @@ streaming 是跨 session 的长期操作。切换 tab 不应该中断它。
 
 **文件**: `events.ts`（`EventBus.clear()` 方法）
 
-**旁注（2026-08-19 总线归零 P1 — 本条已退役）**: `src/ui/events.ts` 已整体删除（EventBus 类 + `bus` + `BusEvents`；docs/plans/eventbus-zero-and-ui-split-plan.md）：11 个残余事件全部迁 zustand 信号 store（`src/state/` 六个新信号 store + agent-panel-store 的 diag/lastToolDone 扩展），本条规则随文件退役、保留作历史记录。跨组件通信现状见 CONVENTIONS §1.3。
+**旁注（2026-08-19 总线归零 + ui/ 拆分 P0-P3 竣工 — 本条已退役）**: `src/ui/events.ts` 已整体删除（EventBus 类 + `bus` + `BusEvents`；docs/plans/eventbus-zero-and-ui-split-plan.md）：11 个残余事件全部迁 zustand 信号 store（`src/state/` 六个新信号 store + agent-panel-store 的 diag/lastToolDone 扩展），本条规则随文件退役、保留作历史记录；事件机制禁复活（终态守护 tests/eventbus-zero-and-ui-split.test.ts COMPLETE=true）。跨组件通信现状见 CONVENTIONS §1.3。
 
 ```
 ⚠️ bus.clear() 只能删除匹配当前 prefix 的事件。

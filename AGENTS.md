@@ -24,7 +24,9 @@ HoloGram/
 ├── src-tauri/         Tauri 2 桌面壳（rpc.rs 单一 IPC 入口 + 权限沙箱 + 命令实现）
 ├── src-ui/            TypeScript 前端（React 19 + Three.js + Monaco + Zustand 5）
 │   ├── src/app/       新观测台壳（单 React 根；新 UI 落这里）
-│   ├── src/ui/        星图 scene + 领域 stores + 旧 React 岛
+│   ├── src/state/     zustand 状态层（领域 store + 面板/app 级 store + 信号 store）
+│   ├── src/scene/     星图 Three.js scene（graph.ts + graph-* + gpu-layout）
+│   ├── src/ui/        chat 编排域核心 + 旧层命令式基础设施（终态 25 文件，见目录 README）
 │   ├── src/cordis/    vendored cordis 内核（Context/Fiber/Service；禁就地改，见目录 README）
 │   └── src/agent/     Agent 运行时、工具层、多 Agent、goal/plan
 ├── docs/              架构/ADR/交接/研究；archive/ 是历史，勿作现状依据
@@ -93,8 +95,8 @@ flowchart LR
 
 ## 6. 前端分层铁律（详情见 CONVENTIONS.md）
 
-- `src/app/` 新代码**不新增** `import .../ui/events`；UI 状态走 zustand store。`ui/events.ts` 是冻结的旧总线（2026-08-19 岛层退休后缩编为 11 事件，生产消费两端都在旧层编排侧或豁免层；`ui/react/` 目录已删除，组件全部迁入 `src/app/**`，终态守护 `tests/ui-react-retirement.test.ts`），不再新增 BusEvents 事件。
-- 面板级状态用 `createScopedStore` 注册表（`messages/session/panel/input` 四件套 + `chat-store` 聚合）；app 级单例用 `shell-store / dock-store / overlay-store`。
+- UI 状态走 zustand store，事件总线已归零（2026-08-19 `docs/plans/eventbus-zero-and-ui-split-plan.md` P0-P3 竣工）：`ui/events.ts` 整文件删除（EventBus/bus/BusEvents 不存在了，禁复活——不要 window.dispatchEvent / CustomEvent / 自建 EventEmitter）；原 11 事件全迁 zustand 信号 store。ui/ 拆分终态：store 一律 `src/state/`（领域 + 面板 + app 级 + 信号 store）、星图一律 `src/scene/`（graph.ts 本体 + graph-* + gpu-layout；`ui/graph.ts` 仅存 3 行 re-export shim，冻结文件 chat-stream 的 type import 走此层）、`ui/` 残余 25 文件 = chat 编排域核心 + 旧层命令式基础设施（见 `src/ui/README.md`）。终态守护 `tests/eventbus-zero-and-ui-split.test.ts` 与 `tests/ui-react-retirement.test.ts`。
+- 面板级状态用 `createScopedStore` 注册表（`state/` 的 messages/session/panel/input 四件套，聚合入口 `ui/chat-store.ts`）；app 级单例用 `app/shell-store` / `state/dock-store` / `state/overlay-store`。
 - 聊天消息原地 mutate 后必须 `touchMessage / touchMessageContaining`——裸 `bump()` 或展开数组会静默卡 UI（`INVARIANTS #1/#2/#3`）。
 - 冻结文件：`ui/chat-session.ts`、`ui/chat-stream.ts`、`ui/part-mutator.ts`、`agent/execution-state.ts`。
 - 样式只写 `--obs-*` token；不引入新 CSS 方案；DOM 所有权按层划分（React UI 不自建游离 DOM，星图 scene / Monaco 宿主是既有 imperative-DOM 所有者）。

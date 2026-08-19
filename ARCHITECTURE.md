@@ -666,7 +666,7 @@ Agent 循环在 TypeScript 中运行（而非 Rust），因为：
 
 ### 10.5 为什么状态全部走 Zustand store + createScopedStore 注册表
 
-（INVARIANTS.md #1）模块顶层全局变量 = 跨面板串流。面板级 store（messages/session/panel/input）统一走 `createScopedStore`（`src-ui/src/ui/scoped-store.ts`）：
+（INVARIANTS.md #1）模块顶层全局变量 = 跨面板串流。面板级 store（messages/session/panel/input）统一走 `createScopedStore`（`src-ui/src/state/scoped-store.ts`）：
 
 ```
 const scoped = createScopedStore('__hologram_xxx_stores__', createImpl);
@@ -675,9 +675,9 @@ export const getXxxStore = scoped.getStore; // 按 storeId 取实例
 
 app 级单例（shell/dock/overlay）用普通 `create()`。新状态必须走注册表或单例 store，否则多面板/多会话共享全局状态必出 bug（已炸 6 次）。
 
-### 10.6 为什么 ui/events.ts 冻结
+### 10.6 为什么 EventBus 已退役（终态）
 
-EventBus 只覆盖不到一半通信，存在 5 个孤儿 emit、三层通信混用。新 `src/app/` 代码禁止 import `ui/events.ts`，UI 状态只走 Zustand stores；Agent 层内部用新 MessageBus（多 Agent 通信，带背压）。迁移完成后 EventBus 退役。
+EventBus 只覆盖不到一半通信，存在 5 个孤儿 emit、三层通信混用——解耦价值归零、复杂度留存。2026-08-19 总线归零（docs/plans/eventbus-zero-and-ui-split-plan.md）后 `ui/events.ts` 整文件删除：UI 状态只走 Zustand store（信号 store 在 `src/state/`）；Agent 层内部用 MessageBus（多 Agent 通信，带背压）；禁 window.dispatchEvent / CustomEvent / 自建 EventEmitter（守护 tests/eventbus-zero-and-ui-split.test.ts）。
 
 ### 10.7 为什么压缩只作用于发送载荷
 

@@ -33,13 +33,15 @@
 ```
 ✅ 面板级（多面板/多会话）store：
    1. create<S>(() => ({ ... })) 定义 store
-   2. createScopedStore('__hologram_xxx_stores__', createImpl) 建注册表（src-ui/src/ui/scoped-store.ts）
+   2. createScopedStore('__hologram_xxx_stores__', createImpl) 建注册表（src-ui/src/state/scoped-store.ts）
    3. export const getXxxStore = scoped.getStore — 按 storeId 取实例
    4. 非响应式读走 getXxxStore(id).getState()
-   参考：messages-store.ts / session-store.ts / panel-store.ts / input-store.ts，聚合入口 chat-store.ts
+   参考：state/messages-store.ts / state/session-store.ts / state/panel-store.ts /
+   state/input-store.ts，聚合入口 ui/chat-store.ts（编排域，留 ui/）
 
 ✅ app 级单例（一个应用只有一份）：
-   app/shell-store.ts（chrome 状态）、ui/dock-store.ts（面板开合/简报）、ui/overlay-store.ts（portal 宿主）
+   app/shell-store.ts（chrome 状态）、state/dock-store.ts（面板开合/简报）、
+   state/overlay-store.ts（portal 宿主）
 
 ✅ 组件内部瞬态 UI 状态（菜单开合、输入焦点等）用 useState；跨组件共享的业务状态进 store
 
@@ -55,8 +57,9 @@
 ✅ ui/react/ 岛层已退休（2026-08-19，docs/plans/ui-react-island-retirement-plan.md）：目录已删除，
    组件全部迁入 src/app/**（聊天件 app/chat/、面板 app/panels/、chrome app/ 根级）；终态守护
    tests/ui-react-retirement.test.ts。总线缩编为 11 事件——lang/agent:config/agent:status/
-   timeline/dataflow 五事件改为 zustand 信号 store（i18n.useLangStore / ui/agent-config-store /
-   agent-panel-store 的 statusTick/toolDoneTick / ui/timeline-store / ui/dataflow-store）
+   timeline/dataflow 五事件改为 zustand 信号 store（i18n.useLangStore /
+   state/agent-config-store / agent-panel-store 的 statusTick/toolDoneTick /
+   state/timeline-store / state/dataflow-store）
 ✅ 事件总线已归零（2026-08-19，docs/plans/eventbus-zero-and-ui-split-plan.md P1）：
    src/ui/events.ts 整文件删除，11 个残余事件全部迁 zustand 信号 store——
    turn-done / goal / chat-context / scene-signal / ask / workspace-switch 六个新信号 store
@@ -64,9 +67,13 @@
    agent-panel-store（diag / lastToolDone 扩展）；旧事件的 payload 类型随 store 走。
    跨工作区 fire-and-forget 消费端照 INVARIANTS #12 epoch 守卫（样板：chat-core
    _refreshGoalRecord）
-🔒 总线归零 + ui/ 拆分进行中（docs/plans/eventbus-zero-and-ui-split-plan.md）：
-   P1 ✅ 事件归零；ui/ 目录只减不增（守护 tests/eventbus-zero-and-ui-split.test.ts）——
-   新建信号 store 一律落 src/state/，新组件落 src/app/**；待执行：P2 拆 scene/+state/ → P3 收口
+🔒 总线归零 + ui/ 拆分已收口（2026-08-19，docs/plans/eventbus-zero-and-ui-split-plan.md
+   P0-P3 全竣工）：P1 事件归零；P2 物理拆分——11 个领域 store 迁 src/state/（连同
+   P1 六信号 store 共 17 文件）、23 个星图文件迁 src/scene/（ui/graph.ts 留 3 行
+   re-export shim，冻结文件 chat-stream 的 type import 走此层）；ui/ 残余 25 文件 =
+   chat 编排域核心 + 旧层命令式基础设施（见 src/ui/README.md）。终态守护
+   tests/eventbus-zero-and-ui-split.test.ts（COMPLETE=true）——新建 store 一律落
+   src/state/，新组件落 src/app/**，新 scene 文件落 src/scene/
 
 ❌ 禁止：window.dispatchEvent / CustomEvent / 自己 new EventEmitter
 ```
@@ -85,7 +92,7 @@ React 靠引用比较观察变化。store 是唯一提交口：
 ❌ 禁止：mutation 后只调 bump() 或手动 setState({ messages: [...] })
    — 数组展开不换消息引用，memo 化的气泡会静默跳过更新
 
-参考：ui/messages-store.ts 的 SINGLE WRITE PATH RULE；守护：tests/chat-write-path.test.ts
+参考：state/messages-store.ts 的 SINGLE WRITE PATH RULE；守护：tests/chat-write-path.test.ts
 ```
 
 ### 1.5 RPC：typedRpc / typedListen，契约单一
@@ -168,8 +175,8 @@ record 永不上 CI；baseline 变更走 docs/plans/agent-core-convergence/basel
 ✅ memo 会阻止必要重渲染（对象引用不变但内部被 mutate）时不用 memo，并加 // ponytail: 注释
 
 DOM 所有权按层划分，不要跨层抢 DOM：
-✅ app/ 与 ui/react/ 的 UI 经 React 渲染；portal 目标由 overlay-store 管理
-✅ 星图 scene/overlay（ui/graph*.ts）、Monaco 宿主（ui/file-viewer.tsx）、
+✅ app/ 的 UI 经 React 渲染；portal 目标由 state/overlay-store 管理
+✅ 星图 scene/overlay（scene/graph*.ts）、Monaco 宿主（ui/file-viewer.tsx）、
    file-translator wrapper 是现有 imperative-DOM 所有者；修改它们沿用其内部模式
 ❌ 新的 React UI 组件不要 document.createElement / appendChild / innerHTML 自建游离 DOM
    确有必要时：把 DOM 操作封在对应所有者模块内，加 // ponytail: 说明原因

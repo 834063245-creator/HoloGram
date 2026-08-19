@@ -18,7 +18,7 @@
 ## 硬约束
 
 - **四条架构约定**（最高）：类型边界 / 单一权威源 / 异步纪律 / 错误不静默。详见 `docs/adr/project-constitution.md`；新代码违反即返工。
-- **前端**：React 19 + Zustand 5。跨组件业务状态走 zustand store（面板级走 `createScopedStore` 注册表），`src-ui/src/app/**` 不要新增 `import .../ui/events`。聊天消息原地 mutate 后必须 `touchMessage` / `touchMessageContaining`。
+- **前端**：React 19 + Zustand 5。跨组件业务状态走 zustand store（面板级走 `createScopedStore` 注册表）；事件总线已归零（`ui/events.ts` 已删除，禁复活——不要 window.dispatchEvent / CustomEvent / 自建 EventEmitter）。分层终态：store 一律 `src/state/`、星图一律 `src/scene/`、`src/ui/` 残余 = chat 编排域核心 + 旧层命令式基础设施（见 `src/ui/README.md`）；新组件落 `src/app/**`。聊天消息原地 mutate 后必须 `touchMessage` / `touchMessageContaining`。
 - **RPC**：前端调后端一律 `typedRpc` / `typedListen`（`src-ui/src/rpc-contract.ts`）；参数键 snake_case。新增后端方法同步 `src-tauri/src/rpc.rs` + `RpcContract`，生成文档用 `scripts/gen-rpc-contract-md.cjs`。受权文件之外裸 `rpc` 会被 biome 拦截。
 - **工具**：模型工具必须 `defineTool` + zod v4；领域动作变更同步 `DOMAIN_SPECS` / `collectHiddenToolNames()` / 测试。禁止手写 schema、execute 里 `as` 强拆、用 `.strict()`。
 - **Agent 运行时**（agent-core-convergence 立规）：新增模型工具/hook 走 `agent/blueprint.ts` capability 表，不改 `AgentConfig`（冻结 31 字段）；capability 表序 = 工具面字节契约（前缀缓存 + effective 快照依赖）；teardown 走 `ctx.effect`，不做进 capability。session 变异只走 `_appendMessage` / `_replaceSession` / `_retractSessionRange` 三入口；改工具折叠同步 `session-log.ts` 的 `derivePayload`。以上全部门禁化：`npm run verify:convergence` 失败即返工。
