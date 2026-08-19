@@ -14,7 +14,8 @@
 | [`cordis-migration/`](cordis-migration/) | **Done — P0-P4 全部落地**（内核 vendor → Workspace fiber 化 → Agent 身份 fiber 桥接 → LSP Service 化 → 四件套评估收口：双范式残留清零、epoch 定案永久保留、8 baseline 零漂移） | 后续同模式候选（goal-manager / memory-bundle-client 等）按需逐个迁 |
 | [`v4-pro-minimal-ab-test-plan.md`](v4-pro-minimal-ab-test-plan.md) | Draft | Linux 环境执行 |
 | [`ui-react-island-retirement-plan.md`](ui-react-island-retirement-plan.md) | **Done**（2026-08-19：ui/react/ 目录删除、5 总线事件退役迁 store、32 文件全量迁入 app/**；终态守护测试常驻） | — |
-| [`eventbus-zero-and-ui-split-plan.md`](eventbus-zero-and-ui-split-plan.md) | P0 ✅（2026-08-19 立项封口：判据表 + 三重守护门禁 + 11 事件全拓扑实测） | 新窗口执行 P1 事件归零（8 步风险升序）→ P2 拆分 state/+scene/ → P3 终态收口 |
+| [`eventbus-zero-and-ui-split-plan.md`](eventbus-zero-and-ui-split-plan.md) | P0 ✅ · P1 ✅（2026-08-19：11 事件全退役迁 store、events.ts 删除、bridge-adapters 删除） | P2 物理拆分 state/+scene/（git mv + import 路径）→ P3 终态收口（COMPLETE 翻真 + 文档回写） |
+| [`agent-plugin-architecture-plan.md`](agent-plugin-architecture-plan.md) | Proposed（方向性立项：DSH 源码实证对标——执行原语 + 工具面单一真源 + cordis Service 收口 + 插件边界） | P1 工具面文档生成（半天，独立收益）随时可做；P2 执行原语建议在总线归零后开 |
 
 ## 已归档计划
 
