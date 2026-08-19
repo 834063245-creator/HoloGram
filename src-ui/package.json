@@ -30,7 +30,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@types/three": "^0.185.1",
     "gpt-tokenizer": "^3.4.0",
-    "highlight.js": "^11.11.1",
+    "highlight.js": "^11.12.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.8",
