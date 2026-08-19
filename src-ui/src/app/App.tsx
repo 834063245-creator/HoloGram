@@ -5,10 +5,10 @@
 // P3：六个 dock 面板收编进 DockPanel；ContextMenu / FileTranslator 经 portal 宿主渲染。
 
 import { useEffect } from 'react';
-import { ContextMenuHost } from '../ui/react/ContextMenu';
 import { initBridgeAdapters } from './bridge-adapters';
 import { CommandBar } from './CommandBar';
 import { CommandPalette } from './CommandPalette';
+import { ContextMenuHost } from './ContextMenu';
 import { ChatBeacon } from './chat/ChatBeacon';
 import { useCoreStore } from './chat/core-instance';
 import { DockRail } from './DockRail';
@@ -16,9 +16,9 @@ import { DockPanel } from './panels/DockPanel';
 import { FileTranslatorPortal } from './panels/FileTranslatorPortal';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
 import { StatusBar } from './StatusBar';
-import { TimelineHUD } from '../ui/react/TimelineHUD';
-import { useGlobalKeys } from './useGlobalKeys';
 import { useShellStore } from './shell-store';
+import { TimelineHUD } from './TimelineHUD';
+import { useGlobalKeys } from './useGlobalKeys';
 
 export function App() {
   useGlobalKeys();

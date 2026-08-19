@@ -5,7 +5,7 @@
 // 左：脉点 + 状态文本 + 日志徽标（点击展开日志浮层）；右：星图遥测 + 工作区路径。
 
 import { useEffect, useRef, useState } from 'react';
-import { BackgroundActivity } from '../ui/react/BackgroundActivity';
+import { BackgroundActivity } from './BackgroundActivity';
 import { useShellStore } from './shell-store';
 
 export function StatusBar() {

@@ -8,7 +8,7 @@
 import type React from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { typedRpc } from '../../rpc-contract';
-import { bus } from '../events';
+import { useAgentPanelStore } from '../../ui/agent-panel-store';
 
 interface AuditEntry {
   ts: number; // Unix 秒
@@ -86,10 +86,13 @@ export const BrowserActivityPanel: React.FC<{ agentId: string }> = ({ agentId })
     if (!expanded) return;
     void refresh();
     const t = setInterval(() => void refresh(), 5000);
-    bus.on('agent:tool-done', refresh);
+    // P1c：订阅 agent-panel-store 的 toolDoneTick，替代 bus 'agent:tool-done'
+    const unsub = useAgentPanelStore.subscribe((s, prev) => {
+      if (s.toolDoneTick !== prev.toolDoneTick) void refresh();
+    });
     return () => {
       clearInterval(t);
-      bus.off('agent:tool-done', refresh);
+      unsub();
     };
   }, [expanded, refresh]);
 

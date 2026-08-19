@@ -6,11 +6,11 @@
 
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useShellStore } from '../../app/shell-store';
 import { typedRpc } from '../../rpc-contract';
-import { askAgent } from '../agent-visualizer';
-import { useDockStore } from '../dock-store';
-import { iconHtml } from '../icons';
+import { askAgent } from '../../ui/agent-visualizer';
+import { useDockStore } from '../../ui/dock-store';
+import { iconHtml } from '../../ui/icons';
+import { useShellStore } from '../shell-store';
 
 interface ConstraintsData {
   routing: Record<string, boolean>;
@@ -337,10 +337,7 @@ const ConstraintsPanelApp: React.FC<{
       <div className="cs-content-wrap">
         {/* ── 路由 ── */}
         <div className="cs-section">
-          <div
-            className="cs-section-title"
-            dangerouslySetInnerHTML={{ __html: `${iconHtml('route', 10)} 路由开关` }}
-          />
+          <div className="cs-section-title" dangerouslySetInnerHTML={{ __html: `${iconHtml('route', 10)} 路由开关` }} />
           {Object.entries(ROUTING_LABELS).map(([key, label]) => (
             <label key={key} className="cs-toggle">
               <span className="cs-toggle-label">{label}</span>
@@ -357,10 +354,7 @@ const ConstraintsPanelApp: React.FC<{
 
         {/* ── 阈值 ── */}
         <div className="cs-section">
-          <div
-            className="cs-section-title"
-            dangerouslySetInnerHTML={{ __html: `${iconHtml('threshold', 10)} 阈值` }}
-          />
+          <div className="cs-section-title" dangerouslySetInnerHTML={{ __html: `${iconHtml('threshold', 10)} 阈值` }} />
           {Object.entries(THRESHOLD_LABELS).map(([key, label]) => (
             <div key={key} className="cs-field">
               <label className="cs-field-label">{label}</label>
@@ -455,10 +449,7 @@ export function ConstraintsPanel() {
   const closePanel = useDockStore((s) => s.closePanel);
 
   return (
-    <div
-      id="constraints-panel"
-      className={open ? 'cs-open' : ''}
-    >
+    <div id="constraints-panel" className={open ? 'cs-open' : ''}>
       <ConstraintsPanelApp projectPath={projectPath} visible={open} onClose={() => closePanel('constraints')} />
     </div>
   );

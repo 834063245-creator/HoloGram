@@ -8,8 +8,8 @@ import { act, createElement, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ProviderPage } from '../../src/ui/react/settings/ProviderPage';
-import { providerId, type AppSettings, type ProviderId } from '../../src/settings';
+import { ProviderPage } from '../../src/app/panels/settings/ProviderPage';
+import { type AppSettings, type ProviderId, providerId } from '../../src/settings';
 
 const mockStageDelete = vi.fn();
 const mockStageClear = vi.fn();
@@ -149,9 +149,11 @@ describe('ProviderPage — 暂存流程', () => {
       i.placeholder.includes('sk-'),
     )!;
     await setInputValue(keyInput, 'sk-custom');
-    await click([...document.querySelectorAll<HTMLButtonElement>('.cd-actions button')].find((b) =>
-      b.textContent?.includes('确认添加'),
-    )!);
+    await click(
+      [...document.querySelectorAll<HTMLButtonElement>('.cd-actions button')].find((b) =>
+        b.textContent?.includes('确认添加'),
+      )!,
+    );
 
     expect(document.querySelector('.pp-add-sheet')).toBeNull();
     expect([...document.querySelectorAll('.pp-src-name')].some((n) => n.textContent?.startsWith('my-gateway'))).toBe(

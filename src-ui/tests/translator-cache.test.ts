@@ -6,10 +6,9 @@
 // 被 catch 当「缓存未命中」吞掉 → 缓存 100% 不命中，用户为重翻译白付 API 费。
 // 修复后：JSON.parse(stripLineNumbers(raw))，缓存正常命中，不发 API 请求。
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act } from 'react';
+import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import React from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockRpc = vi.fn();
 const mockCreateProvider = vi.fn();
@@ -28,7 +27,7 @@ vi.mock('../src/provider', () => ({
 }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
 
-import { FileTranslatorApp } from '../src/ui/react/FileTranslatorPanel';
+import { FileTranslatorApp } from '../src/app/panels/FileTranslatorPanel';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 

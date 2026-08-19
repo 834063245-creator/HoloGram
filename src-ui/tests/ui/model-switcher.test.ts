@@ -2,11 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 // ModelSwitcher（聊天面板模型切换器）组件测试：
-// 切模型 / 切信号源 / 思考强度 / 深度思考开关 → 立即 saveSettings + 发 agent:config-changed
+// 切模型 / 切信号源 / 思考强度 / 深度思考开关 → 立即 saveSettings + notifyAgentConfigChanged
 // （重建由 Workspace.applyAgentConfig 统一处理）。
 
-import { act } from 'react';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -56,13 +55,8 @@ const mockModels = [
 const mockDefaultUrls = new Set(['https://api.deepseek.com/v1', 'https://api.anthropic.com']);
 
 vi.mock('../../src/ui/icons', () => ({ iconHtml: () => '' }));
-vi.mock('../../src/ui/events', () => ({
-  bus: {
-    emit: (...args: unknown[]) => mockConfigChanged(...args),
-    on: vi.fn(),
-    off: vi.fn(),
-    withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }),
-  },
+vi.mock('../../src/ui/agent-config-store', () => ({
+  notifyAgentConfigChanged: (...args: unknown[]) => mockConfigChanged(...args),
 }));
 vi.mock('../../src/provider/catalog', () => ({
   getAllModels: () => mockModels,
@@ -78,7 +72,7 @@ vi.mock('../../src/settings', () => ({
   }),
 }));
 
-import { ModelSwitcher } from '../../src/ui/react/ModelSwitcher';
+import { ModelSwitcher } from '../../src/app/chat/ModelSwitcher';
 import type { AppSettings } from '../../src/settings';
 
 function makeSettings(overrides?: Partial<AppSettings>): AppSettings {
@@ -171,7 +165,7 @@ describe('ModelSwitcher', () => {
     expect(next.providers[0].model).toBe('deepseek-v4');
     expect(next.providers[0].baseUrl).toBe('https://api.deepseek.com/v1'); // 出厂 URL 自动带出
     expect(mockConfigChanged).toHaveBeenCalledTimes(1);
-    expect(mockConfigChanged).toHaveBeenCalledWith('agent:config-changed', { reason: 'model-switched' });
+    expect(mockConfigChanged).toHaveBeenCalledWith('model-switched');
     expect(document.querySelector('.ms-pop')).toBeNull(); // 选择后关闭
   });
 
@@ -183,7 +177,7 @@ describe('ModelSwitcher', () => {
     expect(mockSave).toHaveBeenCalledTimes(1);
     expect((mockSave.mock.calls[0][0] as AppSettings).activeProvider).toBe('anthropic');
     expect(mockConfigChanged).toHaveBeenCalledTimes(1);
-    expect(mockConfigChanged).toHaveBeenCalledWith('agent:config-changed', { reason: 'model-switched' });
+    expect(mockConfigChanged).toHaveBeenCalledWith('model-switched');
     expect(document.querySelector('.ms-pop')).toBeNull();
   });
 

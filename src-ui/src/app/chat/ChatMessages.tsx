@@ -14,10 +14,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useStore } from 'zustand';
-import { iconSvg } from '../icons';
-import { computeSimpleDiff, formatToolResult } from '../chat-utils';
-import { displayToolName, resolveSemanticToolName } from '../tool-semantics';
-import { estimateMessageHeight, getMessageGap } from '../message-height';
+import { computeSimpleDiff, formatToolResult } from '../../ui/chat-utils';
+import { iconSvg } from '../../ui/icons';
+import { estimateMessageHeight, getMessageGap } from '../../ui/message-height';
 import type {
   AssistantMessage,
   AssistantPart,
@@ -27,9 +26,10 @@ import type {
   TextPart,
   ToolCallPart,
   UserMessage,
-} from '../message-model';
-import { getMessagesStore } from '../messages-store';
-import { getSessionStore } from '../session-store';
+} from '../../ui/message-model';
+import { getMessagesStore } from '../../ui/messages-store';
+import { getSessionStore } from '../../ui/session-store';
+import { displayToolName, resolveSemanticToolName } from '../../ui/tool-semantics';
 
 // ── 常量 ──
 
@@ -186,7 +186,9 @@ function RenderStreamingTail({ text }: { text: string }) {
     return (
       <div className="streaming-code-block">
         {lang && <div className="streaming-code-lang">{lang}</div>}
-        <pre><code>{code}</code></pre>
+        <pre>
+          <code>{code}</code>
+        </pre>
       </div>
     );
   }
@@ -316,7 +318,9 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
     const header = filePath ? `// ${filePath}\n` : '';
     return (
       <div className="msg-tool-result">
-        <pre><code>{header + content}</code></pre>
+        <pre>
+          <code>{header + content}</code>
+        </pre>
       </div>
     );
   }
@@ -335,7 +339,9 @@ function renderToolContentPreview(part: ToolCallPart): React.ReactNode | null {
     for (const d of diffLines) lines.push(`${d.prefix} ${d.text}`);
     return (
       <div className="msg-tool-result">
-        <pre><code>{lines.join('\n')}</code></pre>
+        <pre>
+          <code>{lines.join('\n')}</code>
+        </pre>
       </div>
     );
   }
@@ -474,13 +480,16 @@ const ToolCard: React.FC<{ part: ToolCallPart; expanded: boolean; onToggle: () =
           onClick={handleToolResultClick}
         />
       )}
-      {isExpanded && !part.output && part.status === 'running' && (
-        renderToolContentPreview(part) || (
+      {isExpanded &&
+        !part.output &&
+        part.status === 'running' &&
+        (renderToolContentPreview(part) || (
           <div className="msg-tool-result msg-tool-running">
-            <div className="msg-text" style={{ color: 'var(--obs-text-3)' }}>执行中，等待输出…</div>
+            <div className="msg-text" style={{ color: 'var(--obs-text-3)' }}>
+              执行中，等待输出…
+            </div>
           </div>
-        )
-      )}
+        ))}
       {isExpanded && part.err && (
         <div className="msg-tool-result msg-tool-err">
           <pre>
@@ -669,7 +678,11 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
       {isPending && !showFeedback && (
         <div className="msg-plan-card__actions">
           {!part.options || part.options.length < 2 ? (
-            <button className="msg-plan-card__btn msg-plan-card__btn--approve" onClick={() => respond('approved')} type="button">
+            <button
+              className="msg-plan-card__btn msg-plan-card__btn--approve"
+              onClick={() => respond('approved')}
+              type="button"
+            >
               <span dangerouslySetInnerHTML={{ __html: iconSvg('check', 12) }} />
               批准
             </button>
@@ -678,7 +691,11 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
             <span dangerouslySetInnerHTML={{ __html: iconSvg('edit', 12) }} />
             修改
           </button>
-          <button className="msg-plan-card__btn msg-plan-card__btn--reject" onClick={() => respond('rejected')} type="button">
+          <button
+            className="msg-plan-card__btn msg-plan-card__btn--reject"
+            onClick={() => respond('rejected')}
+            type="button"
+          >
             <span dangerouslySetInnerHTML={{ __html: iconSvg('close', 12) }} />
             拒绝
           </button>
@@ -706,7 +723,10 @@ const PlanCard: React.FC<{ part: PlanPart; storeId?: string }> = ({ part, storeI
 // 在同一引用上用任何比较器都会跳过，完全阻止
 // 流式重新渲染。性能由 renderedParts 上的 useMemo 处理；
 // 自动滚动在组件内的 MutationObserver effect 中实现。
-const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: string) => void }> = ({ part, onNavigateToNode }) => {
+const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: string) => void }> = ({
+  part,
+  onNavigateToNode,
+}) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userOverridden = useRef(false);
   const [expanded, setExpanded] = useState(false);
@@ -831,7 +851,14 @@ const SubAgentBlock: React.FC<{ part: SubAgentPart; onNavigateToNode?: (name: st
         i++;
       } else if (p.type === 'text') {
         const tp = p as TextPart;
-        items.push(<MarkdownContent key={i} text={tp.text} streaming={streaming && !tp.finalised} onNavigateToNode={onNavigateToNode} />);
+        items.push(
+          <MarkdownContent
+            key={i}
+            text={tp.text}
+            streaming={streaming && !tp.finalised}
+            onNavigateToNode={onNavigateToNode}
+          />,
+        );
         i++;
       } else {
         i++;
@@ -942,157 +969,158 @@ const AssistantBubble: React.FC<{
     onNavigateToNode,
     panelId,
   }) => {
-  const streaming = msg.status === 'streaming';
+    const streaming = msg.status === 'streaming';
 
-  // 统计推理块数量，以确定哪个是"最后一个"（仍在流式）
-  let reasoningTotal = 0;
-  for (const p of msg.parts) {
-    if (p.type === 'reasoning') reasoningTotal++;
-  }
-  let reasoningSeen = 0;
+    // 统计推理块数量，以确定哪个是"最后一个"（仍在流式）
+    let reasoningTotal = 0;
+    for (const p of msg.parts) {
+      if (p.type === 'reasoning') reasoningTotal++;
+    }
+    let reasoningSeen = 0;
 
-  // 构建扁平渲染组 — 推理块不被提取到顶部；
-  // 它们内联渲染，穿插在工具组和文本之间。
-  const groups: Array<
-    | { kind: 'tool'; tools: ToolCallPart[] }
-    | { kind: 'reasoning'; text: string; idx: number }
-    | { kind: 'text'; text: string; finalised: boolean; idx: number }
-    | { kind: 'subagent'; part: SubAgentPart }
-    | { kind: 'plan'; part: PlanPart }
-  > = [];
-  let i = 0;
-  while (i < msg.parts.length) {
-    const p = msg.parts[i];
-    if (p.type === 'tool') {
-      const run: ToolCallPart[] = [p as ToolCallPart];
-      i++;
-      while (i < msg.parts.length && msg.parts[i].type === 'tool') {
-        run.push(msg.parts[i] as ToolCallPart);
+    // 构建扁平渲染组 — 推理块不被提取到顶部；
+    // 它们内联渲染，穿插在工具组和文本之间。
+    const groups: Array<
+      | { kind: 'tool'; tools: ToolCallPart[] }
+      | { kind: 'reasoning'; text: string; idx: number }
+      | { kind: 'text'; text: string; finalised: boolean; idx: number }
+      | { kind: 'subagent'; part: SubAgentPart }
+      | { kind: 'plan'; part: PlanPart }
+    > = [];
+    let i = 0;
+    while (i < msg.parts.length) {
+      const p = msg.parts[i];
+      if (p.type === 'tool') {
+        const run: ToolCallPart[] = [p as ToolCallPart];
+        i++;
+        while (i < msg.parts.length && msg.parts[i].type === 'tool') {
+          run.push(msg.parts[i] as ToolCallPart);
+          i++;
+        }
+        groups.push({ kind: 'tool', tools: run });
+      } else if (p.type === 'reasoning') {
+        reasoningSeen++;
+        groups.push({ kind: 'reasoning', text: p.text, idx: reasoningSeen });
+        i++;
+      } else if (p.type === 'text') {
+        const tp = p as TextPart;
+        groups.push({ kind: 'text', text: tp.text, finalised: tp.finalised, idx: i });
+        i++;
+      } else if (p.type === 'subagent') {
+        groups.push({ kind: 'subagent', part: p as SubAgentPart });
+        i++;
+      } else if (p.type === 'plan') {
+        groups.push({ kind: 'plan', part: p as PlanPart });
+        i++;
+      } else {
         i++;
       }
-      groups.push({ kind: 'tool', tools: run });
-    } else if (p.type === 'reasoning') {
-      reasoningSeen++;
-      groups.push({ kind: 'reasoning', text: p.text, idx: reasoningSeen });
-      i++;
-    } else if (p.type === 'text') {
-      const tp = p as TextPart;
-      groups.push({ kind: 'text', text: tp.text, finalised: tp.finalised, idx: i });
-      i++;
-    } else if (p.type === 'subagent') {
-      groups.push({ kind: 'subagent', part: p as SubAgentPart });
-      i++;
-    } else if (p.type === 'plan') {
-      groups.push({ kind: 'plan', part: p as PlanPart });
-      i++;
-    } else {
-      i++;
     }
-  }
 
-  return (
-                <div className="msg-assistant-row" data-message-id={msg._id}>
-      <div className="msg-bubble assistant">
-        {groups.map((g, gi) => {
-          if (g.kind === 'tool') {
-            const tools = g.tools;
-            const doneCount = tools.filter((t) => t.status === 'done' || t.status === 'error').length;
-            const allDone = doneCount === tools.length && tools.length >= 3;
-            const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
-            const groupExpanded = tools.some((t) => expandedTools.has(t.toolId));
-            // ponytail: 折叠时仅显示摘要；展开时显示卡片 + 摘要作为切换
-            const collapsed = allDone && !groupExpanded;
-            return (
-              <div key={gi} className="msg-tool-wrapper">
-                {collapsed ? (
-                  <ToolSummary
-                    tools={doneTools}
-                    expandedTools={expandedTools}
-                    onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
-                    onCollapseAll={() => {}}
-                  />
-                ) : (
-                  <>
-                    {allDone && (
-                      <ToolSummary
-                        tools={doneTools}
-                        expandedTools={expandedTools}
-                        onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
-                        onCollapseAll={() => onCollapseAllTools(tools.map((t) => t.toolId))}
-                      />
-                    )}
-                    {tools.map((t) => (
-                      <ToolCard
-                        key={t.toolId}
-                        part={t}
-                        expanded={expandedTools.has(t.toolId)}
-                        onToggle={() => onToggleTool(t.toolId)}
-                      />
-                    ))}
-                  </>
-                )}
-              </div>
-            );
-          }
+    return (
+      <div className="msg-assistant-row" data-message-id={msg._id}>
+        <div className="msg-bubble assistant">
+          {groups.map((g, gi) => {
+            if (g.kind === 'tool') {
+              const tools = g.tools;
+              const doneCount = tools.filter((t) => t.status === 'done' || t.status === 'error').length;
+              const allDone = doneCount === tools.length && tools.length >= 3;
+              const doneTools = tools.filter((t) => t.status === 'done' || t.status === 'error');
+              const groupExpanded = tools.some((t) => expandedTools.has(t.toolId));
+              // ponytail: 折叠时仅显示摘要；展开时显示卡片 + 摘要作为切换
+              const collapsed = allDone && !groupExpanded;
+              return (
+                <div key={gi} className="msg-tool-wrapper">
+                  {collapsed ? (
+                    <ToolSummary
+                      tools={doneTools}
+                      expandedTools={expandedTools}
+                      onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
+                      onCollapseAll={() => {}}
+                    />
+                  ) : (
+                    <>
+                      {allDone && (
+                        <ToolSummary
+                          tools={doneTools}
+                          expandedTools={expandedTools}
+                          onExpandAll={() => onExpandAllTools(tools.map((t) => t.toolId))}
+                          onCollapseAll={() => onCollapseAllTools(tools.map((t) => t.toolId))}
+                        />
+                      )}
+                      {tools.map((t) => (
+                        <ToolCard
+                          key={t.toolId}
+                          part={t}
+                          expanded={expandedTools.has(t.toolId)}
+                          onToggle={() => onToggleTool(t.toolId)}
+                        />
+                      ))}
+                    </>
+                  )}
+                </div>
+              );
+            }
 
-          if (g.kind === 'reasoning') {
-            const isLast = g.idx === reasoningTotal;
-            return (
-              <ReasoningBlock
-                key={gi}
-                text={g.text}
-                streaming={streaming && isLast}
-                reasoningComplete={!streaming || !isLast}
-              />
-            );
-          }
+            if (g.kind === 'reasoning') {
+              const isLast = g.idx === reasoningTotal;
+              return (
+                <ReasoningBlock
+                  key={gi}
+                  text={g.text}
+                  streaming={streaming && isLast}
+                  reasoningComplete={!streaming || !isLast}
+                />
+              );
+            }
 
-          if (g.kind === 'text') {
-            return (
-              <MarkdownContent
-                key={gi}
-                text={g.text}
-                streaming={streaming && !g.finalised}
-                onNavigateToNode={onNavigateToNode}
-              />
-            );
-          }
+            if (g.kind === 'text') {
+              return (
+                <MarkdownContent
+                  key={gi}
+                  text={g.text}
+                  streaming={streaming && !g.finalised}
+                  onNavigateToNode={onNavigateToNode}
+                />
+              );
+            }
 
-          if (g.kind === 'subagent') {
-            return <SubAgentBlock key={gi} part={g.part} onNavigateToNode={onNavigateToNode} />;
-          }
+            if (g.kind === 'subagent') {
+              return <SubAgentBlock key={gi} part={g.part} onNavigateToNode={onNavigateToNode} />;
+            }
 
-          if (g.kind === 'plan') {
-            return <PlanCard key={gi} part={g.part} storeId={panelId} />;
-          }
+            if (g.kind === 'plan') {
+              return <PlanCard key={gi} part={g.part} storeId={panelId} />;
+            }
 
-          return null;
-        })}
+            return null;
+          })}
+        </div>
+        <span className="msg-actions">
+          {onCopy && (
+            <span
+              className="msg-action-btn"
+              onClick={onCopy}
+              title="复制"
+              dangerouslySetInnerHTML={{ __html: svgIcon('copy') }}
+            />
+          )}
+          {onRetry && msg.status === 'done' && (
+            <span
+              className="msg-action-btn"
+              onClick={onRetry}
+              title="重试"
+              dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
+            />
+          )}
+        </span>
       </div>
-      <span className="msg-actions">
-        {onCopy && (
-          <span
-            className="msg-action-btn"
-            onClick={onCopy}
-            title="复制"
-            dangerouslySetInnerHTML={{ __html: svgIcon('copy') }}
-          />
-        )}
-        {onRetry && msg.status === 'done' && (
-          <span
-            className="msg-action-btn"
-            onClick={onRetry}
-            title="重试"
-            dangerouslySetInnerHTML={{ __html: svgIcon('refresh') }}
-          />
-        )}
-      </span>
-    </div>
-  );
-}, (prev, next) =>
-  // 纯引用比较 — 安全，因为每次修改都通过 store 的 touch 方法提交，
-  // 后者总是产生新的消息对象（见 messages-store.ts 单一写入路径规则）。
-  prev.msg === next.msg && prev.expandedTools === next.expandedTools,
+    );
+  },
+  (prev, next) =>
+    // 纯引用比较 — 安全，因为每次修改都通过 store 的 touch 方法提交，
+    // 后者总是产生新的消息对象（见 messages-store.ts 单一写入路径规则）。
+    prev.msg === next.msg && prev.expandedTools === next.expandedTools,
 );
 
 // ── 通知 ──
@@ -1374,11 +1402,7 @@ export const ChatMessagesApp: React.FC<{
               }}
             >
               {msg.role === 'user' && (
-                <UserBubble
-                  msg={msg}
-                  onEdit={callbacks.onEditUserMessage}
-                  onResend={callbacks.onResendUserMessage}
-                />
+                <UserBubble msg={msg} onEdit={callbacks.onEditUserMessage} onResend={callbacks.onResendUserMessage} />
               )}
               {msg.role === 'assistant' && (
                 <AssistantBubble

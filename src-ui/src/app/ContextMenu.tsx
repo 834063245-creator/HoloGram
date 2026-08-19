@@ -6,13 +6,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-
-export interface ContextMenuItem {
-  label: string;
-  action: () => void;
-  disabled?: boolean;
-  separator?: boolean; // 在此项前渲染分隔线
-}
+import type { ContextMenuItem } from '../ui/overlay-store';
 
 interface Props {
   items: ContextMenuItem[];
@@ -125,13 +119,10 @@ const ContextMenuApp: React.FC<Props> = ({ items, x: rawX, y: rawY, onDismiss })
   );
 };
 
-// ── 模块级 API（P3：懒 root 已删 — 请求写入 overlay-store，由单树 ContextMenuHost 渲染）──
+// ── 宿主（P2：showContextMenu 的公共入口在 ui/context-menu.ts 本地实现；
+//    这里只保留单树渲染宿主）──
 
-import { useOverlayStore } from '../overlay-store';
-
-export function showContextMenu(e: MouseEvent, items: ContextMenuItem[]): void {
-  useOverlayStore.getState().showContextMenu({ x: e.clientX, y: e.clientY, items });
-}
+import { useOverlayStore } from '../ui/overlay-store';
 
 /** 单 React 树内的宿主（App 挂载）。 */
 export function ContextMenuHost() {

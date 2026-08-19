@@ -6,12 +6,12 @@
 
 import type { ComponentType } from 'react';
 import type { DockPanelId } from '../../ui/dock-store';
-import { CheckPanel } from '../../ui/react/CheckPanel';
-import { ConstraintsPanel } from '../../ui/react/ConstraintsPanel';
-import { DataflowPanel } from '../../ui/react/DataflowPanel';
-import { SettingsPanel } from '../../ui/react/SettingsPanel';
-import { AgentsPanel } from '../../ui/react/AgentsPanel';
-import { TasksPanel } from '../../ui/react/TasksPanel';
+import { AgentsPanel } from './AgentsPanel';
+import { CheckPanel } from './CheckPanel';
+import { ConstraintsPanel } from './ConstraintsPanel';
+import { DataflowPanel } from './DataflowPanel';
+import { SettingsPanel } from './SettingsPanel';
+import { TasksPanel } from './TasksPanel';
 
 export interface PanelDef {
   id: DockPanelId;

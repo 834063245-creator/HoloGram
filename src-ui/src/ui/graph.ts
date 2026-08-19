@@ -19,7 +19,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { useShellStore } from '../app/shell-store';
-import { setLang, t } from '../i18n';
+import { t, useLangStore } from '../i18n';
 import { bus } from './events';
 import { gpuLayout } from './gpu-layout';
 import { type AnalysisHost, GraphAnalysis } from './graph-analysis';
@@ -248,9 +248,10 @@ export class StarGraph {
     this.buildLegend();
     this._focus.buildFocusBanner();
 
-    // 语言变更时重建图例 + 聚焦横幅
-    this._langHandler = ({ lang }: { lang: string }) => {
-      setLang(lang as 'zh' | 'en');
+    // 语言变更时重建图例 + 聚焦横幅（P1a：订阅 i18n lang store，替代 bus 'lang:changed'；
+    // setLang 写入即通知，handler 无需回写 lang；同值写入跳过重建）
+    this._langUnsub = useLangStore.subscribe((state, prev) => {
+      if (state.lang === prev.lang) return;
       // 重建前移除旧 DOM 元素
       if (this.legendEl) {
         this.legendEl.remove();
@@ -267,8 +268,7 @@ export class StarGraph {
         this.focusSubgraphBanner.innerHTML = `${iconHtml('focus', 12)}<span class="fb-name">${t('focus.title')} · ${node.name}</span><span class="fb-meta">${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} · ${t('focus.exit')}</span>`;
         this.focusSubgraphBanner.style.display = 'flex';
       }
-    };
-    bus.on('lang:changed', this._langHandler);
+    });
     const pointerDown = new THREE.Vector2();
     let pointerDragged = false;
     const canvas = this.renderer.domElement;
@@ -335,7 +335,7 @@ export class StarGraph {
   // ── 路径查找 — 委托给 GraphAnalysis ──────────────
 
   // ── i18n ──
-  private _langHandler: ((data: { lang: string }) => void) | null = null;
+  private _langUnsub: (() => void) | null = null;
 
   // ── Step 3: Alt+拖拽矩形选择 → graph-tooltip.ts ──
 

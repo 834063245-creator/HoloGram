@@ -10,11 +10,11 @@
 import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { agentSessionState } from '../../agent/agent-session-state';
 import type { Task, TaskStatus } from '../../agent/task';
-import { useCoreStore } from '../../app/chat/core-instance';
-import { useAgentPanelStore } from '../agent-panel-store';
-import { useDockStore } from '../dock-store';
-import { iconHtml } from '../icons';
-import { getSessionStore } from '../session-store';
+import { useAgentPanelStore } from '../../ui/agent-panel-store';
+import { useDockStore } from '../../ui/dock-store';
+import { iconHtml } from '../../ui/icons';
+import { getSessionStore } from '../../ui/session-store';
+import { useCoreStore } from '../chat/core-instance';
 import './TasksPanel.css';
 
 const STATUS_META: Record<TaskStatus, { label: string; cls: string }> = {
@@ -101,20 +101,46 @@ export function TasksPanel() {
   return (
     <div id="tasks-panel" className={open ? 'tp-open' : ''}>
       <div className="tp-tab">
-        <span className="tp-tab-label"><span className="zh">待办</span>TASKS</span>
-        {count > 0 && <span className="tp-count">{doneCount}/{count}</span>}
-        <button className="tp-close-btn" dangerouslySetInnerHTML={{ __html: iconHtml('close', 16) }}
-          onClick={(e) => { e.stopPropagation(); closePanel('tasks'); }} />
+        <span className="tp-tab-label">
+          <span className="zh">待办</span>TASKS
+        </span>
+        {count > 0 && (
+          <span className="tp-count">
+            {doneCount}/{count}
+          </span>
+        )}
+        <button
+          className="tp-close-btn"
+          dangerouslySetInnerHTML={{ __html: iconHtml('close', 16) }}
+          onClick={(e) => {
+            e.stopPropagation();
+            closePanel('tasks');
+          }}
+        />
       </div>
       <div className="tp-content">
         <div className="tp-add">
-          <input className="tp-add-title" placeholder="新待办…" value={newTitle}
+          <input
+            className="tp-add-title"
+            placeholder="新待办…"
+            value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') addTask(); }} />
-          <input className="tp-add-detail" placeholder="详情（可选）" value={newDetail}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addTask();
+            }}
+          />
+          <input
+            className="tp-add-detail"
+            placeholder="详情（可选）"
+            value={newDetail}
             onChange={(e) => setNewDetail(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') addTask(); }} />
-          <button className="tp-add-btn" disabled={createDisabled} onClick={addTask}>添加</button>
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addTask();
+            }}
+          />
+          <button className="tp-add-btn" disabled={createDisabled} onClick={addTask}>
+            添加
+          </button>
         </div>
         {!manager ? (
           <div className="tp-empty">当前会话暂无 Agent</div>
@@ -126,18 +152,27 @@ export function TasksPanel() {
               const m = STATUS_META[t.status];
               return (
                 <li key={t.id} className={'tp-item ' + m.cls}>
-                  <button className="tp-status" title={'状态: ' + m.label + '（点按轮换）'}
-                    onClick={() => cycleStatus(t.id, t.status)}>
-                    <span className={'tp-dot ' + m.cls} />{m.label}
+                  <button
+                    className="tp-status"
+                    title={'状态: ' + m.label + '（点按轮换）'}
+                    onClick={() => cycleStatus(t.id, t.status)}
+                  >
+                    <span className={'tp-dot ' + m.cls} />
+                    {m.label}
                   </button>
                   <div className="tp-body">
-                    <div className="tp-title" title={t.detail}>{t.title}</div>
+                    <div className="tp-title" title={t.detail}>
+                      {t.title}
+                    </div>
                     {t.detail && <div className="tp-detail">{t.detail}</div>}
                   </div>
                   {t.status === 'cancelled' ? null : (
-                    <button className="tp-stop" title="取消"
+                    <button
+                      className="tp-stop"
+                      title="取消"
                       dangerouslySetInnerHTML={{ __html: iconHtml('close', 12) }}
-                      onClick={() => stopTask(t.id)} />
+                      onClick={() => stopTask(t.id)}
+                    />
                   )}
                 </li>
               );

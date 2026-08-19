@@ -6,10 +6,9 @@
 // 速度 = IPC 往返速度，永久轰击引擎。
 // 修复后：首次立即 + 退避重试（2s/4s/6s），最多 4 次后停止。
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act } from 'react';
+import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import React from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockRpc = vi.fn();
 vi.mock('../src/bridge', () => ({
@@ -22,10 +21,9 @@ vi.mock('../src/app/shell-store', () => ({
 }));
 vi.mock('../src/ui/agent-visualizer', () => ({ askAgent: vi.fn() }));
 vi.mock('../src/ui/app-shell', () => ({ shell: { register: vi.fn() } }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
 
-import { TimelineHUD } from '../src/ui/react/TimelineHUD';
+import { TimelineHUD } from '../src/app/TimelineHUD';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 

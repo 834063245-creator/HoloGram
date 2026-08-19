@@ -6,8 +6,8 @@
 // 修复 R7：不再混用 CSS class 和内联 style.display。React 条件渲染天然无残留。
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import type { CommandDef } from '../command-registry';
-import { CommandRegistry } from '../command-registry';
+import type { CommandDef } from '../../ui/command-registry';
+import { CommandRegistry } from '../../ui/command-registry';
 
 // ── Exposed imperative API ──
 

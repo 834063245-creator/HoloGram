@@ -93,7 +93,7 @@ flowchart LR
 
 ## 6. 前端分层铁律（详情见 CONVENTIONS.md）
 
-- `src/app/` 新代码**不新增** `import .../ui/events`；UI 状态走 zustand store。`ui/events.ts` 是冻结的旧总线（存量 ~20 个 import），不再新增 BusEvents 事件。
+- `src/app/` 新代码**不新增** `import .../ui/events`；UI 状态走 zustand store。`ui/events.ts` 是冻结的旧总线（2026-08-19 岛层退休后缩编为 11 事件，生产消费两端都在旧层编排侧或豁免层；`ui/react/` 目录已删除，组件全部迁入 `src/app/**`，终态守护 `tests/ui-react-retirement.test.ts`），不再新增 BusEvents 事件。
 - 面板级状态用 `createScopedStore` 注册表（`messages/session/panel/input` 四件套 + `chat-store` 聚合）；app 级单例用 `shell-store / dock-store / overlay-store`。
 - 聊天消息原地 mutate 后必须 `touchMessage / touchMessageContaining`——裸 `bump()` 或展开数组会静默卡 UI（`INVARIANTS #1/#2/#3`）。
 - 冻结文件：`ui/chat-session.ts`、`ui/chat-stream.ts`、`ui/part-mutator.ts`、`agent/execution-state.ts`。

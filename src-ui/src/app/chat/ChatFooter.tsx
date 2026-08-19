@@ -8,13 +8,13 @@
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react';
 import { useStore } from 'zustand';
-import { useShellStore } from '../../app/shell-store';
 import { typedRpc } from '../../rpc-contract';
 import { type AppSettings, loadSettings, onSettingsSaved, saveSettings } from '../../settings';
-import { getChatStore } from '../chat-store';
-import { bus } from '../events';
-import { iconHtml } from '../icons';
-import type { CollaborationMode, PermissionMode } from '../panel-store';
+import { notifyAgentConfigChanged } from '../../ui/agent-config-store';
+import { getChatStore } from '../../ui/chat-store';
+import { iconHtml } from '../../ui/icons';
+import type { CollaborationMode, PermissionMode } from '../../ui/panel-store';
+import { useShellStore } from '../shell-store';
 import { ModelSwitcher } from './ModelSwitcher';
 
 // ── 类型 ──
@@ -103,7 +103,7 @@ function ChatModebar({ panelId }: { panelId: string }) {
       saveSettings(s);
       // 模式切换只改 panel store + 发显式事件；
       // 由 Workspace.applyAgentConfig 统一热切换处理（不重建）。
-      bus.emit('agent:config-changed', { reason: 'collaboration-mode' });
+      notifyAgentConfigChanged('collaboration-mode');
     },
     [panelStore],
   );

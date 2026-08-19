@@ -7,7 +7,7 @@
 
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { iconSvg } from '../icons';
+import { iconSvg } from '../../ui/icons';
 import './prompt-shelf.css';
 
 // ── 类型 ──
@@ -130,15 +130,16 @@ const AskCard: React.FC<{
 
   const hoveredOption = hoverIdx !== null ? prompt.options[hoverIdx] : null;
   const batchTag =
-    prompt.batchTotal && prompt.batchTotal > 1
-      ? `问题 ${prompt.batchIndex ?? 1}/${prompt.batchTotal} · `
-      : '';
+    prompt.batchTotal && prompt.batchTotal > 1 ? `问题 ${prompt.batchIndex ?? 1}/${prompt.batchTotal} · ` : '';
 
   return (
     <div className="prompt-shelf__card" role="dialog" aria-modal="false">
       {/* 头部 */}
       <div className="prompt-shelf__head">
-        <span className="prompt-shelf__tag">{batchTag}{prompt.header.slice(0, 12)}</span>
+        <span className="prompt-shelf__tag">
+          {batchTag}
+          {prompt.header.slice(0, 12)}
+        </span>
         <span className="prompt-shelf__question">{prompt.question}</span>
         <button className="prompt-shelf__dismiss" onClick={cancel} title="取消 (Esc)" type="button">
           <span dangerouslySetInnerHTML={{ __html: svgIcon('close', 14) }} />

@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getDynamicModelCount, getModel, searchModels } from '../../provider/catalog';
 import type { ModelDescriptor, Protocol } from '../../provider/types';
-import { iconHtml } from '../icons';
+import { iconHtml } from '../../ui/icons';
 
 interface ModelSelectorProps {
   value: string;

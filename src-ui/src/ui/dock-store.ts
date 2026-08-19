@@ -7,7 +7,46 @@
 
 import { create } from 'zustand';
 import { cacheCheckResult } from '../agent/state-inject';
-import type { CheckResult } from './react/CheckPanel';
+
+// ── 简报结果类型（P2：随岛层退休从 CheckPanel 迁入——dock-store 是 checkResult 状态的
+//    单一事实源，类型跟着状态走；CheckPanel / main / workspace / 测试从这里 import）──
+
+export interface Violation {
+  signal?: {
+    description?: string;
+    file_path?: string;
+    line?: number;
+    level?: number;
+    affected_nodes?: string[];
+    graph_node_ids?: string[];
+    old_value?: string;
+    new_value?: string;
+    violation_id?: string;
+  };
+  message?: string;
+  level?: number;
+}
+
+export interface CheckResult {
+  passed: boolean;
+  timestamp: string;
+  commit_hash?: string;
+  changed_files: string[];
+  total_changed_files: number;
+  l5_violations: Violation[];
+  l4_violations: Violation[];
+  l3_violations: Violation[];
+  l2_violations: Violation[];
+  passed_checks: string[];
+  blast_radius: number;
+  cross_community_edges: number;
+  new_cycles: number;
+  new_thread_conflicts: number;
+  api_signature_changes: number;
+  new_violations?: number;
+  resolved_violations?: number;
+  persistent_violations?: number;
+}
 
 export type DockPanelId = 'check' | 'constraints' | 'dataflow' | 'settings' | 'agents' | 'tasks';
 

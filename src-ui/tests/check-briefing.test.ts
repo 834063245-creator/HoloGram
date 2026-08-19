@@ -19,8 +19,8 @@ vi.mock('../src/ui/agent-visualizer', () => ({ askAgent: vi.fn() }));
 
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { CheckPanel, type CheckResult } from '../src/app/panels/CheckPanel';
 import { useDockStore } from '../src/ui/dock-store';
-import { CheckPanel, type CheckResult } from '../src/ui/react/CheckPanel';
 
 function resetDock(): void {
   useDockStore.setState({

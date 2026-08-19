@@ -40,7 +40,7 @@ describe('#4 linkifyNodeNames processes <code> elements', () => {
   it('wraps inline <code> elements as clickable node links', { timeout: 20_000 }, async () => {
     // ReactMarkdown renders `someNode` as <code>someNode</code>.
     // linkifyNodeNames should convert them to clickable spans.
-    const { ChatMessagesApp } = await import('../src/ui/react/ChatMessages');
+    const { ChatMessagesApp } = await import('../src/app/chat/ChatMessages');
 
     // Access the internal function via the module (it's not exported, so
     // we test the DOM effect after rendering MarkdownContent).

@@ -7,7 +7,6 @@
 
 import * as THREE from 'three';
 import { shell } from './app-shell';
-import { bus } from './events';
 import { TYPE_LABELS } from './graph-colors';
 import type { GraphFold } from './graph-fold';
 import type { CommunityData } from './graph-types';

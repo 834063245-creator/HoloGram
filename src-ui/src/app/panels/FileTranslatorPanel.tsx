@@ -11,10 +11,10 @@ import { createProvider } from '../../provider';
 import { ChunkType } from '../../provider/types';
 import { typedRpc } from '../../rpc-contract';
 import { getActiveProvider, loadSettingsWithSecrets, type ProviderSettings } from '../../settings';
-import { stripLineNumbers } from '../chat-session';
-import { iconHtml } from '../icons';
+import { stripLineNumbers } from '../../ui/chat-session';
+import { iconHtml } from '../../ui/icons';
 import { escapeAttr } from './helpers';
-import '../file-translator.css';
+import '../../ui/file-translator.css';
 
 // ── 类型 ──
 

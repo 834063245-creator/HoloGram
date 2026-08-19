@@ -19,7 +19,8 @@
 
 ## 约定
 
-- 本目录新代码**不 import** `ui/events.ts`（bus 冻结，仅作引擎/图事件传输；chat-core 是编排层，豁免）；UI 状态一律走 zustand store。
+- 本目录新代码**不 import** `ui/events.ts`（bus 冻结于 11 事件：`agent:diag` / `agent:tool-done` / `prompt:ask` / `goal:state` / `chat:turn-done` / `check:result` / `graph:*` / `highlight:file` / `navigate:file` / `workspace:switched`——生产消费两端都在旧层编排侧或豁免层；新 chrome 需要的总线信号经 `bridge-adapters.ts` 集中转写进 store；chat-core 是编排层，豁免）；UI 状态一律走 zustand store。
+- ✅ `ui/react/` 岛层已退休（2026-08-19，计划见 `docs/plans/ui-react-island-retirement-plan.md`）：原 32 文件全部迁入本目录（聊天件 `chat/`、面板+settings `panels/`、chrome TimelineHUD/BackgroundActivity/ContextMenu 根级）；终态守护 `tests/ui-react-retirement.test.ts`。
 - 样式只使用 `tokens.css` 的 `--obs-*` 变量；`base.css`/`chat.css`/`panels.css` 已删除（P5），样式现分布：`foundation.css` / `shell.css` / `graph-chrome.css` / `chat/chat.css` / `panels/dock-panels/*.css`（按面板拆分，main.ts 按原级联顺序导入）。
 - 不碰 `ui/graph-layout.ts` 的任何布局参数。
 - 门禁：`npm run build` + `npx vitest run`（2026-08-16 实测 1014 passed / 4 skipped）。

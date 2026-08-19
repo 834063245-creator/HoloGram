@@ -4,6 +4,8 @@
 // Minimal i18n — zh/en toggle for new UI elements
 // Does NOT cover the full app — only legend, focus banner, color/scale labels.
 
+import { create } from 'zustand';
+
 const TRANS: Record<string, { zh: string; en: string }> = {
   'legend.title': { zh: '图例', en: 'LEGEND' },
   'legend.node': { zh: '节点', en: 'NODE' },
@@ -76,18 +78,21 @@ const TRANS: Record<string, { zh: string; en: string }> = {
 
 export type Lang = 'zh' | 'en';
 
-let _lang: Lang = 'zh';
+// lang 单一事实源 — zustand store（P1a：替代 bus 'lang:changed' 事件；
+// 见 docs/plans/ui-react-island-retirement-plan.md）。SettingsPanel 保存后
+// setLang 写入即生效；graph 订阅 store 重建图例/聚焦横幅。
+export const useLangStore = create<{ lang: Lang }>(() => ({ lang: 'zh' }));
 
 export function getLang(): Lang {
-  return _lang;
+  return useLangStore.getState().lang;
 }
 
 export function setLang(lang: Lang): void {
-  _lang = lang;
+  useLangStore.setState({ lang });
 }
 
 export function t(key: string): string {
   const entry = TRANS[key];
   if (!entry) return key;
-  return entry[_lang] || entry.en || key;
+  return entry[useLangStore.getState().lang] || entry.en || key;
 }

@@ -14,10 +14,9 @@ import {
   type LifecycleAlert,
   type MessageFlowEntry,
   useAgentPanelStore,
-} from '../agent-panel-store';
-import { useDockStore } from '../dock-store';
-import { bus } from '../events';
-import { iconHtml } from '../icons';
+} from '../../ui/agent-panel-store';
+import { useDockStore } from '../../ui/dock-store';
+import { iconHtml } from '../../ui/icons';
 import { BrowserActivityPanel } from './BrowserActivityPanel';
 import './AgentsPanel.css';
 
@@ -234,7 +233,7 @@ export function AgentsPanel() {
 
   const [tab, setTab] = useState<TabId>('topology');
 
-  // Data refresh: mount + bus listener + 2s polling
+  // Data refresh: mount + statusTick 订阅 + 2s polling
   useEffect(() => {
     if (!open) return;
 
@@ -245,13 +244,16 @@ export function AgentsPanel() {
 
     doRefresh();
 
-    const onStatus = () => doRefresh();
-    bus.on('agent:status', onStatus);
+    // P1c：订阅 agent-panel-store 的 statusTick（runtime-adapter onAgentStatus 递增），
+    // 替代 bus 'agent:status'；refresh 写数据字段不写 tick，无订阅回路。
+    const unsubStatus = useAgentPanelStore.subscribe((s, prev) => {
+      if (s.statusTick !== prev.statusTick) doRefresh();
+    });
 
     const timer = setInterval(doRefresh, 2000);
 
     return () => {
-      bus.off('agent:status', onStatus);
+      unsubStatus();
       clearInterval(timer);
     };
   }, [open]);

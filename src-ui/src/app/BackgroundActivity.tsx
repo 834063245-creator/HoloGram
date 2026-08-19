@@ -11,10 +11,9 @@
 // 第二个任务管理器。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getSubAgentActivity, STUCK_THRESHOLD_S } from '../../agent/subagent-activity';
-import { typedRpc } from '../../rpc-contract';
-import { useAgentPanelStore } from '../agent-panel-store';
-import { bus } from '../events';
+import { getSubAgentActivity, STUCK_THRESHOLD_S } from '../agent/subagent-activity';
+import { typedRpc } from '../rpc-contract';
+import { useAgentPanelStore } from '../ui/agent-panel-store';
 import './BackgroundActivity.css';
 
 interface ShellActivity {
@@ -123,13 +122,14 @@ export function BackgroundActivity() {
       clearTimeout(timer);
       timer = setTimeout(() => void refresh(), 250);
     };
-    bus.on('agent:tool-done', later);
-    bus.on('agent:status', later);
+    // P1c：订阅 agent-panel-store 信号 tick，替代 bus 'agent:tool-done'/'agent:status'
+    const unsub = useAgentPanelStore.subscribe((s, prev) => {
+      if (s.toolDoneTick !== prev.toolDoneTick || s.statusTick !== prev.statusTick) later();
+    });
     void refresh();
     return () => {
       clearTimeout(timer);
-      bus.off('agent:tool-done', later);
-      bus.off('agent:status', later);
+      unsub();
     };
   }, [refresh]);
 

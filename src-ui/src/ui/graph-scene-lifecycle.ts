@@ -14,7 +14,6 @@ import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import type { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import type { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { useShellStore } from '../app/shell-store';
-import { bus } from './events';
 import { gpuLayout } from './gpu-layout';
 import type { GraphAnalysis } from './graph-analysis';
 import { GLOW_COLORS, NODE_COLORS } from './graph-colors';
@@ -136,7 +135,7 @@ export interface LifecycleHost {
   initEdgeParticles(pos: Float32Array, data: EdgeData[]): void;
   initTwinkleData(n: number): void;
   onResize: () => void;
-  _langHandler: ((data: { lang: string }) => void) | null;
+  _langUnsub: (() => void) | null;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1209,10 +1208,10 @@ export class GraphSceneLifecycle {
       this.host._tooltip._promptTimer = null;
     }
     window.removeEventListener('resize', this.host.onResize);
-    // 取消订阅 EventBus 处理器（审计：防止过期 bus 监听器）
-    if (this.host._langHandler) {
-      bus.off('lang:changed', this.host._langHandler);
-      this.host._langHandler = null;
+    // 取消订阅 lang store（P1a：替代 EventBus；审计：防止过期监听器）
+    if (this.host._langUnsub) {
+      this.host._langUnsub();
+      this.host._langUnsub = null;
     }
     // 释放所有 GPU 资源
     for (const cloud of this.host._fold.galaxyClouds) {

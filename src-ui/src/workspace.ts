@@ -48,16 +48,18 @@ import { withThinkingDisabled } from './provider/thinking';
 import type { Provider } from './provider/types';
 import { typedListen, typedRpc } from './rpc-contract';
 import { type AppSettings, defaultPricing, getActiveProvider, loadSettingsWithSecrets } from './settings';
+import type { AgentConfigChangeReason } from './ui/agent-config-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
 import { stripLineNumbers } from './ui/chat-session';
+import type { CheckResult } from './ui/dock-store';
 import { useDockStore } from './ui/dock-store';
-import { type AgentConfigChangeReason, bus } from './ui/events';
+import { bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
 import type { CommunityData, GraphDiffJson, GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
 import { getDiagnosticsForFile, LspService } from './ui/lsp-client';
 import { getPanelStore } from './ui/panel-store';
-import type { CheckResult } from './ui/react/CheckPanel';
 import { createBuilderDeps, createRuntimeAdapter } from './ui/runtime-adapter';
+import { bumpTimelineRefresh } from './ui/timeline-store';
 import { resolveSemanticToolName } from './ui/tool-semantics';
 import { bumpWorkspaceEpoch } from './workspace-scope';
 
@@ -431,12 +433,12 @@ export class Workspace {
               } catch {
                 /* 文件图谱可能尚不存在 */
               }
-              bus.emit('timeline:refresh');
+              bumpTimelineRefresh();
             } catch {
               // 合并失败 / nodeCount 漂移 → 分页全量兜底
               try {
                 await reloadGraphPaged(ws, starGraph);
-                bus.emit('timeline:refresh');
+                bumpTimelineRefresh();
               } catch {
                 /* reloadGraphPaged 也失败 — 保持现状 */
               }
@@ -467,7 +469,7 @@ export class Workspace {
         const sem = resolveSemanticToolName(evt.toolName, JSON.stringify(evt.args || {}));
         if (FILE_MODIFY_TOOLS.has(sem)) {
           ws.scheduleCheck();
-          bus.emit('timeline:refresh');
+          bumpTimelineRefresh();
           // 刷新引擎快照 — 跟踪累积结构漂移
           if (ws._preflightCtx) scheduleEngineSnapshotRefresh(ws._preflightCtx, ws.path);
         }
@@ -562,7 +564,7 @@ export class Workspace {
   }
 
   /**
-   * Agent 配置变更统一入口（由 bus 'agent:config-changed' 驱动）。
+   * Agent 配置变更统一入口（由 ui/agent-config-store 信号驱动）。
    * 所有变更一律热切换，不重建 Agent：
    *  - provider（模型/信号源/协议）变了 → 换 provider 引用 + 定价（setProvider）
    *  - thinking / contextWindow → 热同步（setThinking / setContextWindow）
@@ -875,7 +877,7 @@ export class Workspace {
     const factory = async (): Promise<AgentHandle | null> => {
       // 单一新鲜快照 — apiKey 判定 / provider 构建 / 定价 / 窗口全部出自它。
       // （旧实现用外层 setup 时的 prov 配新鲜 settings 的 key/定价，
-      //  两份快照只靠 agent:config-changed 重跑 setupAgent 才不分叉。）
+      //  两份快照只靠 agent-config-store 信号重跑 setupAgent 才不分叉。）
       const s = await loadSettingsWithSecrets();
       const act = getActiveProvider(s);
       if (!act.apiKey || act.apiKey.trim() === '') return null;
@@ -994,7 +996,7 @@ export class Workspace {
         dock.setCheckResult(result);
         // 旧 loadAndRenderGate 实际等价于 open() — 每次简报后展开面板
         dock.openPanel('check');
-        bus.emit('timeline:refresh');
+        bumpTimelineRefresh();
         // 通知工具栏以显示违规徽章
         const cnt =
           (result.l5_violations?.length || 0) +

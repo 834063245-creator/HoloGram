@@ -10,10 +10,10 @@
 //   - alerts：从 RuntimeNotifier.onSubAgentFinished 推送（pushAlert）
 
 import { create } from 'zustand';
-import type { AgentSummary } from '../agent/runtime/types';
-import type { BoardEntry } from '../agent/task-board';
 import type { DiscoveryEntry } from '../agent/discovery-board';
 import type { AgentMessage } from '../agent/message-types';
+import type { AgentSummary } from '../agent/runtime/types';
+import type { BoardEntry } from '../agent/task-board';
 
 export interface AgentPanelEntry extends AgentSummary {
   children: AgentPanelEntry[];
@@ -38,6 +38,12 @@ interface AgentPanelState {
   messageFlow: MessageFlowEntry[];
   alerts: LifecycleAlert[];
 
+  /** 信号 tick — runtime-adapter 的 onAgentStatus / onToolDone 递增；
+   *  组件订阅 tick 变化触发刷新（P1c：替代 bus 'agent:status'；
+   *  refresh() 只写数据字段不写 tick，无订阅回路） */
+  statusTick: number;
+  toolDoneTick: number;
+
   /** runtime 引用 — 供组件轮询时调 refresh */
   runtimeRef: {
     listAgents: () => AgentSummary[];
@@ -52,6 +58,8 @@ interface AgentPanelState {
   currentSessionId: string;
 
   setAgents: (agents: AgentSummary[]) => void;
+  bumpStatusTick: () => void;
+  bumpToolDoneTick: () => void;
   setTaskBoard: (entries: BoardEntry[]) => void;
   setDiscoveries: (entries: DiscoveryEntry[]) => void;
   pushMessage: (msg: AgentMessage) => void;
@@ -72,10 +80,14 @@ export const useAgentPanelStore = create<AgentPanelState>((set, get) => ({
   discoveries: [],
   messageFlow: [],
   alerts: [],
+  statusTick: 0,
+  toolDoneTick: 0,
   runtimeRef: null,
   currentSessionId: 'default',
 
   setAgents: (agents) => set({ agents }),
+  bumpStatusTick: () => set((s) => ({ statusTick: s.statusTick + 1 })),
+  bumpToolDoneTick: () => set((s) => ({ toolDoneTick: s.toolDoneTick + 1 })),
   setTaskBoard: (entries) => set({ taskBoard: entries }),
   setDiscoveries: (entries) => set({ discoveries: entries }),
 

@@ -425,6 +425,7 @@ vi.mock('../../src/i18n', () => ({
   t: (k: string) => k,
   setLang: vi.fn(),
   getLang: () => 'zh',
+  useLangStore: { subscribe: vi.fn(() => () => {}) },
 }));
 
 import { StarGraph } from '../../src/ui/graph';

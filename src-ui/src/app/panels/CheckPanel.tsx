@@ -7,48 +7,16 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { typedRpc } from '../../rpc-contract';
-import { askAgent } from '../agent-visualizer';
-import { shell } from '../app-shell';
-import { useDockStore } from '../dock-store';
-import { iconHtml } from '../icons';
+import { askAgent } from '../../ui/agent-visualizer';
+import { shell } from '../../ui/app-shell';
+import { useDockStore } from '../../ui/dock-store';
+import { iconHtml } from '../../ui/icons';
 import { basename } from './helpers';
 
-interface Violation {
-  signal?: {
-    description?: string;
-    file_path?: string;
-    line?: number;
-    level?: number;
-    affected_nodes?: string[];
-    graph_node_ids?: string[];
-    old_value?: string;
-    new_value?: string;
-    violation_id?: string;
-  };
-  message?: string;
-  level?: number;
-}
+// 类型随状态走（P2）：CheckResult/Violation 定义在 dock-store（checkResult 的单一事实源）
+export type { CheckResult, Violation } from '../../ui/dock-store';
 
-export interface CheckResult {
-  passed: boolean;
-  timestamp: string;
-  commit_hash?: string;
-  changed_files: string[];
-  total_changed_files: number;
-  l5_violations: Violation[];
-  l4_violations: Violation[];
-  l3_violations: Violation[];
-  l2_violations: Violation[];
-  passed_checks: string[];
-  blast_radius: number;
-  cross_community_edges: number;
-  new_cycles: number;
-  new_thread_conflicts: number;
-  api_signature_changes: number;
-  new_violations?: number;
-  resolved_violations?: number;
-  persistent_violations?: number;
-}
+import type { CheckResult, Violation } from '../../ui/dock-store';
 
 interface HistoryEvent {
   timestamp: string;
@@ -227,7 +195,9 @@ export function CheckPanel() {
       {/* 头部 */}
       <div className="check-tab">
         <span className={`check-tab-status ${passed ? 'check-pass' : 'check-fail'}`} />
-        <span className="check-tab-label"><span className="zh">简报</span>BRIEFING</span>
+        <span className="check-tab-label">
+          <span className="zh">简报</span>BRIEFING
+        </span>
         <button
           className="check-history-btn"
           title="查看历史"

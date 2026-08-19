@@ -18,7 +18,7 @@ import './app/panels/dock-panels/dataflow-panel.css';
 import './app/panels/dock-panels/shared.css';
 import './app/panels/dock-panels/model-selector.css';
 import './app/panels/dock-panels/provider-settings.css';
-import './ui/react/TasksPanel.css';
+import './app/panels/TasksPanel.css';
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { log } from './agent/logger';
@@ -30,24 +30,25 @@ import { useShellStore } from './app/shell-store';
 import { isMockMode } from './bridge';
 import { initCordisKernel } from './cordis/boot';
 import { setLang } from './i18n';
+import { WorkspaceStateMachine } from './lifecycle/state-machine';
+import { withTimeout } from './lifecycle/timeout';
 import { streamWithIdleTimeout } from './provider/idle-stream';
 import { ChunkType } from './provider/types';
-import { loadSettings } from './settings';
 import { typedListen, typedRpc } from './rpc-contract';
+import { loadSettings } from './settings';
+import { useAgentConfigStore } from './ui/agent-config-store';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
 import { setDataflowQueryParser, setDockStarGraph } from './ui/dock-config';
+import type { CheckResult } from './ui/dock-store';
 import { useDockStore } from './ui/dock-store';
 import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
 import { GraphInteraction } from './ui/graph-interaction';
+import type { GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
 import { getPanelStore } from './ui/panel-store';
 import { installResizeZones } from './ui/resize-zones';
-import type { CheckResult } from './ui/react/CheckPanel';
-import { isSamePath, loadGraphPages, Workspace, type CachedGraphMeta } from './workspace';
-import { WorkspaceStateMachine } from './lifecycle/state-machine';
-import { withTimeout } from './lifecycle/timeout';
-import type { GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
+import { type CachedGraphMeta, isSamePath, loadGraphPages, Workspace } from './workspace';
 
 /** 冷启动缓存载荷 — 分页 meta（P0-2）或旧格式全量图（兼容）。 */
 interface CachedGraphPayload {
@@ -58,14 +59,14 @@ interface CachedGraphPayload {
 }
 
 // 懒加载 FileViewer — 避免将 Monaco（~5MB）拉入初始 bundle
-let _FileViewer: (typeof import('./ui/file-viewer'))['FileViewer'] | null = null;
+let _FileViewer: typeof import('./ui/file-viewer')['FileViewer'] | null = null;
 async function loadFileViewer(): Promise<void> {
   if (!_FileViewer) {
     const mod = await import('./ui/file-viewer');
     _FileViewer = mod.FileViewer;
   }
 }
-function FV(): (typeof import('./ui/file-viewer'))['FileViewer'] | null {
+function FV(): typeof import('./ui/file-viewer')['FileViewer'] | null {
   return _FileViewer;
 }
 // ponytail：权限对话框现在通过 ChatPanel.showPermissionCard 内联嵌入
@@ -128,7 +129,10 @@ async function pickFolder(): Promise<string | null> {
 // switchWorkspace — 统一入口
 // ═══════════════════════════════════════════════════════════════
 
-async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; cachedGraph?: CachedGraphMeta }): Promise<void> {
+async function switchWorkspace(
+  path?: string,
+  opts?: { skipAnalysis?: boolean; cachedGraph?: CachedGraphMeta },
+): Promise<void> {
   if (!starGraph) {
     pushStatus('3D 渲染不可用（WebGL2 初始化失败），无法打开项目');
     return;
@@ -157,14 +161,10 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     // 停用旧工作区 — 设 5 秒超时以防卡死
     if (workspace) {
       try {
-        await withTimeout(
-          workspace.deactivate(chatPanel),
-          5000,
-          () => {
-            console.warn('[switchWorkspace] deactivate timed out, forcing clear');
-            workspace?.forceClearState();
-          },
-        );
+        await withTimeout(workspace.deactivate(chatPanel), 5000, () => {
+          console.warn('[switchWorkspace] deactivate timed out, forcing clear');
+          workspace?.forceClearState();
+        });
       } catch (e) {
         console.error('[switchWorkspace] deactivate error:', e);
         workspace?.forceClearState();
@@ -208,20 +208,14 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
     await notifyAllPanels(ws);
 
     const gd = ws.graphData;
-    const nodeCount = gd
-      ? (Array.isArray(gd.nodes) ? gd.nodes.length : Object.keys(gd.nodes || {}).length)
-      : 0;
+    const nodeCount = gd ? (Array.isArray(gd.nodes) ? gd.nodes.length : Object.keys(gd.nodes || {}).length) : 0;
     const genRaw = gd?.meta?.generated_at;
     const genTime =
-      typeof genRaw === 'string' || typeof genRaw === 'number'
-        ? new Date(genRaw).toLocaleTimeString()
-        : '';
+      typeof genRaw === 'string' || typeof genRaw === 'number' ? new Date(genRaw).toLocaleTimeString() : '';
     pushStatus(`✨ ${nodeCount} 节点已就绪${genTime ? ` · ${genTime}` : ''}`);
     log.info('main', 'project loaded', {
       nodes: nodeCount,
-      edges: gd
-        ? (Array.isArray(gd.edges) ? gd.edges.length : Object.keys(gd.edges || {}).length)
-        : 0,
+      edges: gd ? (Array.isArray(gd.edges) ? gd.edges.length : Object.keys(gd.edges || {}).length) : 0,
     });
     setLoading(false);
 
@@ -238,7 +232,7 @@ async function switchWorkspace(path?: string, opts?: { skipAnalysis?: boolean; c
   } finally {
     // 确保状态机未卡在 'switching' 状态
     if (wsMachine.state === 'switching') {
-      wsMachine.forceState(workspace?._health === 'degraded' ? 'degraded' : (workspace ? 'active' : 'idle'));
+      wsMachine.forceState(workspace?._health === 'degraded' ? 'degraded' : workspace ? 'active' : 'idle');
     }
   }
 }
@@ -452,7 +446,6 @@ async function init(): Promise<void> {
     const AUTO_WHITELIST = new Set(['Edit']);
     const timedOutRequests = new Set<string>();
     await typedListen('permission-ask', (p) => {
-
       // 权限模式旁路：yolo → 全部自动，auto → 仅安全编辑
       const permMode = getPanelStore(chatPanel.panelId).getState().permissionMode;
       if (permMode === 'yolo' || (permMode === 'auto' && AUTO_WHITELIST.has(p.tool))) {
@@ -478,36 +471,38 @@ async function init(): Promise<void> {
       }, timeoutMs);
 
       // 为子 Agent 可见性标注来源 Agent 的原因
-      const displayReason = isSubAgent
-        ? `[子Agent ${p.agentId}] ${p.reason}`
-        : p.reason;
+      const displayReason = isSubAgent ? `[子Agent ${p.agentId}] ${p.reason}` : p.reason;
 
-      chatPanel.showPermissionCard(p.tool, displayReason, p.path, p.danger).then((result) => {
-        clearTimeout(timeoutId);
-        if (timedOutRequests.has(p.requestId)) {
-          timedOutRequests.delete(p.requestId);
-          return;
-        }
-        typedRpc('permission_ask_response', {
-          request_id: p.requestId,
-          allow: result.allow,
-          remember: result.remember || undefined,
-          rule_to_add: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
-          rule_behavior: result.remember && p.suggestions.length > 0 ? p.suggestions[0]?.behavior || 'allow' : undefined,
+      chatPanel
+        .showPermissionCard(p.tool, displayReason, p.path, p.danger)
+        .then((result) => {
+          clearTimeout(timeoutId);
+          if (timedOutRequests.has(p.requestId)) {
+            timedOutRequests.delete(p.requestId);
+            return;
+          }
+          typedRpc('permission_ask_response', {
+            request_id: p.requestId,
+            allow: result.allow,
+            remember: result.remember || undefined,
+            rule_to_add: result.remember && p.suggestions.length > 0 ? p.suggestions[0].rule : undefined,
+            rule_behavior:
+              result.remember && p.suggestions.length > 0 ? p.suggestions[0]?.behavior || 'allow' : undefined,
+          });
+        })
+        .catch((err) => {
+          clearTimeout(timeoutId);
+          if (timedOutRequests.has(p.requestId)) {
+            timedOutRequests.delete(p.requestId);
+            return;
+          }
+          console.error('[permission-ask]', err);
+          typedRpc('permission_ask_response', {
+            request_id: p.requestId,
+            allow: false,
+            remember: false,
+          });
         });
-      }).catch((err) => {
-        clearTimeout(timeoutId);
-        if (timedOutRequests.has(p.requestId)) {
-          timedOutRequests.delete(p.requestId);
-          return;
-        }
-        console.error('[permission-ask]', err);
-        typedRpc('permission_ask_response', {
-          request_id: p.requestId,
-          allow: false,
-          remember: false,
-        });
-      });
     });
   } catch {
     /* 浏览器 mock：无 Tauri 事件总线 */
@@ -771,15 +766,18 @@ async function init(): Promise<void> {
     { id: 'esc-layer', group: '操作', label: '逐层关闭', icon: 'close', run: escLayer },
   ]);
 
-  // Agent 配置变更统一入口：设置面板/模型切换/模式按钮只发事件，
+  // Agent 配置变更统一入口：设置面板/模型切换/模式按钮只发信号
+  // （P1b：agent-config-store 订阅，替代 bus 'agent:config-changed' 事件），
   // workspace.applyAgentConfig 热切换处理（不重建，会话/上下文全保留）。
-  bus.on('agent:config-changed', (e) => {
+  useAgentConfigStore.subscribe((state, prev) => {
+    if (state.seq === prev.seq || !state.reason) return;
+    const reason = state.reason;
     document.documentElement.style.setProperty('--font-scale', String(loadSettings().display.fontScale));
     starGraph?.resize();
     if (workspace) {
-      void workspace.applyAgentConfig(chatPanel, e.reason).catch((err) =>
-        console.error('[agent:config-changed] hot-switch failed:', err),
-      );
+      void workspace
+        .applyAgentConfig(chatPanel, reason)
+        .catch((err) => console.error('[agent-config] hot-switch failed:', err));
     }
   });
   chatPanel.setOnOpenSettings(() => useDockStore.getState().openPanel('settings'));
@@ -880,7 +878,13 @@ async function init(): Promise<void> {
 // ── 平台标记 + 渲染能力检测：方便 CSS 针对平台/引擎能力做差异化处理 ──
 {
   const ua = navigator.userAgent;
-  const plat = ua.includes('Linux') ? 'linux' : ua.includes('Windows') ? 'windows' : ua.includes('Mac') ? 'macos' : 'unknown';
+  const plat = ua.includes('Linux')
+    ? 'linux'
+    : ua.includes('Windows')
+      ? 'windows'
+      : ua.includes('Mac')
+        ? 'macos'
+        : 'unknown';
   document.documentElement.setAttribute('data-platform', plat);
   // WebKitGTK <2.46 / 软件渲染下 backdrop-filter 不可靠 — 全局降级为不透明玻璃（tokens.css html.no-bf）
   const bfOk = CSS.supports('backdrop-filter', 'blur(1px)') || CSS.supports('-webkit-backdrop-filter', 'blur(1px)');

@@ -12,13 +12,15 @@
 // 全部原样保留 —— 会话 ctx 的 DOM 字段由分离桩元素吸收（写入不可见但兼容）。
 // ═══════════════════════════════════════════════════════════════
 
-import type { AgentEvent } from '../../agent/agent-types';
-import type { RuntimePort } from '../../agent/runtime/types';
 import type { OwnedAgentHandle } from '../../agent/agent-session-state';
+import type { AgentEvent } from '../../agent/agent-types';
 import type { ChatAgentHandle, GoalRunResult } from '../../agent/chat-agent-handle';
 import { createExecState, type ExecStateInstance } from '../../agent/execution-state';
 import { GoalManager, type GoalRecord } from '../../agent/goal-manager';
+import type { RuntimePort } from '../../agent/runtime/types';
+import { useShellStore } from '../../app/shell-store';
 import type { ToolSchema } from '../../provider/types';
+import { useAgentPanelStore } from '../../ui/agent-panel-store';
 import * as Session from '../../ui/chat-session';
 import {
   getChatStore,
@@ -31,14 +33,12 @@ import {
 import * as Stream from '../../ui/chat-stream';
 import { type CommandDef, CommandRegistry, DEFAULT_COMMANDS } from '../../ui/command-registry';
 import { bus } from '../../ui/events';
-import { useShellStore } from '../../app/shell-store';
 import type { StarGraph } from '../../ui/graph';
-import { useAgentPanelStore } from '../../ui/agent-panel-store';
 import { type AssistantMessage, type ChatMessage, resetMsgIdCounter, type UserMessage } from '../../ui/message-model';
-import type { AtAutocompleteHandle } from '../../ui/react/AtAutocomplete';
-import type { ChatFooterHandle } from '../../ui/react/ChatFooter';
-import type { PromptShelfHandle } from '../../ui/react/PromptShelf';
-import type { SlashPanelHandle } from '../../ui/react/SlashPanel';
+import type { AtAutocompleteHandle } from './AtAutocomplete';
+import type { ChatFooterHandle } from './ChatFooter';
+import type { PromptShelfHandle } from './PromptShelf';
+import type { SlashPanelHandle } from './SlashPanel';
 
 /** 视图注册的输入框命令式接口（聚焦/全选），其余输入状态一律走 input-store */
 export interface ComposerApi {
@@ -52,16 +52,15 @@ export interface MessagesApi {
 }
 
 export class ChatCore {
-  /** 面板唯一实例 ID。自动生成，用于 store 隔离 + 事件前缀。 */
+  /** 面板唯一实例 ID。自动生成，用于 store 隔离。 */
   readonly panelId: string;
-
-  /** 面板级事件总线 — 加前缀以防止跨面板事件泄漏。 */
-  private _bus: typeof bus;
 
   /** 执行状态 — 面板级实例。 */
   private _exec: ExecStateInstance;
   /** workspace 接线的公开访问器。 */
-  get execState(): ExecStateInstance { return this._exec; }
+  get execState(): ExecStateInstance {
+    return this._exec;
+  }
 
   private starGraph: StarGraph | null = null;
 
@@ -105,7 +104,6 @@ export class ChatCore {
 
   constructor() {
     this.panelId = `cp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    this._bus = bus.withPrefix(`p:${this.panelId}:`);
     this._exec = createExecState();
 
     CommandRegistry.instance.registerAll(DEFAULT_COMMANDS);
@@ -689,7 +687,9 @@ export class ChatCore {
     if (!path) return;
     const mgr = new GoalManager(path, (r) => bus.emit('goal:state', r));
     const active = await mgr.getActive();
-    const history = (await mgr.list()).filter((r) => r.status !== 'active' && r.status !== 'paused' && r.status !== 'blocked');
+    const history = (await mgr.list()).filter(
+      (r) => r.status !== 'active' && r.status !== 'paused' && r.status !== 'blocked',
+    );
     if (!active && history.length === 0) {
       this.addNotice('当前没有目标。用法: /goal 目标描述 — Agent 会自主循环直到完成', 'info');
       return;
@@ -700,7 +700,8 @@ export class ChatCore {
       this.addNotice(`🎯 ${active.text.slice(0, 60)} · ${label} · 第 ${active.iteration + 1} 轮${hint}`, 'info');
     }
     for (const r of history.slice(-3).reverse()) {
-      const icon = r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : r.status === 'blocked' ? '🚧' : '🚫';
+      const icon =
+        r.status === 'completed' ? '✅' : r.status === 'failed' ? '❌' : r.status === 'blocked' ? '🚧' : '🚫';
       this.addNotice(`${icon} ${r.text.slice(0, 50)} — ${(r.summary || r.status).slice(0, 60)}`, 'info');
     }
   }
@@ -943,7 +944,7 @@ export class ChatCore {
     const filesSnapshot = [...files];
     this.appendUserBubble(text, filesSnapshot);
 
-        // 构建焦点上下文前缀 — 告诉 Agent 用户正在查看什么。
+    // 构建焦点上下文前缀 — 告诉 Agent 用户正在查看什么。
     // 每次发送消费一次后清除，防止过期焦点泄漏到后续轮次。
     let focusPrefix = '';
     const focusNode = getChatStore(this.panelId).panel.getState().userFocusNode;

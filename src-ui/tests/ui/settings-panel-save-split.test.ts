@@ -20,19 +20,12 @@ vi.mock('../../src/bridge', () => ({
   rpc: (...args: unknown[]) => mockRpc(...args),
 }));
 vi.mock('../../src/i18n', () => ({ setLang: vi.fn() }));
-vi.mock('../../src/ui/events', () => ({
-  bus: {
-    emit: (...args: unknown[]) => {
-      if (args[0] === 'agent:config-changed') mockConfigChanged(...args);
-    },
-    on: vi.fn(),
-    off: vi.fn(),
-    withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }),
-  },
+vi.mock('../../src/ui/agent-config-store', () => ({
+  notifyAgentConfigChanged: (...args: unknown[]) => mockConfigChanged(...args),
 }));
 vi.mock('../../src/ui/icons', () => ({ iconHtml: () => '' }));
 
-import { SettingsPanel } from '../../src/ui/react/SettingsPanel';
+import { SettingsPanel } from '../../src/app/panels/SettingsPanel';
 
 const STORAGE_KEY = 'hologram_settings';
 const tick = () => new Promise((r) => setTimeout(r, 50));
@@ -44,9 +37,7 @@ function setInputValue(el: HTMLInputElement, value: string): void {
 }
 
 function clickTab(label: string): void {
-  const tab = [...document.querySelectorAll<HTMLButtonElement>('.sp-tab')].find((b) =>
-    b.textContent?.includes(label),
-  );
+  const tab = [...document.querySelectorAll<HTMLButtonElement>('.sp-tab')].find((b) => b.textContent?.includes(label));
   tab?.click();
 }
 
@@ -99,7 +90,7 @@ describe('SettingsPanel — 保存拆域', () => {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
     expect(stored.providers.find((p: any) => p.name === 'deepseek').baseUrl).toBe('https://custom.example/v1');
     expect(mockConfigChanged).toHaveBeenCalledTimes(1);
-    expect(mockConfigChanged).toHaveBeenCalledWith('agent:config-changed', { reason: 'settings-saved' });
+    expect(mockConfigChanged).toHaveBeenCalledWith('settings-saved');
   });
 
   it('Provider dirty 不点亮全局保存；Provider 保存后全局保存仍禁用', async () => {
@@ -142,6 +133,6 @@ describe('SettingsPanel — 保存拆域', () => {
     await tick();
     expect(save.disabled).toBe(true);
     expect(mockConfigChanged).toHaveBeenCalledTimes(1);
-    expect(mockConfigChanged).toHaveBeenCalledWith('agent:config-changed', { reason: 'settings-saved' });
+    expect(mockConfigChanged).toHaveBeenCalledWith('settings-saved');
   });
 });

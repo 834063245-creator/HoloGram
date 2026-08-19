@@ -8,17 +8,17 @@
 import { getVersion } from '@tauri-apps/api/app';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { typedRpc } from '../../rpc-contract';
 import type { Lang } from '../../i18n';
 import { setLang } from '../../i18n';
+import { DEEP_THINK_LABEL } from '../../provider/thinking';
+import { typedRpc } from '../../rpc-contract';
 import type { AppSettings, ProviderId } from '../../settings';
 import { loadSettings, loadSettingsWithSecrets, persistSecrets, removeSecret, saveSettings } from '../../settings';
-import { useDockStore } from '../dock-store';
-import { bus } from '../events';
-import { iconHtml } from '../icons';
+import { notifyAgentConfigChanged } from '../../ui/agent-config-store';
+import { useDockStore } from '../../ui/dock-store';
+import { iconHtml } from '../../ui/icons';
 import { ConfirmDialog } from './settings/ConfirmDialog';
 import { ProviderPage } from './settings/ProviderPage';
-import { DEEP_THINK_LABEL } from '../../provider/thinking';
 
 type Tab = 'provider' | 'agent' | 'display' | 'languages' | 'about';
 
@@ -217,10 +217,7 @@ const SettingsPanelApp: React.FC<{
     (name: ProviderId) => setPendingClears((c) => (c.includes(name) ? c : [...c, name])),
     [],
   );
-  const unstageClear = useCallback(
-    (name: ProviderId) => setPendingClears((c) => c.filter((x) => x !== name)),
-    [],
-  );
+  const unstageClear = useCallback((name: ProviderId) => setPendingClears((c) => c.filter((x) => x !== name)), []);
 
   const handleClose = useCallback(() => {
     if (dirty || providerDirty) {
@@ -248,7 +245,6 @@ const SettingsPanelApp: React.FC<{
     setPendingClears([]);
     setPendingDeletes([]);
     setLang(settings.display.language);
-    bus.emit('lang:changed', { lang: settings.display.language });
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
     if (onSave) onSave();
@@ -361,8 +357,8 @@ const SettingsPanelApp: React.FC<{
                   {DEEP_THINK_LABEL}
                 </label>
                 <div className="sp-hint-sub">
-                  关闭 = 强制直出（Anthropic / OpenAI 兼容两种协议都生效）。思考强度档位在
-                  Provider 页或聊天面板模型切换器设置（DeepSeek：高/极限；OpenAI 官方：低/中/高）。
+                  关闭 = 强制直出（Anthropic / OpenAI 兼容两种协议都生效）。思考强度档位在 Provider
+                  页或聊天面板模型切换器设置（DeepSeek：高/极限；OpenAI 官方：低/中/高）。
                 </div>
               </div>
               <div className="sp-field">
@@ -681,7 +677,7 @@ export function SettingsPanel() {
   return (
     <SettingsPanelApp
       onClose={() => closePanel('settings')}
-      onSave={() => bus.emit('agent:config-changed', { reason: 'settings-saved' })}
+      onSave={() => notifyAgentConfigChanged('settings-saved')}
     />
   );
 }

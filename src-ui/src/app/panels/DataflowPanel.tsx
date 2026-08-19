@@ -8,10 +8,11 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { typedRpc } from '../../rpc-contract';
-import { getDataflowQueryParser } from '../dock-config';
-import { useDockStore } from '../dock-store';
-import { bus } from '../events';
-import { iconHtml } from '../icons';
+import { useDataflowStore } from '../../ui/dataflow-store';
+import { getDataflowQueryParser } from '../../ui/dock-config';
+import { useDockStore } from '../../ui/dock-store';
+import { iconHtml } from '../../ui/icons';
+import { useShellStore } from '../shell-store';
 import { escapeHtml } from './helpers';
 
 interface TraceSummary {
@@ -359,11 +360,17 @@ export function DataflowPanel() {
       loadTraceList();
     };
 
-    bus.on('dataflow:saved', onSaved);
-    bus.on('workspace:switched', onSwitched);
+    // P1e：替代 bus 'dataflow:saved'/'workspace:switched'——
+    // 保存信号走 dataflow-store tick；工作区切换改订 shell-store 的 projectPath 变化。
+    const unsubSaved = useDataflowStore.subscribe((s, prev) => {
+      if (s.savedTick !== prev.savedTick) onSaved();
+    });
+    const unsubPath = useShellStore.subscribe((s, prev) => {
+      if (s.projectPath !== prev.projectPath) onSwitched();
+    });
     return () => {
-      bus.off('dataflow:saved', onSaved);
-      bus.off('workspace:switched', onSwitched);
+      unsubSaved();
+      unsubPath();
     };
   }, [loadTraceList]);
 
@@ -565,7 +572,9 @@ export function DataflowPanel() {
         style={{ cursor: 'move', userSelect: 'none' }}
         onPointerDown={onDragStart}
       >
-        <span className="df-panel-title"><span className="zh">数据流</span>DATAFLOW</span>
+        <span className="df-panel-title">
+          <span className="zh">数据流</span>DATAFLOW
+        </span>
         <button
           className="df-panel-close"
           onPointerDown={(e) => e.stopPropagation()}

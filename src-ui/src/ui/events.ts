@@ -8,22 +8,10 @@ import { dbg } from './debug';
 // 所有事件必须在 BusEvents 中声明类型 — 不再有 any fallback。
 // 新增事件：在 BusEvents 里加一行，编译器自动检查参数类型。
 
-/** 触发 agent:config-changed 的原因。所有原因都由 Workspace.applyAgentConfig
- *  热切换处理，不重建 Agent。 */
-export type AgentConfigChangeReason =
-  | 'settings-saved'
-  | 'collaboration-mode'
-  | 'model-switched'
-  | 'thinking-changed';
-
 export interface BusEvents {
   // ── Agent ──
   'agent:diag': [d: { text: string; ready: boolean }];
-  'agent:status': [data: { agentId: string; status: string }];
   'agent:tool-done': [data: { toolName: string; args: Record<string, unknown>; output: string }];
-  /** Agent 配置变更（设置面板保存 / 模型切换 / 协作模式切换 / 思考策略）——
-   *  由 Workspace.applyAgentConfig 热切换处理，不重建。 */
-  'agent:config-changed': [data: { reason: AgentConfigChangeReason }];
   'prompt:ask': [
     data: {
       id: string;
@@ -49,7 +37,6 @@ export interface BusEvents {
     data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string },
   ];
   'graph:rendered': [];
-  'lang:changed': [data: { lang: string }];
 
   // ── Navigation / Highlight ──
   'highlight:file': [filePath: string];
@@ -57,8 +44,6 @@ export interface BusEvents {
 
   // ── Workspace ──
   'workspace:switched': [];
-  'timeline:refresh': [];
-  'dataflow:saved': [];
 }
 
 type Handler = (...args: unknown[]) => void;

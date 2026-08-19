@@ -7,7 +7,7 @@
 
 import { createPortal } from 'react-dom';
 import { useOverlayStore } from '../../ui/overlay-store';
-import { FileTranslatorApp } from '../../ui/react/FileTranslatorPanel';
+import { FileTranslatorApp } from './FileTranslatorPanel';
 
 export function FileTranslatorPortal() {
   const session = useOverlayStore((s) => s.translator);

@@ -6,12 +6,12 @@
 // 大点 = 重要事件（始终有标签），小点 = 普通（hover 才展开）。
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useShellStore } from '../../app/shell-store';
-import { typedRpc } from '../../rpc-contract';
-import { askAgent } from '../agent-visualizer';
-import { shell } from '../app-shell';
-import { bus } from '../events';
-import { iconHtml } from '../icons';
+import { typedRpc } from '../rpc-contract';
+import { askAgent } from '../ui/agent-visualizer';
+import { shell } from '../ui/app-shell';
+import { iconHtml } from '../ui/icons';
+import { useTimelineStore } from '../ui/timeline-store';
+import { useShellStore } from './shell-store';
 
 interface TimelineEvent {
   id: number;
@@ -98,15 +98,16 @@ export function TimelineHUD() {
     }
   }, [projectPath, refresh, loading, events.length]);
 
+  // P1d：订阅 timeline-store 的 refreshTick（workspace 递增），替代 bus 'timeline:refresh'
   useEffect(() => {
     let t: ReturnType<typeof setTimeout>;
-    const h = () => {
+    const unsub = useTimelineStore.subscribe((s, prev) => {
+      if (s.refreshTick === prev.refreshTick) return;
       clearTimeout(t);
       t = setTimeout(refresh, 600);
-    };
-    bus.on('timeline:refresh', h);
+    });
     return () => {
-      bus.off('timeline:refresh', h);
+      unsub();
       clearTimeout(t);
     };
   }, [refresh]);
@@ -121,15 +122,14 @@ export function TimelineHUD() {
           <span className="th-spinner" />
         </div>
       )}
-      {!loading && events.length === 0 && (
-        <div className="th-status">·</div>
-      )}
+      {!loading && events.length === 0 && <div className="th-status">·</div>}
       {events.map((ev) => {
         const ts = ev.timestamp ? formatTime(ev.timestamp) : '';
         const sameMinute = lastMinute === ts;
         lastMinute = ts;
         const meta = TYPE_META[ev.event_type] || { label: ev.event_type, kind: 'info', size: 'minor' as const };
-        const isCheck = ev.event_type === 'commit_violation' || ev.event_type === 'commit_clean' || ev.event_type === 'check';
+        const isCheck =
+          ev.event_type === 'commit_violation' || ev.event_type === 'commit_clean' || ev.event_type === 'check';
         const checkPassed = ev.properties?.passed !== false;
         const dotKind = checkPassed && isCheck ? 'pass' : meta.kind;
         const filesProp = ev.properties?.files as string[] | undefined;
@@ -146,9 +146,7 @@ export function TimelineHUD() {
             >
               <span className={`th-glow th-glow-${dotKind}`} />
               <span className={`th-core th-core-${dotKind}`} />
-              {isMajor && (
-                <span className={`th-tag th-tag-${meta.kind}`}>{meta.label}</span>
-              )}
+              {isMajor && <span className={`th-tag th-tag-${meta.kind}`}>{meta.label}</span>}
               {isHovered && (
                 <div className="th-bubble">
                   <div className="th-bubble-head">
@@ -158,10 +156,7 @@ export function TimelineHUD() {
                   {ev.summary && <div className="th-bubble-summary">{ev.summary}</div>}
                   <div className="th-bubble-actions">
                     {ev.file && (
-                      <span
-                        className="th-bubble-file"
-                        onClick={() => shell.navigateToFile(ev.file)}
-                      >
+                      <span className="th-bubble-file" onClick={() => shell.navigateToFile(ev.file)}>
                         {basename(ev.file)}
                       </span>
                     )}
@@ -175,7 +170,9 @@ export function TimelineHUD() {
                           `[${meta.label}]`,
                           ev.file ? `文件: ${ev.file}` : '',
                           ev.summary ? `摘要: ${ev.summary}` : '',
-                        ].filter(Boolean).join(' | ');
+                        ]
+                          .filter(Boolean)
+                          .join(' | ');
                         askAgent(`分析这次变更: ${ctx}`);
                       }}
                       dangerouslySetInnerHTML={{ __html: iconHtml('agent', 11) }}

@@ -63,7 +63,9 @@ streaming 是跨 session 的长期操作。切换 tab 不应该中断它。
 
 ## 4. EventBus：prefix clear 不能删父级 handler
 
-**文件**: `events.ts:117-130`（`EventBus.clear()` 方法）
+**文件**: `events.ts`（`EventBus.clear()` 方法）
+
+**旁注（2026-08-19 岛层退休后）**: `withPrefix` 生产面已清零（chat-core 的 `p:{panelId}:` 前缀总线随 eventSink 直连改造删除）；`clear()` 语义不变，规则继续有效。
 
 ```
 ⚠️ bus.clear() 只能删除匹配当前 prefix 的事件。

@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import { type AppSettings, getActiveProvider, loadSettingsWithSecrets, onSettingsSaved } from '../../settings';
-import { getChatStore, msgStoreFor } from '../chat-store';
+import { getChatStore, msgStoreFor } from '../../ui/chat-store';
 
 // ponytail: 稳定引用，使下方 selector 不会返回新的 []
 // 否则会通过 useSyncExternalStore 触发无限循环。

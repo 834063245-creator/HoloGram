@@ -9,13 +9,14 @@
 // UI 层拥有此模块 — 可以自由 import zustand/store/bus。
 // agent/ 层永远不 import 此文件。
 
-import type { AgentEvent, EventSink } from '../agent/agent-types';
 import { agentSessionState } from '../agent/agent-session-state';
+import type { AgentEvent, EventSink } from '../agent/agent-types';
 import type { AgentStatus, RuntimeNotifier } from '../agent/runtime/types';
 import type { Message } from '../provider/types';
 import { useAgentPanelStore } from './agent-panel-store';
 import { rebuildMessagesFromMessages } from './chat-session';
 import { getChatStore, msgStoreFor } from './chat-store';
+import { bumpDataflowSaved } from './dataflow-store';
 import { bus } from './events';
 import type { AssistantMessage, SubAgentPart } from './message-model';
 import { createSubAgentSink } from './subagent-sink';
@@ -34,7 +35,7 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
     onAgentStatus(agentId: string, status: AgentStatus): void {
       const store = useAgentPanelStore.getState();
       store.setAgents(store.agents.map((a) => (a.id === agentId ? { ...a, status } : a)));
-      bus.emit('agent:status', { agentId, status });
+      store.bumpStatusTick(); // P1c：替代 bus 'agent:status'（岛侧消费者订阅 tick）
     },
 
     onProgress(_agentId: string, _step: number, _toolName: string): void {
@@ -42,7 +43,8 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
     },
 
     onToolDone(_agentId: string, toolName: string, args: Record<string, unknown>, output: string): void {
-      bus.emit('agent:tool-done', { toolName, args, output });
+      bus.emit('agent:tool-done', { toolName, args, output }); // 旧层消费者（workspace / agent-visualizer）
+      useAgentPanelStore.getState().bumpToolDoneTick(); // 岛侧消费者（P1c 双轨）
     },
 
     onSessionReplaced(_agentId: string, messages: Message[]): void {
@@ -181,7 +183,7 @@ export function createBuilderDeps(storeId: string): import('../agent/runtime/age
       bus.emit('prompt:ask', req);
     },
     onDataflowSaved: () => {
-      bus.emit('dataflow:saved');
+      bumpDataflowSaved();
     },
     // diagnosticsSource 和 shellStream 单独接线
     // （它们需要属于 UI 层的 Tauri 特定 import）

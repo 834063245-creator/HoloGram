@@ -6,9 +6,9 @@
 // 零 innerHTML、零 querySelector、零手动 class 切换。
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { useShellStore } from '../../app/shell-store';
 import { typedRpc } from '../../rpc-contract';
-import { getChatStore } from '../chat-store';
+import { getChatStore } from '../../ui/chat-store';
+import { useShellStore } from '../shell-store';
 
 // ── 类型 ──
 

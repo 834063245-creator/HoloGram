@@ -42,7 +42,7 @@ import {
   startLsp,
   stopAllLsp,
 } from './lsp-client';
-import { MarkdownFilePreview } from './react/MarkdownFilePreview';
+import { MarkdownFilePreview } from './markdown-file-preview';
 
 // LSP 会话单一事实源在 lsp-client.ts（getLspSession）— 这里不再自建第二张会话表，
 // 否则 stopAllLsp 清不到本表、切换后 LSP 永久假死还显示已连接（landmine-map H2）。

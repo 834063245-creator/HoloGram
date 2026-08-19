@@ -6,19 +6,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getAllModels, getDefaultModel } from '../../provider/catalog';
+import { DEEP_THINK_LABEL, type StoredThinking, thinkingModesFor } from '../../provider/thinking';
 import type { ModelDescriptor } from '../../provider/types';
-import { DEEP_THINK_LABEL, thinkingModesFor, type StoredThinking } from '../../provider/thinking';
 import {
+  type AppSettings,
   getActiveProvider,
   isFactoryBaseUrl,
+  type ProviderId,
   saveSettings,
   updateProvider,
-  type AppSettings,
-  type ProviderId,
 } from '../../settings';
-import { bus, type AgentConfigChangeReason } from '../events';
-import { iconHtml } from '../icons';
-import { protocolLabel } from './settings/protocol';
+import { type AgentConfigChangeReason, notifyAgentConfigChanged } from '../../ui/agent-config-store';
+import { iconHtml } from '../../ui/icons';
+import { protocolLabel } from '../panels/settings/protocol';
 
 interface ModelSwitcherProps {
   settings: AppSettings;
@@ -34,7 +34,10 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
   const thinkingModes = thinkingModesFor(active.kind, active.name, active.baseUrl, active.model);
 
   const currentModels = useMemo(
-    () => getAllModels().filter((m) => m.vendor === active.name).sort((a, b) => a.id.localeCompare(b.id)),
+    () =>
+      getAllModels()
+        .filter((m) => m.vendor === active.name)
+        .sort((a, b) => a.id.localeCompare(b.id)),
     [active.name],
   );
 
@@ -58,7 +61,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
    *  reason 区分变更来源，workspace 统一按需换 provider / 同步行为参数。 */
   const apply = useCallback((next: AppSettings, reason: AgentConfigChangeReason, keepOpen = false) => {
     saveSettings(next);
-    bus.emit('agent:config-changed', { reason });
+    notifyAgentConfigChanged(reason);
     if (!keepOpen) setOpen(false);
   }, []);
 
@@ -149,7 +152,9 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
                       <span className="ms-pop-tag ctx">{(m.contextWindow / 1000).toFixed(0)}k</span>
                     )}
                     {m.cost.input > 0 && (
-                      <span className="ms-pop-tag">${m.cost.input}/${m.cost.output}</span>
+                      <span className="ms-pop-tag">
+                        ${m.cost.input}/${m.cost.output}
+                      </span>
                     )}
                   </span>
                 </button>
@@ -192,11 +197,7 @@ export function ModelSwitcher({ settings, onOpenSettings }: ModelSwitcherProps) 
             {thinkingModes.length > 0 ? (
               <select
                 className="ms-pop-select"
-                value={
-                  thinkingModes.some((o) => o.value === (active.thinking || ''))
-                    ? active.thinking || ''
-                    : ''
-                }
+                value={thinkingModes.some((o) => o.value === (active.thinking || '')) ? active.thinking || '' : ''}
                 onChange={(e) => setThinking(e.target.value as StoredThinking)}
               >
                 {thinkingModes.map((o) => (

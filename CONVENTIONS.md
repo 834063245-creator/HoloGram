@@ -53,6 +53,11 @@
 ✅ app/** 新代码：UI 状态走 zustand store，不要 import ui/events.ts
 ✅ Agent ↔ Agent：agent/message-bus.ts（有界 inbox + ack + 背压），不是 ui/events.ts
 ✅ 存量旧组件继续用 ui/events.ts 的既有事件；events.ts 的 BusEvents 不再新增事件
+✅ ui/react/ 岛层已退休（2026-08-19，docs/plans/ui-react-island-retirement-plan.md）：目录已删除，
+   组件全部迁入 src/app/**（聊天件 app/chat/、面板 app/panels/、chrome app/ 根级）；终态守护
+   tests/ui-react-retirement.test.ts。总线缩编为 11 事件——lang/agent:config/agent:status/
+   timeline/dataflow 五事件改为 zustand 信号 store（i18n.useLangStore / ui/agent-config-store /
+   agent-panel-store 的 statusTick/toolDoneTick / ui/timeline-store / ui/dataflow-store）
 
 ❌ 禁止：window.dispatchEvent / CustomEvent / 自己 new EventEmitter
 ```

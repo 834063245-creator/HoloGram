@@ -13,16 +13,16 @@ import { type AppSettings, getActiveProvider, loadSettings, onSettingsSaved } fr
 import * as Session from '../../ui/chat-session';
 import { bumpChat, getChatStore } from '../../ui/chat-store';
 import { type CommandDef, CommandRegistry } from '../../ui/command-registry';
-import { AtAutocomplete, type AtAutocompleteHandle } from '../../ui/react/AtAutocomplete';
-import { ChatFooter, type ChatFooterHandle } from '../../ui/react/ChatFooter';
-import { ChatHint } from '../../ui/react/ChatHint';
-import { ChatMessagesApp, type ChatMessagesCallbacks } from '../../ui/react/ChatMessages';
-import { PromptShelf, type PromptShelfHandle } from '../../ui/react/PromptShelf';
-import { SlashPanel, type SlashPanelHandle } from '../../ui/react/SlashPanel';
 import { Icon } from '../Icon';
+import { AtAutocomplete, type AtAutocompleteHandle } from './AtAutocomplete';
+import { ChatFooter, type ChatFooterHandle } from './ChatFooter';
+import { ChatHint } from './ChatHint';
+import { ChatMessagesApp, type ChatMessagesCallbacks } from './ChatMessages';
 import { Composer } from './Composer';
 import { ChatCore } from './chat-core';
 import { HistoryPanel } from './HistoryPanel';
+import { PromptShelf, type PromptShelfHandle } from './PromptShelf';
+import { SlashPanel, type SlashPanelHandle } from './SlashPanel';
 
 const MODE_CLASS: Record<string, string> = {
   pill: 'chat-pill',
@@ -109,7 +109,8 @@ function GoalStrip({ core }: { core: ChatCore }) {
       <span className="goal-strip-icon">🎯</span>
       <span className="goal-strip-text">{rec.text.length > 40 ? `${rec.text.slice(0, 40)}…` : rec.text}</span>
       <span className="goal-strip-meta">
-        {rec.status === 'paused' ? '已暂停' : rec.status === 'blocked' ? '已受阻' : '进行中'} · 第 {rec.iteration + 1} 轮
+        {rec.status === 'paused' ? '已暂停' : rec.status === 'blocked' ? '已受阻' : '进行中'} · 第 {rec.iteration + 1}{' '}
+        轮
       </span>
       {rec.status === 'active' ? (
         <button type="button" className="goal-strip-btn" onClick={() => core.abort()}>

@@ -5,7 +5,16 @@
 // ContextMenu（原懒 root）与 FileTranslator（原 FileViewer 内独立 root）经 portal 渲染。
 
 import { create } from 'zustand';
-import type { ContextMenuItem } from './react/ContextMenu';
+
+// ── ContextMenuItem（P2：随岛层退休从 ContextMenu.tsx 下沉——它是 ContextMenuRequest
+//    的字段类型，类型跟着状态走；app/ContextMenu.tsx 与 ui/context-menu.ts 从这里 import）──
+
+export interface ContextMenuItem {
+  label: string;
+  action: () => void;
+  disabled?: boolean;
+  separator?: boolean; // 在此项前渲染分隔线
+}
 
 export interface ContextMenuRequest {
   x: number;
