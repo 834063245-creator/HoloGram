@@ -25,9 +25,6 @@ vi.mock('../src/bridge', () => ({
 // ── Mock DOM-heavy libs that don't matter for session logic ──
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
-vi.mock('../src/ui/events', () => ({
-  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
-}));
 vi.mock('../src/ui/app-shell', () => ({
   shell: { register: vi.fn(), notifyPanelChanged: vi.fn(), wire: vi.fn(), navigateToFile: vi.fn() },
 }));
@@ -747,9 +744,7 @@ describe('ChatPanel session persistence', () => {
 
       mockInvoke
         .mockResolvedValueOnce(JSON.stringify({ lastId: 1, nextId: 2 }))
-        .mockResolvedValueOnce(
-          mockSessionFile(1, mockSessionMessages, '测试会话'),
-        );
+        .mockResolvedValueOnce(mockSessionFile(1, mockSessionMessages, '测试会话'));
 
       return panel.autoRestoreLastSession('D:/test');
     }
@@ -857,9 +852,7 @@ describe('ChatPanel session persistence', () => {
       const restored: any[] = [];
       setupStubAgent((msgs) => restored.push(...msgs));
       mockDisk((fp) =>
-        fp.endsWith('/7.json')
-          ? JSON.stringify({ id: 7, deleted: true, label: '', messages: [], savedAt: '' })
-          : null,
+        fp.endsWith('/7.json') ? JSON.stringify({ id: 7, deleted: true, label: '', messages: [], savedAt: '' }) : null,
       );
 
       await panel.autoRestoreLastSession(PROJ);

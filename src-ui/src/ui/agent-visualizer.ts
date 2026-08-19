@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// Agent Visualizer — 订阅 EventBus，Agent 工具调用完成 → 星图可视化
+// Agent Visualizer — 订阅 agent-panel-store（lastToolDone），Agent 工具调用完成 → 星图可视化
 // 不改 Agent 循环，不改 Python 引擎。纯胶水层。
 //
 // Step 2: 重构为类。订阅 'agent:tool-done' → 单入口更新图，
 // 消除 main.ts / chat.ts 中的三重 visualizeAgentTool() 调用。
 
+import { useAgentPanelStore } from './agent-panel-store';
 import { shell } from './app-shell';
-import { bus } from './events';
 import type { StarGraph } from './graph';
 
 /**
@@ -33,7 +33,11 @@ export class AgentVisualizer {
 
   constructor(graph: StarGraph) {
     this.graph = graph;
-    bus.on('agent:tool-done', this._onToolDone.bind(this));
+    // P1 总线归零：agent:tool-done → agent-panel-store.lastToolDone
+    // （main.ts 进程级单例，常驻订阅 — 与旧 bus.on 生命周期一致，无清理点）
+    useAgentPanelStore.subscribe((s, prev) => {
+      if (s.toolDoneTick !== prev.toolDoneTick && s.lastToolDone) this._onToolDone(s.lastToolDone);
+    });
   }
 
   /** 更新星图引用（用于重建图的场景模式切换）。 */

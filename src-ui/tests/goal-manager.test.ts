@@ -3,17 +3,13 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// ── Mock bridge and events ──
+// ── Mock bridge ──
 
 const rpcMock = vi.fn();
-const emitMock = vi.fn();
 vi.mock('../src/bridge', () => ({
   rpc: (...args: any[]) => rpcMock(...args),
   listen: vi.fn(() => () => {}),
   isMockMode: () => false,
-}));
-vi.mock('../src/ui/events', () => ({
-  bus: { emit: (...args: any[]) => emitMock(...args), on: vi.fn(), off: vi.fn() },
 }));
 
 import { GoalManager, type GoalRecord } from '../src/agent/goal-manager';
@@ -67,7 +63,6 @@ const GOALS = '/proj/.hologram/goals';
 
 describe('GoalManager CRUD', () => {
   beforeEach(() => {
-    emitMock.mockReset();
     mockLiveFs();
   });
 
@@ -175,7 +170,6 @@ describe('GoalManager CRUD', () => {
 
 describe('GoalManager session snapshots', () => {
   beforeEach(() => {
-    emitMock.mockReset();
     mockLiveFs();
   });
 
@@ -204,8 +198,6 @@ describe('GoalManager session snapshots', () => {
 // ── 崩溃接管 ──
 
 describe('GoalManager adoptOrphans', () => {
-  beforeEach(() => emitMock.mockReset());
-
   it('ancient active record → paused', async () => {
     const orphan = makeRecord({ id: 'goal-orphan', status: 'active', updatedAt: 1 });
     mockLiveFs({
@@ -235,8 +227,6 @@ describe('GoalManager adoptOrphans', () => {
 // ── 旧格式迁移 ──
 
 describe('GoalManager migrateLegacy', () => {
-  beforeEach(() => emitMock.mockReset());
-
   it('imports legacy goal.json as paused, copies session, deletes legacy file', async () => {
     const legacy = {
       goal: 'legacy goal',

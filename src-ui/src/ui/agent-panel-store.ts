@@ -38,6 +38,14 @@ interface AgentPanelState {
   messageFlow: MessageFlowEntry[];
   alerts: LifecycleAlert[];
 
+  /** Agent 就绪诊断 — workspace 在 provider/key 校验后直写（P1 事件归零：替代 bus
+   *  'agent:diag'；chat-core 订阅转写进 panel-store.lastAgentDiag） */
+  diag: { text: string; ready: boolean } | null;
+
+  /** 最近完成的工具调用 — runtime-adapter 的 onToolDone 直写（P1 事件归零：
+   *  bus 'agent:tool-done' + toolDoneTick 双轨合并为携带 payload 的单轨） */
+  lastToolDone: { toolName: string; args: Record<string, unknown>; output: string } | null;
+
   /** 信号 tick — runtime-adapter 的 onAgentStatus / onToolDone 递增；
    *  组件订阅 tick 变化触发刷新（P1c：替代 bus 'agent:status'；
    *  refresh() 只写数据字段不写 tick，无订阅回路） */
@@ -58,8 +66,10 @@ interface AgentPanelState {
   currentSessionId: string;
 
   setAgents: (agents: AgentSummary[]) => void;
+  setDiag: (d: { text: string; ready: boolean }) => void;
   bumpStatusTick: () => void;
-  bumpToolDoneTick: () => void;
+  /** 写入最近工具调用结果并原子递增 toolDoneTick（订阅者按 tick 触发、读 payload）。 */
+  setLastToolDone: (d: { toolName: string; args: Record<string, unknown>; output: string }) => void;
   setTaskBoard: (entries: BoardEntry[]) => void;
   setDiscoveries: (entries: DiscoveryEntry[]) => void;
   pushMessage: (msg: AgentMessage) => void;
@@ -80,14 +90,17 @@ export const useAgentPanelStore = create<AgentPanelState>((set, get) => ({
   discoveries: [],
   messageFlow: [],
   alerts: [],
+  diag: null,
+  lastToolDone: null,
   statusTick: 0,
   toolDoneTick: 0,
   runtimeRef: null,
   currentSessionId: 'default',
 
   setAgents: (agents) => set({ agents }),
+  setDiag: (d) => set({ diag: d }),
   bumpStatusTick: () => set((s) => ({ statusTick: s.statusTick + 1 })),
-  bumpToolDoneTick: () => set((s) => ({ toolDoneTick: s.toolDoneTick + 1 })),
+  setLastToolDone: (d) => set((s) => ({ lastToolDone: d, toolDoneTick: s.toolDoneTick + 1 })),
   setTaskBoard: (entries) => set({ taskBoard: entries }),
   setDiscoveries: (entries) => set({ discoveries: entries }),
 

@@ -1,11 +1,10 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 
-// P1：应用壳 — 单 React 根。组合全部新 chrome，挂全局快捷键与 bus 适配器。
+// P1：应用壳 — 单 React 根。组合全部新 chrome，挂全局快捷键。
 // P3：六个 dock 面板收编进 DockPanel；ContextMenu / FileTranslator 经 portal 宿主渲染。
 
 import { useEffect } from 'react';
-import { initBridgeAdapters } from './bridge-adapters';
 import { CommandBar } from './CommandBar';
 import { CommandPalette } from './CommandPalette';
 import { ContextMenuHost } from './ContextMenu';
@@ -24,10 +23,6 @@ export function App() {
   useGlobalKeys();
   const core = useCoreStore((s) => s.core);
   const view = useShellStore((s) => s.view);
-
-  useEffect(() => {
-    initBridgeAdapters();
-  }, []);
 
   useEffect(() => {
     const welcome = document.getElementById('welcome');

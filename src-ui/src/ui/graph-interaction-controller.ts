@@ -11,7 +11,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
-import { bus } from './events';
+import { setGraphNodeClicked } from '../state/scene-signal-store';
 import type { GraphAnalysis } from './graph-analysis';
 import type { GraphEdgeRenderer } from './graph-edge-renderer';
 import type { GraphFold } from './graph-fold';
@@ -294,7 +294,8 @@ export class GraphInteractionController {
 
     if (idx >= 0 && idx < this.host._nodeCount) {
       const node = this.host.graphNodes[idx];
-      bus.emit('graph:node-clicked', {
+      // P1 总线归零：graph:node-clicked → state/scene-signal-store
+      setGraphNodeClicked({
         nodeName: node.name,
         nodeType: (node.type || node.kind || 'symbol') as string,
         nodeId: node.id,

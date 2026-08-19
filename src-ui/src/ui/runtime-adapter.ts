@@ -13,11 +13,11 @@ import { agentSessionState } from '../agent/agent-session-state';
 import type { AgentEvent, EventSink } from '../agent/agent-types';
 import type { AgentStatus, RuntimeNotifier } from '../agent/runtime/types';
 import type { Message } from '../provider/types';
+import { pushAsk } from '../state/ask-store';
 import { useAgentPanelStore } from './agent-panel-store';
 import { rebuildMessagesFromMessages } from './chat-session';
 import { getChatStore, msgStoreFor } from './chat-store';
 import { bumpDataflowSaved } from './dataflow-store';
-import { bus } from './events';
 import type { AssistantMessage, SubAgentPart } from './message-model';
 import { createSubAgentSink } from './subagent-sink';
 
@@ -43,8 +43,9 @@ export function createRuntimeAdapter(storeId: string): RuntimeNotifier {
     },
 
     onToolDone(_agentId: string, toolName: string, args: Record<string, unknown>, output: string): void {
-      bus.emit('agent:tool-done', { toolName, args, output }); // 旧层消费者（workspace / agent-visualizer）
-      useAgentPanelStore.getState().bumpToolDoneTick(); // 岛侧消费者（P1c 双轨）
+      // P1 总线归零：bus 'agent:tool-done' + toolDoneTick 双轨合并为 lastToolDone 单轨
+      // （workspace / agent-visualizer / 岛侧 tick 消费者统一订阅 agent-panel-store）
+      useAgentPanelStore.getState().setLastToolDone({ toolName, args, output });
     },
 
     onSessionReplaced(_agentId: string, messages: Message[]): void {
@@ -180,7 +181,8 @@ function hashStr(s: string): string {
 export function createBuilderDeps(storeId: string): import('../agent/runtime/agent-builder').BuilderDeps {
   return {
     onAskUser: (req) => {
-      bus.emit('prompt:ask', req);
+      // P1 总线归零：prompt:ask → state/ask-store（callback-in-store）
+      pushAsk(req);
     },
     onDataflowSaved: () => {
       bumpDataflowSaved();

@@ -1,10 +1,7 @@
-﻿import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '' }));
-vi.mock('../src/ui/events', () => ({
-  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
-}));
 vi.mock('../src/ui/app-shell', () => ({ shell: { register: vi.fn() } }));
 vi.mock('../src/agent/permission', () => ({}));
 vi.mock('../src/agent/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -39,12 +36,7 @@ import type { AgentEvent } from '../src/agent/agent-types';
 import { EventKind } from '../src/agent/agent-types';
 import { msgStoreFor, msgStoreForActive } from '../src/ui/chat-store';
 import type { StreamContext } from '../src/ui/chat-stream';
-import {
-  addNotice,
-  appendUserBubble,
-  finishTurn,
-  renderEvent,
-} from '../src/ui/chat-stream';
+import { addNotice, appendUserBubble, finishTurn, renderEvent } from '../src/ui/chat-stream';
 import type { AssistantMessage, ChatMessage, MessageId } from '../src/ui/message-model';
 import { getSessionStore } from '../src/ui/session-store';
 
@@ -87,7 +79,9 @@ function makeCtx(activeSession: number = SESSION_A): StreamContext {
       _streamingId = id;
     }) as (id: MessageId | null) => void,
     getStreamingTargetSid: () => _streamingTargetSid,
-    setStreamingTargetSid: (sid: number | null) => { _streamingTargetSid = sid; },
+    setStreamingTargetSid: (sid: number | null) => {
+      _streamingTargetSid = sid;
+    },
     getUserScrolledUp: () => false,
     setUserScrolledUp: vi.fn(),
     getSyncRafId: () => null,

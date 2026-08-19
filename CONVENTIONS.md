@@ -47,21 +47,26 @@
 ❌ 禁止：引入 Zustand 之外的状态库
 ```
 
-### 1.3 跨组件通信：新状态走 store，EventBus 是冻结存量
+### 1.3 跨组件通信：状态走 store，EventBus 已退役
 
 ```
-✅ app/** 新代码：UI 状态走 zustand store，不要 import ui/events.ts
-✅ Agent ↔ Agent：agent/message-bus.ts（有界 inbox + ack + 背压），不是 ui/events.ts
-✅ 存量旧组件继续用 ui/events.ts 的既有事件；events.ts 的 BusEvents 不再新增事件
+✅ app/** 新代码：UI 状态走 zustand store（ui/events.ts 已于 2026-08-19 总线归零 P1 删除）
+✅ Agent ↔ Agent：agent/message-bus.ts（有界 inbox + ack + 背压），不是事件总线
 ✅ ui/react/ 岛层已退休（2026-08-19，docs/plans/ui-react-island-retirement-plan.md）：目录已删除，
    组件全部迁入 src/app/**（聊天件 app/chat/、面板 app/panels/、chrome app/ 根级）；终态守护
    tests/ui-react-retirement.test.ts。总线缩编为 11 事件——lang/agent:config/agent:status/
    timeline/dataflow 五事件改为 zustand 信号 store（i18n.useLangStore / ui/agent-config-store /
    agent-panel-store 的 statusTick/toolDoneTick / ui/timeline-store / ui/dataflow-store）
-🔒 总线归零 + ui/ 拆分立项（2026-08-19，docs/plans/eventbus-zero-and-ui-split-plan.md）：
-   events.ts 事件只减不增（守护 tests/eventbus-zero-and-ui-split.test.ts）；ui/ 目录只减不增——
-   新建信号 store 一律落 src/state/（P1 起该目录为状态层新家），新组件落 src/app/**；
-   执行窗口：下一个新窗口（P1 事件归零 → P2 拆 scene/+state/ → P3 收口）
+✅ 事件总线已归零（2026-08-19，docs/plans/eventbus-zero-and-ui-split-plan.md P1）：
+   src/ui/events.ts 整文件删除，11 个残余事件全部迁 zustand 信号 store——
+   turn-done / goal / chat-context / scene-signal / ask / workspace-switch 六个新信号 store
+   落 src/state/（该目录自此为状态层新家），agent:diag 与 agent:tool-done 落
+   agent-panel-store（diag / lastToolDone 扩展）；旧事件的 payload 类型随 store 走。
+   跨工作区 fire-and-forget 消费端照 INVARIANTS #12 epoch 守卫（样板：chat-core
+   _refreshGoalRecord）
+🔒 总线归零 + ui/ 拆分进行中（docs/plans/eventbus-zero-and-ui-split-plan.md）：
+   P1 ✅ 事件归零；ui/ 目录只减不增（守护 tests/eventbus-zero-and-ui-split.test.ts）——
+   新建信号 store 一律落 src/state/，新组件落 src/app/**；待执行：P2 拆 scene/+state/ → P3 收口
 
 ❌ 禁止：window.dispatchEvent / CustomEvent / 自己 new EventEmitter
 ```

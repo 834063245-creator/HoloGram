@@ -396,10 +396,6 @@ vi.mock('../../src/ui/graph-layout', async (importActual) => {
   return { ...actual, relaxNewNodes: vi.fn(async () => {}) };
 });
 
-vi.mock('../../src/ui/events', () => ({
-  bus: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), clear: vi.fn() },
-}));
-
 vi.mock('../../src/ui/app-shell', () => ({
   shell: {
     register: vi.fn(),

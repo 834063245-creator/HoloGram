@@ -27,10 +27,7 @@ const BASELINE_EVENTS = [
 ] as const;
 
 /** 过渡期豁免：app/** 内允许 import ui/events 的文件（两者都随 P1 消亡）。 */
-const APP_EVENTS_IMPORT_ALLOWLIST = new Set([
-  'src/app/chat/chat-core.ts',
-  'src/app/bridge-adapters.ts',
-]);
+const APP_EVENTS_IMPORT_ALLOWLIST = new Set(['src/app/chat/chat-core.ts', 'src/app/bridge-adapters.ts']);
 
 /** P0 基线（2026-08-19）：ui/ 全量 59 文件。只能扣减（graph.ts 允许变 shim 但文件名保留）。 */
 const UI_MANIFEST = [
@@ -111,7 +108,7 @@ function listFiles(root: string): string[] {
 /** 从 events.ts 提取 BusEvents 接口里的事件名（'xxx:yyy': 形式的键）。 */
 function extractEventNames(src: string): string[] {
   const out: string[] = [];
-  for (const m of src.matchAll(/^\s*['\"]([a-z-]+:[a-z-]+)['\"]\s*:/gm)) out.push(m[1]);
+  for (const m of src.matchAll(/^\s*['"]([a-z-]+:[a-z-]+)['"]\s*:/gm)) out.push(m[1]);
   return out;
 }
 
@@ -125,7 +122,7 @@ function findEventsImports(root: string): string[] {
       else if (/\.(ts|tsx)$/.test(e.name)) {
         const rel = p.replace(/\\/g, '/').replace(/^.*\/src\//, 'src/');
         for (const line of readFileSync(p, 'utf-8').split('\n')) {
-          if (/from ['\"][^'\"]*ui\/events['\"]/.test(line)) hits.push(`${rel}: ${line.trim()}`);
+          if (/from ['"][^'"]*ui\/events['"]/.test(line)) hits.push(`${rel}: ${line.trim()}`);
         }
       }
     }
@@ -141,12 +138,16 @@ describe('事件总线归零 + ui/ 拆分门禁（docs/plans/eventbus-zero-and-u
     const eventsFile = join(uiDir, 'events.ts');
     if (COMPLETE) {
       expect(existsSync(eventsFile), 'src/ui/events.ts 应已删除').toBe(false);
-    } else {
+    } else if (existsSync(eventsFile)) {
+      // P1 已删除 events.ts 时此门禁天然满足（零事件 ⊆ 11 基线）；文件仍存在则继续封口
       const actual = extractEventNames(readFileSync(eventsFile, 'utf-8'));
       const baseline = new Set<string>(BASELINE_EVENTS);
       const extra = actual.filter((e) => !baseline.has(e));
-      expect(extra, `BusEvents 出现基线之外的新事件（封口违规）：
-${extra.join('\n')}`).toEqual([]);
+      expect(
+        extra,
+        `BusEvents 出现基线之外的新事件（封口违规）：
+${extra.join('\n')}`,
+      ).toEqual([]);
       expect(actual.length, '事件数应只减不增').toBeLessThanOrEqual(BASELINE_EVENTS.length);
     }
   });
@@ -155,8 +156,11 @@ ${extra.join('\n')}`).toEqual([]);
     const actual = listFiles(uiDir);
     const manifest = new Set<string>(UI_MANIFEST);
     const extra = actual.filter((f) => !manifest.has(f));
-    expect(extra, `ui/ 出现 manifest 之外的新文件（封口违规——新 store 去 state/，新组件去 app/）：
-${extra.join('\n')}`).toEqual([]);
+    expect(
+      extra,
+      `ui/ 出现 manifest 之外的新文件（封口违规——新 store 去 state/，新组件去 app/）：
+${extra.join('\n')}`,
+    ).toEqual([]);
     if (COMPLETE) {
       expect(actual.length, 'ui/ 残余应已收窄').toBeLessThanOrEqual(24);
     }
@@ -168,8 +172,11 @@ ${extra.join('\n')}`).toEqual([]);
       const file = h.split(':')[0];
       return !APP_EVENTS_IMPORT_ALLOWLIST.has(file);
     });
-    expect(violations, `app/** 出现豁免面之外的 ui/events import：
-${violations.join('\n')}`).toEqual([]);
+    expect(
+      violations,
+      `app/** 出现豁免面之外的 ui/events import：
+${violations.join('\n')}`,
+    ).toEqual([]);
   });
 
   it.skipIf(!COMPLETE)('终态：总线与桥接全灭，scene/ 与 state/ 就位', () => {
@@ -180,6 +187,9 @@ ${violations.join('\n')}`).toEqual([]);
     const state = listFiles(join(process.cwd(), 'src', 'state'));
     expect(state.length, 'state/ 应 ≥11 文件').toBeGreaterThanOrEqual(11);
     const shim = readFileSync(join(uiDir, 'graph.ts'), 'utf-8');
-    expect(shim.split('\n').filter((l) => l.trim()).length, 'ui/graph.ts 应为 ≤3 行 re-export shim').toBeLessThanOrEqual(3);
+    expect(
+      shim.split('\n').filter((l) => l.trim()).length,
+      'ui/graph.ts 应为 ≤3 行 re-export shim',
+    ).toBeLessThanOrEqual(3);
   });
 });

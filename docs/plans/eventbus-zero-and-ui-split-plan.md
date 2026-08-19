@@ -1,7 +1,7 @@
 # 事件总线归零 + ui/ 层拆分计划
 
 > 立项：2026-08-19（岛层退休收口当日立项；执行窗口：下一个新窗口）
-> 状态：**P0 ✅（本窗口完成：本计划 + 守护测试 + 注册封口）· P1-P3 待执行**
+> 状态：**P0 ✅ · P1 ✅（2026-08-19 本窗口完成：11 事件全退役 + events.ts 删除）· P2-P3 待执行**
 > 守护：`tests/eventbus-zero-and-ui-split.test.ts`（三重只减不增门禁 + 终态断言）
 > 前置：docs/plans/ui-react-island-retirement-plan.md（Done，2026-08-19）
 
@@ -103,7 +103,17 @@ withPrefix 生产调用为零。
   chat-core 与 bridge-adapters（过渡期豁免面，终态全零）
 - plans/README 注册 + CONVENTIONS 封口行
 
-### P1 事件归零（语义工作，风险升序，每步 tsc + 定向 vitest）
+### P1 ✅（2026-08-19，本窗口）事件归零（语义工作，风险升序，每步 tsc + 定向 vitest）
+
+实际执行记录：11 事件全数退役，新增 6 个信号 store 落 `src/state/`（turn-done / goal /
+chat-context / scene-signal / ask / workspace-switch），agent-panel-store 扩展 diag +
+lastToolDone（tool-done 双轨合并单轨），bridge-adapters.ts 删除、workspace 直写
+shell-store 违章徽标，chat-core 全部 bus.on 换 store 订阅（workspace:switched 消费端
+补 INVARIANTS #12 epoch 守卫），prompt:ask 落 callback-in-store + 回归测试
+tests/ask-store.test.ts（pending 期 chat-core 重建），events.ts 整文件删除，30 个测试
+文件的陈旧 ui/events mock 清零，守护测试适配「文件已删则门禁天然满足」。
+执行差异：graph:node-clicked 实测有两个消费者（graph-interaction + chat-core，
+计划拓扑表漏登后者），均迁 scene-signal-store。
 
 1. check:result → workspace 直写 dock-store；删 bridge-adapters.ts + App.tsx 挂载行
 2. agent:diag → agent-panel-store.diag；chat:turn-done → turnDoneTick（简单信号热身）

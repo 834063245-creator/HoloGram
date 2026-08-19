@@ -20,7 +20,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { useShellStore } from '../app/shell-store';
 import { t, useLangStore } from '../i18n';
-import { bus } from './events';
+import { bumpGraphRendered } from '../state/scene-signal-store';
 import { gpuLayout } from './gpu-layout';
 import { type AnalysisHost, GraphAnalysis } from './graph-analysis';
 import { BG_COLOR } from './graph-colors';
@@ -550,7 +550,7 @@ export class StarGraph {
   async render(graph: GraphJSON): Promise<void> {
     try {
       await this._lifecycle.renderImpl(graph);
-      bus.emit('graph:rendered');
+      bumpGraphRendered(); // P1 总线归零：graph:rendered → state/scene-signal-store
     } catch (e) {
       console.error('[StarGraph] render crashed:', e);
       this._renderInProgress = false;

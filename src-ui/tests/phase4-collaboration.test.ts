@@ -23,15 +23,14 @@ vi.mock('../src/bridge', () => ({
   listen: vi.fn(),
   isMockMode: () => false,
 }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 
+import { SubAgentPool, SubAgentStatus } from '../src/agent/coordinator';
 import { DiscoveryBoard } from '../src/agent/discovery-board';
 import { MessageBus } from '../src/agent/message-bus';
-import { MeshTopology } from '../src/agent/topology';
-import { SubAgentPool, SubAgentStatus } from '../src/agent/coordinator';
 import type { AgentAddress } from '../src/agent/message-types';
-import { createRequestTool } from '../src/agent/tools/request';
 import { createDiscoveryTools } from '../src/agent/tools/discovery';
+import { createRequestTool } from '../src/agent/tools/request';
+import { MeshTopology } from '../src/agent/topology';
 
 // ── Helpers ──
 
@@ -123,7 +122,11 @@ describe('DiscoveryBoard', () => {
     const tools = createDiscoveryTools(board, () => 'agent-a');
 
     // Post a discovery
-    const discoverResult = await tools[0].execute({ key: 'auth', value: 'auth in src/auth.ts', category: 'architecture' });
+    const discoverResult = await tools[0].execute({
+      key: 'auth',
+      value: 'auth in src/auth.ts',
+      category: 'architecture',
+    });
     expect(discoverResult).toContain('发现已发布');
 
     // Lookup

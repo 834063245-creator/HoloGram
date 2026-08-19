@@ -6,7 +6,7 @@
 // persisted in this.session, keeping the session history clean for stable
 // cache prefixes across all LLM providers.
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock bridge.rpc — used by drain_bg_notifications and agentInvoke
 const mockRpc = vi.fn();
@@ -15,7 +15,6 @@ vi.mock('../src/bridge', () => ({
   listen: vi.fn(),
   isMockMode: () => false,
 }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 
 import { Agent } from '../src/agent/agent';
 import { ToolRegistry } from '../src/agent/tool';
@@ -131,9 +130,7 @@ describe('Transient reminders', () => {
 
     // The aura recall should be in transient, not in session
     const session = agent.getSession();
-    const auraInSession = session.some(
-      (m) => typeof m.content === 'string' && m.content.includes('aura recall'),
-    );
+    const auraInSession = session.some((m) => typeof m.content === 'string' && m.content.includes('aura recall'));
     expect(auraInSession).toBe(false);
   });
 
@@ -193,9 +190,7 @@ describe('Transient reminders', () => {
     // recall was wiped, the mock provider would still work, but we can verify
     // the flow by checking session doesn't contain it (it was transient).
     const session = agent.getSession();
-    const auraInSession = session.some(
-      (m) => typeof m.content === 'string' && m.content.includes('aura recall'),
-    );
+    const auraInSession = session.some((m) => typeof m.content === 'string' && m.content.includes('aura recall'));
     expect(auraInSession).toBe(false);
   });
 });

@@ -2,26 +2,23 @@
 // SPDX-License-Identifier: MIT
 
 // Graph Interaction — Step 3: 图作为 Agent 输入设备
-// 订阅图交互事件 graph:node-clicked
+// 订阅 scene 信号 store 的节点点击（P1 总线归零：原 bus 'graph:node-clicked'）
 // 不改 Agent 循环。纯增量。
 
+import { type GraphNodeClicked, useSceneSignalStore } from '../state/scene-signal-store';
 import { dbg } from './debug';
-import { bus } from './events';
-
-interface NodeClickedData {
-  nodeName: string;
-  nodeType: string;
-  nodeId: string;
-  degree: number;
-  location: string;
-}
 
 export class GraphInteraction {
   constructor() {
-    bus.on('graph:node-clicked', this._onNodeClicked.bind(this));
+    // ponytail：副作用构造函数，store 监听器常驻（main.ts 进程级单例）
+    useSceneSignalStore.subscribe((s, prev) => {
+      if (s.nodeClickedTick !== prev.nodeClickedTick && s.nodeClicked) {
+        this._onNodeClicked(s.nodeClicked);
+      }
+    });
   }
 
-  private _onNodeClicked(data: NodeClickedData): void {
+  private _onNodeClicked(data: GraphNodeClicked): void {
     dbg('graph-interaction', `node-clicked: "${data.nodeName}" (${data.nodeType})`);
   }
 }

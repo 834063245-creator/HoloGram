@@ -11,9 +11,8 @@ vi.mock('../src/bridge', () => ({
   listen: vi.fn(),
   isMockMode: () => false,
 }));
-// tool.ts 模块加载时引用 bus 做事件接线
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 
+// tool.ts 模块加载时引用 bus 做事件接线
 import { agentInvoke } from '../src/agent/tool';
 
 describe('agentInvoke camelCase contract', () => {

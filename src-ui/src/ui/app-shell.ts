@@ -3,7 +3,7 @@
 
 // AppShell — 应用级 UI 外壳
 // 跨面板的命令式操作（导航、高亮、Agent 查询）。
-// 不负责项目级状态（那归 Workspace），不负责纯通知（那归 bus）。
+// 不负责项目级状态（那归 Workspace），不负责纯通知（那归 store 信号）。
 // P3：面板开合状态已迁 dock-store，本类只保留导航/高亮/查询命令。
 //
 // 使用方式：
@@ -11,9 +11,10 @@
 //   shell.navigateToNode(name);   // 替代 bus.emit('navigate:node', name)
 //   shell.highlightFile(path);    // 替代 bus.emit('highlight:file', path)
 //
-// 每条命令执行后同时通过 bus 广播通知，供 chat.ts 等模块做上下文跟踪。
+// 每条命令执行后同步写 chat-context-store 焦点信号，供 chat-core 做上下文跟踪
+//（P1 总线归零：原 bus 'navigate:file' / 'highlight:file' 广播）。
 
-import { bus } from './events';
+import { setChatFocusFile } from '../state/chat-context-store';
 
 /**
  * shell 本身是模块级单例——跟 bus 一样的 import 模式。
@@ -59,7 +60,7 @@ class AppShell {
 
   navigateToFile(path: string, line?: number): void {
     this._navigateToFile?.(path, line);
-    bus.emit('navigate:file', path); // broadcast for chat.ts context tracking
+    setChatFocusFile(path); // chat 上下文跟踪（P1 总线归零：state/chat-context-store）
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -68,7 +69,7 @@ class AppShell {
 
   highlightFile(path: string): void {
     this._highlightFile?.(path);
-    bus.emit('highlight:file', path); // broadcast for chat.ts context tracking
+    setChatFocusFile(path); // chat 上下文跟踪（P1 总线归零：state/chat-context-store）
   }
 
   highlightFolder(path: string): void {

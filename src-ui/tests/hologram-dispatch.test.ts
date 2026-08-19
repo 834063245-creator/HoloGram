@@ -9,7 +9,6 @@ vi.mock('../src/bridge', () => ({
   listen: vi.fn(),
   isMockMode: () => false,
 }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 
 import type { ToolExecutor } from '../src/agent/tool';
 import { invoke } from '../src/bridge';

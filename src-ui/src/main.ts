@@ -36,13 +36,14 @@ import { streamWithIdleTimeout } from './provider/idle-stream';
 import { ChunkType } from './provider/types';
 import { typedListen, typedRpc } from './rpc-contract';
 import { loadSettings } from './settings';
+import { useTurnDoneStore } from './state/turn-done-store';
+import { bumpWorkspaceSwitched } from './state/workspace-switch-store';
 import { useAgentConfigStore } from './ui/agent-config-store';
 import { AgentVisualizer } from './ui/agent-visualizer';
 import { shell } from './ui/app-shell';
 import { setDataflowQueryParser, setDockStarGraph } from './ui/dock-config';
 import type { CheckResult } from './ui/dock-store';
 import { useDockStore } from './ui/dock-store';
-import { bus } from './ui/events';
 import { StarGraph } from './ui/graph';
 import { GraphInteraction } from './ui/graph-interaction';
 import type { GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
@@ -268,7 +269,7 @@ async function notifyAllPanels(ws: Workspace): Promise<void> {
   chatPanel.setProjectPath(ws.path);
   await loadFileViewer();
   FV()?.get().setProjectPath(ws.path);
-  bus.emit('workspace:switched');
+  bumpWorkspaceSwitched(); // P1 总线归零：workspace:switched → state/workspace-switch-store
 }
 
 // ── 简报 ──
@@ -587,7 +588,7 @@ async function init(): Promise<void> {
   chatPanel.setOnTrailToggle(() => agentViz?.toggleTrail());
 
   // 图交互
-  const _graphInteraction = new GraphInteraction(); // ponytail：副作用构造函数，事件总线监听器
+  const _graphInteraction = new GraphInteraction(); // ponytail：副作用构造函数，scene 信号 store 监听器
 
   // Dock 面板外部依赖注入（组件已收编进 App 树，这里只写配置槽）
   if (starGraph) setDockStarGraph(starGraph);
@@ -640,8 +641,9 @@ async function init(): Promise<void> {
     },
   });
 
-  // ── Bus 通知（纯通知 — 发送方不关心谁监听）──
-  bus.on('chat:turn-done', () => {
+  // ── 轮次完成通知（P1 总线归零：chat:turn-done → state/turn-done-store 信号）──
+  useTurnDoneStore.subscribe((s, prev) => {
+    if (s.turnDoneTick === prev.turnDoneTick) return;
     if (workspace?.path) {
       // 增量持久化 — 将最后一条消息追加到后端 NDJSON
       chatPanel.appendLastMessage(workspace.path);

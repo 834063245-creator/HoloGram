@@ -10,9 +10,15 @@ vi.mock('../src/agent/tool', () => ({
   ToolRegistry: class {
     register() {}
     alias() {}
-    all() { return []; }
-    schemas() { return []; }
-    get() { return null; }
+    all() {
+      return [];
+    }
+    schemas() {
+      return [];
+    }
+    get() {
+      return null;
+    }
   },
   createCodingTools: () => [],
   createSubAgentTool: () => ({}),
@@ -45,7 +51,6 @@ vi.mock('../src/settings', () => ({
 vi.mock('../src/provider/anthropic', () => ({ createAnthropicProvider: vi.fn() }));
 vi.mock('../src/provider/openai', () => ({ createOpenAIProvider: vi.fn() }));
 vi.mock('../src/provider/types', () => ({}));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 vi.mock('../src/ui/debug', () => ({ dbg: vi.fn() }));
 vi.mock('../src/ui/chat-store', () => ({
   msgStoreForActive: () => null,
@@ -69,10 +74,7 @@ describe('buildSystemPrompt', () => {
   });
 
   it('loaded graph prompt contains model identity disclaimer', () => {
-    const prompt = buildSystemPrompt(
-      { nodes: [1, 2, 3], edges: [1, 2] },
-      'D:\\test-project',
-    );
+    const prompt = buildSystemPrompt({ nodes: [1, 2, 3], edges: [1, 2] }, 'D:\\test-project');
     expect(prompt).toContain('D:\\test-project');
     expect(prompt).toContain('DeepSeek');
   });
@@ -86,10 +88,7 @@ describe('buildSystemPrompt', () => {
   it('loaded graph prompt has a mode-neutral collaboration block', () => {
     // 系统提示词不随协作模式变化（热切换不重建，前缀缓存不击穿）——
     // 规划模式的完整工作流由 PlanModeInjector 的运行时提醒携带。
-    const prompt = buildSystemPrompt(
-      { nodes: [1], edges: [1] },
-      'D:\\proj',
-    );
+    const prompt = buildSystemPrompt({ nodes: [1], edges: [1] }, 'D:\\proj');
     expect(prompt).toContain('## 协作模式');
     expect(prompt).toContain('规划模式');
     expect(prompt).toContain('执行模式');

@@ -2,9 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '' }));
-vi.mock('../src/ui/events', () => ({
-  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
-}));
 vi.mock('../src/ui/app-shell', () => ({ shell: { register: vi.fn() } }));
 vi.mock('../src/agent/permission', () => ({}));
 vi.mock('../src/agent/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -258,7 +255,6 @@ describe('session rebuild 鈥?sub-agent parts survive', () => {
   });
 });
 
-
 describe('subagent spawn — no duplicate ToolCard', () => {
   beforeEach(() => {
     _streamingId = null;
@@ -281,7 +277,13 @@ describe('subagent spawn — no duplicate ToolCard', () => {
     // 完整分发：action=spawn —— SubAgentBlock 接管，仍不得建 tool part
     renderEvent(ctx, {
       kind: EventKind.ToolDispatch,
-      tool: { id: 'sa1', name: 'agent', args: '{"action":"spawn","description":"x"}', read_only: false, partial: false },
+      tool: {
+        id: 'sa1',
+        name: 'agent',
+        args: '{"action":"spawn","description":"x"}',
+        read_only: false,
+        partial: false,
+      },
     } as AgentEvent);
     renderEvent(ctx, {
       kind: EventKind.ToolResult,

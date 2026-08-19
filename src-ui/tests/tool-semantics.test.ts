@@ -10,9 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // ── Mocks（与 audit-fixes-*.test.ts 一致的最小集）──
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
-vi.mock('../src/ui/events', () => ({
-  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
-}));
 vi.mock('../src/ui/app-shell', () => ({ shell: { register: vi.fn() } }));
 vi.mock('../src/agent/permission', () => ({}));
 vi.mock('../src/agent/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -125,7 +122,12 @@ describe('formatToolResult — 领域工具结果特殊渲染', () => {
 
   it('search(content) 走代码块（非 markdown 误渲染）', async () => {
     const { formatToolResult } = await import('../src/ui/chat-utils');
-    const r = formatToolResult('search', 'foo.ts:12: const x = 1\nbar.ts:34: const x = 2\n', false, '{"action":"content"}');
+    const r = formatToolResult(
+      'search',
+      'foo.ts:12: const x = 1\nbar.ts:34: const x = 2\n',
+      false,
+      '{"action":"content"}',
+    );
     const html = r.kind === 'html' ? r.html : '';
     expect(html).toContain('<pre><code>');
   });
@@ -210,7 +212,7 @@ describe('part-mutator — 领域工具 ToolProgress 语义', () => {
   });
 
   it('fs(write) 的流式预览替换而非累积', () => {
-    const parts: typeof AssistantPart[] = [];
+    const parts: (typeof AssistantPart)[] = [];
     applyEventToParts(parts, {
       kind: EventKind.ToolDispatch,
       tool: { id: 't1', name: 'fs', args: '{"action":"write"', read_only: false, partial: true },
@@ -229,7 +231,7 @@ describe('part-mutator — 领域工具 ToolProgress 语义', () => {
   });
 
   it('shell(run) 的 stdout 增量追加', () => {
-    const parts: typeof AssistantPart[] = [];
+    const parts: (typeof AssistantPart)[] = [];
     applyEventToParts(parts, {
       kind: EventKind.ToolDispatch,
       tool: { id: 't2', name: 'shell', args: '{"action":"run"', read_only: false, partial: true },

@@ -11,9 +11,6 @@ vi.mock('../src/bridge', () => ({
   listen: vi.fn(() => () => {}),
   isMockMode: () => false,
 }));
-vi.mock('../src/ui/events', () => ({
-  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
-}));
 
 import { Agent } from '../src/agent/agent';
 import { AgentStore } from '../src/agent/agent-store';

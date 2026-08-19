@@ -33,7 +33,10 @@ describe('ui/react/ 岛层退休终态（docs/plans/ui-react-island-retirement-p
   });
 
   it('events.ts 不含 5 个退役事件名（已迁 zustand store）', () => {
-    const src = readFileSync(join(process.cwd(), 'src', 'ui', 'events.ts'), 'utf-8');
+    // 2026-08-19 总线归零 P1：events.ts 已整体删除——退役事件无载体可复活，天然通过
+    const eventsFile = join(process.cwd(), 'src', 'ui', 'events.ts');
+    if (!existsSync(eventsFile)) return;
+    const src = readFileSync(eventsFile, 'utf-8');
     for (const ev of RETIRED_EVENTS) {
       expect(src.includes(`'${ev}'`), `events.ts 仍含退役事件 ${ev}`).toBe(false);
     }

@@ -9,9 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // ── Mocks (minimal — these tests touch store-level logic) ──
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
-vi.mock('../src/ui/events', () => ({
-  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
-}));
 vi.mock('../src/ui/app-shell', () => ({ shell: { register: vi.fn() } }));
 vi.mock('../src/agent/permission', () => ({}));
 vi.mock('../src/agent/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -163,16 +160,18 @@ describe('#11 ToolResult clears output on error', () => {
     const { EventKind } = await import('../src/agent/agent-types');
     type AssistantPart = import('../src/ui/message-model').AssistantPart;
 
-    const parts: AssistantPart[] = [{
-      type: 'tool',
-      toolId: 't1',
-      name: 'read_file',
-      args: '{}',
-      label: 'read_file',
-      readOnly: true,
-      status: 'running',
-      output: 'partial output line 1\npartial output line 2',
-    } as AssistantPart];
+    const parts: AssistantPart[] = [
+      {
+        type: 'tool',
+        toolId: 't1',
+        name: 'read_file',
+        args: '{}',
+        label: 'read_file',
+        readOnly: true,
+        status: 'running',
+        output: 'partial output line 1\npartial output line 2',
+      } as AssistantPart,
+    ];
 
     // ToolProgress accumulated some output
     applyEventToParts(parts, {
@@ -199,16 +198,18 @@ describe('#11 ToolResult clears output on error', () => {
     const { EventKind } = await import('../src/agent/agent-types');
     type AssistantPart = import('../src/ui/message-model').AssistantPart;
 
-    const parts: AssistantPart[] = [{
-      type: 'tool',
-      toolId: 't2',
-      name: 'search',
-      args: '{}',
-      label: 'search',
-      readOnly: true,
-      status: 'running',
-      output: 'partial',
-    } as AssistantPart];
+    const parts: AssistantPart[] = [
+      {
+        type: 'tool',
+        toolId: 't2',
+        name: 'search',
+        args: '{}',
+        label: 'search',
+        readOnly: true,
+        status: 'running',
+        output: 'partial',
+      } as AssistantPart,
+    ];
 
     // ToolResult success
     applyEventToParts(parts, {

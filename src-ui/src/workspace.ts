@@ -39,6 +39,7 @@ import { buildTurnStartBlock, refreshGitStatus, refreshTimeline } from './agent/
 import { TaskManager } from './agent/task';
 import type { Tool, ToolRegistry } from './agent/tool';
 import type { ChatCore } from './app/chat/chat-core';
+import { useShellStore } from './app/shell-store';
 import type { Context, Fiber } from './cordis';
 import { initCordisKernel } from './cordis/boot';
 import { withTimeout } from './lifecycle/timeout';
@@ -48,12 +49,12 @@ import { withThinkingDisabled } from './provider/thinking';
 import type { Provider } from './provider/types';
 import { typedListen, typedRpc } from './rpc-contract';
 import { type AppSettings, defaultPricing, getActiveProvider, loadSettingsWithSecrets } from './settings';
+import { broadcastGoalRecord } from './state/goal-store';
 import type { AgentConfigChangeReason } from './ui/agent-config-store';
 import { useAgentPanelStore } from './ui/agent-panel-store';
 import { stripLineNumbers } from './ui/chat-session';
 import type { CheckResult } from './ui/dock-store';
 import { useDockStore } from './ui/dock-store';
-import { bus } from './ui/events';
 import type { StarGraph } from './ui/graph';
 import type { CommunityData, GraphDiffJson, GraphEdge, GraphJSON, GraphNode } from './ui/graph-types';
 import { getDiagnosticsForFile, LspService } from './ui/lsp-client';
@@ -474,8 +475,11 @@ export class Workspace {
           if (ws._preflightCtx) scheduleEngineSnapshotRefresh(ws._preflightCtx, ws.path);
         }
       };
-      bus.on('agent:tool-done', onToolDone);
-      ws._fiber.ctx.effect(() => () => bus.off('agent:tool-done', onToolDone), 'listener:tool-done');
+      // P1 总线归零：agent:tool-done → agent-panel-store.lastToolDone（tick+payload 原子更新）
+      const unsubToolDone = useAgentPanelStore.subscribe((s, prev) => {
+        if (s.toolDoneTick !== prev.toolDoneTick && s.lastToolDone) onToolDone(s.lastToolDone);
+      });
+      ws._fiber.ctx.effect(() => unsubToolDone, 'listener:tool-done');
 
       // 清理进度监听器（仅在初始分析期间存活）
       unlistenProgress();
@@ -592,7 +596,7 @@ export class Workspace {
       // 相同 name/kind/key/baseUrl/model 时，_agentRebuildKey 与残留的
       // _lastAgentCfgKey 相同，重建被跳过，provider/agent 永远起不来。
       this._lastAgentCfgKey = null;
-      bus.emit('agent:diag', { text: `❌ API Key 已清空 — provider="${act.name}"。`, ready: false });
+      useAgentPanelStore.getState().setDiag({ text: `❌ API Key 已清空 — provider="${act.name}"。`, ready: false });
       return;
     }
 
@@ -687,12 +691,14 @@ export class Workspace {
 
     const diag = `[Agent] provider=${active.name} keyLen=${(active.apiKey || '').length}`;
     this.onStatusChange?.(diag);
-    bus.emit('agent:diag', { text: diag, ready: !!active.apiKey && active.apiKey.trim() !== '' });
+    useAgentPanelStore.getState().setDiag({ text: diag, ready: !!active.apiKey && active.apiKey.trim() !== '' });
 
     if (!active.apiKey || active.apiKey.trim() === '') {
       this.agent = null;
       chatPanel.setAgent(null);
-      bus.emit('agent:diag', { text: `❌ 未检测到 API Key — provider="${active.name}" 的 Key 为空。`, ready: false });
+      useAgentPanelStore
+        .getState()
+        .setDiag({ text: `❌ 未检测到 API Key — provider="${active.name}" 的 Key 为空。`, ready: false });
       return;
     }
 
@@ -751,7 +757,7 @@ export class Workspace {
 
     // 初始化 Agent 状态持久化 + goal 生命周期 + skill 注册表
     this.agentStore = new AgentStore(this.path);
-    this.goalManager = new GoalManager(this.path, (r) => bus.emit('goal:state', r));
+    this.goalManager = new GoalManager(this.path, broadcastGoalRecord);
     this.goalManager
       .migrateLegacy()
       .then(() => this.goalManager?.adoptOrphans())
@@ -1003,7 +1009,8 @@ export class Workspace {
           (result.l4_violations?.length || 0) +
           (result.l3_violations?.length || 0) +
           (result.l2_violations?.length || 0);
-        bus.emit('check:result', { passed: result.passed, violations: cnt });
+        // P1 总线归零：原 bus 'check:result' → bridge-adapters 转写，现直写 shell-store
+        useShellStore.getState().setViolations(result.passed ? 0 : cnt);
         // 推送状态栏通知 — 即使检查面板关闭也可见
         if (!result.passed) {
           this.onStatusChange?.(`⚠ 简报未通过: ${cnt} 条违规`);

@@ -14,7 +14,6 @@ vi.mock('../src/bridge', () => ({
   listen: vi.fn(),
   isMockMode: () => false,
 }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 
 import { Agent } from '../src/agent/agent';
 import { ToolRegistry } from '../src/agent/tool';
@@ -33,7 +32,13 @@ const SETTINGS_WITH_TWO_PROVIDERS = {
   activeProvider: 'deepseek',
   providers: [
     { kind: 'openai', name: 'deepseek', apiKey: '', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-pro' },
-    { kind: 'anthropic', name: 'minimax', apiKey: '', baseUrl: 'https://api.minimax.io/anthropic', model: 'MiniMax-M3' },
+    {
+      kind: 'anthropic',
+      name: 'minimax',
+      apiKey: '',
+      baseUrl: 'https://api.minimax.io/anthropic',
+      model: 'MiniMax-M3',
+    },
   ],
   projectPath: '.',
   agent: { temperature: 0.7, contextWindow: 0 },

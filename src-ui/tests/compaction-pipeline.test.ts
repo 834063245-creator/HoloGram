@@ -12,7 +12,7 @@
 //   7. 摘要飞行中 session 替换 — 折叠结果被丢弃
 //   8. 块数超上限 — 最老块机械消化，LLM 调用数封顶
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { defineTool } from '../src/agent/tools/define-tool';
 
@@ -22,8 +22,6 @@ vi.mock('../src/bridge', () => ({
   listen: vi.fn(),
   isMockMode: () => false,
 }));
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
-
 // 钉死摘要模型选择：无 key、无候选 → 永远回退主模型（即 mock provider），
 // 测试不受 localStorage 里真实设置污染。
 vi.mock('../src/settings', async (importOriginal) => {
@@ -45,9 +43,9 @@ vi.mock('../src/provider/catalog', async (importOriginal) => {
 });
 
 import { Agent } from '../src/agent/agent';
-import { ToolRegistry } from '../src/agent/tool';
 import { createExecState } from '../src/agent/execution-state';
 import { countMessages, countText } from '../src/agent/token-counter';
+import { ToolRegistry } from '../src/agent/tool';
 import type { Message, Provider } from '../src/provider/types';
 import { ChunkType } from '../src/provider/types';
 
@@ -81,10 +79,7 @@ function makeSummaryProvider(behavior: {
   };
 }
 
-function makeAgent(
-  prov: Provider,
-  opts: { contextWindow?: number; events?: any[] } = {},
-): Agent {
+function makeAgent(prov: Provider, opts: { contextWindow?: number; events?: any[] } = {}): Agent {
   return new Agent(prov, new ToolRegistry(), 'You are a test agent.', {
     contextWindow: opts.contextWindow ?? 100000,
     compactRatio: 0.55,

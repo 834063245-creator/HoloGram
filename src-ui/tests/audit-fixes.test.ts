@@ -27,9 +27,6 @@ vi.mock('../src/bridge', () => ({
 
 vi.mock('../src/ui/graph', () => ({ StarGraph: class {} }));
 vi.mock('../src/ui/icons', () => ({ iconHtml: () => '', iconSvg: () => '' }));
-vi.mock('../src/ui/events', () => ({
-  bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), withPrefix: () => ({ emit: vi.fn(), on: vi.fn(), off: vi.fn() }) },
-}));
 vi.mock('../src/ui/app-shell', () => ({
   shell: { register: vi.fn(), notifyPanelChanged: vi.fn(), wire: vi.fn(), navigateToFile: vi.fn() },
 }));
@@ -55,7 +52,15 @@ vi.mock('../src/settings', () => ({
 vi.mock('gsap', () => {
   const tween = () => ({ kill: vi.fn(), play: vi.fn(), pause: vi.fn() });
   return {
-    default: { set: vi.fn(), to: vi.fn(tween), from: vi.fn(tween), fromTo: vi.fn(tween), killTweensOf: vi.fn(), isTweening: vi.fn(() => false), utils: { toArray: vi.fn(() => []) } },
+    default: {
+      set: vi.fn(),
+      to: vi.fn(tween),
+      from: vi.fn(tween),
+      fromTo: vi.fn(tween),
+      killTweensOf: vi.fn(),
+      isTweening: vi.fn(() => false),
+      utils: { toArray: vi.fn(() => []) },
+    },
     gsap: { set: vi.fn() },
   };
 });
@@ -133,9 +138,7 @@ describe('#1 exportSession parameter name', () => {
     await exportSession(ctx);
 
     // Find the write_file_content rpc call
-    const calls = mockInvoke.mock.calls.filter(
-      (c: any[]) => c[1]?.method === 'write_file_content',
-    );
+    const calls = mockInvoke.mock.calls.filter((c: any[]) => c[1]?.method === 'write_file_content');
     expect(calls.length).toBe(1);
     const params = calls[0][1].params;
     // Must have file_path, NOT path
@@ -220,9 +223,7 @@ describe('#10 scheduleAutoSave per-panel isolation', () => {
     await vi.advanceTimersByTimeAsync(600);
 
     // Both panels should have written to disk (at least the session file)
-    const writeCalls = mockInvoke.mock.calls.filter(
-      (c: any[]) => c[1]?.method === 'write_file_content',
-    );
+    const writeCalls = mockInvoke.mock.calls.filter((c: any[]) => c[1]?.method === 'write_file_content');
     // Each panel writes at least 2 files (session + tracker) = 4 total
     expect(writeCalls.length).toBeGreaterThanOrEqual(4);
 

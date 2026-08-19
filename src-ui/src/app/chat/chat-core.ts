@@ -20,6 +20,12 @@ import { GoalManager, type GoalRecord } from '../../agent/goal-manager';
 import type { RuntimePort } from '../../agent/runtime/types';
 import { useShellStore } from '../../app/shell-store';
 import type { ToolSchema } from '../../provider/types';
+import { useAskStore } from '../../state/ask-store';
+import { useChatContextStore } from '../../state/chat-context-store';
+import { broadcastGoalRecord, useGoalStore } from '../../state/goal-store';
+import { useSceneSignalStore } from '../../state/scene-signal-store';
+import { bumpTurnDone } from '../../state/turn-done-store';
+import { useWorkspaceSwitchStore } from '../../state/workspace-switch-store';
 import { useAgentPanelStore } from '../../ui/agent-panel-store';
 import * as Session from '../../ui/chat-session';
 import {
@@ -32,9 +38,9 @@ import {
 } from '../../ui/chat-store';
 import * as Stream from '../../ui/chat-stream';
 import { type CommandDef, CommandRegistry, DEFAULT_COMMANDS } from '../../ui/command-registry';
-import { bus } from '../../ui/events';
 import type { StarGraph } from '../../ui/graph';
 import { type AssistantMessage, type ChatMessage, resetMsgIdCounter, type UserMessage } from '../../ui/message-model';
+import { getWorkspaceEpoch, isCurrentEpoch } from '../../workspace-scope';
 import type { AtAutocompleteHandle } from './AtAutocomplete';
 import type { ChatFooterHandle } from './ChatFooter';
 import type { PromptShelfHandle } from './PromptShelf';
@@ -99,7 +105,7 @@ export class ChatCore {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 构造 — 只做总线订阅与 exec 绑定，不碰 DOM
+  // 构造 — 只做 store 订阅与 exec 绑定，不碰 DOM
   // ═══════════════════════════════════════════════════════════
 
   constructor() {
@@ -110,65 +116,55 @@ export class ChatCore {
     this._wireCommandHandlers();
 
     // ── ask_user tool → prompt shelf（视图注册后生效）──
-    bus.on(
-      'prompt:ask',
-      (data: {
-        id: string;
-        question: string;
-        header: string;
-        options: { label: string; description: string }[];
-        multiSelect: boolean;
-        batchIndex?: number;
-        batchTotal?: number;
-        callback: (answer: string[] | null) => void;
-      }) => {
-        if (!this._promptShelf) {
-          data.callback(null);
-          return;
-        }
-        this._promptShelf
-          .showAsk({
-            type: 'ask',
-            id: data.id,
-            question: data.question,
-            header: data.header,
-            options: data.options,
-            multiSelect: data.multiSelect,
-            batchIndex: data.batchIndex,
-            batchTotal: data.batchTotal,
-          })
-          .then(data.callback);
-      },
-    );
+    // P1 总线归零：prompt:ask → state/ask-store（callback-in-store：pending 跨
+    // chat-core 重建存活——构造时回放；bus 时代 emit 早于订阅即静默丢失）
+    useAskStore.subscribe((s, prev) => {
+      if (s.seq !== prev.seq) this._consumePendingAsk();
+    });
+    this._consumePendingAsk(); // 回放在途 pending（chat-core 重建场景）
     // ── 追踪用户焦点 — 文件查看器 / 图谱选择 ──
-    bus.on('highlight:file', (filePath: string) => {
-      const panel = getChatStore(this.panelId).panel.getState();
-      panel.setUserFocusFile(filePath);
-      panel.setUserFocusNode(null);
-    });
-    bus.on('navigate:file', (filePath: string) => {
-      const panel = getChatStore(this.panelId).panel.getState();
-      panel.setUserFocusFile(filePath);
-      panel.setUserFocusNode(null);
-    });
-    bus.on(
-      'graph:node-clicked',
-      (data: { nodeName: string; nodeType: string; nodeId: string; degree: number; location: string }) => {
+    // P1 总线归零：highlight:file / navigate:file 两事件消费端行为一致，
+    // 合并为 state/chat-context-store 单信号
+    useChatContextStore.subscribe((s, prev) => {
+      if (s.focusFileTick !== prev.focusFileTick) {
         const panel = getChatStore(this.panelId).panel.getState();
-        panel.setUserFocusNode({ name: data.nodeName, location: data.location || undefined });
-        panel.setUserFocusFile(null);
-      },
-    );
-    // 每次完整渲染后将可见节点名喂给 @ 自动补全
-    bus.on('graph:rendered', () => {
-      if (this.starGraph) this._atAutocomplete?.setNodeNames(this.starGraph.getNodeNames());
+        panel.setUserFocusFile(s.focusFile);
+        panel.setUserFocusNode(null);
+      }
     });
-    bus.on('agent:diag', (d: { text: string; ready: boolean }) => {
-      getChatStore(this.panelId).panel.getState().setLastAgentDiag(d.text);
+    // P1 总线归零：graph:node-clicked → state/scene-signal-store（用户焦点节点）
+    useSceneSignalStore.subscribe((s, prev) => {
+      if (s.nodeClickedTick !== prev.nodeClickedTick && s.nodeClicked) {
+        const panel = getChatStore(this.panelId).panel.getState();
+        panel.setUserFocusNode({
+          name: s.nodeClicked.nodeName,
+          location: s.nodeClicked.location || undefined,
+        });
+        panel.setUserFocusFile(null);
+      }
+    });
+    // 每次完整渲染后将可见节点名喂给 @ 自动补全（P1 总线归零：graph:rendered → scene 信号）
+    useSceneSignalStore.subscribe((s, prev) => {
+      if (s.renderedTick !== prev.renderedTick && this.starGraph) {
+        this._atAutocomplete?.setNodeNames(this.starGraph.getNodeNames());
+      }
+    });
+    // P1 总线归零：agent:diag → agent-panel-store.diag（workspace 直写，此处订阅转写）
+    useAgentPanelStore.subscribe((s, prev) => {
+      if (s.diag !== prev.diag && s.diag !== null) {
+        getChatStore(this.panelId).panel.getState().setLastAgentDiag(s.diag.text);
+      }
     });
     // ── Goal strip：状态迁移驱动显隐；切换工作区后重载 ──
-    bus.on('goal:state', (record: GoalRecord) => this._updateGoalRecord(record));
-    bus.on('workspace:switched', () => this._refreshGoalRecord());
+    // P1 总线归零：goal:state → state/goal-store（GoalManager 回调直写，此处订阅）
+    useGoalStore.subscribe((s, prev) => {
+      if (s.tick !== prev.tick && s.record !== null) this._updateGoalRecord(s.record);
+    });
+    // P1 总线归零：workspace:switched → state/workspace-switch-store
+    //（跨工作区触发：_refreshGoalRecord 在途结果按 INVARIANTS #12 epoch 守卫）
+    useWorkspaceSwitchStore.subscribe((s, prev) => {
+      if (s.switchedTick !== prev.switchedTick) void this._refreshGoalRecord();
+    });
     this._refreshGoalRecord();
 
     // ⚡ ExecutionState → store 同步：订阅活动会话的 execState，会话切换时重绑
@@ -685,7 +681,7 @@ export class ChatCore {
   private async showGoalStatus(): Promise<void> {
     const path = useShellStore.getState().projectPath;
     if (!path) return;
-    const mgr = new GoalManager(path, (r) => bus.emit('goal:state', r));
+    const mgr = new GoalManager(path, broadcastGoalRecord);
     const active = await mgr.getActive();
     const history = (await mgr.list()).filter(
       (r) => r.status !== 'active' && r.status !== 'paused' && r.status !== 'blocked',
@@ -714,7 +710,7 @@ export class ChatCore {
       this.addNotice('目标运行中 — 请先点击停止(或状态条上的暂停),再 /goal cancel', 'warn');
       return;
     }
-    const mgr = new GoalManager(path, (r) => bus.emit('goal:state', r));
+    const mgr = new GoalManager(path, broadcastGoalRecord);
     const active = await mgr.getActive();
     if (!active) {
       this.addNotice('没有可取消的目标', 'info');
@@ -779,7 +775,7 @@ export class ChatCore {
       this._streamingTargetSid = null;
       this._activeExec().done();
       this.finishTurn();
-      bus.emit('chat:turn-done');
+      bumpTurnDone();
     }
   }
 
@@ -797,6 +793,28 @@ export class ChatCore {
     }
   }
 
+  /** 消费 ask-store 的在途请求 → PromptShelf（无 shelf 时立即按取消回答回调）。 */
+  private _consumePendingAsk(): void {
+    const data = useAskStore.getState().consumeAsk();
+    if (!data) return;
+    if (!this._promptShelf) {
+      data.callback(null);
+      return;
+    }
+    this._promptShelf
+      .showAsk({
+        type: 'ask',
+        id: data.id,
+        question: data.question,
+        header: data.header,
+        options: data.options,
+        multiSelect: data.multiSelect,
+        batchIndex: data.batchIndex,
+        batchTotal: data.batchTotal,
+      })
+      .then(data.callback);
+  }
+
   // ── Goal 状态记录 → panel-store.goalRecord（GoalStrip 组件渲染）──
 
   private _updateGoalRecord(record: GoalRecord): void {
@@ -811,8 +829,11 @@ export class ChatCore {
   private async _refreshGoalRecord(): Promise<void> {
     const path = useShellStore.getState().projectPath;
     if (!path) return;
+    // INVARIANTS #12：跨工作区 fire-and-forget —— 在途 resolve 后校验代际，过期丢弃
+    const epoch = getWorkspaceEpoch();
     try {
-      const rec = await new GoalManager(path, (r) => bus.emit('goal:state', r)).getActive();
+      const rec = await new GoalManager(path, broadcastGoalRecord).getActive();
+      if (!isCurrentEpoch(epoch)) return;
       getChatStore(this.panelId).panel.getState().setGoalRecord(rec);
     } catch (e) {
       // fire-and-forget 路径：goal 状态条读取失败不应当让未处理的 rejection 外泄
@@ -1004,8 +1025,8 @@ export class ChatCore {
       this._activeExec().done();
       this.finishTurn();
     }
-    // 通知 main.ts 持久化会话
-    bus.emit('chat:turn-done');
+    // 通知 main.ts 持久化会话（P1 总线归零：chat:turn-done → state/turn-done-store 信号）
+    bumpTurnDone();
   }
 
   abort(): void {

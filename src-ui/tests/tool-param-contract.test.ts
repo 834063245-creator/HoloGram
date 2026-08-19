@@ -16,11 +16,10 @@ vi.mock('../src/mock-data', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/mock-data')>();
   return { ...actual, mockInvoke: (...args: any[]) => mockInvoke(...args) };
 });
-// tool.ts 模块加载时引用 bus 做事件接线
-vi.mock('../src/ui/events', () => ({ bus: { emit: vi.fn(), on: vi.fn(), off: vi.fn() } }));
 
-import { rpc } from '../src/bridge';
 import { agentInvoke } from '../src/agent/tool';
+// tool.ts 模块加载时引用 bus 做事件接线
+import { rpc } from '../src/bridge';
 
 /** 走真实 rpc()，从 mock 探针参数里取出转换后的 snake_case params */
 async function toSnake(params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -88,7 +87,9 @@ describe('全量工具 schema key 契约', () => {
         const hasUpper = /[A-Z]/.test(key);
         const hasSnake = key.includes('_');
         if (hasUpper && hasSnake) {
-          problems.push(`工具 ${t.name()}: schema key "${key}" 混合了 camelCase 与 snake_case — 改 key 时要么全 camelCase（走 rpc 转换）、要么全 snake（直传 Rust）`);
+          problems.push(
+            `工具 ${t.name()}: schema key "${key}" 混合了 camelCase 与 snake_case — 改 key 时要么全 camelCase（走 rpc 转换）、要么全 snake（直传 Rust）`,
+          );
         }
       }
     }
