@@ -43,7 +43,7 @@ tauri-plugin-window-state = "2"
 
 [target.'cfg(windows)'.dependencies]
 # UIA 进程内 COM 客户端（desktop_uia_*）+ 物理输入合成（SendInput/剪贴板）
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_UI_Accessibility",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
