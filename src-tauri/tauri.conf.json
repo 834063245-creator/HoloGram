@@ -5,8 +5,8 @@
   "build": {
     "frontendDist": "../src-ui/dist",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeDevCommand": "npm --prefix ../src-ui run dev",
-    "beforeBuildCommand": "npm --prefix ../src-ui run build"
+    "beforeDevCommand": "npm --prefix src-ui run dev",
+    "beforeBuildCommand": "npm --prefix src-ui run build"
   },
   "app": {
     "windows": [
