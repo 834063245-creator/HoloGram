@@ -2788,6 +2788,23 @@
 .pp-composer-settings > * {
   min-width: 0;
 }
+/* ── 读数件/思考 pill 的行盒相位修正（2026-10-12：用户报「役·墨与同行控件
+ * 不在同一线」）────────────────────────────────────────────────────
+ * 三枚包裹容器此前是普通 block，内嵌的 inline-flex 按钮以**隐式基线**参与
+ * 行盒构造——行高 1.8（.pp-root 继承）的 27px strut 压过 22px 按钮，而按钮
+ * 基线取决于其第一个 flex item（役/墨 = 6px 圆点 ⇒ 距盒底 8px；思考 =
+ * 14px 图标 ⇒ 4px），于是「役」「墨」被整体压低 4px（实机截图逐像素实测
+ * 4.0px）。改为 flex 后按钮按盒居中、不再走行盒；margin 3px 补偿本组 22px
+ * 按钮与模式三档（23px 盒 = padding 3/4 + 2px 朱砂底线，字在盒内偏高
+ * 1.5px）之间的相位差，两族文字归同一条水平线（实测相对偏差 0.0px）。
+ * 相位补偿的 margin-bottom: 3px 在下方三枚 trigger 各自的主规则内；组合
+ * pill（.pp-comp-sel）同族同病（实测 2px），修法见 composition-chip.css。 */
+.pp-composer-settings .pp-thinking-sel,
+.pp-composer-settings .pp-work-sel,
+.pp-composer-settings .pp-ink-sel {
+  display: flex;
+  align-items: center;
+}
 .pp-composer-settings-spacer {
   flex: 1;
 }
@@ -2829,6 +2846,8 @@
   cursor: pointer;
   white-space: nowrap;
   transition: color var(--snap);
+  /* 行盒相位补偿（2026-10-12）：见「读数件/思考 pill 的行盒相位修正」注 */
+  margin-bottom: 3px;
 }
 .pp-composer-settings .pp-ink-trigger:hover,
 .pp-composer-settings .pp-ink-trigger.open {
@@ -3103,6 +3122,8 @@
   cursor: pointer;
   white-space: nowrap;
   transition: color var(--snap);
+  /* 行盒相位补偿（2026-10-12）：见「读数件/思考 pill 的行盒相位修正」注 */
+  margin-bottom: 3px;
 }
 .pp-composer-settings .pp-work-trigger:hover,
 .pp-composer-settings .pp-work-trigger.open {
@@ -3589,6 +3610,8 @@
   cursor: pointer;
   white-space: nowrap;
   transition: color var(--snap);
+  /* 行盒相位补偿（2026-10-12）：见「读数件/思考 pill 的行盒相位修正」注 */
+  margin-bottom: 3px;
 }
 .pp-composer-settings .pp-thinking-pill:hover,
 .pp-composer-settings .pp-thinking-pill.open {

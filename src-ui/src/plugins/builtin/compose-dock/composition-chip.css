@@ -12,6 +12,12 @@
 .pp-composer-settings .pp-comp-sel {
   position: relative;
   flex: 0 0 auto;
+  /* 行盒相位修正（2026-10-12）：与 .pp-thinking-sel / .pp-work-sel / .pp-ink-sel
+   * 同族同病——block 包裹内的 pill（button/span 两形态）以隐式基线参与行盒，
+   * 实测比同行标准线低 2px。flex 化 + 下侧相位补偿（margin 在 .pp-comp-pill
+   * 主规则内）。 */
+  display: flex;
+  align-items: center;
 }
 
 /* 收起态：纯文字 pill（与思考档位同高度、同字体、同色阶） */
@@ -32,6 +38,8 @@
   white-space: nowrap;
   transition: color var(--snap);
   text-decoration: none;
+  /* 行盒相位补偿（2026-10-12）：见 .pp-comp-sel 注 */
+  margin-bottom: 3px;
 }
 .pp-composer-settings .pp-comp-pill:hover,
 .pp-composer-settings .pp-comp-pill.open {
