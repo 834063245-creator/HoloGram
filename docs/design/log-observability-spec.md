@@ -59,7 +59,7 @@
 | `llm.error` | error | 每次尝试失败（重试链上逐次） | 同上 + status；`err.kind` = 错误分类（transient / rate_limited / auth_or_param / context_overflow） |
 | `turn.failed` | error/warn | **唯一漏斗**：任何用户可见的回合失败（墓碑） | `err.phase` = preflight / stream / tool；`err.kind`；`err.raw`；同 (session, turn, phase) 去重 |
 | `ui.toast` | error | error 级 toast 出口（用户看见了） | text（前 200 字） |
-| `log.self` | warn | 日志器自身健康度：写失败补偿（**批 3 落地**，生产者在 `logger.ts` 而非门面——反向调用会与 import 方向成环） | channel、dropped、level、source |
+| `log.self` | warn | 日志器自身健康度：写失败补偿 / 失败现场的前情倒出（**批 3 落地**，生产者在 `logger.ts` 而非门面——反向调用会与 import 方向成环） | channel、dropped、ring_dumped、level、source |
 
 **`phase` 的判定**（定位的关键——「哪一层」比「什么错」先要答出来）：
 
@@ -127,19 +127,29 @@ status 的 401/403（文案「本行没有 API Key」）按类型判为 `phase: 
   `default`）——拿到一份没有 debug 行的 log，必须能回答「是没发生，还是级别把它挡了」。
 - 开关当前**无 UI**（设置页开关留到下一批）：`LANTAI_LOG_LEVEL=debug` 放进启动环境，
   或在开发者控制台写 `localStorage['lantai.log.level']='debug'` 后调一次
-  `applyLogLevelFromShell()`（幂等，改完再调即生效）。
+  `applyLogLevelFromShell()`（幂等，改完再调即生效）。**但日常不需要它**——被挡下的
+  debug 不是丢掉，而是进「前情缓冲」（§6.2 ③），失败时自动连现场一起落盘。
 - **过滤点只有一处** = `logger.ts` 的 `write()`：`log.*` 与门面 `obs.*` 都从这里过。
 
-### 6.2 日志健康度（丢条可见）
+### 6.2 日志健康度（丢条可见）与 debug 前情缓冲
 
-「日志里没有」有两种可能：**没发生**，或**写不出去**。后者此前被静默吞掉
-（事故里两条 `denied: outside project root` 就是这样丢的现场）。现在：
+「日志里没有」有两种可能：**没发生**，或**写不出去 / 被级别挡了**。两条都在批 3 收口：
 
-- 写失败（IPC 抛错）= **计数** + **首次** `console.error`（此后只计数，不刷屏）；
-  下一条成功写入补一条 `log.self{dropped:N, channel, level, source}`。
-- **通道未初始化**（无工作区，`logPath = null`）：条目留在缓冲、**不计丢条**——
-  把「攒着」报成「丢了」是健康度读数在说谎。
-- 通道可用性由 `boot` 的 `log_channel` 如实记（`ok` / `unavailable`，批 1 已有）。
+1. **丢条可见**（写失败）：计数 + **首次** `console.error`（此后只计数，不刷屏）；
+   下一条成功写入补一条 `log.self{dropped:N, channel, level, source}`。
+2. **通道未初始化**（无工作区，`logPath = null`）：条目留在**缓冲**、**不计丢条**——
+   把「攒着」报成「丢了」是健康度读数在说谎。
+3. **debug 前情环形缓冲**（2026-10-12 用户拍板：「不靠人记得开开关」）：被级别挡下的
+   debug 条目**不丢**，留在内存定长缓冲里（≤2000 条 / 128K 字符，实测 ≈0.13MB、最坏
+   ≈0.4MB，**跑多久都不涨**）；一旦出现**用户可见的失败**（错误级 **且带 `event`** =
+   接缝认定的失败），先倒一条 `log.self{ring_dumped:N}` 头，再把 N 条前情连失败一起写盘
+   （前情在前、失败在后，读起来是一条完整现场）。
+   三条纪律：① 裸 `log.error`（路径噪声那类）**不触发**——本机 `ui.log` 有 5.2 万条
+   这种 error，认它们等于让噪声泵爆文件；② 倒一次清空，下次要**攒够 25 条**才再倒
+   （错误风暴不刷屏）；③ 级别真开到 debug 时缓冲恒空（直接写盘，不倒，避免写两遍）。
+   单条超 4KB **不入缓冲**（截断会破坏 NDJSON；宁可少一条前情）。
+
+通道可用性由 `boot` 的 `log_channel` 如实记（`ok` / `unavailable`，批 1 已有）。
 
 ### 6.3 Rust 侧出网日志（`src-tauri/src/llm_proxy.rs`）
 

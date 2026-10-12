@@ -114,6 +114,11 @@ obs.turnFailed({...}); obs.panelReload({...}); obs.self({...});
   `log_level` / `log_level_source` 上报。设置页 UI 开关仍留待下一批。
 - **日志健康度**：写失败计数 + 首次 `console.error`，下一条成功写入补 `log.self{dropped:N}`
   （生产者在 `logger.ts`——`obs.ts` 反向调用会成环）。通道未初始化时条目留在缓冲、**不计**丢条。
+- **debug 前情环形缓冲**（批 3 追加，用户拍板「不靠人记得开开关」）：被级别挡下的 debug
+  条目进内存定长缓冲（≤2000 条 / 128K 字符，实测 ≈0.13MB，跑多久都不涨）；用户可见的失败
+  （错误级 + 带 `event`）触发倒出——**开关不再是「必须记得拧」的东西**，它只用于
+  「我要一份全程 debug」。三条纪律（裸 log.error 不触发 / 倒一次后要攒够 25 条才再倒 /
+  开 debug 时缓冲恒空不倒）见规格 §6.2，判据在 `tests/log-level-and-health.test.ts`。
 
 **批 4（下一批，不在本计划）**：诊断包导出（带可信度段：通道可用性 / 断档区间 / 文件 mtime /
 字段来源标签）+ 日志轮转 / 保留窗口（`bridge.log` 现状 `Rotation::NEVER`、`ui.log` 纯追加，

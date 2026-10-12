@@ -382,6 +382,9 @@ DOM 所有权按层划分，不要跨层抢 DOM：
    认不出的值**不猜**（回空串 ⇒ 回落）
 ✅ 丢条必须可见：写失败计数 + 首次 `console.error`，下一条成功写入补 `log.self{dropped:N}`
    （生产者在 `logger.ts`——`obs.ts` 反向调用会成环）；通道未初始化时条目留在缓冲、不计丢条
+✅ 被级别挡下的 debug **不丢**，进内存**前情环形缓冲**（定长 ≤2000 条 / 128K 字符）；
+   用户可见的失败（错误级 **且带 `event`**）触发倒出（`log.self{ring_dumped:N}` 头 + 前情 + 失败）
+   ——「要记得拧开关」这件事不成立（用户原话），故不靠开关靠缓冲；裸 `log.error` 不触发
 ✅ 产物域取门面经宿主面 `./host` + `host-modules.ts` 的 `faceDeps` 登记
    （漏登记 tsc 红；改 faceDeps 须同 commit 跑 `npm run gen:host-surface`）
 ❌ 禁止：在接缝里自己拼日志对象、自己抹凭据、用中文句子当事件名

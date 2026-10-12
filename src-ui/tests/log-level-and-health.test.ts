@@ -3,20 +3,22 @@
 // Copyright (c) 2026 Wenbing Jing. MIT License.
 // SPDX-License-Identifier: MIT
 //
-// 日志可观测性批 3 —— **级别开关**与**日志健康度**（`agent/logger.ts`）守护。
+// 日志可观测性批 3 —— **级别开关**、**日志健康度**、**debug 前情环形缓冲**
+// （`agent/logger.ts`）守护。
 //
 // 批 1 测门面不变量（log-observability.test.ts）、批 2 测接缝接线
-// （log-observability-seams.test.ts）；本文件测批 3 的两件事：
+// （log-observability-seams.test.ts）；本文件测批 3 的三件事：
 //
 //   ① 级别过滤与运行时开关：默认 `info`（**debug 默认丢弃**——事故那份 1158 行
-//      log 里 1024 行是同一条 invoke debug，信号被自己的噪声淹了）；优先级
-//      `LANTAI_LOG_LEVEL`（壳读 → `log_level_hint` RPC）> `localStorage`
-//      > 默认；认不出的值**不猜**（回落下一档）。
-//   ② 健康度：写失败计数 + **首次** console.error，下一条成功写入补一条
+//      log 里 1024 行是同一条 invoke）；优先级 `LANTAI_LOG_LEVEL`（壳读 →
+//      `log_level_hint` RPC）> `localStorage` > 默认；认不出的值**不猜**。
+//   ② 健康度：写失败计数 + **首次** console.error，下一条成功写入补
 //      `log.self{dropped:N}`——「日志里没有」必须能分出「没发生」与「写不出去」。
+//   ③ debug 前情环形缓冲（2026-10-12 用户拍板「不靠人记得开开关」）：被级别挡下的
+//      debug 条目留在内存（定长），失败（错误级 + 带 event）时连前情一起落盘。
 //
 // 走真 logger + mock rpc-contract（内存 fs + 可控的级别提示），断言落在**实际
-// 落盘的 NDJSON** 上：过滤与丢条补偿都是「写出去之后」的性质。
+// 落盘的 NDJSON** 上：过滤、丢条补偿、倒前情都是「写出去之后」的性质。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -58,9 +60,26 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void
   }
 }
 
-describe('日志可观测性批 3 · 级别开关与健康度', () => {
+describe('日志可观测性批 3 · 级别开关 / 健康度 / 前情缓冲', () => {
   let logger: LoggerMod;
   let drainSeq = 0;
+
+  function fileText(): string {
+    return H.kernelFs!.fs.files.get(LOG_PATH) ?? '';
+  }
+
+  /** 当前落盘文件解析出的条目（**全量**——批 3 的 dump 会一口气 append 十几万字节，
+   *  见 drain 的说明：这里的文件是累积的，清文件只在 beforeEach 做）。 */
+  function lines(): Record<string, unknown>[] {
+    return fileText()
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+
+  function byEvent(event: string): Record<string, unknown>[] {
+    return lines().filter((e) => e.event === event);
+  }
 
   /** 当前级别下**能通过**的写入口：本文件的被测性质就是级别本身，drain 的信号行
    *  与填充行必须过得了自己的过滤，否则批次到不了 50 条、flush 永不触发（假红）。 */
@@ -75,25 +94,20 @@ describe('日志可观测性批 3 · 级别开关与健康度', () => {
     }
   }
 
-  /** 逼出一次 flush 并回读落盘的 NDJSON 条目（同 log-observability.test.ts 的
-   *  手法：写满阈值逼同步 splice，**不用** fake timers）。信号必须是本次唯一标记
-   *  ——内存 fs 跨用例复用，固定串会被上一轮残留骗过（假绿）。 */
+  /** 逼出一次 flush（写满阈值逼同步 splice，不用 fake timers），回读文件全量条目。
+   *
+   *  ⚡ **不在 drain 里清文件**（旧版这么做）：本批的 dump 会一口气 append 十几万
+   *  字节，而内存 fs 的 append 是「读-改-写」——「清文件」会与在途 append 抢同一把
+   *  钥匙：清掉的可能正是刚落地的 dump，之后又可能被在途 append 补回来，两个方向都
+   *  会造出假红/假绿（2026-10-12 实测踩到）。清文件改在 beforeEach（那时没有在途
+   *  append，见那里的等待）。 */
   async function drain(mod: LoggerMod = logger): Promise<Record<string, unknown>[]> {
-    const fs = H.kernelFs!.fs;
-    fs.files.clear();
     const mark = `drain-mark-${++drainSeq}`;
     const emit = emitThrough(mod);
     emit(mark);
     for (let i = 0; i < 50; i++) emit('filler');
-    await waitFor(() => (fs.files.get(LOG_PATH) ?? '').includes(mark));
-    return (fs.files.get(LOG_PATH) ?? '')
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => JSON.parse(l) as Record<string, unknown>);
-  }
-
-  function fileText(): string {
-    return H.kernelFs!.fs.files.get(LOG_PATH) ?? '';
+    await waitFor(() => fileText().includes(mark));
+    return lines();
   }
 
   beforeEach(async () => {
@@ -103,13 +117,16 @@ describe('日志可观测性批 3 · 级别开关与健康度', () => {
     } catch {
       /* 存储被禁：与 logger 同判（回落默认） */
     }
+    // 等在途 append 落地**再**清：上一轮用例的最后一批可能还在 append 的微任务链上，
+    // 不先让位就会把它的内容补进本轮的干净文件里（假绿/假红）。
+    await new Promise((r) => setTimeout(r, 5));
     const k = H.kernelFs!;
     k.fs.files.clear();
     k.fs.dirs.clear();
     k.fs.writes.length = 0;
     k.fs.fail = {};
-    // 重置模块缓存：级别与丢条账都是模块级状态，跨用例必须从零开始
-    //（否则上一轮的 dropped 会被算进本轮——假绿）。
+    // 重置模块缓存：级别、丢条账、前情缓冲都是模块级状态，跨用例必须从零开始
+    //（否则上一轮的 dropped / ring 会被算进本轮——假绿）。
     vi.resetModules();
     logger = await import('../src/agent/logger');
     await logger.initLogger('/ws');
@@ -164,15 +181,6 @@ describe('日志可观测性批 3 · 级别开关与健康度', () => {
     expect(fileText()).toContain('WARN-KEPT');
   });
 
-  it('级别读数上得了台面：`logLevel()` 是诊断面（boot 的 log_level_source）', async () => {
-    // boot 事件把它写进启动锚——收到的 log 少了 debug 行时必须能回答
-    //「是没发生，还是被级别挡了」。此处钉住读数本身（端到端断言在 obs 侧）。
-    expect(logger.logLevel().level).toBe('info');
-    H.hint = 'warn';
-    await logger.applyLogLevelFromShell();
-    expect(logger.logLevel()).toMatchObject({ level: 'warn', source: 'env' });
-  });
-
   // ── ② 健康度：丢条可见 ───────────────────────────────────────────
 
   it('写失败计数 + 下一条成功写入补 log.self{dropped:N}；首次失败只 console 一次', async () => {
@@ -196,11 +204,7 @@ describe('日志可观测性批 3 · 级别开关与健康度', () => {
     for (let i = 0; i < 150; i++) logger.log.info('t', `ok ${i}`);
     await waitFor(() => fileText().includes('log.self'));
 
-    const entries = fileText()
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => JSON.parse(l) as Record<string, unknown>);
-    const self = entries.filter((e) => e.event === 'log.self');
+    const self = byEvent('log.self');
     expect(self).toHaveLength(1);
     expect(self[0].module).toBe('logger');
     expect(self[0].ctx).toMatchObject({ dropped: 100, channel: 'ok', level: 'info', source: 'default' });
@@ -218,6 +222,96 @@ describe('日志可观测性批 3 · 级别开关与健康度', () => {
     await mod.initLogger('/ws');
     await drain(mod);
     expect(fileText()).toContain('BEFORE-INIT');
-    expect(fileText()).not.toContain('log.self');
+    expect(byEvent('log.self')).toHaveLength(0);
+  });
+
+  // ── ③ debug 前情环形缓冲（用户拍板：不靠人记得开开关）─────────────────
+
+  it('失败自动倒前情：平时不写盘的 debug 条目，在失败那一刻连现场一起落盘', async () => {
+    logger.log.debug('bridge', 'invoke', { command: 'rpc', method: 'fs_cap' });
+    logger.log.debug('bridge', 'invoke', { command: 'rpc', method: 'credential_get' });
+    // 平时（无失败）：debug 一条都不在文件里（只躺在内存前情缓冲里）
+    await drain();
+    expect(fileText()).not.toContain('invoke');
+    expect(byEvent('log.self')).toHaveLength(0);
+
+    // 失败（错误级 + 带 event = 接缝认定的失败）→ 前情 + 失败一起落盘
+    logger.log.debug('bridge', 'invoke', { command: 'rpc', method: 'credential_store' });
+    logger.log.error('chat', '回合失败：本地模型连不上', { provider: 'local' }, { event: 'turn.failed' });
+    await drain();
+    const text = fileText();
+    expect(text).toContain('credential_store'); // 前情在
+    expect(text).toContain('credential_get'); // 更早的前情也在（没被挤掉）
+    expect(text).toContain('turn.failed'); // 失败自己
+    const self = byEvent('log.self');
+    expect(self).toHaveLength(1);
+    expect(self[0].ctx).toMatchObject({ ring_dumped: 3 });
+    // 顺序：前情在失败**之前**（读起来是「前情 → 失败」）
+    expect(text.indexOf('credential_store')).toBeLessThan(text.indexOf('turn.failed'));
+  });
+
+  it('裸 log.error（无 event，路径噪声那类）**不触发**倒前情——否则被噪声泵爆', async () => {
+    logger.log.debug('bridge', 'invoke', { command: 'rpc', method: 'fs_cap' });
+    logger.log.error('fs', 'stat 失败：系统找不到指定的文件', { path: 'D:/x' }); // 无 event
+    await drain();
+    expect(byEvent('log.self')).toHaveLength(0);
+    expect(fileText()).toContain('系统找不到指定的文件'); // error 自己照写
+  });
+
+  it('前情缓冲定长：写 3000 条后仍被上限截住（内存不随运行时长增长），最旧的先被挤掉', async () => {
+    for (let i = 0; i < 3000; i++) logger.log.debug('t', `RING-${i}`);
+    logger.log.error('chat', 'boom', undefined, { event: 'turn.failed' });
+    // ⚡ 本用例**不再灌填充行逼 flush**：dump 批次自己就有上千条（远过 50 条阈值），
+    //    落地即是被测事实。原因见 drain 的说明——十几万字节的在途 append 与紧随其后
+    //    的批次在这个内存 fs 的「读-改-写」append 上会互相抢跑，测的就不是产品行为了。
+    await waitFor(() => fileText().includes('RING-2999'));
+    const self = byEvent('log.self')[0];
+    const dumped = Number((self.ctx as Record<string, unknown>).ring_dumped);
+    // 不钉死条数：两条上限（2000 条 / 128K 字符）谁先到算谁——契约是「有界」。
+    expect(dumped).toBeLessThanOrEqual(2000);
+    expect(dumped).toBeGreaterThan(500);
+    const text = fileText();
+    expect(text).not.toContain('RING-0"'); // 最旧的被挤掉
+    expect(text).toContain('RING-2999"'); // 最新的在
+    // 自洽：报出的条数 == 真正落盘的前情条数（读数不许虚报）
+    expect(lines().filter((e) => e.level === 'debug')).toHaveLength(dumped);
+  });
+
+  it('单条超长不入缓冲（一条巨物不许撑内存），且不破坏 NDJSON', async () => {
+    logger.log.debug('t', `HUGE-${'x'.repeat(5000)}`);
+    logger.log.debug('t', 'SMALL-KEPT');
+    logger.log.error('chat', 'boom', undefined, { event: 'turn.failed' });
+    await drain();
+    expect(fileText()).toContain('SMALL-KEPT');
+    expect(fileText()).not.toContain('HUGE-');
+    expect(byEvent('log.self')[0].ctx).toMatchObject({ ring_dumped: 1 });
+    // 落盘条目逐行可解析（NDJSON 不被截断破坏）——lines() 会解析全文，抛错即红
+    expect(lines().length).toBeGreaterThan(0);
+  });
+
+  it('级别真的开到 debug 时不倒前情（条目直接进文件，避免写两遍）', async () => {
+    H.hint = 'debug';
+    await logger.applyLogLevelFromShell();
+    logger.log.debug('t', 'DBG-ONCE');
+    logger.log.error('chat', 'boom', undefined, { event: 'turn.failed' });
+    await drain();
+    const text = fileText();
+    expect(byEvent('log.self')).toHaveLength(0);
+    expect(text.split('DBG-ONCE').length - 1).toBe(1); // 恰好一次
+  });
+
+  it('错误风暴不刷屏：倒过一次后要再攒够 25 条才倒第二次', async () => {
+    logger.log.debug('t', 'SEED-1');
+    logger.log.error('chat', 'boom-1', undefined, { event: 'turn.failed' });
+    logger.log.error('chat', 'boom-2', undefined, { event: 'turn.failed' });
+    await drain();
+    // 第二次错误时缓冲是空的（刚倒完、且没有新 debug）⇒ 只有一条 log.self
+    expect(byEvent('log.self')).toHaveLength(1);
+
+    for (let i = 0; i < 25; i++) logger.log.debug('t', `REFILL-${i}`);
+    logger.log.error('chat', 'boom-3', undefined, { event: 'turn.failed' });
+    await drain();
+    expect(byEvent('log.self')).toHaveLength(2); // 攒够 25 条 → 又倒了一次
+    expect(fileText()).toContain('REFILL-24');
   });
 });

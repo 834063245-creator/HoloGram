@@ -25,6 +25,10 @@
 //      「没发生」与「写不出去」（事故里两条 `denied: outside project root`
 //      就是这样丢的现场）。现在失败计数 + 首次 `console.error`，下一条成功
 //      写入补一条 `log.self{dropped:N}`。
+//   ③ **debug 前情环形缓冲**（同日追加，用户拍板）：被级别挡下的 debug 条目
+//      **不丢**，留在内存（定长 ≤2000 条/128K 字符，实测 ≈0.2MB）；一旦出现
+//      用户可见的失败（错误级 + 带 `event`），连前情一起倒进日志。**用户不需要
+//      知道这个开关存在**——这是①的开关不被「忘记拧」的兜底。详见 dumpRing 上方注。
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -160,6 +164,79 @@ let droppedEntries = 0;
 /** 本次失败是否已 console 过（首次留痕，之后交给计数——不刷屏）。 */
 let firstDropReported = false;
 
+// ── debug 前情环形缓冲（批 3 追加，2026-10-12 用户拍板「不要靠人记得开开关」）──
+//
+// 用户侧的现实：**没人会记得去拧调试开关**（用户原话「我都不知道还需要有调试开关来着」）。
+// 故不靠开关，靠缓冲：debug 条目平时**不写盘**，只留在内存环形缓冲里；一旦出现
+// 用户可见的失败（= 错误级 **且带 `event`** 的条目，即接缝认定的失败），就把缓冲里的
+// 前情连同失败一起倒进日志（前情在前、失败在后，读起来是一条完整现场）。
+//
+// 体积（定长，跑多久都不涨）：上限 `RING_MAX_ENTRIES` 条 / `RING_MAX_CHARS` 字符，
+// 谁先到算谁。实测本机 ui.log 的 debug 行平均 112 字节（几乎是同一条 rpc invoke）⇒
+// 现实里先撞**字符**上限 ≈1150 条 / 128KB ≈ 0.13MB；极端情形（整屏中文，3 字节/字符）
+// 最坏 ≈0.4MB。对比：一张粘贴的截图 6.4MB、前端 bundle 3MB。
+//
+// 三条触发纪律：
+//   ① **只认「错误级 + 带 event」**——裸 `log.error`（路径噪声那类）不触发：本机
+//      ui.log 里有 5.2 万条这种 error，认它们等于让噪声把文件泵爆。
+//   ② 倒一次清空缓冲，且**下一次要攒够 `RING_REPEAT_MIN` 条**才再倒（错误风暴不刷屏）。
+//   ③ 级别真的开到 debug 时，条目直接进文件、缓冲恒空（不倒，避免重复写两遍）。
+const RING_MAX_ENTRIES = 2000;
+const RING_MAX_CHARS = 128 * 1024;
+/** 单条超此长度**不入缓冲**（宁可少一条前情，也不让一条巨物撑爆内存；
+ *  截断会破坏 NDJSON 可解析性，故选择不缓存）。 */
+const RING_MAX_LINE = 4096;
+/** 首次有前情就倒；此后需攒够这么多条才再倒。 */
+const RING_REPEAT_MIN = 25;
+
+let ring: string[] = [];
+let ringChars = 0;
+let ringMinDump = 1;
+
+/** debug 条目入缓冲（已序列化的行直接进；超长/序列化失败 = 这条前情不要）。 */
+function pushRing(entry: LogEntry): void {
+  let line: string;
+  try {
+    line = JSON.stringify(entry);
+  } catch {
+    return; // ctx 里混进循环引用之类：丢这一条前情，绝不打扰调用方
+  }
+  if (line.length > RING_MAX_LINE) return;
+  ring.push(line);
+  ringChars += line.length + 1;
+  while (ring.length > RING_MAX_ENTRIES || (ringChars > RING_MAX_CHARS && ring.length > 1)) {
+    const evicted = ring.shift();
+    if (evicted === undefined) break;
+    ringChars -= evicted.length + 1;
+  }
+}
+
+/** 入写出缓冲（不做级别判断、不触发倒前情——`write` 与 `dumpRing` 共用）。 */
+function enqueue(entry: LogEntry): void {
+  logBuffer.push(JSON.stringify(entry));
+  if (logBuffer.length >= MAX_BUFFER) flush();
+}
+
+/**
+ * 错误触发：把缓冲里的 debug 前情倒进日志。判据见上方三条纪律①。
+ * 前情行**不再过一遍级别过滤**——它们是「当时被级别挡下」的条目，补写的目的就是它们。
+ */
+function dumpRing(entry: LogEntry): void {
+  if (entry.level !== 'error' || entry.event === undefined) return;
+  if (ring.length < ringMinDump) return;
+  const lines = ring;
+  ring = [];
+  ringChars = 0;
+  ringMinDump = RING_REPEAT_MIN;
+  enqueue({
+    ...buildEntry('warn', 'logger', `失败现场：前面 ${lines.length} 条 debug 前情（平时只在内存环形缓冲，不写盘）`),
+    ctx: { ring_dumped: lines.length, level: minLevel, source: levelSource, channel: logChannelState() },
+    event: 'log.self',
+  });
+  for (const line of lines) logBuffer.push(line);
+  if (logBuffer.length >= MAX_BUFFER) flush();
+}
+
 export async function initLogger(projectPath: string): Promise<void> {
   // 刷新旧 workspace 的剩余日志，然后清除旧定时器
   if (flushTimer) {
@@ -187,9 +264,15 @@ async function appendToFile(path: string, content: string): Promise<void> {
 }
 
 function write(entry: LogEntry): void {
-  if (!shouldWrite(entry.level)) return; // 级别过滤（debug 默认丢弃）
-  logBuffer.push(JSON.stringify(entry));
-  if (logBuffer.length >= MAX_BUFFER) flush();
+  if (!shouldWrite(entry.level)) {
+    // 级别挡下的 **debug** 不丢：进环形缓冲，等失败时连前情一起倒出（见 dumpRing）。
+    // 其余级别（未来若加更细的档）直接丢弃。
+    if (entry.level === 'debug') pushRing(entry);
+    return;
+  }
+  // 失败（错误级 + 带 event）先把前情倒出来，再写自己——日志里读起来是「前情 → 失败」。
+  dumpRing(entry);
+  enqueue(entry);
 }
 
 /** 下一条成功写入时补账：`log.self{dropped:N}`——丢过多少必须能查回来。 */
