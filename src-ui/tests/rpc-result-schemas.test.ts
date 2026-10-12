@@ -34,6 +34,8 @@ const MOCK_SAMPLE_PARAMS: Record<keyof typeof rpcResultSchemas, Record<string, u
   plugin_data_list: { name: 'mock-plugin', path: '' },
   // 随包引擎探测（2026-09-24 收编）：无参；mock 返回合成「已检测到」形状。
   engine_bundled_info: {},
+  // 诊断包导出（日志可观测性批 4 收编）：无参；mock 返回合成形状（浏览器 dev 无盘）。
+  diag_export: {},
 };
 
 describe('rpc 边界校验层：mock 同源自检（mock ↔ schema 漂移即红）', () => {

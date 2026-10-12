@@ -221,6 +221,8 @@ fn rpc_result_shape(method: &str) -> RpcResultShape {
         // ── 日志轮转（日志可观测性批 4）──
         // log_rotate：ok_json({rotated, size_before, path}) 恒 JSON 对象。
         "log_rotate" => RpcResultShape::JsonValue,
+        // diag_export：ok_json({path, size, channels}) 恒 JSON 对象。
+        "diag_export" => RpcResultShape::JsonValue,
 
         // （数据流形状条目（dataflow_save / dataflow_query → Text）随图谱
         //  全量退役删除，2026-09-09。）
@@ -773,6 +775,20 @@ async fn dispatch_rpc(
                 "size_before": size_before,
                 "path": p,
             })))
+        }
+        // 诊断包导出（日志可观测性批 4）：组装单文件诊断包（ui.log + bridge.log +
+        // boot.log + engine.log + 可信心段）落 `<工作区>/.lantai/diag/`，保留最近
+        // 10 份。工作区由服务端取（workspace_path）——无调用方路径参数（与
+        // providers_dir / composition_dir 同一条安全纪律）。组装是同步文件 IO，
+        // 进 spawn_blocking。
+        "diag_export" => {
+            let ws = crate::utils::workspace_path(&state)?;
+            let r = tokio::task::spawn_blocking(move || {
+                crate::commands::diag::diag_export(std::path::Path::new(&ws))
+            })
+            .await
+            .map_err(|e| format!("diag_export 任务失败: {e}"))?;
+            ok_json(r)
         }
 
         // ═══════════════════════════════════════════════════════

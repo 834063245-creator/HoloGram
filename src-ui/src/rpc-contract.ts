@@ -480,6 +480,19 @@ export interface RpcContract {
     params: { path: string };
     result: { rotated: boolean; size_before: number; path: string }; // JSON
   };
+  /** 诊断包导出（日志可观测性批 4）：服务端组装单文件诊断包（ui.log +
+   *  bridge.log + boot.log + engine.log + 可信心段）落 `<工作区>/.lantai/diag/`，
+   *  保留最近 10 份；返回 {path, size, channels[]} 供 UI 显示「导到哪了、多大」。
+   *  工作区由服务端取（workspace_path）——无调用方路径参数。用户拿到这个文件
+   *  发给 Agent 即可（单文件纯文本，不做压缩包）。 */
+  diag_export: {
+    params: Record<string, never>;
+    result: {
+      path: string;
+      size: number;
+      channels: { name: string; exists: boolean; size: number; included_bytes: number; truncated: boolean }[];
+    }; // JSON
+  };
 
   // ── 插件安装通道（S4-3）─────────────────────────────────
   /** 安装插件：source_kind = registry（name/version?/registry?）|
@@ -1083,6 +1096,25 @@ export const rpcResultSchemas = {
       path: z.nullable(z.string()),
       dir: z.nullable(z.string()),
       available: z.boolean(),
+    })
+    .passthrough(),
+  // 诊断包导出（日志可观测性批 4）：ok_json({path, size, channels[]}) 恒 JSON
+  // 对象（channels 内缺省形状与 Rust diag.rs 的 ChannelOut 同源）。
+  diag_export: z
+    .object({
+      path: z.string(),
+      size: z.number(),
+      channels: z.array(
+        z
+          .object({
+            name: z.string(),
+            exists: z.boolean(),
+            size: z.number(),
+            included_bytes: z.number(),
+            truncated: z.boolean(),
+          })
+          .passthrough(),
+      ),
     })
     .passthrough(),
   sandbox_status: z

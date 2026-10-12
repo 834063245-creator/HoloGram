@@ -86,6 +86,16 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     return JSON.stringify({ path: null, dir: null, available: false });
   }
 
+  // 诊断包导出（日志可观测性批 4）：浏览器 dev 无真实日志文件系统 ⇒ 合成形状
+  // （形状真源 = commands/diag.rs 的 ChannelOut；mock↔schema 同源自检钉住）。
+  if (cmd === 'diag_export') {
+    return JSON.stringify({
+      path: 'mock://.lantai/diag/lantai-diag-20261012-000000.txt',
+      size: 1024,
+      channels: [{ name: 'ui.log', exists: false, size: 0, included_bytes: 0, truncated: false }],
+    });
+  }
+
   // 回退
   console.warn(`[mock] Unhandled command: ${cmd}`, args);
   return JSON.stringify({ mock: true, cmd, note: 'No mock data for this command' });

@@ -1,6 +1,6 @@
 # 日志可观测性规格（log-observability spec）
 
-> 状态：**当前**（2026-10-12 批 1–3 落地）。真源 = `src-ui/src/agent/obs.ts`（事件门面，
+> 状态：**当前**（2026-10-12 批 1–4 落地）。真源 = `src-ui/src/agent/obs.ts`（事件门面，
 > 事件名与字段表在文件头定死）+ `src-ui/src/agent/logger.ts`（级别过滤与健康度）；
 > 本页是它们的**长期规范**（给人读的契约面）。
 > 立项与事故取证见 [`../plans/log-observability-plan.md`](../plans/log-observability-plan.md)。
@@ -125,10 +125,12 @@ status 的 401/403（文案「本行没有 API Key」）按类型判为 `phase: 
   的形态；未设 / 认不出 / 通道不通一律回空串。
 - **级别上得了台面**：`boot` 的 `log_level` / `log_level_source`（`env` / `storage` /
   `default`）——拿到一份没有 debug 行的 log，必须能回答「是没发生，还是级别把它挡了」。
-- 开关当前**无 UI**（设置页开关留到下一批）：`LANTAI_LOG_LEVEL=debug` 放进启动环境，
-  或在开发者控制台写 `localStorage['lantai.log.level']='debug'` 后调一次
-  `applyLogLevelFromShell()`（幂等，改完再调即生效）。**但日常不需要它**——被挡下的
-  debug 不是丢掉，而是进「前情缓冲」（§6.2 ③），失败时自动连现场一起落盘。
+- 开关有 UI 了（2026-10-12 批 4 起）：设置 → 「诊断」签的「记录详细日志
+  （全程 debug）」——勾选即时生效（写偏好 + 重应用，幂等）。**但它不是必需品**：
+  默认档 + 前情缓冲（§6.2 ③）已覆盖日常排障，失败时自动连现场落盘；开关的语义
+  只有「我要一份全程逐条的详细记录」。环境变量 `LANTAI_LOG_LEVEL` 仍有最高优先级
+  （被它压过时 UI 如实显示「由启动环境变量指定」，不撒谎）；开发者控制台写
+  `localStorage` + 调 `applyLogLevelFromShell()` 的旧路依旧可用。
 - **过滤点只有一处** = `logger.ts` 的 `write()`：`log.*` 与门面 `obs.*` 都从这里过。
 
 ### 6.2 日志健康度（丢条可见）与 debug 前情缓冲
@@ -168,12 +170,50 @@ status 的 401/403（文案「本行没有 API Key」）按类型判为 `phase: 
   `?api-key=`。⚠ 原文里的**路径保留**（只削 query）：路径不是凭据，且 404 判别要看它；
   「只记 host:port」是 `target` 字段的纪律，不是 `err.raw` 的。
 
-## 7. 尚未做（批 4）
+## 7. 批 4（2026-10-12 落地）：轮转 / 开关 UI / 诊断包
 
-- **诊断包导出**（带可信度段：通道可用性 / 断档区间 / 文件 mtime / 字段来源标签）。
-- **日志轮转 / 保留窗口**：`bridge.log` 现状 `Rotation::NEVER`（`max_log_files` 配着
-  也不生效——永不切分就没有多余文件可清），`ui.log` 是前端纯追加，两者都会无限增长
-  （实测见过 71MB+）。`boot.log` 有单代 4MB 轮转，是唯一的例外。
-- 设置页的**级别开关 UI**（批 3 的旋钮当前只能靠环境变量 / 控制台）。
+### 7.1 日志轮转 / 保留窗口
+
+**病灶**（实测）：ui.log 涨到 74.9 MB、bridge.log 13.0 MB，两者只增不减——
+`logging.rs` 的 `Rotation::NEVER + max_log_files(5)` 里 max_log_files 是死参数
+（永不切分就没有多余文件可清）；ui.log 是前端纯追加，无任何上限。
+
+**判据单一真源** = `logging.rs`：`LOG_MAX_BYTES`（8 MiB）/ `LOG_KEEP`（2 代，
+滚名为 `.1`/`.2`，最老代删）。三份日志同规、各按自己的写入方接线：
+
+| 通道 | 触发点 | 形态 |
+|---|---|---|
+| `bridge.log` | tracing 写入路径（`RotatingFileWriter`——non_blocking worker 是唯一写者，写前自计数、越限即滚代重开） | 进程内自持 |
+| `ui.log` | 前端 logger：首写 + 每累计 1 MiB 一次 `log_rotate` RPC（壳侧 stat 并判上限；口内 `is_rotatable_log` 形状围栏，只收 `.lantai/logs/*.log`） | IPC 触发 |
+| `boot.log` | 打开时（`open_boot_log`）调同一 `rotate_if_large` | 启动期单点 |
+
+失败可见：Rust 侧首次 `log::warn!`（boot.log + stderr）；前端侧**不阻断写入**
+（宁可文件大，不丢一条）但首次 console.error + 下一条成功写入补
+`log.self{rotate_failed:N}` 补偿（与 §6.2 的 dropped 同节奏）。
+
+### 7.2 设置页「诊断」签（级别开关 UI）
+
+设置 → 「诊断」：日志级别开关（勾选即时生效，不参与面板保存流程）；文案语义
+=「我要一份全程详细记录」，**不是「出问题请先打开」**（默认档 + 前情缓冲兜底）。
+实现走宿主桥（`logLevel` / `setLogLevelPreference`），宿主面指纹同批重录
+（产物热更需重建 exe）。
+
+### 7.3 诊断包导出（`diag_export`）
+
+闭环：**用户点一下 → 得到一个文件 → 把文件发给 Agent**。
+
+- 形态：单文件纯文本 `.txt`（不做压缩包——Windows 双击体验 + 零新依赖），落
+  `<工作区>/.lantai/diag/lantai-diag-<YYYYMMDD-HHMMSS>.txt`，保留最近 10 份。
+- 内容 = 可信度段 + 四通道正文（ui.log → bridge.log → boot.log → engine.log，
+  存在才带）。每份日志尾部截取 ≤ 8 MiB（与轮转上限同数；正常轮转后一份不截）。
+- **可信度段**（判据面）：通道可用性（存在/大小/mtime，[实测]）、包内所载统计
+  （行数/无法解析行/时间跨度/最大空档/超 1 小时空档数/时间回退，[实测]）、
+  丢条线索（ui.log 的 log.self 汇总：dropped / rotate_failed / ring_dumped，
+  [自报]）、字段来源标签总则（[实测] vs [自报]）、应用版本（取自日志中最后一条
+  boot 记录，[自报]）。
+- 验收判据：拿到一个包应能回答 ① 有没有丢条（`log.self{dropped}`）② 有没有
+  断档（相邻记录时间跳跃——最大空档与超阈值计数）。
+- 诚实纪律：包内统计只覆盖**包内实际所载**（与「文件全量大小/mtime」分开写）；
+  「空档 ≠ 丢日志」在包里明说（可能只是没人用）。
 
 详见计划 §2.5 / §4。
