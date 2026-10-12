@@ -465,6 +465,12 @@ export interface RpcContract {
   /** 系统浏览器打开 URL（OAuth 授权页等）。 */
   open_external: { params: { url: string }; result: string }; // "null"
   llm_proxy_port: { params: Record<string, never>; result: string }; // 端口号字符串（0=不可用）
+  /** 前端日志级别的壳侧提示（日志可观测性批 3）= `LANTAI_LOG_LEVEL` 环境变量。
+   *  认得出（debug/info/warn/error，大小写与空白容错）才回规范名；**未设 / 认不出
+   *  / 通道不通一律回空串** ⇒ 前端回落 `localStorage['lantai.log.level']` → 默认
+   *  `info`。写成"提示"而不是"设定"是刻意的：级别真源在前端进程内（logger.ts），
+   *  本 RPC 只是把壳看得见的那只旋钮递过去。 */
+  log_level_hint: { params: Record<string, never>; result: string };
 
   // ── 插件安装通道（S4-3）─────────────────────────────────
   /** 安装插件：source_kind = registry（name/version?/registry?）|

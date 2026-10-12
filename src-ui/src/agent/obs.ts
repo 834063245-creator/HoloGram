@@ -32,7 +32,7 @@
 //    条上限兜底），无跨工作区所有权问题。`BUILD` 是**冻结常量表**（模块加载期
 //    求值一次，此后只读）。
 
-import { type LogEntry, log, logChannelState } from './logger';
+import { type LogEntry, log, logChannelState, logLevel } from './logger';
 
 // ── 构建锚（构建期烙进 define，见 vite.config.ts 的 buildAnchor）──
 //
@@ -54,7 +54,9 @@ const BUILD: { v: string; commit: string } =
 //   llm.send / llm.first_byte / llm.done / llm.error   出网四相（公共面）
 //   turn.failed              用户可见的回合失败（唯一漏斗，按 (session,turn,phase) 去重）
 //   ui.toast                 error 级 toast 出口（用户看见了）
-//   log.self                 日志器自身健康度（丢条/通道）——**批 3**，此处只登记名字
+//   log.self                 日志器自身健康度（丢条补偿；级别见 boot 的
+//                            log_level/log_level_source）——生产者在 logger.ts
+//                            （不经本门面：反向调用会与 import 方向成环）
 //
 // 字段纪律（**不记**）：apiKey / token 明文、消息正文、请求体全文、URL query、
 // 工具输出全文。只记：长度、存在性、`host:port`、节数、错误原文（经脱敏）。
@@ -214,6 +216,17 @@ function channelState(): 'ok' | 'unavailable' {
   }
 }
 
+/** 当前日志级别与来源读取（**不抛**，同 channelState 的替身纪律）。
+ *  这条读数的用途：收到一份**没有 debug 行**的 log，必须能回答「是没发生，
+ *  还是级别把它挡了」——批 3 前这个问题的答案是「不知道」。 */
+function levelInfo(): { level: string; source: string } {
+  try {
+    return typeof logLevel === 'function' ? logLevel() : { level: 'unknown', source: 'unknown' };
+  } catch {
+    return { level: 'unknown', source: 'unknown' };
+  }
+}
+
 /** 逐级收缩直到进预算（**保信号优先**，不是一刀切）：
  *  ① 削 `err.raw` → ② `ctx` 字符串值削到 160 字 + 长数组裁到前 8 项（留 `…(+N)` 计数，
  *  不静默丢）→ ③ 丢 `ctx` → ④ 削 `message`。任何一级生效都标 `truncated:true`。 */
@@ -316,6 +329,7 @@ export function boot(f: {
 }): void {
   const { tz, utc_offset_min } = tzDesc();
   const channel = channelState();
+  const lvl = levelInfo();
   emit('info', 'boot', 'boot', `启动 v${BUILD.v} (${BUILD.commit}) · 工作区 ${f.workspace || '<未打开>'}`, {
     ids: f.ids,
     out: channel === 'ok' ? 'ok' : 'fail',
@@ -327,6 +341,8 @@ export function boot(f: {
       providers_yml: f.providersPath,
       proxy_port: f.proxyPort,
       log_channel: channel,
+      log_level: lvl.level,
+      log_level_source: lvl.source,
     },
     err:
       channel === 'ok'
@@ -677,6 +693,9 @@ export function toast(f: { text: string; level: string }): void {
   });
 }
 
-// ⚠ `log.self`（日志器自身健康度：丢条计数 / 通道自述）**刻意不在此实现**——
-//   它属于批 3（计划 §2.5），而当下没有生产者：留一个无人调用的门面函数就是死抽象。
-//   事件名已在文件头的事件表登记，批 3 落健康度计数时同处补函数 + 调用点。
+// ⚠ `log.self`（日志器健康度：丢条补偿 `dropped` / 级别 `level`+`source`）**刻意不在
+//   本文件实现**——它的生产者在 `agent/logger.ts`（批 3 落地：写失败计数 + 下一条
+//   成功写入补一条）。理由 = import 方向：本文件 import logger，反向调用会成环；
+//   且那条载荷只有级别名与计数（无用户文本），不需要过本文件的脱敏。事件名登记在
+//   上方事件表与 `docs/design/log-observability-spec.md` §2；级别读数则挂在
+//   `boot` 的 `log_level` / `log_level_source`（启动锚里一次说清，不另发事件）。

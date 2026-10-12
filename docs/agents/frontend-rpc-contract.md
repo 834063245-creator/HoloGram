@@ -1,8 +1,8 @@
 # 前端 RPC 契约（生成物）
 
 > 由 `scripts/gen-rpc-contract-md.cjs` 从 `src-tauri/src/rpc.rs` 生成 — 勿手改。
-> 生成时间：2026-09-24T07:32:09.811Z
-> 方法总数：55（rpc.rs 头注释为历史数字，以此表为准）
+> 生成时间：2026-10-12T13:38:04.600Z
+> 方法总数：56（rpc.rs 头注释为历史数字，以此表为准）
 
 前端类型化入口：`src-ui/src/rpc-contract.ts`（`typedRpc` / `typedListen`，编译期接线检查）。
 
@@ -71,7 +71,7 @@
 |------|----------|----------|------|
 | `protocol_bridge_spawn` | id, command, args | env | 字符串 |
 | `protocol_bridge_write` | id, line | — | 字符串 |
-| `protocol_bridge_kill` | id | — | 字符串 |
+| `protocol_bridge_kill` | id | reason | 字符串 |
 
 ## 能力口（editor_cap）
 
@@ -95,6 +95,7 @@
 | `oauth_refresh` | provider, account_id | — | JSON 字符串 |
 | `open_external` | url | — | `null`（unit） |
 | `llm_proxy_port` | — | — | 字符串 |
+| `log_level_hint` | — | — | 字符串 |
 
 ## 身份认证 / 权限
 
@@ -105,8 +106,8 @@
 | `plugin_dir` | name | — | JSON 字符串 |
 | `engine_bundled_info` | — | — | JSON 字符串 |
 | `plugin_set_enabled` | name, enabled | — | `null`（unit） |
-| `composition_dir` | — | open | JSON 字符串 |
-| `providers_dir` | — | open | JSON 字符串 |
+| `composition_dir` | — | open | 字符串 |
+| `providers_dir` | — | open | 字符串 |
 
 ## OAuth 订阅平面
 
@@ -160,10 +161,12 @@ payload 类型见 `src-ui/src/rpc-contract.ts` 的 `EventContract`（前端类�
 
 | 事件名 | 发射源 |
 |--------|--------|
+| `bg:note` | src-tauri/src/utils/bg_jobs.rs |
 | `composition:changed` | src-tauri/src/composition_watcher.rs |
 | `lsp-message` | src-tauri/src/lsp_manager.rs |
 | `permission-ask` | src-tauri/src/utils/path_resolve.rs |
 | `protocol-bridge:exit` | src-tauri/src/commands/protocol_bridge.rs |
+| `protocol-bridge:output` | src-tauri/src/commands/protocol_bridge.rs |
 | `providers:changed` | src-tauri/src/providers_watcher.rs |
 | `pty-output` | src-tauri/src/pty_manager.rs |
 | `shell:done` | src-tauri/src/commands/process_cap.rs |

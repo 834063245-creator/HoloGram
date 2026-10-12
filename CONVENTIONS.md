@@ -375,9 +375,17 @@ DOM 所有权按层划分，不要跨层抢 DOM：
    请求体全文、请求头、URL query 永不落盘；只记长度/存在性/`host:port`/节数。
    端点一律把**整条 URL** 递给门面（`url` 字段），由门面削成 `host:port`
 ✅ `ids` 由**调用点显式给**（多卷并发下模块级 ambient 上下文会串卷——INVARIANTS #1 同族）
+✅ 级别过滤**只有一处**（`agent/logger.ts` 的 `write`，`log.*` 与门面都从这里过）：默认
+   `info`、`debug` **默认丢弃**；开关优先级 `LANTAI_LOG_LEVEL`（壳经 `log_level_hint`
+   RPC 递进来）> `localStorage['lantai.log.level']` > 默认；级别与来源进 `boot` 的
+   `log_level` / `log_level_source`（「这份 log 没 debug 行」必须能分出没发生还是被挡了）。
+   认不出的值**不猜**（回空串 ⇒ 回落）
+✅ 丢条必须可见：写失败计数 + 首次 `console.error`，下一条成功写入补 `log.self{dropped:N}`
+   （生产者在 `logger.ts`——`obs.ts` 反向调用会成环）；通道未初始化时条目留在缓冲、不计丢条
 ✅ 产物域取门面经宿主面 `./host` + `host-modules.ts` 的 `faceDeps` 登记
    （漏登记 tsc 红；改 faceDeps 须同 commit 跑 `npm run gen:host-surface`）
 ❌ 禁止：在接缝里自己拼日志对象、自己抹凭据、用中文句子当事件名
+❌ 禁止：绕开 `write()` 直接落盘（级别过滤与健康度都在那一层）
 ❌ 禁止：日志链路抛错打断用户动作（门面 `safeWrite` 兜底——丢条可见但不炸链路）
 ```
 

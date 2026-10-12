@@ -223,7 +223,7 @@ fn rpc_result_shape(method: &str) -> RpcResultShape {
 
         // ── 其余（含 ok_unit "null" 家族、read_file_content、
         // exec_command、会话持久化、workspace、
-        // protocol_bridge、llm_proxy_port 等）──
+        // protocol_bridge、llm_proxy_port、log_level_hint 等）──
         // 默认 Text：字节精确优先，形态不恒定或体量不可控的一律不展开。
         _ => RpcResultShape::Text,
     }
@@ -742,6 +742,10 @@ async fn dispatch_rpc(
             ok_unit(r)
         }
         "llm_proxy_port" => Ok(crate::llm_proxy::proxy_port().to_string()),
+        // 前端日志级别的壳侧提示（日志可观测性批 3）：`LANTAI_LOG_LEVEL` 环境变量。
+        // WebView 读不到进程环境变量，而壳读得到——故经这一手递过去（空串 = 未设/
+        // 认不出 ⇒ 前端回落 localStorage → 默认 info）。见 agent/logger.ts。
+        "log_level_hint" => Ok(crate::logging::level_hint_from_env()),
 
         // ═══════════════════════════════════════════════════════
         // 插件安装通道（3 个命令，S4-3）：npm tarball 源 / 本地目录 → 下载/解包/

@@ -70,23 +70,26 @@ describe('Logger 数据流链路验证', () => {
     vi.restoreAllMocks();
   });
 
-  it('debug/info/warn/error 都会调用 write → 写入 logBuffer', async () => {
+  it('级别过滤：默认 info 下 debug 不入缓冲，其余三个入口照写（批 3）', async () => {
     // 初始化日志路径
     await initLogger('/fake/project');
 
-    // 4 个入口函数调用 write，写入 buffer
+    // 4 个入口函数调用 write，其中 debug 在默认级别下被丢弃
     log.debug('mod', 'debug msg');
     log.info('mod', 'info msg');
     log.warn('mod', 'warn msg');
     log.error('mod', 'error msg');
 
-    // 4 条日志都在 buffer 里，未满 50 条不会触发 flush
-    // 我们无法直接读私有变量，但通过 flush 的间接行为来验证
-    // 验证：flush 应该被 write 内部的 >= MAX_BUFFER 条件触发
-    // 这里 4 条 < 50，所以不会自动 flush —— 证明 buffer 在积累
-    // 4 条日志 < MAX_BUFFER(50)，不会触发自动 flush
-    // 因此 appendToFile 不应该被调用
+    // 缓冲里只有 3 条（< MAX_BUFFER 50）⇒ 未触发自动 flush（appendToFile 未被调用）
     expect(H.kernelFs!.fs.files.size).toBe(0);
+
+    // 补 47 条逼出 flush：批次里**没有** debug 行 = 过滤真的生效（不是没写）
+    for (let i = 0; i < 47; i++) log.info('mod', `fill ${i}`);
+    await waitFor(() => H.kernelFs!.fs.files.size >= 1);
+    const content = [...H.kernelFs!.fs.files.entries()].find(([p]) => p.includes('ui.log'))![1] as string;
+    expect(content).not.toContain('debug msg');
+    expect(content).toContain('info msg');
+    expect(content.split('\n').filter(Boolean)).toHaveLength(50);
   });
 
   it('write → 达到阈值 → 自动触发 flush', async () => {
@@ -117,8 +120,10 @@ describe('Logger 数据流链路验证', () => {
     log.warn('mod', 'message 2');
 
     // 再写 48 条，第 48 次时 buffer 达到 50，触发 flush
+    // （批 3 起默认级别 info，debug 不入缓冲——这里的填充行必须是 info，
+    //  否则 batch 只有 2 条、永不触发 flush）
     for (let i = 0; i < 48; i++) {
-      log.debug('mod', `batch msg ${i}`);
+      log.info('mod', `batch msg ${i}`);
     }
     // flush() 是 fire-and-forget 异步，等调用真正落地（冷 import 可达 ~100ms）
     await waitFor(() => H.kernelFs!.fs.files.size >= 1);

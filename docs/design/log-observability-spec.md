@@ -1,7 +1,8 @@
 # 日志可观测性规格（log-observability spec）
 
-> 状态：**当前**（2026-09-27 批 1–2 落地）。真源 = `src-ui/src/agent/obs.ts`（事件门面，
-> 事件名与字段表在文件头定死）；本页是它的**长期规范**（给人读的契约面）。
+> 状态：**当前**（2026-10-12 批 1–3 落地）。真源 = `src-ui/src/agent/obs.ts`（事件门面，
+> 事件名与字段表在文件头定死）+ `src-ui/src/agent/logger.ts`（级别过滤与健康度）；
+> 本页是它们的**长期规范**（给人读的契约面）。
 > 立项与事故取证见 [`../plans/log-observability-plan.md`](../plans/log-observability-plan.md)。
 
 ## 0. 这条规格要保证的性质
@@ -47,7 +48,7 @@
 
 | 事件 | 级别 | 何时 | 关键字段（`ctx` / `err`） |
 |---|---|---|---|
-| `boot` | info | 工作区打开、logger 落定后一次 | platform、tz、utc_offset_min、workspace、providers_yml、proxy_port、log_channel |
+| `boot` | info | 工作区打开、logger 落定后一次 | platform、tz、utc_offset_min、workspace、providers_yml、proxy_port、log_channel、**log_level、log_level_source**（批 3：这份 log 是哪个级别、开关从哪来） |
 | `config.load` | info/warn/error | provider 文档装载出口（**成功也写**） | path、sections、rows、section_errors、fatal、empty、source（file/localStorage）、keys（`N/M` 带 Key 行数） |
 | `panel.providers_reload` | info/warn/error | 设置面板重读（外部改动 / 重试路径两条） | 同上 + trigger |
 | `cred.get` | info/warn/error | **真解析**一次凭据（IPC 往返；缓存命中不记） | provider、len；`err.kind=CRED_IPC_ERROR` 区分「IPC 抛错」与「真没配」 |
@@ -58,7 +59,7 @@
 | `llm.error` | error | 每次尝试失败（重试链上逐次） | 同上 + status；`err.kind` = 错误分类（transient / rate_limited / auth_or_param / context_overflow） |
 | `turn.failed` | error/warn | **唯一漏斗**：任何用户可见的回合失败（墓碑） | `err.phase` = preflight / stream / tool；`err.kind`；`err.raw`；同 (session, turn, phase) 去重 |
 | `ui.toast` | error | error 级 toast 出口（用户看见了） | text（前 200 字） |
-| `log.self` | info/warn | 日志器自身健康度（丢条 / 通道）——**批 3 落地**，名字先在此登记 | channel、dropped |
+| `log.self` | warn | 日志器自身健康度：写失败补偿（**批 3 落地**，生产者在 `logger.ts` 而非门面——反向调用会与 import 方向成环） | channel、dropped、level、source |
 
 **`phase` 的判定**（定位的关键——「哪一层」比「什么错」先要答出来）：
 
@@ -108,10 +109,61 @@ status 的 401/403（文案「本行没有 API Key」）按类型判为 `phase: 
    `plugins/builtin/host-modules.ts` 的 `faceDeps` 登记（漏登记 tsc 就红——
    `host-surface-seal.test.ts` 封印，改宿主面须同 commit 跑 `npm run gen:host-surface`）；
 4. 配一条守护测试（门面不变量 → `tests/log-observability.test.ts`；
-   接缝接线 → `tests/log-observability-seams.test.ts`）。
+   接缝接线 → `tests/log-observability-seams.test.ts`；级别开关与丢条补偿 →
+   `tests/log-level-and-health.test.ts`）。
 
-## 6. 尚未做（批 3/4）
+## 6. 级别与开关 + 健康度 + Rust 出网（批 3，2026-10-12 落地）
 
-Rust 侧出网日志（`llm_proxy.rs` 的 `eprintln!` → `tracing`，落 `bridge.log`）、级别过滤与运行时
-开关（`debug` 默认丢弃）、日志健康度计数、诊断包导出、轮转 / 保留窗口（现状 `Rotation::NEVER`
-会无限增长）。详见计划 §2.5 / §4。
+### 6.1 级别过滤与运行时开关
+
+- **默认 `info`，`debug` 默认丢弃**——触发事故那份 1158 行 `ui.log` 里 1024 行是同一条
+  无 `method` 的 `invoke` debug 行（88%）：信号被自己的噪声淹了。`bridge` 的 rpc invoke
+  属 debug 档（打开 debug 才写，写则带 `method`）。
+- **优先级**：`LANTAI_LOG_LEVEL` 环境变量 > `localStorage['lantai.log.level']` > 默认
+  `info`。环境变量经壳转一手（RPC `log_level_hint`）——WebView 里读不到进程环境变量，
+  而壳读得到。认不出的值**不猜**（回落下一档）：猜错会把「我明明设了 debug」变成更难查
+  的形态；未设 / 认不出 / 通道不通一律回空串。
+- **级别上得了台面**：`boot` 的 `log_level` / `log_level_source`（`env` / `storage` /
+  `default`）——拿到一份没有 debug 行的 log，必须能回答「是没发生，还是级别把它挡了」。
+- 开关当前**无 UI**（设置页开关留到下一批）：`LANTAI_LOG_LEVEL=debug` 放进启动环境，
+  或在开发者控制台写 `localStorage['lantai.log.level']='debug'` 后调一次
+  `applyLogLevelFromShell()`（幂等，改完再调即生效）。
+- **过滤点只有一处** = `logger.ts` 的 `write()`：`log.*` 与门面 `obs.*` 都从这里过。
+
+### 6.2 日志健康度（丢条可见）
+
+「日志里没有」有两种可能：**没发生**，或**写不出去**。后者此前被静默吞掉
+（事故里两条 `denied: outside project root` 就是这样丢的现场）。现在：
+
+- 写失败（IPC 抛错）= **计数** + **首次** `console.error`（此后只计数，不刷屏）；
+  下一条成功写入补一条 `log.self{dropped:N, channel, level, source}`。
+- **通道未初始化**（无工作区，`logPath = null`）：条目留在缓冲、**不计丢条**——
+  把「攒着」报成「丢了」是健康度读数在说谎。
+- 通道可用性由 `boot` 的 `log_channel` 如实记（`ok` / `unavailable`，批 1 已有）。
+
+### 6.3 Rust 侧出网日志（`src-tauri/src/llm_proxy.rs`）
+
+- 五处 `eprintln!` → 结构化留痕（**只记 `host:port`** + status + 脱敏后的错误原文），
+  并**新增两条**：上游回 4xx/5xx（「配好了却调不通」的关键判据：401 是 Key、404 是路径、
+  502 是本地端点没起）、SSE 中途断流（「答到一半停了」的唯一线索，此前全无痕迹）。
+- **落点按就绪度二选一**（与计划原文「一律落 bridge.log」的偏离，理由是「失败不静默」
+  这条硬要求）：`bridge.log` 的 tracing subscriber 要等工作区打开才装（`logging.rs`
+  由 `workspace_service` 调用），而代理在 `main.rs` 的 setup 期就起来了——窗口期内
+  `tracing::warn!` 的记录会**静默消失**（无 subscriber = 无人接盘）。故
+  `logging::bridge_sink_ready()` 为 false 时回退 `log` 门面（`boot.log`，进程启动期即装）。
+  诊断时三份合并看：`boot.log`（启动期）+ `bridge.log`（工作区期）+ `ui.log`（前端）。
+- **脱敏在 Rust 侧另有一份**（前端 `obs.ts` 那套门面到不了这里）：只记 `Url::parse`
+  出来的 `host:port`（userinfo 一并摘掉），第三方错误原文先过 `scrub_url_query`
+  （与前端 REDACTIONS ① 同形的正则）——reqwest 的 `Display` 会带上整条 URL，可能含
+  `?api-key=`。⚠ 原文里的**路径保留**（只削 query）：路径不是凭据，且 404 判别要看它；
+  「只记 host:port」是 `target` 字段的纪律，不是 `err.raw` 的。
+
+## 7. 尚未做（批 4）
+
+- **诊断包导出**（带可信度段：通道可用性 / 断档区间 / 文件 mtime / 字段来源标签）。
+- **日志轮转 / 保留窗口**：`bridge.log` 现状 `Rotation::NEVER`（`max_log_files` 配着
+  也不生效——永不切分就没有多余文件可清），`ui.log` 是前端纯追加，两者都会无限增长
+  （实测见过 71MB+）。`boot.log` 有单代 4MB 轮转，是唯一的例外。
+- 设置页的**级别开关 UI**（批 3 的旋钮当前只能靠环境变量 / 控制台）。
+
+详见计划 §2.5 / §4。

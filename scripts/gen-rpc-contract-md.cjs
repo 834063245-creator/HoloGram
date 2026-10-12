@@ -152,7 +152,10 @@ function appendEvents(md, root) {
   const events = new Map();
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
-    for (const m of src.matchAll(/emit\("([a-z][a-z:-]*)"\s*,/g)) {
+    // ⚠ `emit(` 与事件名之间允许换行/空白：`protocol_bridge.rs` 的 `protocol-bridge:exit`
+    // 就是 `app_exit.emit(\n "protocol-bridge:exit", …)` 这种折行写法——旧正则
+    // （`emit\("`）看不见它，**重生成会把一条真实事件从表里删掉**（2026-10-12 实测）。
+    for (const m of src.matchAll(/emit\(\s*"([a-z][a-z:-]*)"\s*,/g)) {
       const rel = path.relative(root, f).replace(/\\/g, '/');
       if (!events.has(m[1])) events.set(m[1], []);
       if (!events.get(m[1]).includes(rel)) events.get(m[1]).push(rel);

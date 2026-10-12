@@ -65,6 +65,75 @@ pub fn proxy_port() -> u16 {
     BOUND_PORT.load(Ordering::SeqCst)
 }
 
+// ── 出网日志（日志可观测性批 3，2026-10-12）────────────────────────────
+//
+// 立项理由：2026-09-27 事故里用户报「本地模型（baseUrl http://127.0.0.1:8080/v1）
+// 配好了却一直无法调用」，而那份 ui.log 对「请求到底发出去没有、上游回了什么」
+// **一个字节都没有**——因为这条链的失败此前只 `eprintln!` 到 stderr：GUI 进程的
+// stderr 没人看得见，用户抓不到、也交不出来。
+//
+// 出口选择（「**失败不静默**」是硬要求）：本代理在 `main.rs` 的 setup 期就起来了，
+// 而 bridge.log 的 tracing subscriber 要等工作区打开才装（`logging.rs`）——窗口期内
+// `tracing::warn!` 的记录会**静默消失**（无 subscriber = 无人接盘）。故未就绪时回退
+// `log` 门面（`.lantai/logs/boot.log`，boot_log.rs 在进程启动期即装上）。诊断时三个
+// 文件合并看：boot.log（启动期）+ bridge.log（工作区期）+ ui.log（前端）。
+//
+// 脱敏：**只记 `host:port`**（协议 / 路径 / query 一律不落盘——query 里可能带 Azure
+// 风格的 `?api-key=`），第三方错误原文先过 `scrub_url_query`。凭据头本就不在我们手上。
+macro_rules! net_log {
+    ($level:ident, $($arg:tt)*) => {{
+        let line = format!($($arg)*);
+        if crate::logging::bridge_sink_ready() {
+            tracing::$level!("{}", line);
+        } else {
+            log::$level!("{}", line);
+        }
+    }};
+}
+
+/// 目标 URL → `host:port`（**只记这个**）。
+/// 刻意走 `Url::parse` 而不是字符串裁剪：userinfo（`https://user:pass@h/v1`）
+/// 会被 parser 摘掉，字符串裁剪不会——凭据就是这样漏进日志的。
+fn target_host_port(target: &str) -> String {
+    match url::Url::parse(target) {
+        Ok(u) => match (u.host_str(), u.port()) {
+            (Some(h), Some(p)) => format!("{h}:{p}"),
+            (Some(h), None) => h.to_string(),
+            _ => "<no-host>".to_string(),
+        },
+        Err(_) => "<unparsable>".to_string(),
+    }
+}
+
+/// 抹掉文本里 URL 的 query（与前端 `obs.ts` 的 REDACTIONS ① 同形同判）。
+/// reqwest 的 Display 会带上整条 URL，而 **Rust 侧没有前端那套脱敏门面**——
+/// 第三方错误原文落盘前必须过这里。
+fn scrub_url_query(s: &str) -> String {
+    static URL_QUERY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)(https?://[^\s?#<>"']+)\?[^\s"'<>]*"#).expect("URL query 脱敏正则")
+    });
+    URL_QUERY.replace_all(s, "$1?<redacted>").into_owned()
+}
+
+/// 上游回错（4xx/5xx）一行：请求**发出去了**、上游给了答复——这正是「配好了
+/// 却调不通」时最该一眼看到的那条（错误码是判据：401 是 Key，404 是路径，
+/// 502 是本地端点没起）。
+fn upstream_status_line(target: &str, status: u16) -> String {
+    format!(
+        "[llm_proxy] 上游回错 target={} status={status}",
+        target_host_port(target)
+    )
+}
+
+/// 请求失败（连不上 / 超时 / 中途断流）一行：只带 `host:port` 与脱敏后的原文。
+fn upstream_error_line(target: &str, detail: &str) -> String {
+    format!(
+        "[llm_proxy] 出网失败 target={} err={}",
+        target_host_port(target),
+        scrub_url_query(detail)
+    )
+}
+
 /// 在 127.0.0.1 上启动本地代理服务器（后台 tokio 任务）。
 /// 幂等：只启动一次；重复调用返回既有端口。
 pub fn spawn_llm_proxy() -> u16 {
@@ -105,7 +174,7 @@ pub fn spawn_llm_proxy() -> u16 {
     let p = BOUND_PORT.load(Ordering::SeqCst);
     if p == 0 {
         // 启动失败 — 进程内降级返回 0，调用方应回退到直连（不阻塞用户）。
-        eprintln!("[llm_proxy] 代理启动失败（端口未就绪）");
+        net_log!(error, "[llm_proxy] 代理启动失败（端口未就绪）");
         return 0;
     }
     let _ = AVAILABLE_PROXY_PORT.set(p);
@@ -131,10 +200,12 @@ async fn run_server() -> u16 {
                 return port;
             }
             Err(e) if attempt < 7 => {
-                eprintln!("[llm_proxy] bind 127.0.0.1:{port} 失败: {e}，尝试下一端口");
+                // ⚠ 这里在**启动期**（main.rs setup）——tracing 尚无 subscriber，
+                //   故实际落 boot.log（见 net_log 的出口选择注）。
+                net_log!(warn, "[llm_proxy] bind 127.0.0.1:{port} 失败: {e}，尝试下一端口");
             }
             Err(e) => {
-                eprintln!("[llm_proxy] 无可用端口: {e}");
+                net_log!(error, "[llm_proxy] 无可用端口: {e}");
                 return 0;
             }
         }
@@ -154,7 +225,7 @@ fn loopback_bind_addr(port: u16) -> SocketAddr {
 pub(crate) async fn serve_listener(listener: &TcpListener, client: reqwest::Client, shutdown: &AtomicBool) {
     loop {
         if shutdown.load(Ordering::SeqCst) {
-            eprintln!("[llm_proxy] shutdown flag set, exiting accept loop");
+            net_log!(info, "[llm_proxy] shutdown flag set, exiting accept loop");
             break;
         }
         // 200ms 超时轮询：无连接时也要醒来检查停机标志。
@@ -257,6 +328,11 @@ async fn handle_inner(client: reqwest::Client, req: Request<Incoming>) -> Respon
     match outbound {
         Ok(upstream) => {
             let status = upstream.status();
+            // 上游回错留痕（批 3）：请求**发出去了**、上游给了答复——「配好了却
+            // 调不通」时这一行 + 前端 llm.error 就是完整答案（谁拒的、什么码）。
+            if status.is_client_error() || status.is_server_error() {
+                net_log!(warn, "{}", upstream_status_line(&target, status.as_u16()));
+            }
             // 透传上游响应头（同样去掉 hop-by-hop）
             let mut rb = Response::builder().status(status);
             for (k, v) in upstream.headers().iter() {
@@ -292,19 +368,25 @@ async fn handle_inner(client: reqwest::Client, req: Request<Incoming>) -> Respon
                 .header("access-control-allow-headers", "*")
                 .header("access-control-allow-private-network", "true")
                 .header("access-control-expose-headers", "x-hologram-proxy-error");
-            let body = StreamBody::new(
-                upstream.bytes_stream().map(|r| {
-                    r.map(|bytes| hyper::body::Frame::data(bytes))
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-                }),
-            );
+            // 中途断流也要留痕（批 3）：SSE 半路断掉在用户侧的表现是「答到一半停了」，
+            // 而这条此前完全不可见（前端只看到 fetch 抛错）。
+            let tgt = target_host_port(&target);
+            let body = StreamBody::new(upstream.bytes_stream().map(move |r| {
+                r.map(|bytes| hyper::body::Frame::data(bytes))
+                    .map_err(|e| {
+                        net_log!(warn, "{}", upstream_error_line(&tgt, &e.to_string()));
+                        Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                    })
+            }));
             // 显式调 BodyExt::boxed —— StreamBody 也实现了 Stream，`.boxed()` 会被
             // StreamExt::boxed 劫持（返回 Pin<Box<dyn Stream>>），必须指名 Body 装箱。
             rb.body(http_body_util::BodyExt::boxed(body))
                 .unwrap_or_else(|_| err_response(StatusCode::BAD_GATEWAY, "proxy: 响应构造失败"))
         }
         Err(e) => {
-            eprintln!("[llm_proxy] 目标请求失败: {e}");
+            // 出网失败留痕（批 3）：连不上 / 超时 / DNS 错——原文经 scrub_url_query
+            // 削掉 query（reqwest 的 Display 会带上整条 URL，可能含 `?api-key=`）。
+            net_log!(error, "{}", upstream_error_line(&target, &e.to_string()));
             err_response(StatusCode::BAD_GATEWAY, &format!("proxy: 目标请求失败: {e}"))
         }
     }
@@ -372,6 +454,56 @@ mod tests {
         assert!(!validate_target("ftp://example.com"));
         assert!(!validate_target("not a url"));
         assert!(!validate_target(""));
+    }
+
+    /// 出网留痕只带 `host:port`（批 3）：协议 / 路径 / query 一律不落盘。
+    /// userinfo 形态（`https://user:pass@h/v1`）必须被摘掉——这是「字符串裁剪」
+    /// 与「parser 取值」的差别的实测点。
+    #[test]
+    fn target_host_port_keeps_host_and_port_only() {
+        assert_eq!(
+            target_host_port("https://api.example.com/v1/chat/completions?api-key=SK-LEAK0123"),
+            "api.example.com"
+        );
+        assert_eq!(target_host_port("http://127.0.0.1:8080/v1"), "127.0.0.1:8080");
+        assert_eq!(target_host_port("http://localhost:11434/v1/chat"), "localhost:11434");
+        assert_eq!(target_host_port("https://user:pass@api.example.com/v1"), "api.example.com");
+        assert_eq!(target_host_port("not a url"), "<unparsable>");
+    }
+
+    /// 第三方错误原文里的 URL query 必须先削掉（前端 obs.ts 同判）——
+    /// reqwest 的 Display 会带上整条 URL，而 Rust 侧没有那套脱敏门面。
+    #[test]
+    fn scrub_url_query_never_leaks_credentials_in_query() {
+        let raw = "error sending request for url (https://api.example.com/v1?api-key=SK-LEAK0123): connection refused";
+        let out = scrub_url_query(raw);
+        assert!(!out.contains("SK-LEAK0123"), "query 里的凭据不得落盘: {out}");
+        assert!(out.contains("https://api.example.com/v1?<redacted>"), "URL 主体与后续文本要保留: {out}");
+        assert!(out.contains("connection refused"));
+        // 无 URL / 无 query 的文本一字不改
+        assert_eq!(scrub_url_query("connection refused"), "connection refused");
+        assert_eq!(
+            scrub_url_query("https://api.example.com/v1/chat"),
+            "https://api.example.com/v1/chat"
+        );
+    }
+
+    /// 两行留痕的字段面：**target 只带 `host:port`**、status 带码；错误原文按前端同判
+    /// 只削 query（路径保留——404 判别要看它，且路径不是凭据）。
+    #[test]
+    fn upstream_lines_carry_target_and_status_without_secrets() {
+        let line = upstream_error_line(
+            "http://127.0.0.1:8080/v1/chat?api-key=SK-LEAK0123",
+            "error sending request for url (http://127.0.0.1:8080/v1/chat?api-key=SK-LEAK0123)",
+        );
+        assert!(line.contains("target=127.0.0.1:8080"), "{line}");
+        assert!(!line.contains("SK-LEAK0123"), "query 里的凭据不得落盘: {line}");
+        assert!(line.contains("?<redacted>"), "{line}");
+
+        let status_line = upstream_status_line("https://api.deepseek.com/v1/chat/completions", 401);
+        assert!(status_line.contains("target=api.deepseek.com"), "{status_line}");
+        assert!(status_line.contains("status=401"), "{status_line}");
+        assert!(!status_line.contains("/v1/chat"), "target 字段不落路径: {status_line}");
     }
 
     /// 端到端：本地代理把上游 SSE 流式透传给调用方（模拟 provider 流式对话）。

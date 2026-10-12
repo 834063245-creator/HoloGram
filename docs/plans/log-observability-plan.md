@@ -1,8 +1,9 @@
 # 日志可观测性（log-observability）计划
 
-> 状态：**批 0–2 已落地（2026-09-27）· 余批 3/4 + 真机验收（§5 六条）**。
-> 落地：批 1 = `06fadbe2`（公共字段 + `agent/obs.ts` 门面 + 唯一漏斗 + `boot`）；批 2 = 本批（`config.load` /
-> `panel.providers_reload` / `cred.*` / `llm.*` 四相接缝 + 事件表进长期规范）。批 0 四项经核对**已全部在 HEAD**，
+> 状态：**批 0–3 已落地（批 1/2 = 2026-09-27；批 3 = 2026-10-12）· 余批 4 + 真机验收（§5 六条）**。
+> 落地：批 1 = `06fadbe2`（公共字段 + `agent/obs.ts` 门面 + 唯一漏斗 + `boot`）；批 2 = `bf4c910b`
+>（`config.load` / `panel.providers_reload` / `cred.*` / `llm.*` 四相接缝 + 事件表进长期规范）；
+> 批 3 = 本批（级别开关 + 日志健康度 + Rust 出网留痕，实测与偏离见 §2.5）。批 0 四项经核对**已全部在 HEAD**，
 > 无需重做。**规格面已定稿** → [`../design/log-observability-spec.md`](../design/log-observability-spec.md)
 > （事件名与字段表的长期规范；本文件此后只是立项与取证记录）。
 > 一句话：消灭「**失败默认无痕**」这个类别——让任何让用户看见的失败，日志里至少留一条带层与原始文本的记录。
@@ -96,11 +97,27 @@ obs.turnFailed({...}); obs.panelReload({...}); obs.self({...});
 
 > 选公共面而非逐方言插桩：以后加第 4 个方言，日志**自动继承**——这是「不穷举」的机制本身。
 
-### 2.5 批 3/4（本次不执行，先记设计）
+### 2.5 批 3（✅ 2026-10-12 已落地）与批 4（待办）
 
-- **Rust 侧出网**（`llm_proxy.rs`）：三处 `eprintln!` → `tracing::warn!/error!`（落 `bridge.log`），记 `target_host` / `status` / 错误原文；目标 URL 只记 `host:port`，凭据头与 query 不落盘。诊断时 `bridge.log` + `ui.log` 合并看。
-- **级别与运行时开关**：默认 `info`，`debug` **默认丢弃**（现在是无条件写，即那 88% 噪声来源）；优先级 `LANTAI_LOG_LEVEL` 环境变量 > `localStorage['lantai.log.level']` > 默认；打开 debug 后纳入 `bridge` 的 rpc invoke（含 `method`）。设置页 UI 开关留到下一批。
-- **日志健康度**：写失败计数 + 首次 `console.error`；下一条成功写入补 `log.self{dropped:N}`；通道不可用由 `boot` 如实记 `log_channel:"unavailable"`。**轮转/保留窗口**（现状 `Rotation::NEVER` 会无限增长）与**诊断包导出**（带可信度段：通道可用性 / 断档区间 / 文件 mtime / 字段来源标签）同属下一批。
+**批 3 已落地**（规格 §6 是规范性描述，此处只记实测与两处偏离）：
+
+- **Rust 侧出网**（`llm_proxy.rs`）：五处 `eprintln!` → 结构化留痕，记 `host:port` / `status` /
+  错误原文（原文先过 `scrub_url_query`——reqwest 的 Display 会带上整条 URL，可能含 `?api-key=`）。
+  **新增两条**：上游回 4xx/5xx、SSE 中途断流（此前完全不可见）。
+  ⚠ **偏离原文「落 bridge.log」**：`bridge.log` 的 tracing subscriber 要等工作区打开才装，而代理在
+  `main.rs` setup 期就起来（还可能在从未打开工作区的会话里转发请求）——窗口期内 `tracing::warn!`
+  的记录**静默消失**（无 subscriber，不是「进 stderr」）。故按 `logging::bridge_sink_ready()` 二选一，
+  未就绪时回退 `log` 门面（`boot.log`，进程启动期即装）。判据 = 「失败不静默」这条硬要求。
+- **级别与运行时开关**：默认 `info`，`debug` 默认丢弃；优先级 `LANTAI_LOG_LEVEL` 环境变量
+  > `localStorage['lantai.log.level']` > 默认。环境变量经**新 RPC `log_level_hint`** 抵前端
+  （WebView 读不到进程环境变量）；认不出的值不猜（回空串 ⇒ 回落）。级别与来源由 `boot` 的
+  `log_level` / `log_level_source` 上报。设置页 UI 开关仍留待下一批。
+- **日志健康度**：写失败计数 + 首次 `console.error`，下一条成功写入补 `log.self{dropped:N}`
+  （生产者在 `logger.ts`——`obs.ts` 反向调用会成环）。通道未初始化时条目留在缓冲、**不计**丢条。
+
+**批 4（下一批，不在本计划）**：诊断包导出（带可信度段：通道可用性 / 断档区间 / 文件 mtime /
+字段来源标签）+ 日志轮转 / 保留窗口（`bridge.log` 现状 `Rotation::NEVER`、`ui.log` 纯追加，
+都会无限增长）+ 设置页级别开关 UI。
 
 ## 3. 前置条件（批 0）：先提交工作区里的四项修复
 
@@ -123,11 +140,12 @@ obs.turnFailed({...}); obs.panelReload({...}); obs.self({...});
 **批 2（一天）**：②`config.load` + ③`cred.*` + ④`llm.*` 三条接缝 + 面板重读日志。
 → 产出性质：本次事故的三个问题全部可答。
 
-**批 3（半天，后续）**：Rust 出网日志 + 级别开关 + 健康度。
+**批 3（半天，✅ 已落地 2026-10-12）**：Rust 出网日志 + 级别开关 + 健康度。
 
-**批 4（下一批，不在本计划）**：诊断包导出 + 日志轮转。
+**批 4（下一批，不在本计划）**：诊断包导出 + 日志轮转 + 设置页级别开关 UI。
 
-> 用户已批准范围 = **批 0–2**（约 2 天）。批 3/4 留着，等这次的真机验收过了再说。
+> 用户已批准范围 = **批 0–2**（约 2 天）；批 3 于 2026-10-12 单独批准并当批落地（实测与偏离见 §2.5）。
+> 批 4 与真机验收仍留着。
 
 ## 5. 测试与验证
 
@@ -136,6 +154,16 @@ logger 级别过滤与写失败计数、`config.load`（成功 / 逐节错误 / 
 `llm.*` 四条字段（mock fetch）。新增模块需同步 `host-surface` 基线（`npm run gen:host-surface` 视需要重录）与 `doc-check`。
 
 **Rust 测**：现有假上游用例扩展——上游连接失败时断言落盘日志字段（必要时把日志出口做成可注入 sink）。
+批 3 实测做法：把「要落盘的那一行」抽成纯函数（`target_host_port` / `scrub_url_query` /
+`upstream_status_line` / `upstream_error_line`）直接断言字段面与**不泄密**（`?api-key=` 不得出现在
+任何一行里）；级别名解析（`logging::parse_level` / `level_hint_from_env`）同测。**不做注入 sink**：
+两条出口（tracing / `log` 门面）的可用性是进程全局状态，在单进程测试里造它比它保护的东西更脆。
+
+**批 3 已落的测试**：`tests/log-level-and-health.test.ts`（级别优先级 env > storage > 默认、认不出的
+值不猜、debug 默认丢弃、写失败计数 + `log.self{dropped:N}` 补偿 + 首次 console 只一次、未 init 时
+条目留在缓冲不计丢条）；既有 `logger-dataflow.test.ts` / `log-observability.test.ts` 里依赖
+「debug 无条件写」的用例按**新行为**改判（填充行改 info，过滤行为写进断言——行为变更本身在 commit
+message 里声明）。
 
 **端到端真机验收（最终判据）**：
 1. 空 Key 的 provider（2026-09-28 无 Key 放行批后语义）：**本地端点** → 请求照发，

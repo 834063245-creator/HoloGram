@@ -61,8 +61,10 @@ describe('日志可观测性 · 事件门面（obs.ts）', () => {
     const fs = H.kernelFs!.fs;
     fs.files.clear();
     const mark = `drain-mark-${++drainSeq}`;
-    logger.log.debug('test', mark);
-    for (let i = 0; i < 50; i++) logger.log.debug('test', 'filler');
+    // ⚡ 批 3 起默认级别 = info（debug 直接被过滤、不入缓冲）——drain 的信号行与
+    //    填充行一律用 info：本文件的被测性质是**门面字段/脱敏/上限**，与级别无关。
+    logger.log.info('test', mark);
+    for (let i = 0; i < 50; i++) logger.log.info('test', 'filler');
     await waitFor(() => (fs.files.get(LOG_PATH) ?? '').includes(mark));
     const raw = fs.files.get(LOG_PATH) ?? '';
     return raw

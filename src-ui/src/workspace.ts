@@ -17,7 +17,7 @@ import { AgentStore } from './agent/agent-store';
 import { resetAgentCaches } from './agent/cache-store';
 import { GoalManager } from './agent/goal-manager';
 import { DisposerBag } from './agent/lifecycle';
-import { initLogger, log } from './agent/logger';
+import { applyLogLevelFromShell, initLogger, log } from './agent/logger';
 import type { MemoryManagerFace } from './agent/memory-contract';
 // 批 9h-4：记忆域实现随 memory-domain 包 ⇒ 装配点走内核登记表门面（缺实现 fail-loud）
 import { createMemoryManager, memoryBundleIngest } from './agent/memory-impl';
@@ -271,6 +271,14 @@ export class Workspace {
     //   抢跑会误报 log_channel:unavailable，且本条会写进**旧工作区**的缓冲）；
     //   ② 全程 void——锚是诊断副产物，绝不许拖慢或拦住工作区打开。
     void (async () => {
+      // 级别开关（日志可观测性批 3）：**必须先于 initLogger** —— 级别就位之前
+      // 写的条目会按旧级别判（该丢的写了 / 该留的丢了）。env > localStorage > 默认。
+      try {
+        await applyLogLevelFromShell();
+      } catch {
+        // 级别解析失败不是失败：applyLogLevelFromShell 自身已全部兜底，这里再兜一层
+        //（它不许成为工作区打开的失败源——与下面的 initLogger 同一条纪律）。
+      }
       // try/await 而非 .catch()：initLogger 在测试替身里可能返回非 promise
       //（vi.fn() → undefined），`.catch` 会当场炸——锚是副产物，不许它成为
       // 工作区打开的失败源。
