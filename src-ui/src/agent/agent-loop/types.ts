@@ -20,6 +20,7 @@ import type { AgentEventBus } from '../events';
 import type { HookRegistry, PreflightHookRegistry } from '../hooks';
 import type { MessageBus } from '../message-contract';
 import type { PlanGate } from '../plan/plan-registry';
+import type { PreStepRegistry } from '../pre-step';
 import type { SessionLog } from '../session-log';
 import type { StreamingToolExecutor } from '../streaming-executor';
 import type { TokenRequestRecord } from '../token-meter';
@@ -52,6 +53,9 @@ export interface AgentLoopHost {
   readonly tools: ToolRegistry;
   readonly hooks: HookRegistry | null;
   readonly preflightHooks: PreflightHookRegistry | null;
+  /** 步前裁决面（agent-hooks-plan 一期）——每步入场直读；null = 未接面
+   *  （子 Agent 不接）⇒ 直通 enter。第三方 loop 不读 = 零影响。 */
+  readonly preStep: PreStepRegistry | null;
   /** 隔离 worktree id（null = 主仓）。 */
   readonly isolationId: string | null;
   readonly planGate: PlanGate;

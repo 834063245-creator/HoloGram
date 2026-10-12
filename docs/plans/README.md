@@ -25,6 +25,7 @@ Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 
 | **文档面重构** | [`doc-surface-refactor-plan.md`](doc-surface-refactor-plan.md) | **P0-P3 已落；P4 在推**（P3 补批 = 11 件竣工件归档；P4a ADR/cookbook/research 三索引已落，docs/README 唯一入口重写进行中） | 四层形态 + 批序 + 豁免账见施工单；门禁 `npm run doc-check`，真源 `scripts/doc-facts.cjs` |
 | **paper-shell（R5 打磨环）** | [`paper-shell/README.md`](paper-shell/README.md) | **收尾中** | 剩余工作逐项清单 = [`r5-polish-backlog.md`](paper-shell/r5-polish-backlog.md)（最常看）；视觉决定账本 [`taste-ledger.md`](paper-shell/taste-ledger.md)；管线史 [`HISTORY.md`](paper-shell/HISTORY.md)；走查 [`walkthrough.md`](paper-shell/walkthrough.md)；表面覆盖地图 [`v2-surface-inventory.md`](paper-shell/v2-surface-inventory.md)；访谈 [`interviews/R1-2026-08-20.md`](paper-shell/interviews/R1-2026-08-20.md) |
 | **画布空间模型** | [`canvas-space/canvas-space-model-notes.md`](canvas-space/canvas-space-model-notes.md) | **Stage-6 进行中**（UI/UX 专项） | 一纸多卷 / 有界流区 / 宿主模型 / 三层导航；阶段件与返工清单见笔记「展开」段；provider+创作坞联合体检 [`canvas-space/composer-provider-audit.md`](canvas-space/composer-provider-audit.md) |
+| **agent hooks（生命周期扩展点）** | [`agent-hooks-plan.md`](agent-hooks-plan.md) | **一期已竣工**（2026-10-13；二期待拍） | 步前裁决面已落：每步 `enter`/`reject` + 注入通道 `ctx.preStep`（对标 DSH interception extension points）；二期 request/turn-stopping + 存量收编、三期 CC 兼容桥待拍 |
 
 ## 待执行但已立项（按成本排）
 

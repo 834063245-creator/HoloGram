@@ -1,6 +1,6 @@
 # REGISTRY_OWNERSHIP — agent 注册点所有权清单
 
-> 生成：2026-08-16（agent-core-convergence Phase 1 任务，基线 commit `5ff78821`）· 更新：2026-08-23（P4 B①+②——git/search/fs/shell/agent-isolation 五族迁 ctx.tools 第一方插件通道，行表 14→9 族；B④ 收官——13 prompt 段全迁 ctx.prompts 通道；S4-4 甲——贡献行/段进组合解析域（factoryComposition 快照），buildToolRegistry 单循环统一装配）
+> 生成：2026-08-16（agent-core-convergence Phase 1 任务，基线 commit `5ff78821`）· 更新：2026-08-23（P4 B①+②——git/search/fs/shell/agent-isolation 五族迁 ctx.tools 第一方插件通道，行表 14→9 族；B④ 收官——13 prompt 段全迁 ctx.prompts 通道；S4-4 甲——贡献行/段进组合解析域（factoryComposition 快照），buildToolRegistry 单循环统一装配）· 2026-10-13（agent-hooks-plan 一期：preStep 裁决表随 Agent 实例登记）
 > 规则：**新增注册 API 必须返回 Disposer 并登记到本清单**；不返回 disposer 的要写豁免原因。
 > Phase 4（生命周期所有权统一）将以本清单为迁移地图：每行最终都应指向 `AgentContext.effect()`。
 
@@ -28,6 +28,7 @@
 | 注册点 | owner | 清理点 | 自动清理 |
 |---|---|---|---|
 | `runtime/runtime.ts:695-709`（graph/state/plan/board hooks） | createAgent → `newAgent.setHooks/setPreflightHooks` | 随 Agent 实例 GC（无跨 Agent 引用） | ✅ 随实例 |
+| `runtime/runtime.ts`（preStep 裁决表通道贡献折叠 → `newAgent.setPreStep`，agent-hooks-plan 一期） | createAgent → Agent 实例 | 随 Agent 实例 GC（无跨 Agent 引用；子 Agent 不接本面） | ✅ 随实例 |
 | `agent.ts:2566`（子 Agent board-tracking hook） | 子 Agent | 随子 Agent | ✅ 随实例 |
 
 > Phase 1 起 `register()` 返回 Disposer；上述调用点暂不消费（随实例释放已足够）。

@@ -23,6 +23,7 @@ import { capabilitiesServicePlugin } from '../composition/capability-service';
 import { fsServicePlugin } from '../composition/fs-service';
 import { hooksServicePlugin } from '../composition/hook-service';
 import { overlayServicePlugin } from '../composition/overlay-service';
+import { preStepServicePlugin } from '../composition/pre-step-service';
 import { promptsServicePlugin } from '../composition/prompt-service';
 import { rendererServicePlugin } from '../composition/renderer-service';
 import { rootViewsServicePlugin } from '../composition/root-views-service';
@@ -43,7 +44,7 @@ export interface ServicePluginEntry {
   description: string;
 }
 
-/** 18 个内核 service（**表序 = 装载序 = 字节契约**；加/删只许动本表）。
+/** 19 个内核 service（**表序 = 装载序 = 字节契约**；加/删只许动本表）。
  *  第 14 位 `lsp-service`（批 9b §4-13）：此前游离在清单外（`ui/lsp-client.ts` 自建第二个根
  *  Context 当兜底）⇒ 不受「内核不可禁用」覆盖、不进 boot 审计；现由 loader 装载。
  *  第 15 位 `composition-root-views`（批 9e）：App 外壳视图槽通道（'home' 主区 / 'overlay' 浮层）
@@ -54,7 +55,10 @@ export interface ServicePluginEntry {
  *  第 16 位 `token-meter`（§4-6 A，用户 2026-09-25 裁定）：token 计量面此前既不在清单、
  *  也无产物认领（消费方只能 import 内核实现文件）；立 service 后每卷账本由
  *  `ctx.tokenMeter.createLedger()/restoreLedger()` 制造、分桶代数经 `ctx.tokenMeter.usage`
- *  取用——**录入点仍唯一 = `Agent.streamOnce`**。 */
+ *  取用——**录入点仍唯一 = `Agent.streamOnce`**。
+ *  第 19 位 `pre-step-service`（agent-hooks-plan 一期）：步前裁决贡献面——每步进入前可
+ *  enter（附注入批）/ reject；通道贡献经 runtime 装配折叠进 per-Agent PreStepRegistry，
+ *  default-loop 经 `host.preStep` 直读（无注册者 = 直通 enter，零行为变化）。 */
 export const SERVICE_PLUGINS: readonly ServicePluginEntry[] = [
   {
     plugin: compositionServicesPlugin,
@@ -82,5 +86,9 @@ export const SERVICE_PLUGINS: readonly ServicePluginEntry[] = [
   {
     plugin: tokenMeterServicePlugin,
     description: 'token 计量（每卷账本工厂 + 分桶代数真源；录入点唯一 = Agent.streamOnce）',
+  },
+  {
+    plugin: preStepServicePlugin,
+    description: '步前裁决贡献注册表（每步 enter/reject + 注入）',
   },
 ];

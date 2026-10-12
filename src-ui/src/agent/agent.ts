@@ -58,6 +58,7 @@ import type { Disposer } from './lifecycle';
 import { log } from './logger';
 import { batchStormSignature, type ToolOutcome } from './loop-helpers';
 import { type PlanGate, planGateCheck } from './plan/plan-registry';
+import type { PreStepRegistry } from './pre-step';
 import {
   applyImageBudget,
   collectImageRefs,
@@ -326,6 +327,10 @@ export class Agent {
 
   // Preflight hooks — 破坏性写入前告警（edit_file / write_file）
   private preflightHooks: PreflightHookRegistry | null = null;
+
+  // 步前裁决面 — 每步进入前的 enter/reject + 注入（agent-hooks-plan 一期；
+  // 装配经 setPreStep 注入，loop 经 host.preStep 直读；子 Agent 不接 ⇒ null）
+  private preStep: PreStepRegistry | null = null;
 
   // Storm breaker — 检测重复失败的工具调用
   stormSig = '';
@@ -669,6 +674,12 @@ export class Agent {
       this._preflightAttached = true;
       attachPreflightRegistry(this._loopEvents, hooks);
     }
+  }
+
+  /** 步前裁决面接线（agent-hooks-plan 一期）——只存引用：loop 经
+   *  host.preStep 直读，不经 eventBus（装配期折叠的贡献注册进同一 registry 实例）。 */
+  setPreStep(registry: PreStepRegistry): void {
+    this.preStep = registry;
   }
 
   /** preflight 注册表只读访问 — 子 Agent 装配继承门禁用（subagent-spawn.ts）。 */
@@ -1584,6 +1595,7 @@ export class Agent {
       tools: this.tools,
       hooks: this.hooks,
       preflightHooks: this.preflightHooks,
+      preStep: this.preStep,
       isolationId: this._isolationId ?? null,
       planGate: this._planGate,
       loopEvents: this._loopEvents,

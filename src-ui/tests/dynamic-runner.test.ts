@@ -23,6 +23,7 @@ import { activeCapabilityContributions, capabilitiesServicePlugin } from '../src
 import { fsServicePlugin } from '../src/composition/fs-service';
 import { activeHookContributions, hooksServicePlugin } from '../src/composition/hook-service';
 import { overlayServicePlugin } from '../src/composition/overlay-service';
+import { preStepServicePlugin } from '../src/composition/pre-step-service';
 import { promptsServicePlugin } from '../src/composition/prompt-service';
 import { rendererServicePlugin } from '../src/composition/renderer-service';
 import { activeToolContributions, compositionServicesPlugin } from '../src/composition/services';
@@ -310,7 +311,7 @@ describe('ctx.dynamicRunner（D7 动态插件运行时）', () => {
  * 本组补上它承诺却没兑现的那条守护：白名单 ↔ 真装配对拍。 */
 
 describe('守卫注册面校准（白名单 ↔ 真装配）', () => {
-  /** 全服务装配：九条贡献通道 + 五条 seam（agentLoop 经产物域插件挂）。 */
+  /** 全服务装配：十条贡献通道 + 五条 seam（agentLoop 经产物域插件挂）。 */
   const SERVICE_PLUGINS = [
     compositionServicesPlugin,
     rendererServicePlugin,
@@ -318,6 +319,7 @@ describe('守卫注册面校准（白名单 ↔ 真装配）', () => {
     hooksServicePlugin,
     capabilitiesServicePlugin,
     overlayServicePlugin,
+    preStepServicePlugin,
     fsServicePlugin,
     shellServicePlugin,
     sessionPersistenceServicePlugin,
@@ -333,7 +335,7 @@ describe('守卫注册面校准（白名单 ↔ 真装配）', () => {
     return { runner, dispose: () => root.fiber.dispose() };
   }
 
-  it('⑩ 白名单 ↔ 真装配对拍：零死条目 + 九通道五 seam 齐备 + graph 不回榜', async () => {
+  it('⑩ 白名单 ↔ 真装配对拍：零死条目 + 十通道五 seam 齐备 + graph 不回榜', async () => {
     const root = new Context();
     for (const p of SERVICE_PLUGINS) await root.plugin(p);
     const reflect = (root as unknown as { reflect: { get(n: string): unknown } }).reflect;
@@ -357,7 +359,7 @@ describe('守卫注册面校准（白名单 ↔ 真装配）', () => {
     expect(dead, '白名单里有解析不到的服务（死条目）').toEqual([]);
     expect(noRegister, '白名单条目解析到的对象没有 register').toEqual([]);
 
-    // 集合与集合语义：九通道 + 五 seam，无重复，退役面不回榜
+    // 集合与集合语义：十条通道 + 五 seam，无重复，退役面不回榜
     expect([...GUARDED_SERVICES].sort()).toEqual(
       [
         'tools',
@@ -366,6 +368,7 @@ describe('守卫注册面校准（白名单 ↔ 真装配）', () => {
         'llm',
         'prompts',
         'hooks',
+        'preStep',
         'capabilities',
         'renderers',
         'overlays',

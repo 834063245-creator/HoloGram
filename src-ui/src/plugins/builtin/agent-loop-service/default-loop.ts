@@ -92,6 +92,23 @@ export async function runDefaultLoop(host: AgentLoopHost, signal: AbortSignal): 
       // 又往卷里写一次没人要的事实。具名错误照抛——调用方（Agent.run 的 finally /
       // 上层 catch）认的是 RunDeadlineExceededError 这个类型，不是文案。
       if (!host.stepBoundary(signal)) throw host.abandonedError(signal);
+
+      // ── 步前裁决（agent-hooks-plan 一期）——enter 放行（可附注入批）/ reject
+      //    拦下本步（不开步、不发请求，本轮收尾）。未接面 / 无注册者 = 直通
+      //    enter——空表不进异步调用，**连同步时序都零变化**。
+      const preStepDecision =
+        host.preStep && host.preStep.size > 0 ? await host.preStep.decide({ agentId: host.id, step, signal }) : null;
+      if (preStepDecision?.action === 'reject') {
+        host.sink({
+          kind: EventKind.Notice,
+          level: 'warn',
+          text: preStepDecision.reason
+            ? `本步被钩子拦下（未发送请求）：${preStepDecision.reason}`
+            : '本步被钩子拦下（未发送请求）',
+        });
+        return; // 本轮收尾（turn/end 在 finally 照发；不开步、不记录 step/start）
+      }
+
       host.loopEvents.emitLoopEvent('step/start', { agentId: host.id, step });
       // 清除上一步的临时提醒 — 提醒只应对本轮 LLM 可见。
       host.transientReminders = [];
@@ -152,6 +169,15 @@ export async function runDefaultLoop(host: AgentLoopHost, signal: AbortSignal): 
 
       // 注入其他 Agent 的新发现
       host.injectDiscoveries();
+
+      // ── 步前裁决的注入批（agent-hooks-plan 一期）——enter 时钩子贡献的消息
+      //    作为落会话的 user/message 追加（durable；content 原样，贡献者自备
+      //    文本形态）。位置 = 本步现有注入链之后、压缩预检之前。
+      if (preStepDecision?.action === 'enter' && preStepDecision.messages && preStepDecision.messages.length > 0) {
+        for (const m of preStepDecision.messages) {
+          host.appendMessage('user/message', { role: 'user', content: m.content });
+        }
+      }
 
       // ── 预检上下文窗口（自动压缩主触发点，2026-09 迭代）──
       // 每 step 发送前用估算检查载荷压力；≥ compactRatio(默认 0.8，随模型

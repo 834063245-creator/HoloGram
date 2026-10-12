@@ -36,7 +36,7 @@ describe('first-party-manifest（清单完备性守护）', () => {
     }
   });
 
-  it('计数快照（53 = 15 内核 service + 38 出厂 feature）', () => {
+  it('计数快照（58 = 19 内核 service + 39 出厂 feature）', () => {
     // graph-service / graph-builtin / engine-domain 随图谱功能全量退役（2026-09-09）：45 → 42
     // office-domain 新增（2026-09-13，C 路：OfficeCLI 一等域工具，取代 MCP 挂接）：42 → 43
     // plan-mode 新增（2026-09-24 批 6a：规划模式实现归产物，内核 capability 查登记表）：43 → 44
@@ -49,7 +49,8 @@ describe('first-party-manifest（清单完备性守护）', () => {
     // composition-workspaces / composition-shell-rows 新增（2026-09-26 批 10 同窗：两条宿主生命周期
     // 贡献面，用户 2026-09-25 裁定 A）：54 → 56
     // bundled-engine 新增（2026-09-26 批 10 部件三：引擎接线产物化）：56 → 57
-    expect(Object.keys(FIRST_PARTY_MANIFEST)).toHaveLength(57);
+    // pre-step-service 新增（2026-10-13 agent-hooks-plan 一期：步前裁决贡献面）：57 → 58
+    expect(Object.keys(FIRST_PARTY_MANIFEST)).toHaveLength(58);
   });
 
   it('两类都有存量：service 平台服务（常驻）与 feature 功能插件（可禁用）', () => {
@@ -59,7 +60,8 @@ describe('first-party-manifest（清单完备性守护）', () => {
 
   it('§4-15 单一真源（批 9a）：内核 service 名单只在 service-plugins.ts 写一次', () => {
     const names = SERVICE_PLUGINS.map((e) => e.plugin.name);
-    expect(names).toHaveLength(18);
+    // pre-step-service 追加末位（2026-10-13 agent-hooks-plan 一期）：18 → 19
+    expect(names).toHaveLength(19);
     // loader 表由本表派生（对象同一，不是「两份名单碰巧一样」）
     expect(BUILTIN_PLUGINS.map((p) => p.name)).toEqual(names);
     expect(BUILTIN_PLUGINS.map((p) => p.name)).toEqual(SERVICE_PLUGINS.map((e) => e.plugin.name));

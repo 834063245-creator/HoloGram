@@ -136,13 +136,15 @@ export function evaluateDynamicPlugin(source: string, fallbackName: string): Com
  *  键集同时是：守卫白名单 + 可解析服务清单（服务经 reflect.get 免 inject
  *  通道解析——runner 不声明 inject（依赖集编译期不可知））。 */
 export const GUARDED_SERVICES: readonly string[] = [
-  // 九条贡献通道（与 composition/contribution-channel.ts 的九通道同集）
+  // 贡献通道（与 composition/contribution-channel.ts 的通道同集——2026-10-13 补
+  // preStep，agent-hooks-plan 一期）
   'tools',
   'panels',
   'commands',
   'llm',
   'prompts',
   'hooks',
+  'preStep',
   'capabilities',
   'renderers',
   'overlays',
@@ -162,7 +164,9 @@ export const GUARDED_SERVICES: readonly string[] = [
  *    - **补 `overlays`**：画布覆盖层（`{ id, slot, component }`——与 panels 同形）；
  *    - **补 `agentLoop`**：流式循环 seam（`{ id, run }`）；
  *    - **补 `hooks`**：工具管道钩子——承重成员是**嵌套形状**（`{ id, kind, hook }`，
- *      函数成员在 `hook` 里面），presence 表表达不了，由下方 SHAPE_CHECKS 承担。 */
+ *      函数成员在 `hook` 里面），presence 表表达不了，由下方 SHAPE_CHECKS 承担；
+ *    - **补 `preStep`**（2026-10-13）：步前裁决钩子——同样是嵌套形状
+ *      （`{ id, hook }`，函数成员在 `hook` 里面），SHAPE_CHECKS 承担。 */
 const REQUIRED_FN_MEMBERS: Record<string, readonly string[]> = {
   tools: ['factory'],
   panels: ['component'],
@@ -170,6 +174,7 @@ const REQUIRED_FN_MEMBERS: Record<string, readonly string[]> = {
   llm: ['create'],
   prompts: ['render'],
   hooks: [], // 嵌套形状——见 SHAPE_CHECKS
+  preStep: [], // 嵌套形状——见 SHAPE_CHECKS
   capabilities: ['install'],
   renderers: ['component'],
   overlays: ['component'],
@@ -196,6 +201,15 @@ const SHAPE_CHECKS: Record<string, (def: Record<string, unknown>) => string | nu
     for (const m of members) {
       if (typeof hook[m] !== 'function') return `hook 缺 ${m} 函数成员`;
     }
+    return null;
+  },
+  // PreStepContribution = { id, hook }——hook 是对象（name + decide 函数）。
+  // 畸形形状在装载期拒绝，不潜伏到每步裁决期。
+  preStep: (def) => {
+    const hook = def.hook as Record<string, unknown> | undefined;
+    if (hook == null || typeof hook !== 'object') return 'hook 必须是对象（PreStepHook）';
+    if (typeof hook.name !== 'string' || hook.name.trim() === '') return 'hook.name 必须是非空 string';
+    if (typeof hook.decide !== 'function') return 'hook 缺 decide 函数';
     return null;
   },
 };

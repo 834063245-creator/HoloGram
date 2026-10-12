@@ -4,7 +4,7 @@
 > 从组合层源码机械推导生成 — 勿手改；服务面变更后重新生成并同 commit。
 > 不含时间戳：字节稳定是 `--check`（doc-sync 门禁）的前提。
 
-共 22 个 ctx 服务：seam 5 · 贡献通道 9 · 服务 8。
+共 23 个 ctx 服务：seam 5 · 贡献通道 10 · 服务 8。
 kind 三分规则（机械推导）：ctx 键 ∈ SEAM_DOMAINS（seam-resolution.ts 单一真源）= seam；
 类体含 `register(def: *Contribution)` = 贡献通道；其余 = 服务。
 
@@ -67,6 +67,7 @@ shell 后端能力注册表（平台化 Phase 2 · D11；subprocess 并入本 se
 | `ctx.hooks` | `HooksService` | `src/composition/hook-service.ts` | `plan-injector` | 0 文件 |
 | `ctx.overlays` | `OverlayService` | `src/composition/overlay-service.ts` | `asset-rack` · `compose-dock` · `paper-minimap` · `toc-strip` | 2 文件 |
 | `ctx.panels` | `PanelsService` | `src/composition/services.ts` | `canvas-sidebar` · `canvas-spine` · `my-panel` · `paper` · `settings` | 4 文件 |
+| `ctx.preStep` | `PreStepService` | `src/composition/pre-step-service.ts` | — | 0 文件 |
 | `ctx.prompts` | `PromptsService` | `src/composition/prompt-service.ts` | `my/section` | 2 文件 |
 | `ctx.renderers` | `RenderersService` | `src/composition/renderer-service.tsx` | `my/kind` | 7 文件 |
 | `ctx.rootViews` | `RootViewsService` | `src/composition/root-views-service.ts` | `ask-cards` · `sessions-home` | 2 文件 |
@@ -111,6 +112,14 @@ capability 贡献注册表（A-3 第八贡献通道）——贡献注册 → dis
 - owner：`src/composition/services.ts`
 - 默认实现 / 贡献者 id：`canvas-sidebar` · `canvas-spine` · `my-panel` · `paper` · `settings`
 - 消费面（4）：`src/plugins/builtin/canvas-nav/index.ts` · `src/plugins/builtin/paper-shell/index.ts` · `src/plugins/builtin/settings-domain/index.ts` · `src/plugins/builtin/skill-domain/builtin-skills.ts`
+
+### `ctx.preStep` — PreStepService（贡献通道）
+
+步前裁决注册表（agent-hooks-plan 一期）——hook 贡献注册 → disposer； 下次 Agent 装配生效语义。
+
+- owner：`src/composition/pre-step-service.ts`
+- 默认实现 / 贡献者 id：—
+- 消费面：—（无直接 import/ctx 引用——运行时通道注入）
 
 ### `ctx.prompts` — PromptsService（贡献通道）
 

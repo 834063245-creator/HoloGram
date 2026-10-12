@@ -46,8 +46,9 @@ const FILES = walk(SRC).map((abs) => ({
 /** 生效时机四档闭集（与 ContributionTiming 同源；此处手写是为了让漂移在此红）。 */
 const TIMINGS = ['immediate', 'next-assembly', 'request', 'frame'];
 
-/** 15 个 service 的通道构造点：十条贡献通道 + 五条 seam provider 注册表。
- *  批 9e（2026-09-26）新增第十条：`rootViews`（App 外壳视图槽——首页 / 根浮层）。 */
+/** 16 个 service 的通道构造点：十一条贡献通道 + 五条 seam provider 注册表。
+ *  批 9e（2026-09-26）新增第十条：`rootViews`（App 外壳视图槽——首页 / 根浮层）。
+ *  agent-hooks-plan 一期（2026-10-13）新增第十一条：`preStep`（步前裁决——每步 enter/reject + 注入）。 */
 const EXPECTED_KINDS = [
   'panels',
   'commands',
@@ -56,6 +57,7 @@ const EXPECTED_KINDS = [
   'renderers',
   'prompts',
   'hooks',
+  'preStep',
   'capabilities',
   'overlays',
   'rootViews',
@@ -109,7 +111,7 @@ describe('贡献通道内核单源（M1 终态守护）', () => {
     expect(hits, '被收编的手抄注册表复活了——请改用 contribution-channel 的 ContributionChannel').toEqual([]);
   });
 
-  it('③ 15 个 service 各有一个通道构造点，且都在 composition 层（agent-loop 经宿主桥）', () => {
+  it('③ 16 个 service 各有一个通道构造点，且都在 composition 层（agent-loop 经宿主桥）', () => {
     const sites = constructionSites();
     const kinds = sites.map((s) => s.kind).sort();
     expect(kinds).toEqual([...EXPECTED_KINDS].sort());

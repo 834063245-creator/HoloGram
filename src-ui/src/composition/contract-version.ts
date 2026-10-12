@@ -22,9 +22,19 @@
 // 不静默漂移；这是刻意取舍不是缺陷。
 
 /** 开放面契约当前版本（变更即 +1，历史见 open-surface-contract.md 变更记录）。 */
-export const OPEN_SURFACE_CONTRACT_VERSION = 54;
+export const OPEN_SURFACE_CONTRACT_VERSION = 55;
 
 /** 契约面载体文件（相对 src-ui/；fingerprint 生成器与 guard 消费同一份）。
+ *  v55（2026-10-13）**步前裁决贡献面（agent-hooks-plan 一期）**：新增贡献通道
+ *  `ctx.preStep`（`composition/pre-step-service.ts`，内核 service 表尾追加第 19 位）
+ *  与内核裁决件 `src/agent/pre-step.ts`（`PreStepHook` / `PreStepDecision` /
+ *  `PreStepPayload` / `PreStepRegistry`）——每步进入前可 `enter`（附注入批，
+ *  落会话 user/message）/ `reject`（拦下本步：不开步、不发请求，reason 只给 UI
+ *  可见）；`AgentLoopHost` 增只读成员 `preStep`（第三方 loop 不读 = 零影响）+
+ *  default-loop 两处消费点；`BlueprintScope` 增 `preStep`（capability 注册面）；
+ *  动态插件沙箱白名单补 `preStep`（嵌套形状由 SHAPE_CHECKS 承担）。
+ *  **对外可感知**：第三方产物从此能贡献「每步进入前的裁决与注入」；**无注册者 =
+ *  循环逐字节零行为变化**（直通 enter，回归门 tests/pre-step.test.ts）。
  *  v54（2026-09-28）**无 Key 放行 + 鉴权文案分岔**（`provider/types.ts`）：
  *  `classifyError` 新增**可选**第 5 参 `keyless`（= 本次请求没带凭据头）。为 true 且
  *  401/403 时返回专用文案（「本行没有 API Key」：本地端点请核对地址/端口，云端请去
@@ -361,4 +371,8 @@ export const OPEN_SURFACE_CONTRACT_FILES: readonly string[] = [
   // ctx.* 贡献（裁定：敏感面 = MCP 桥，走 faceDeps 留第一方）。
   'src/composition/workspaces-service.ts',
   'src/composition/shell-rows-service.ts',
+  // 步前裁决面（agent-hooks-plan 一期，2026-10-13）：贡献形状载体（PreStepHook /
+  // PreStepDecision / PreStepPayload / PreStepRegistry）+ 通道 service（ctx.preStep）。
+  'src/agent/pre-step.ts',
+  'src/composition/pre-step-service.ts',
 ];
