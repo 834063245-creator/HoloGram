@@ -1,5 +1,7 @@
 # 并发会话（多卷同跑）— 会话身份贯通计划
 
+> **已归档（2026-10-08 竣工）**——Phase 1-5 拆掉 chat UI 层全部单槽假设 + **Phase 6 测试面全落**（`tests/concurrent-sessions.test.ts` 226 行 / 10 用例覆盖计划要的 5 类断言；`chat-stream-session-leak.test.ts` 已改新 ctx 形状）；**余真机五项**。真机欠账见 [`plans/README.md`](../../plans/README.md) 欠账表。
+
 > 立项：2026-08-26 · 状态：**In progress（Phase 1-5 代码已落地，Phase 6 门禁收尾中）**
 > 触发：用户痛点——「画布层辛苦做到同工作区全量会话共存 + 每卷创作坞，结果多个会话不能同时运行」。
 > 授权基线：⚡ 破坏性操作授权（CLAUDE/AGENTS 头部）——拆干净比绕着走重要，测试工程兜底。
