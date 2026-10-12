@@ -15,5 +15,6 @@
 | [`pin-provenance-plan.md`](pin-provenance-plan.md) | 出处引导：钉块页边注常显卷名 + hover 引线 + 点行溯源 | 欠账表「出处引导手感」六条 |
 | [`asset-state-plan.md`](asset-state-plan.md) | 资产状态：沙箱 html 卡的交互态经 postMessage 桥写回内核并按会话落盘 | 欠账表「资产状态」（**须重建 exe**） |
 | [`asset-rack-plan.md`](asset-rack-plan.md) | 图版架（资产收纳面）：坞下横架，点=飞回块 / 拖出=钉到纸上 | 欠账表「图版架手感」九条 |
+| [`paper-interaction-handoff.md`](paper-interaction-handoff.md) | 纸壳交互承接：审计「交互面断链全集」逐条修复（8/8 销账） | 守护 `src-ui/tests/paper-interaction-handoff.test.ts` |
 
 **关联但仍在办**（不在本目录）：`docs/plans/paper-shell/`（R5 打磨环收尾中）· `docs/plans/canvas-space/`（画布 Stage-6 进行中）。

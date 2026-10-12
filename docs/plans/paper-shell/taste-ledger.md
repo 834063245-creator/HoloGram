@@ -388,7 +388,7 @@
   **选（2026-09-21 用户拍板 A+B 的 A 面）**：退掉 ①②③④ 的重复号（血缘卡「父卷不在场」标题改走 `volumeDisplayName('', id)`——号留在**名字位**，不再重复报）；**保留两处「号即身份」**：书脊档号 `.sr-num`（题名两栏截断后唯一可靠的身份，独立规格 §334）与卷首眉行（恰出现一次，2026-09-16 拍板）。**无名卷的号即其名**——显示兜底（侧栏行名 / 卷首题字 / 书脊题名 / 墨层地志标签 / 出处行 / 窗口标题 / 墨量册标题 / 权限卡徽标 / 案头签条）**全留**。诊断 / toast / 状态字**一律留号**：那些调用点手里只有 `number`、没有卷名（`running: number[]`、`failed[].id`），退号 = 报错说不出哪一卷。
   **弃**：① 连兜底显示一起退（无名卷的卷名位会一片空白——「退掉显示兜底」不可行，只能退「重复报号」）；② 退书脊 `.sr-num`（索书号用法，两栏截断后无身份可认）；③ 退卷首眉行（推翻 2026-09-16 拍板）。
   **已知代价（诚实栏）**：按号检索仍命中（`filterRows` 的 `String(r.id).includes(q)`），但行上不再显示号 ⇒ 输入 `12` 得到一行名字，**匹配理由不可见**（现无高亮/片段机制）。接受：placeholder 的承诺是「能搜到」，不是「看得见号」。
-  **钉值**：`tests/canvas-nav.test.ts`（`sessionMeta` 期望串去 `Nº`）、`tests/session-sidebar-tree.test.tsx` 与 `tests/session-sidebar-views.test.tsx`（title 只留「枝 / 自父卷分出」、卡机读行只留「N 块 · 枝自它分出」）；`tests/paper-c8-spine.test.tsx` 的「档号恒显」**逐字不动**——它正是「书脊档号不可退」的考官。设计件 [`../volume-number-governance-plan.md`](../volume-number-governance-plan.md) §2。
+  **钉值**：`tests/canvas-nav.test.ts`（`sessionMeta` 期望串去 `Nº`）、`tests/session-sidebar-tree.test.tsx` 与 `tests/session-sidebar-views.test.tsx`（title 只留「枝 / 自父卷分出」、卡机读行只留「N 块 · 枝自它分出」）；`tests/paper-c8-spine.test.tsx` 的「档号恒显」**逐字不动**——它正是「书脊档号不可退」的考官。设计件 [`../../archive/session-line/volume-number-governance-plan.md`](../../archive/session-line/volume-number-governance-plan.md) §2。
   **交付口径**：A 面三处落在插件产物（canvas-nav / compose-dock / paper-shell），B 面（发号账）落在 `src/ui/chat-session.ts` = **app bundle** ⇒ **本批整体要重建 exe**（关掉在跑的兰台后 `cd src-tauri && cargo tauri build --no-bundle`）；只热更插件产物不够。
 
 - 2026-09-22 · **左缘边缘滚动失灵：书脊列压住左缘感应带**（用户「靠了，边缘滚动的左侧边缘失灵了，估计是和新的书脊栏逻辑冲突了」）·

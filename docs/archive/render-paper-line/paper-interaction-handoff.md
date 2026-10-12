@@ -1,5 +1,7 @@
 # 纸壳交互承接施工单（paper-interaction-handoff）
 
+> **已归档（2026-08-25 竣工）**——8/8 全销账（审计「交互面断链全集」= 空，KNOWN_DEAD 收敛机制已清空）；守护测试 `src-ui/tests/paper-interaction-handoff.test.ts`。现状指针：[`plans/README.md`](../../plans/README.md) 与 [族索引](../README.md)。
+
 > 立项：2026-08-25 · 状态：审计完成，逐条修复中
 > 守护测试：`src-ui/tests/paper-interaction-handoff.test.ts`（KNOWN_DEAD 收敛机制）
 

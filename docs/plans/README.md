@@ -27,8 +27,6 @@ Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 
 | **画布空间模型** | [`canvas-space/canvas-space-model-notes.md`](canvas-space/canvas-space-model-notes.md) | **Stage-6 进行中**（UI/UX 专项） | 一纸多卷 / 有界流区 / 宿主模型 / 三层导航；阶段件与返工清单见笔记「展开」段；provider+创作坞联合体检 [`canvas-space/composer-provider-audit.md`](canvas-space/composer-provider-audit.md) |
 | 并发会话（多卷同跑） | [`concurrent-sessions-plan.md`](concurrent-sessions-plan.md) | In progress（Phase 1-5 代码已落地，Phase 6 门禁收尾中） | 会话身份贯通：多卷同时运行互不拖累；触发=用户「多个会话不能同时运行」 |
 | LSP 舰队共享化 | [`lsp-fleet-daemon-plan.md`](lsp-fleet-daemon-plan.md) | 开工（2026-09-09） | 每根目录一套 LSP（hologram-lspd）——16GB 机器内存耗尽的**结构性根治**（当日已落三闸止血） |
-| 纸壳交互承接 | [`paper-interaction-handoff.md`](paper-interaction-handoff.md) | 审计完成，逐条修复中 | 守护 `src-ui/tests/paper-interaction-handoff.test.ts`（KNOWN_DEAD 收敛机制——只减不增） |
-| **卷号治理（A 收显示 + B 号不复用）** | [`volume-number-governance-plan.md`](volume-number-governance-plan.md) | **开工（2026-09-21，用户拍板 A+B）** | 号保留为身份但**永不复用**（每工作区发号账 `_issue.json`：发出即记账、重启不回退）+ **有名卷**常显号收成两处（书脊档号 / 卷首眉行）；C「换 UUID」不做。顺带拆立枝发号的 await 前快照竞态 |
 
 ## 待执行但已立项（按成本排）
 
@@ -85,6 +83,7 @@ Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 
 | **役册（后台工作监视面）手感** | 代码已落地（2026-09-22，门禁全绿；设计与边界见 [§9.4](../design/lantai-design-spec.md)，数据面取证见 [`../landmine-map.md`](../landmine-map.md) L5）——待用户体感确认五件：① 设置行行尾多一枚「役 N」是否显得挤（**役内墨外**，墨仍收最右）；② 册页在坞上方弹出（300px 宽 / 封高 `min(70vh,520px)`）是否合意、三段排序与条数够不够；③ 三秒一轮对账在真机有无可感开销（**恒跑**，空转轮不重渲）；④ 逐条「停」是否真能停掉后台命令（`bash_kill` 用户路径）+ 停完立刻落「已了」是否读得懂；⑤ 子代理条目**只读**（无逐条停）能否接受。2026-10-07 修**读数不随任务起停自更**（对账改恒跑 + 役点呼吸收编 `pp-ink-live`）：动 `compose-dock` 产物与壳 bundle（`PaperPanel.css`）⇒ 重建 exe 后复核 ①③——owner：用户 |
 | **provider「刷新目录」CORS 修复** | landmine N1 **已拆**（2026-09-23，门禁全绿：`cargo test` 494 + 1，协议级回归先证红后转绿；见 [`../landmine-map.md`](../landmine-map.md) 第十三批）——上游自带的 `access-control-*` 不再透传（此前成品响应带两条 ACAO，浏览器按 CORS 规范拒收整条响应 ⇒ 凡经代理的调用全废，配了自定义请求头的行 100% 失败）。**须重建 exe**（壳域改动，前端未动）：重建后验收 = 设置 → Provider → opencode 行点「刷新目录」应出目录（此前必报「模型目录获取失败（网络错误或端点无响应）」）；顺带可核对 `commandcodegoat` 行走的是代理而不是静默直连兜底。**已用替身代理在真机页面带真实凭据预验**（2026-09-23：opencode 33 / commandcodegoat 80 个模型，上游皆 200），余 = 重建后点按钮的确认——owner：用户 |
 | **图版架（资产收纳面）手感** | 代码已落地（2026-09-23，B1-B3；施工单 §8 施工回执，原计划头部「待施工」已订正）——待用户体感确认 §6 九条：① 架位（坞下一条、正文一字不遮）；② 匣拖最底时架不被屏缘切；③ 匣拖离时架跟随、让位带与其他家具不抖；④ 点签条飞到流内那块并展开；⑤ 拖签条到纸上成钉、签条随即离架且递补无残影；⑥ 钉住张着 + 拔钉回架原位；⑦ 全钉出时整条退场；⑧ 流内图版卡默认一行签条、钉住默认张着；⑨ 空卷时整条不出现（坞位与让位带逐像素同今日）。真源 [`docs/archive/render-paper-line/asset-rack-plan.md`](../archive/render-paper-line/asset-rack-plan.md) §6——owner：用户 |
+| **卷号治理 A+B 真机一次** | 代码已落（2026-09-21 拍板；A 显示收口已退号、B 发号账 `_issue.json` 在码）——待你真机跑一次：**删高位卷 → 重启 → 起卷**，确认新卷号**不复用**已删号。真源 [`docs/archive/session-line/volume-number-governance-plan.md`](../archive/session-line/volume-number-governance-plan.md) §7——owner：用户 |
 
 | **卷重建丢卡根治（session-rebuild-recovery）** | 代码已落地（2026-10-08，门禁全绿：vitest 416 文件 / 4429 用例 + build + biome 0/0；见 [`../archive/session-line/session-rebuild-recovery-plan.md`](../archive/session-line/session-rebuild-recovery-plan.md)）——待用户体感确认两件：① 打开 51 号卷：3 张表格卡 + 1 张拟策卡恢复出现（拟策只读态）；② 「开卷 → 不操作 → 关」循环后重开：卡片仍在（快照已对齐，不再判陈旧）——owner：用户 |
 
@@ -94,7 +93,7 @@ Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 
 **会话线 4**（[`session-line/`](../archive/session-line/README.md)）· **渲染纸面线 8**（[`render-paper-line/`](../archive/render-paper-line/README.md)）·
 **内核工具平台线 11**（[`kernel-tooling-line/`](../archive/kernel-tooling-line/README.md)）。判据 = **「过程文档是否还活着」，不是「验收跑没跑完」**
 （CONVENTIONS §4：「待实机 / 验收 / 欠账」不算在办标记）——**真机欠账一行未删，全在本页欠账表**。
-同日早些时候已归档 8 份插件化欠账施工单（[`plugin-extraction/`](../archive/plugin-extraction/README.md)）。
+补（同日）：**纸壳交互承接**（8/8 全销账、守护断链集 = 空）与**卷号治理 A+B**（代码已落、余真机一次）按同判据归入 `render-paper-line/` / `session-line/`。同日早些时候已归档 8 份插件化欠账施工单（[`plugin-extraction/`](../archive/plugin-extraction/README.md)）。
 **同日追加（2026-10-08 深夜）**：会话线 `session-line/` +1——[`session-rebuild-recovery-plan.md`](../archive/session-line/session-rebuild-recovery-plan.md)（卷重建丢卡根治：资产/拟策块自工具回执恢复 + 开卷落盘断循环；案卷 51 真机取证立案，当日施工当日归档）。
 
 **2026-09-16 P3 归档批**（全文在 [`docs/archive/`](../archive/README.md)，索引见 [`../archive/README.md`](../archive/README.md)）：

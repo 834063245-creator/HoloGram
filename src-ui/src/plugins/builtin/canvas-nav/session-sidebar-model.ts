@@ -330,7 +330,7 @@ export function bucketClosed(
  *  **不报卷号**（2026-09-21 卷号收显示）：号就在紧邻的卷名里——未命名卷的名本身
  *  即「案卷 N」（state/volume-name 的档号兜底），同一行再报一次是同义反复。
  *  常显的号只留两处：书脊档号 `.sr-num`（题名两栏截断后唯一可靠的身份）与卷首
- *  眉行（恰出现一次口径）。设计件：docs/plans/volume-number-governance-plan.md §2。 */
+ *  眉行（恰出现一次口径）。设计件：docs/archive/session-line/volume-number-governance-plan.md §2。 */
 export function sessionMeta(r: Pick<SidebarRow, 'msgCount' | 'savedAt' | 'orphan'>, now = Date.now()): string {
   const parts = [`${r.msgCount} 块`];
   if (r.savedAt) parts.push(relativeTime(r.savedAt, now));
