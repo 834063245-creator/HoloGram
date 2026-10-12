@@ -29,6 +29,30 @@
 - 工具名前缀 `mcp__<server名>__<工具名>`；进程 kill 归插件 fiber disposer（链式停）。
 - ⚠️ **该子进程是全权用户进程**：不经 `fs_cap`、不受 `os_sandbox` 约束（可写任意路径）——需要沙箱/权限类/审计的动作应走 `process_cap`（shell 域）而不是 MCP 路。
 
+## 用户级挂接（不写插件）：`~/.lantai/mcp.json`
+
+只想给自己加一个 server、不打算发插件包时走这条（跨项目生效）：
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "my-tools",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@some/mcp-server"]
+    }
+  ]
+}
+```
+
+- **路径**：`~/.lantai/mcp.json`（Windows = `%USERPROFILE%\.lantai\mcp.json`）。也收映射形态 `{ "mcpServers": { "my-tools": { … } } }`。
+- **条目 schema 与 `manifest.mcpServers` 同构**（复用 `McpServerDeclSchema`，单一真源）——字段含义与上节一致（`failurePolicy` / `readOnly` 都在）。
+- **`command` 解析与插件不同**：用户级的裸名（`npx` / `node` / `uvx`）**走 PATH**；`./x` 形态相对 `~/.lantai` 解析。插件里的 `./` 才是相对插件目录。
+- **宽容语义**：缺文件 / 坏 JSON / 空表 = 没有 server（不算错误）；**单条目 schema 失败只跳过该条**，原因进可见诊断（设置 → MCP 页）。
+- 工具贡献行 id = `plugin/user/mcp/<server>`——patch / preset 里可按它禁用。
+- 装载真源 `src-ui/src/plugins/user-mcp.ts`（复用插件的治理分岔与生命周期，受治字段在场走 ServerGovernor）；守卫 `tests/user-mcp.test.ts`。
+
 ## 协议面（MCP JSON-RPC over stdio）
 
 - `initialize` → 返回 capabilities.tools + serverInfo；

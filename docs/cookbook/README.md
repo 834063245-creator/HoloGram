@@ -13,7 +13,8 @@
 | [`adding-a-shell-backend.md`](adding-a-shell-backend.md) | 换 shell 执行后端 | `shell` seam provider |
 | [`adding-a-session-backend.md`](adding-a-session-backend.md) | 换会话持久化后端（卷读写/列举/删除） | `sessionPersistence` seam provider |
 | [`adding-a-dynamic-plugin.md`](adding-a-dynamic-plugin.md) | 让模型在运行时定义插件包 | `ctx.dynamicRunner`（cordis 域） |
-| [`adding-an-mcp-server.md`](adding-an-mcp-server.md) | 挂接外部 MCP server | manifest `mcpServers` / MCP 机器桥 |
+| [`adding-an-mcp-server.md`](adding-an-mcp-server.md) | 挂接外部 MCP server（插件声明式 / 用户级 `~/.lantai/mcp.json`） | manifest `mcpServers` / MCP 机器桥 |
+| [`adding-a-skill.md`](adding-a-skill.md) | 给 Agent 加一门技能（项目级 / 用户级 / 出厂覆盖） | 技能发现根（`Skill` 工具 + 每步目录注入） |
 | [`plugin-as-software.md`](plugin-as-software.md) | 写一个「软件级」插件（窗口 + 后台 + 数据目录） | app shell 四件套 |
 
 ## 读法

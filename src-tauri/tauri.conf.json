@@ -34,6 +34,7 @@
     ],
     "resources": {
       "../target/release/hologram-engine.exe": "hologram-engine.exe",
+      "../target/release/hologram-lspd.exe": "hologram-lspd.exe",
       "../engine/grammars/*.dll": "grammars/",
       "../engine/onnxruntime.dll": "onnxruntime.dll",
       "../engine/models/all-MiniLM-L6-v2/model.onnx": "models/all-MiniLM-L6-v2/model.onnx",
