@@ -1,8 +1,8 @@
 # 前端 RPC 契约（生成物）
 
 > 由 `scripts/gen-rpc-contract-md.cjs` 从 `src-tauri/src/rpc.rs` 生成 — 勿手改。
-> 生成时间：2026-10-12T13:38:04.600Z
-> 方法总数：56（rpc.rs 头注释为历史数字，以此表为准）
+> 生成时间：2026-10-12T15:12:07.675Z
+> 方法总数：57（rpc.rs 头注释为历史数字，以此表为准）
 
 前端类型化入口：`src-ui/src/rpc-contract.ts`（`typedRpc` / `typedListen`，编译期接线检查）。
 
@@ -96,6 +96,7 @@
 | `open_external` | url | — | `null`（unit） |
 | `llm_proxy_port` | — | — | 字符串 |
 | `log_level_hint` | — | — | 字符串 |
+| `log_rotate` | path | — | JSON 字符串 |
 
 ## 身份认证 / 权限
 

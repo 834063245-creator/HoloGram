@@ -15,6 +15,13 @@
 //   替它兜。形态上也不发明第二套写 API。
 //   立项理由见 docs/plans/log-observability-plan.md。
 //
+//   ⚡ 2026-10-12 日志可观测性批 4：本文件再加一件事——**轮转触发**：
+//   ui.log 此前是纯追加、无上限（实测涨到 75 MB）。现在 logger 每累计写
+//   `ROTATE_CHECK_BYTES` 问一次壳侧（`log_rotate` RPC）：壳自己 stat、自己
+//   判上限（8 MiB / 保 2 代，真源 `logging.rs`，与 bridge/boot 同一套），
+//   越限则滚成 `.1`/`.2`。轮转失败**不阻断**写日志（宁可文件大，不丢日志）
+//   但必须可见：首次 console.error + 下一条成功写入补 `log.self{rotate_failed:N}`。
+//
 // ⚡ 2026-10-12 日志可观测性批 3：本文件再添两件事——
 //   ① **级别过滤与运行时开关**（`debug` 默认丢弃）：事故那份 1158 行 log 里
 //      1024 行是同一条无 `method` 的 `invoke` debug 行（88%）——**信号被自己的
@@ -149,6 +156,55 @@ function shouldWrite(level: LogLevel): boolean {
   return LEVEL_ORDER[level] >= LEVEL_ORDER[minLevel];
 }
 
+// ── 轮转触发（批 4）───────────────────────────────────────────────
+//
+// 大小判据真源在**壳侧**（`logging.rs` 的 LOG_MAX_BYTES/LOG_KEEP，与 bridge/boot
+// 同一套）；前端只知道“检查频率”（每累计写这么多字节问一次）——两份语言不共
+// 常量，避免上限值两边漂移。问“该不该滚”时壳自己 stat（一次便宜的本地 IPC）。
+
+/** 轮转检查间隔（字节）：每累计写入这么多就问一次壳侧。1 MiB 下正常日志
+ *  几小时才问一次；debug 全开时也远低于 IPC 压力上限。 */
+const ROTATE_CHECK_BYTES = 1024 * 1024;
+
+let bytesSinceRotateCheck = 0;
+/** init 后的首写检查旗（见 initLogger）：第一次真写盘前先问一次壳，
+ *  「存量越限文件不等累计」的判据由此承接。 */
+let pendingInitialRotateCheck = false;
+/** 轮转失败计数（与 dropped 同构：下一条成功写入时补 `log.self` 落账）。 */
+let rotateFailures = 0;
+let rotateFailureReported = false;
+
+/** 问一次壳侧：ui.log 越限了吗？越限壳会滚代（`.1`/`.2`，保 2 代）。
+ *  失败**不阻断**日志写入（宁可文件大，不丢一条），但必须可见：
+ *  首次 console.error，下一条成功写入补 `log.self{rotate_failed:N}`。 */
+async function rotateIfNeeded(): Promise<void> {
+  if (!logPath) return;
+  try {
+    const { kernelLogRotate } = await import('../rpc-contract');
+    await kernelLogRotate(logPath);
+  } catch (e) {
+    rotateFailures += 1;
+    if (!rotateFailureReported) {
+      rotateFailureReported = true;
+      console.error('[logger] 日志轮转失败（文件将继续增长；下一条成功写入时补记）：', e);
+    }
+  }
+}
+
+/** 轮转失败补偿（与 `reportDroppedEntries` 同节奏）：`log.self{rotate_failed:N}`
+ *  —— “滚代滚不动、文件会无限涨”这件事不许静默。 */
+function reportRotateFailures(): void {
+  if (rotateFailures === 0) return;
+  const n = rotateFailures;
+  rotateFailures = 0;
+  rotateFailureReported = false;
+  write({
+    ...buildEntry('warn', 'logger', `日志轮转失败补偿：此前 ${n} 次滚代未成功（日志文件会超出上限继续增长）`),
+    ctx: { channel: logChannelState(), rotate_failed: n, level: minLevel, source: levelSource },
+    event: 'log.self',
+  });
+}
+
 // ── 日志健康度（批 3）────────────────────────────────────────────────
 //
 // 「日志里没有」有两种可能：**没发生**，或**写不出去**。旧的 appendToFile 把
@@ -251,6 +307,12 @@ export async function initLogger(projectPath: string): Promise<void> {
     logPath = null;
   }
   flushTimer = setInterval(flush, FLUSH_MS);
+  // 打开工作区后的首次真写要**先问一次壳**（存量越限文件不等累计到检查间隔）。
+  // 2026-10-12 实测修正：不在本函数里 fire-and-forget 那次检查——那会让
+  // 「检查的 import」与「写入的 import」并发，测试面（mock 工厂的 importOriginal
+  // 与消费方动态 import 同 ID）在 resetModules 后会撞出替身/真身竞态（假红假绿）；
+  // 改由首次 flush 消化（pendingInitialRotateCheck），检查与写入严格串行。
+  pendingInitialRotateCheck = true;
 }
 
 function buildEntry(level: LogLevel, module: string, message: string, ctx?: Record<string, unknown>): LogEntry {
@@ -292,9 +354,19 @@ async function flush(): Promise<void> {
   if (logBuffer.length === 0 || !logPath) return;
   const batch = logBuffer.splice(0);
   logBuffer = [];
+  const text = batch.join('\n') + '\n';
+  // 写前轮转检查（批 4）：首写无条件问一次（承接「打开即查存量」）；此后
+  // 每累计够一个检查间隔问一次。壳自己 stat、自己判上限（★检查与写入串行）。
+  if (pendingInitialRotateCheck || bytesSinceRotateCheck >= ROTATE_CHECK_BYTES) {
+    pendingInitialRotateCheck = false;
+    bytesSinceRotateCheck = 0;
+    await rotateIfNeeded();
+  }
   try {
-    await appendToFile(logPath, batch.join('\n') + '\n');
+    await appendToFile(logPath, text);
+    bytesSinceRotateCheck += text.length;
     reportDroppedEntries();
+    reportRotateFailures();
   } catch (e) {
     // 丢条可见（批 3）：计数 + **首次** console.error。日志器自己坏掉这件事必须
     // 留痕——否则「日志里没有」会被读成「没发生」。仍不抛：日志不能破坏应用。

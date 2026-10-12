@@ -77,8 +77,10 @@ export class MockFs {
   writes: WriteCapture[] = [];
   /** 全部 list 调用（kernelListDirectory/Flat）记录。 */
   lists: ListCapture[] = [];
+  /** 全部日志轮转调用（kernelLogRotate）记录——批 4 断言面。 */
+  logRotates: string[] = [];
   /** 可编程失败注入：返回错误字符串则抛错。缺省 = 成功。 */
-  fail: { createDir?: string; write?: string; read?: string; delete?: string; list?: string } = {};
+  fail: { createDir?: string; write?: string; read?: string; delete?: string; list?: string; rotate?: string } = {};
 
   /** 目录确保存在（含父级）。幂等。 */
   private ensureDir(p: string): void {
@@ -202,6 +204,14 @@ export function createKernelFsMock(opts?: { wrapWithSpies?: boolean }): {
     return p;
   };
 
+  /** 日志轮转（批 4）：记录“被要求过轮转”（断言面）+ 可注入失败。真实现的
+   *  滚代在壳侧（大小判据/代数都在那里的单一真源），内存 mock 不模拟文件滚动。 */
+  const kernelLogRotate = async (path: string): Promise<{ rotated: boolean; size_before: number }> => {
+    if (fs.fail.rotate) throw new Error(fs.fail.rotate);
+    fs.logRotates.push(String(path).replace(/\\/g, '/'));
+    return { rotated: false, size_before: 0 };
+  };
+
   /** 事件日志写面（Phase 1 换轨）：durable append——与 kernelWriteFile 同记账，
    *  但语义是**追加**（真实现 = O_APPEND + fsync，失败回滚到写入前 size）。 */
   const kernelAppendFileDurable = async (filePath: string, content: string): Promise<string> => {
@@ -252,6 +262,7 @@ export function createKernelFsMock(opts?: { wrapWithSpies?: boolean }): {
     kernelListDirectory,
     kernelListDirectoryFlat,
     kernelLogAppend,
+    kernelLogRotate,
     kernelAppendFileDurable,
     kernelTruncateFile,
     kernelReadMemoryBatch,

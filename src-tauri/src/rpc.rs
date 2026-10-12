@@ -218,6 +218,10 @@ fn rpc_result_shape(method: &str) -> RpcResultShape {
         // `src-ui/tests/bundled-engine-probe-shape.test.ts`（两种线形都必须判 true）。
         "engine_bundled_info" => RpcResultShape::JsonValue,
 
+        // ── 日志轮转（日志可观测性批 4）──
+        // log_rotate：ok_json({rotated, size_before, path}) 恒 JSON 对象。
+        "log_rotate" => RpcResultShape::JsonValue,
+
         // （数据流形状条目（dataflow_save / dataflow_query → Text）随图谱
         //  全量退役删除，2026-09-09。）
 
@@ -746,6 +750,30 @@ async fn dispatch_rpc(
         // WebView 读不到进程环境变量，而壳读得到——故经这一手递过去（空串 = 未设/
         // 认不出 ⇒ 前端回落 localStorage → 默认 info）。见 agent/logger.ts。
         "log_level_hint" => Ok(crate::logging::level_hint_from_env()),
+        // 日志轮转（日志可观测性批 4）：把超过上限（8 MiB）的主日志滚代
+        // （`.1`/`.2`，保 2 代；判据真源 = logging.rs 的 LOG_MAX_BYTES/LOG_KEEP，
+        // bridge/boot 同一套）。前端 logger 例行触发（ui.log 越限时），只作用于
+        // `.lantai/logs/<name>.log`——口内先做路径形状围栏（is_rotatable_log），
+        // 防被当成「删任意文件副本」的入口。未越限 = rotated:false（不是错误）；
+        // 滚代失败带步骤与原因（失败可见，调用方落面）。
+        "log_rotate" => {
+            let p = req_str(&params, "path", "log_rotate")?;
+            let real = crate::utils::resolve_write_dispatch(&p, false, None, &state, &app).await?;
+            if !crate::logging::is_rotatable_log(&real) {
+                return Err(format!("log_rotate: 只接受 .lantai/logs/ 下的 .log 文件（收到 {p}）"));
+            }
+            let r = tokio::task::spawn_blocking(move || {
+                crate::logging::rotate_if_large(&real, crate::logging::LOG_MAX_BYTES, crate::logging::LOG_KEEP)
+            })
+            .await
+            .map_err(|e| format!("log_rotate 任务失败: {e}"))?;
+            let (rotated, size_before) = r?;
+            ok_json(Ok(serde_json::json!({
+                "rotated": rotated,
+                "size_before": size_before,
+                "path": p,
+            })))
+        }
 
         // ═══════════════════════════════════════════════════════
         // 插件安装通道（3 个命令，S4-3）：npm tarball 源 / 本地目录 → 下载/解包/

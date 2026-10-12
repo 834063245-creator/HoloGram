@@ -471,6 +471,15 @@ export interface RpcContract {
    *  `info`。写成"提示"而不是"设定"是刻意的：级别真源在前端进程内（logger.ts），
    *  本 RPC 只是把壳看得见的那只旋钮递过去。 */
   log_level_hint: { params: Record<string, never>; result: string };
+  /** 日志轮转（日志可观测性批 4）：把超过壳侧上限（8 MiB）的主日志滚代
+   *  （`.1`/`.2`，保 2 代；最老代删）。只作用于 `.lantai/logs/<name>.log`
+   *  ——壳侧先做路径形状围栏（is_rotatable_log），别处路径一律拒。判据
+   *  （上限/代数/“该不该滚”都是壳侧算）真源 = `logging.rs`，本调用只是**触发器**
+   *  （前端 logger 每累计写 1 MiB 问一次）。未越限 = rotated:false，不是错误。 */
+  log_rotate: {
+    params: { path: string };
+    result: { rotated: boolean; size_before: number; path: string }; // JSON
+  };
 
   // ── 插件安装通道（S4-3）─────────────────────────────────
   /** 安装插件：source_kind = registry（name/version?/registry?）|
@@ -854,6 +863,22 @@ export async function kernelDeleteFile(path: string): Promise<string> {
 export async function kernelLogAppend(path: string, content: string): Promise<string> {
   const raw = await fsCapCall({ action: 'append', path, content, is_agent: false });
   return fsCapPathOf(raw);
+}
+
+/** 日志轮转触发（日志可观测性批 4）：`log_rotate` 的具名封装——logger.ts 用它
+ *  把越限的 ui.log 滚代（上限/代数由壳侧 `logging.rs` 定，本函数只是触发器）。
+ *  双形态解包（真实运行时 = 结构化 Value；mock/旧形态 = JSON 字符串）；缺
+ *  `rotated` 字段即抛（违形不得静默读成“没滚”）。 */
+export async function kernelLogRotate(path: string): Promise<{ rotated: boolean; size_before: number }> {
+  const raw = await typedRpc('log_rotate', { path });
+  const payload = raw !== null && typeof raw === 'object' ? raw : parseJson<unknown>(raw as string);
+  if (payload !== null && typeof payload === 'object') {
+    const r = payload as { rotated?: unknown; size_before?: unknown };
+    if (typeof r.rotated === 'boolean') {
+      return { rotated: r.rotated, size_before: typeof r.size_before === 'number' ? r.size_before : 0 };
+    }
+  }
+  throw new Error('kernelLogRotate: 返回形状违反契约（缺 rotated）');
 }
 
 /** 追加 + fsync（durable 变体，2026-09-15 会话事件日志换轨）——**返回即已落盘**

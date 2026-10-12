@@ -20,12 +20,13 @@
 //! （`.lantai/logs/bridge.log`，`logging.rs` + `workspace_service` 初始化）照旧，两者是并列的
 //! 两个文件、互不干扰。`log` crate 只允许一个 logger，所以这里必须是唯一持有者，
 //! **不能再叠 `LogTracer`**（否则启动期记录会因为 tracing 尚无 subscriber 而再次丢失）。
+//!
+//! **轮转（2026-10-12 批 4）**：本文件原自带单代 4 MiB 轮转（`boot.log.old`）。现统一
+//! 到 `logging.rs` 的同一套判据（8 MiB / 保 2 代，`boot.log.1`/`.2`）——三份日志同规，
+//! 修一个数只改 `logging.rs` 一处。
 
 use std::io::Write;
 use std::sync::Mutex;
-
-/// 启动期日志文件的体积上限：超过就在打开时轮转一次（best-effort，失败不影响启动）。
-const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 /// 日志级别解析（纯函数，供测试）：`LANTAI_BOOT_LOG_LEVEL` 覆盖，缺省 `Info`。
 /// 认不出/未设一律回 `Info`——宁可多记，不可静默。
@@ -77,21 +78,18 @@ impl log::Log for BootLogger {
     }
 }
 
-/// 超过上限就把上一份挪成 `boot.log.old`（单代轮转，丢了也无所谓）。
-fn rotate_if_large(path: &std::path::Path) {
-    let too_big = std::fs::metadata(path).map(|m| m.len() > MAX_BYTES).unwrap_or(false);
-    if too_big {
-        let _ = std::fs::rename(path, path.with_extension("log.old"));
-    }
-}
-
 fn open_boot_log() -> Option<Mutex<std::fs::File>> {
     let dir = crate::utils::project_root().join(".lantai").join("logs");
     if std::fs::create_dir_all(&dir).is_err() {
         return None;
     }
     let path = dir.join("boot.log");
-    rotate_if_large(&path);
+    // 轮转统一走 logging 的同一套（批 4）：上限 8 MiB / 保 2 代，与 ui/bridge 同规
+    //（旧版是本地单代 4 MiB + `.old` 后缀）。失败不挡启动：继续追加大文件，
+    // stderr 留一行说明（失败可见）。
+    if let Err(e) = crate::logging::rotate_if_large(&path, crate::logging::LOG_MAX_BYTES, crate::logging::LOG_KEEP) {
+        eprintln!("[boot] boot.log 轮转失败（继续追加大文件）：{e}");
+    }
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
