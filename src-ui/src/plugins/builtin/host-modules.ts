@@ -57,7 +57,7 @@ import { registerGoalImplementation } from '../../agent/goal-impl';
 import { HookRegistry } from '../../agent/hooks';
 import { enqueueIsolationOp } from '../../agent/isolation-queue';
 import { once } from '../../agent/lifecycle';
-import { log } from '../../agent/logger';
+import { log, logLevel, setLogLevelPreference } from '../../agent/logger';
 // 批 9h-2 归家（2026-09-26）：出厂默认 loop 实现进 agent-loop-service 包 ⇒
 // `defaultAgentLoop` 桥键撤除；改桥该包新的取用面（循环依赖面 3 个缺失键）。
 import { errText, finishReasonMessage, parseFilePathArg } from '../../agent/loop-helpers';
@@ -758,6 +758,9 @@ const faceDeps = {
   registerCompactionImplementation,
   streamWithIdleTimeout,
   log,
+  // 日志可观测性批 4：设置页「诊断」签的级别开关面（读当前 + 设偏好）
+  logLevel,
+  setLogLevelPreference,
   buildCompactedSummaryMessage,
   countMessage,
   countMessages,

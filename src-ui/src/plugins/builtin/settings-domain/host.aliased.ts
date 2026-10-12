@@ -140,6 +140,9 @@ export const intentOf = impl.intentOf;
 export const credStore = impl.credStore;
 export const credRemove = impl.credRemove;
 export const panelReload = impl.panelReload;
+// 日志可观测性批 4：级别开关面（DiagnosticPage 取用；与 host.ts 同形状镜像）
+export const logLevel = impl.logLevel;
+export const setLogLevelPreference = impl.setLogLevelPreference;
 
 export type AppSettings = import('./host').AppSettings;
 export type ConnectionProbe = import('./host').ConnectionProbe;
@@ -150,6 +153,8 @@ export type BundledEngineInfo = import('./host').BundledEngineInfo;
 export type McpServerDecl = import('./host').McpServerDecl;
 export type PluginRecord = import('./host').PluginRecord;
 export type SkillDef = import('./host').SkillDef;
+export type LogLevel = import('./host').LogLevel;
+export type LogLevelSource = import('./host').LogLevelSource;
 export type DiscoverPresetsOptions = import('./host').DiscoverPresetsOptions;
 export type PresetEntry = import('./host').PresetEntry;
 

@@ -181,6 +181,26 @@ describe('日志可观测性批 3 · 级别开关 / 健康度 / 前情缓冲', (
     expect(fileText()).toContain('WARN-KEPT');
   });
 
+  it('setLogLevelPreference（设置页开关的路径）：写 localStorage 并立即生效；环境变量压过时如实返回', async () => {
+    const r1 = await logger.setLogLevelPreference('debug');
+    expect(r1).toEqual({ level: 'debug', source: 'storage' });
+    expect(localStorage.getItem('lantai.log.level')).toBe('debug');
+    logger.log.debug('t', 'DBG-AFTER-TOGGLE');
+    await drain();
+    expect(fileText()).toContain('DBG-AFTER-TOGGLE');
+
+    // 壳侧环境变量（LANTAI_LOG_LEVEL）优先：偏好照写、真实来源如实回报（不撒谎）
+    H.hint = 'warn';
+    const r2 = await logger.setLogLevelPreference('debug');
+    expect(r2).toEqual({ level: 'warn', source: 'env' });
+
+    // 清除偏好 = 回落默认
+    H.hint = '';
+    const r3 = await logger.setLogLevelPreference(null);
+    expect(r3).toEqual({ level: 'info', source: 'default' });
+    expect(localStorage.getItem('lantai.log.level')).toBeNull();
+  });
+
   // ── ② 健康度：丢条可见 ───────────────────────────────────────────
 
   it('写失败计数 + 下一条成功写入补 log.self{dropped:N}；首次失败只 console 一次', async () => {

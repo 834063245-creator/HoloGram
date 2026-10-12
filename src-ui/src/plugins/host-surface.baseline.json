@@ -1,5 +1,5 @@
 {
-  "fingerprint": "8ac3c19a",
+  "fingerprint": "2feaa599",
   "keys": [
     "ANCHOR",
     "ASSEMBLY_READY_WAIT_MS",
@@ -198,6 +198,7 @@
     "lodFarActive",
     "lodTierOf",
     "log",
+    "logLevel",
     "markDynamicFetchStart",
     "mergeDynamicModels",
     "minimapProject",
@@ -294,6 +295,7 @@
     "setActiveAgentLoop",
     "setBundledEngineEnabled",
     "setLang",
+    "setLogLevelPreference",
     "setOwnerSessionResolver",
     "shellRefs",
     "slashOnly",

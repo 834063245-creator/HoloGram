@@ -22,7 +22,7 @@ import { SETTINGS_TABS } from '../src/plugins/builtin/settings-domain/settings-t
 import { iconNames } from '../src/ui/icons';
 
 describe('设置面板页签图标', () => {
-  it('七个页签的图标互不相同（同形 = 用户报的「图标重复了」）', () => {
+  it('各页签的图标互不相同（同形 = 用户报的「图标重复了」）', () => {
     const byIcon = new Map<string, string[]>();
     for (const t of SETTINGS_TABS) {
       byIcon.set(t.icon, [...(byIcon.get(t.icon) ?? []), t.label]);

@@ -17,6 +17,8 @@ import type { AppSettings, ConnectionProbe, ProviderId } from './host';
 // 配方文档纯函数面（意图抽取——写盘补丁的形状真源；纯计算，不经宿主桥）
 import { intentOf } from './host';
 import './settings-panel.css';
+// 批 1 归家：三页与作者面已是包内实现（不再经宿主面整页桥）。
+import { DiagnosticPage } from './DiagnosticPage';
 import {
   activationConflict,
   activationSkipped,
@@ -42,7 +44,6 @@ import {
   usePresetStore,
   useUpdateStore,
 } from './host';
-// 批 1 归家：三页与作者面已是包内实现（不再经宿主面整页桥）。
 import { McpPage } from './McpPage';
 import { PluginsPage } from './PluginsPage';
 import { ProviderPage } from './ProviderPage';
@@ -857,6 +858,15 @@ const SettingsPanelApp: React.FC<{
           {/* ═══ MCP 标签页（skills-mcp-production-plan Commit 6c）═══ */}
           <div className="sp-tab-content" data-tab="mcp" style={{ display: activeTab === 'mcp' ? '' : 'none' }}>
             <McpPage />
+          </div>
+
+          {/* ═══ 诊断标签页（日志可观测性批 4）═══ */}
+          <div
+            className="sp-tab-content"
+            data-tab="diagnostic"
+            style={{ display: activeTab === 'diagnostic' ? '' : 'none' }}
+          >
+            <DiagnosticPage />
           </div>
 
           {/* ═══ 关于标签页 ═══ */}

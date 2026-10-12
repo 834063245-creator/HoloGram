@@ -15,6 +15,10 @@
 // 随包引擎开关面（McpPage 卡片）、loader 装卸面（PluginsPage 按钮，运行期取用）、
 // `stringifyPatchYaml`（作者面 YAML 序列化留内核——产物不得裸 import）。
 
+export type { LogLevel, LogLevelSource } from '../../../agent/logger';
+// 日志可观测性批 4（2026-10-12）：设置页「诊断」签的级别开关面（读当前级别 +
+// 持久化偏好并立即生效）。同上：内核基础设施，产物域经宿主桥取用。
+export { logLevel, setLogLevelPreference } from '../../../agent/logger';
 // 日志可观测性批 2（2026-09-27）：凭据写面的事件门面（provider-data.ts 的
 // persistSecrets / removeSecret 用）。内核不可禁的基础设施，经宿主桥取用。
 export { credRemove, credStore, panelReload } from '../../../agent/obs';

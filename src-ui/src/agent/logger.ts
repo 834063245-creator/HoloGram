@@ -37,7 +37,7 @@
 //      用户可见的失败（错误级 + 带 `event`），连前情一起倒进日志。**用户不需要
 //      知道这个开关存在**——这是①的开关不被「忘记拧」的兜底。详见 dumpRing 上方注。
 
-type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 /** 落盘条目。前五个字段是历史形状（解析器依赖），其余为 obs 事件层扩展。 */
 export interface LogEntry {
@@ -154,6 +154,23 @@ export async function applyLogLevelFromShell(): Promise<void> {
 /** 该不该写（级别过滤——`debug` 默认丢弃）。 */
 function shouldWrite(level: LogLevel): boolean {
   return LEVEL_ORDER[level] >= LEVEL_ORDER[minLevel];
+}
+
+/** 持久化级别偏好并立即生效（设置页开关的路径）：写 `localStorage` 再
+ *  `applyLogLevelFromShell()`（幂等）。`null` = 清除偏好（回落环境变量/默认）。
+ *  返回应用后的**真实**级别与来源——不撒谎：环境变量压过偏好时，UI 据此如实
+ *  显示（“拨了没生效”比“拨不动”好解得多）。本函数不抛。 */
+export async function setLogLevelPreference(
+  level: LogLevel | null,
+): Promise<{ level: LogLevel; source: LogLevelSource }> {
+  try {
+    if (level) globalThis.localStorage?.setItem(LOG_LEVEL_STORAGE_KEY, level);
+    else globalThis.localStorage?.removeItem(LOG_LEVEL_STORAGE_KEY);
+  } catch {
+    // 存储被禁：偏好写不进，仍尝试应用（回落默认）——写不进不是失败，是回落。
+  }
+  await applyLogLevelFromShell();
+  return logLevel();
 }
 
 // ── 轮转触发（批 4）───────────────────────────────────────────────
