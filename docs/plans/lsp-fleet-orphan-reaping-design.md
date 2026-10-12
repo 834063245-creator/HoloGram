@@ -30,7 +30,7 @@
 
 | 进程 | 谁拉起 | die-with-parent？ |
 |---|---|---|
-| `hologram-lspd` | 引擎 `spawn_daemon`（stdio 全 null + CREATE_NO_WINDOW，[lsp_manager.rs:1009-1020](../../engine/src/lsp_manager.rs)） | **故意不设**——同根共享舰队，设计上要活过单个引擎（见 `docs/plans/lsp-fleet-daemon-plan.md`） |
+| `hologram-lspd` | 引擎 `spawn_daemon`（stdio 全 null + CREATE_NO_WINDOW，[lsp_manager.rs:1009-1020](../../engine/src/lsp_manager.rs)） | **故意不设**——同根共享舰队，设计上要活过单个引擎（见 `docs/archive/kernel-tooling-line/lsp-fleet-daemon-plan.md`） |
 | 舰队（r-a / gopls / …） | lspd，或引擎的**本地池回退**路径（`spawn_server`） | **unix：有**（PDEATHSIG + ppid 复查）；**Windows：什么都没有** |
 
 **Windows 是唯一缺口**——`spawn_server` 的 `#[cfg(windows)]` 分支只设了 `CREATE_NO_WINDOW`

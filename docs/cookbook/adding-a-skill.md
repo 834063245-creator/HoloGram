@@ -2,7 +2,7 @@
 
 > 技能 = 一段**按需加载**的说明（可带附属文件），让 Agent 在特定任务上按你写的步骤做。
 > 形态遵循 Agent Skills 开放标准（目录包 + YAML frontmatter）。真源 `src-ui/src/plugins/builtin/skill-domain/skills.ts`；
-> 技能面改造来历见 `docs/plans/skills-mcp-production-plan.md`。
+> 技能面改造来历见 `docs/archive/kernel-tooling-line/skills-mcp-production-plan.md`。
 
 ## 放哪（三个发现根，优先级 项目 > 用户 > 出厂）
 

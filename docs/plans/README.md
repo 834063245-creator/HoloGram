@@ -25,7 +25,6 @@ Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 
 | **文档面重构** | [`doc-surface-refactor-plan.md`](doc-surface-refactor-plan.md) | **P0-P3 已落；P4 在推**（P3 补批 = 11 件竣工件归档；P4a ADR/cookbook/research 三索引已落，docs/README 唯一入口重写进行中） | 四层形态 + 批序 + 豁免账见施工单；门禁 `npm run doc-check`，真源 `scripts/doc-facts.cjs` |
 | **paper-shell（R5 打磨环）** | [`paper-shell/README.md`](paper-shell/README.md) | **收尾中** | 剩余工作逐项清单 = [`r5-polish-backlog.md`](paper-shell/r5-polish-backlog.md)（最常看）；视觉决定账本 [`taste-ledger.md`](paper-shell/taste-ledger.md)；管线史 [`HISTORY.md`](paper-shell/HISTORY.md)；走查 [`walkthrough.md`](paper-shell/walkthrough.md)；表面覆盖地图 [`v2-surface-inventory.md`](paper-shell/v2-surface-inventory.md)；访谈 [`interviews/R1-2026-08-20.md`](paper-shell/interviews/R1-2026-08-20.md) |
 | **画布空间模型** | [`canvas-space/canvas-space-model-notes.md`](canvas-space/canvas-space-model-notes.md) | **Stage-6 进行中**（UI/UX 专项） | 一纸多卷 / 有界流区 / 宿主模型 / 三层导航；阶段件与返工清单见笔记「展开」段；provider+创作坞联合体检 [`canvas-space/composer-provider-audit.md`](canvas-space/composer-provider-audit.md) |
-| LSP 舰队共享化 | [`lsp-fleet-daemon-plan.md`](lsp-fleet-daemon-plan.md) | 开工（2026-09-09） | 每根目录一套 LSP（hologram-lspd）——16GB 机器内存耗尽的**结构性根治**（当日已落三闸止血） |
 
 ## 待执行但已立项（按成本排）
 
@@ -39,7 +38,6 @@ Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 
 | **v11 分析引擎** | 草案挂起（用户拍板挂起） | 动态边 + 查询预算 + 降噪分级三篇合一——[`v11-analysis-engine-master-plan.md`](v11-analysis-engine-master-plan.md)；D 篇原件 [`docs/archive/kernel-tooling-line/dynamic-edge-detection-plan.md`](../archive/kernel-tooling-line/dynamic-edge-detection-plan.md)（superseded，以主文档为准） |
 | **会话存盘换轨（DSH 参照）** | 未定 | 参照 DSH 的会话持久化审计与移植——[`session-persistence-dsh-port-plan.md`](session-persistence-dsh-port-plan.md) |
 | **钉住与纸条改造** | 未定 | 钉住/纸条 UX 重构 + UI 换装——[`pin-strip-rework-plan.md`](pin-strip-rework-plan.md) |
-| **Skills 与 MCP 生产级改造** | 余文档收口 + 真机验收 | Commit 1-6 已落地——[`skills-mcp-production-plan.md`](skills-mcp-production-plan.md) |
 | **卷首字节稳定性（前缀缓存）** | 中（动段表 + 基线重录双轨） | 记忆库坐卷首第 ~2.5k token ⇒ 每次「重启 + 记忆变动」整卷重算（实测 34.7 万 token 全价、命中率 99%→0.6%）；「把记忆段挪到卷首末尾」已验算**无效**（只省 2.8%）——[`prompt-prefix-stability-plan.md`](prompt-prefix-stability-plan.md) |
 | agent-plugin **P4** 插件化全集 | 持续 | **D9 换轨：不等 DSH、自研为主**；存量拆解全清，剩 C12 dsh-compat 合法挂起 + 新能力走通道——[`agent-plugin-architecture-plan.md`](agent-plugin-architecture-plan.md) |
 
@@ -85,6 +83,7 @@ Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 
 | **卷号治理 A+B 真机一次** | 代码已落（2026-09-21 拍板；A 显示收口已退号、B 发号账 `_issue.json` 在码）——待你真机跑一次：**删高位卷 → 重启 → 起卷**，确认新卷号**不复用**已删号。真源 [`docs/archive/session-line/volume-number-governance-plan.md`](../archive/session-line/volume-number-governance-plan.md) §7——owner：用户 |
 | **随包 LSP 守护（打包补件）** | 新加（2026-10-08）：`tauri.conf.json` 的 `bundle.resources` 补 `hologram-lspd.exe` 映射（引擎按**同目录**查找 lspd：`lsp_manager.rs` 的 `current_exe().parent().join(...)`；此前正式包缺该件 ⇒ 生产里只能回退 local pool）。**未验证**（本机应用在跑，建不了生产包）：**重建 exe 后验收** = 安装目录出现 `hologram-lspd.exe`，且进工作区后舰队真起（不是 local pool 回退）。真源 `docs/archive/kernel-tooling-line/lsp-fleet-daemon-plan.md` §7——owner：用户 |
 | **并发会话（多卷同跑）真机五项** | 代码全落（Phase 1-5 拆单槽 + Phase 6 测试面：`tests/concurrent-sessions.test.ts` 226 行 10 用例 + `chat-stream-session-leak.test.ts` 改新 ctx 形状；全量 vitest 绿）——待你真机确认五项：① 两卷同时流式输出、消息**零串卷**；② A 卷在跑时 B 卷**可直接发起新轮次**（不再报「有后台任务运行中」）；③ **两卷同时 ask_user**，各答各的、无 Agent 死等；④ A 后台卷请求写权限时**卡挂 A 的 exec**（卡面带卷徽标）、**停 B 不杀 A 的卡**；⑤ **状态栏只反映活跃卷**（后台卷运行态由创作坞既有指示承担）。真源 [`docs/archive/session-line/concurrent-sessions-plan.md`](../archive/session-line/concurrent-sessions-plan.md) §3——owner：用户 |
+| **技能与 MCP 生产级改造 真机验收** | Commit 1-6c + 文档收口全落（2026-10-08）——待你真机确认：① 往 `~/.lantai/skills/<name>/SKILL.md` 放一门技能 → 设置「技能」tab 列出它、Agent 每步的技能目录里出现它、`Skill` 能读到正文；② 往 `~/.lantai/mcp.json` 加一个 stdio server → 工具面出现 `mcp__<server>__<工具>`，杀掉该 server 进程后能自动重连；③ 两个 tab 的新建/删除可用、坏档给可见诊断。真源 [`docs/archive/kernel-tooling-line/skills-mcp-production-plan.md`](../archive/kernel-tooling-line/skills-mcp-production-plan.md)——owner：用户 |
 
 | **卷重建丢卡根治（session-rebuild-recovery）** | 代码已落地（2026-10-08，门禁全绿：vitest 416 文件 / 4429 用例 + build + biome 0/0；见 [`../archive/session-line/session-rebuild-recovery-plan.md`](../archive/session-line/session-rebuild-recovery-plan.md)）——待用户体感确认两件：① 打开 51 号卷：3 张表格卡 + 1 张拟策卡恢复出现（拟策只读态）；② 「开卷 → 不操作 → 关」循环后重开：卡片仍在（快照已对齐，不再判陈旧）——owner：用户 |
 

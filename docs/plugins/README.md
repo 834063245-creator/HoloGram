@@ -452,7 +452,7 @@ patch/preset 可寻址禁用单个 server（组合均匀性不破）。**不需�
 > `manifest.mcpServers` 外，用户可写 `~/.lantai/mcp.json` 声明跨项目个人
 > MCP server（同构条目，boot 期装载为工具贡献，行 id `plugin/user/mcp/
 > <server>`；设置面板「MCP」tab 管理）。详见
-> `docs/plans/skills-mcp-production-plan.md` §3.2。
+> `docs/archive/kernel-tooling-line/skills-mcp-production-plan.md` §3.2。
 
 ### ctx.renderers —— 块渲染器（纸壳，即时生效）
 
