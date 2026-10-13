@@ -56,7 +56,7 @@
     "gpt-tokenizer": "^3.4.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.18.6",
-    "mermaid": "^12.0.0",
+    "mermaid": "^12.2.0",
     "monaco-editor": "^0.55.1",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.2.7",
@@ -83,6 +83,6 @@
     "vitest": "^4.1.11"
   },
   "overrides": {
-    "dompurify": "^3.4.13"
+    "dompurify": "^3.4.17"
   }
 }

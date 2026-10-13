@@ -5,6 +5,15 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # glib 的 unsoundness 告警（GHSA-wrw7-89jp-8q8g）本仓修不了，理由三条：
+      #   ① 修复版是 gtk-rs 0.20，而 0.18 由上游 tauri / wry / tao 钉死，
+      #      单独升 glib 会把 GTK 链路撕成两半；
+      #   ② 该链路只在 Linux 目标编译（Windows 构建不碰 glib，实测
+      #      `cargo tree -i glib --target x86_64-pc-windows-msvc` 为空）；
+      #   ③ 缺陷是 Iterator 实现的健全性问题，不是可利用的越权路径。
+      # 等 tauri 上游迁到 gtk-rs 0.20 后，删掉这条 ignore。
+      - dependency-name: "glib"
 
   - package-ecosystem: "cargo"
     directory: "/engine"
