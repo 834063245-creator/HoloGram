@@ -3,23 +3,26 @@
 > 上游：[iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)（Apache-2.0，单二进制 Office 套件）。
 > 计划与实测数据：[`docs/archive/kernel-tooling-line/office-cli-integration-plan.md`](../../docs/archive/kernel-tooling-line/office-cli-integration-plan.md)。
 >
-> **形态（2026-09-13 C 路改判；2026-09-15 R3 重构）**：读写能力由兰台**内置 office 域工具**
+> **形态（2026-09-13 C 路改判；2026-09-15 R3 重构；2026-10-13 手册收编为出厂技能）**：读写能力由兰台**内置 office 域工具**
 > `office(action,…)` 承担（zod 真源；经 `process_cap` 的 `office_exec` 动作受控 spawn——
 > 命令由 Rust 拼装，权限只审声明的目标文件 `file`/`out`，plan 按动作分读写）。**不再需要**
 > MCP 挂接，也不需要插件自带二进制。
 
-## 1. 三件套（装一次）
+## 1. 组件一览
 
-| 件 | 落位 | 说明 |
+| 件 | 渠道 | 说明 |
 |---|---|---|
-| 二进制 | `%USERPROFILE%\.lantai\tools\officecli\officecli.exe` | pin **v1.0.149**（win-x64 **31.87 MB**，SHA256 `abd82dae…31e2`）；**强制层**定位它（`$OFFICECLI_PATH` → 该标准位 → PATH 兜底） |
-| 技能 | `%USERPROFILE%\.lantai\skills\officecli\SKILL.md` | 域工具的权威手册（动作面/铁律/交付门槛覆盖面/四条工作流/坑表）。域工具**不带**技能，技能仍落技能根 |
+| 二进制 | **随兰台安装包分发**（宿主 exe 同级，零配置）；开发机 / 源码路径由 `scripts/fetch-officecli.mjs`（或本目录 `install-officecli.ps1`）装到标准位 | pin **v1.0.149**（win-x64 **31.87 MB**，SHA256 `abd82dae…31e2`）；**强制层**定位它（`$OFFICECLI_PATH` → `%USERPROFILE%\.lantai\tools\officecli\officecli.exe` → 随包件（宿主 exe 同级）→ PATH 兜底） |
+| 技能（手册） | **随兰台出厂**（内置技能 `officecli`，随应用分发，无需安装） | 域工具的权威手册（动作面/铁律/交付门槛覆盖面/四条工作流/坑表），2026-10-13 起收编为出厂技能。若曾按旧文档手动装过 `~/.lantai/skills/officecli/`，**删掉旧副本**——用户级同名会覆盖出厂版（拿不到后续更新） |
 | 活预览窗（可选） | `examples/plugins/office/` 经「设置 → 插件 → 安装目录」装载 | 想边改边看：**你自己**用绝对路径起 `officecli watch <文件>` + 让 Agent 调 `office_preview_open`（Agent 起不了 watch——它的 shell 里没有 officecli；且 watch 占着的文件别再让 Agent 改，见插件 README ⚠️） |
 
 **office 域工具随兰台出厂**（内置第一方域插件 `office-domain`，buildOrder 29）——不需要你安装任何插件；
 `~/.lantai/mcp.json` 里也**不应该**再有 `office` 条目（预检会点名）。
 
-## 2. 装
+## 2. 装（开发机 / 源码路径）
+
+> 正式安装包已自带二进制（宿主 exe 同级），无需本节的任何步骤。本节供开发机、
+> 未走随包取件的构建、或想在标准位放一份的用户使用。
 
 ### 2.1 一条命令（推荐：`install-officecli.ps1`）
 
@@ -42,22 +45,16 @@ $dest = "$env:USERPROFILE\.lantai\tools\officecli"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Item .\officecli.exe "$dest\officecli.exe" -Force
 & "$dest\officecli.exe" --version            # 期望 1.0.149
-
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.lantai\skills\officecli" | Out-Null
-Copy-Item .\SKILL.md "$env:USERPROFILE\.lantai\skills\officecli\SKILL.md" -Force
 ```
-
-> 用户级技能读取走「沙箱用户数据白名单」——2026-09-13 修掉过一条 verbatim 前缀
-> （`\\?\C:\…`）导致豁免恒不命中的沙箱 bug。**未重建壳的旧版本**上可把同一份 SKILL.md 放到
-> **项目级** `<工作区>/.lantai/skills/officecli/`（不依赖豁免）。
 
 ## 3. 验证
 
 ```powershell
-.\preflight.ps1     # 只读诊断：二进制/哈希/版本 pin、技能、MCP 退役面、活预览窗、watch、常驻进程
+.\preflight.ps1     # 只读诊断：二进制/哈希/版本 pin、旧技能副本残留、MCP 退役面、活预览窗、watch、常驻进程
 ```
 
-关键项（二进制 + pin + 技能）全过 = exit 0；把输出贴回来即可定位问题。
+关键项（二进制 + pin 一致）全过 = exit 0；把输出贴回来即可定位问题。
+（技能自 2026-10-13 起随兰台出厂，不再是盘上检查项；预检只提醒删除旧手动副本。）
 
 人工验收（重启兰台 → 开新会话）：
 1. 让模型跑 `office(action:'create', file:'试.docx')` → 盘上出现文件（域工具带 `flush=each`，**不要**手动 save；

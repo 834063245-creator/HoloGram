@@ -3,7 +3,7 @@
 // 定位（2026-09-13 C 路改判后重述）：产品路已改为内置 office 域工具（`office(action,…)`，
 // 守护在 tests/office-domain.test.ts）。本文件保留是因为它用**最小挂载器**（一个 manifest 形状的
 // server 声明 + registerMcpServerTools）就能把 officecli 当纯 CLI 驱动，用来钉**officecli 自身的
-// 语义**——这些结论同时是 `examples/office-cli/SKILL.md` 的实测依据：
+// 语义**——这些结论同时是出厂技能 `officecli` 正文（`builtin-skills.ts`）的实测依据：
 //   ① 挂载器形状与真实 tools/list（`mcp__office__officecli`）+ **P0 只读语义**（无 annotations
 //      ⇒ readOnly=false，旧实现恒 true 会让写动作绕过 plan 门禁）；
 //   ② 真写盘与落盘边界（别的程序读的是盘上字节）；

@@ -3,7 +3,7 @@
   OfficeCLI × 兰台 集成预检（只读诊断，不改任何东西）。
 
 .DESCRIPTION
-  把「真机验收清单」变成一条命令：逐项检查二进制/技能/（可选的）活预览窗/退役面，
+  把「真机验收清单」变成一条命令：逐项检查二进制/（可选的）活预览窗/退役面 + 旧技能副本残留，
   每项给 ✓/✗ + 一句怎么修。**不写任何文件、不起任何进程**——纯诊断。
   验收时把整段输出贴回来即可定位问题。
 
@@ -58,15 +58,14 @@ else {
   Check '二进制在位' $false "缺：$BIN" '跑 examples/office-cli/install-officecli.ps1 -FromRelease（或 -FromLocal <已下载件>）——office 域工具靠它工作'
 }
 
-# ── 2. 技能（office 域工具的权威手册；域工具不带技能，技能落技能根）──
+# ── 2. 技能（2026-10-13 起随兰台出厂，name: officecli——盘上不再需要文件）──
+# 旧文档曾要求手动拷 SKILL.md 到用户技能根；该副本会覆盖出厂版（用户 > 出厂），
+# 检出即提示删除。不入关键项（出厂技能在应用 bundle 里，本脚本够不着）。
 if (Test-Path -LiteralPath $SKILL -PathType Leaf) {
-  $text = Get-Content -LiteralPath $SKILL -Raw
-  $hasFm = $text.StartsWith('---') -and $text.Contains('name:') -and $text.Contains('description:')
-  Check '技能文件在位' $true "$SKILL（$((Get-Item -LiteralPath $SKILL).Length) B）" ''
-  Check '技能 frontmatter 完整' $hasFm '需含 name / description（YAML 围栏）' '从 examples/office-cli/SKILL.md 重新拷一份'
+  Check '旧手动技能副本' $false "发现 $SKILL——会覆盖随兰台出厂的技能（name: officecli）" '删除该技能目录：出厂技能已随应用分发，无需盘上副本'
 }
 else {
-  Check '技能文件在位' $false "缺：$SKILL" 'Copy-Item examples\office-cli\SKILL.md <该路径>（目录需先建）'
+  Check '旧手动技能副本' $true '无（技能随兰台出厂分发，无需安装）' ''
 }
 
 # ── 3. 退役面：MCP 条目应当已被清理（C 路改判）──
@@ -132,13 +131,13 @@ foreach ($r in $results) {
   if (-not $r.ok -and $r.fix) { Write-Host ("      → {0}" -f $r.fix) -ForegroundColor DarkGray }
 }
 
-# 关键项（二进制 + pin 一致 + 技能）决定退出码；可选/信息项不计
-$critical = @('二进制在位', '哈希与 pin 一致', '版本与 pin 一致', '技能文件在位')
+# 关键项（二进制 + pin 一致）决定退出码；可选/信息项不计
+$critical = @('二进制在位', '哈希与 pin 一致', '版本与 pin 一致')
 $failed = @($results | Where-Object { -not $_.ok -and $_.name -in $critical })
 Write-Host ''
 if ($failed.Count -eq 0) {
-  Write-Host '预检结论：关键项全过（二进制 + pin + 技能）——重启兰台后开新会话，office 域工具即可用。' -ForegroundColor Green
-  Write-Host '  真机验收见 docs/plans/office-cli-integration-plan.md §8。' -ForegroundColor DarkGray
+  Write-Host '预检结论：关键项全过（二进制 + pin 一致）——重启兰台后开新会话，office 域工具即可用。' -ForegroundColor Green
+  Write-Host '  真机验收见 docs/archive/kernel-tooling-line/office-cli-integration-plan.md §8。' -ForegroundColor DarkGray
   exit 0
 }
 Write-Host '预检结论：有未过项（见上方 → 提示）。' -ForegroundColor Yellow

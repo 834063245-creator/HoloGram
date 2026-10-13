@@ -260,7 +260,7 @@ export function cleanShellOutput(raw: string): string {
     .join('\n')
     .trimEnd();
   if (/officecli(\.exe)?["']?:\s*(command not found|no such file or directory)/i.test(withoutCwd)) {
-    return `${withoutCwd}\n[office] 未找到 officecli 可执行文件（解析序：$OFFICECLI_PATH → ~/.lantai/tools/officecli/officecli.exe → PATH）。安装：examples/office-cli/install-officecli.ps1（pin 版本 + 哈希校验）；诊断：examples/office-cli/preflight.ps1。**不要**自己下 shell 找二进制跑——那会另起常驻进程抢同一个文件。`;
+    return `${withoutCwd}\n[office] 未找到 officecli 可执行文件（解析序：$OFFICECLI_PATH → ~/.lantai/tools/officecli/officecli.exe → 随包件（宿主 exe 同级）→ PATH）。后端随兰台安装包分发，缺失时让用户重装/修复兰台；开发机由 node scripts/fetch-officecli.mjs 取件。**不要**自己下 shell 找二进制跑——那会另起常驻进程抢同一个文件。`;
   }
   return withoutCwd;
 }

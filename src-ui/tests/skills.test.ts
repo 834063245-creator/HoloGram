@@ -89,6 +89,18 @@ describe('scanSkills — 项目级发现', () => {
     expect(pluginDev!.source).toBe('builtin');
     expect(pluginDev!.dir).toBeUndefined(); // 不在盘上——内容自包含
     expect(pluginDev!.prompt).toContain('为兰台写插件');
+    // 2026-10-13 收编：officecli 手册随出厂（原 examples/office-cli/SKILL.md，内容自包含）
+    const office = scan.skills.find((s) => s.name === 'officecli');
+    expect(office).toBeDefined();
+    expect(office!.source).toBe('builtin');
+    expect(office!.dir).toBeUndefined();
+    expect(office!.prompt).toContain('office 域');
+    // 2026-10-13 新增：埃台产品地图（出厂，自包含）
+    const guide = scan.skills.find((s) => s.name === 'lantai-guide');
+    expect(guide).toBeDefined();
+    expect(guide!.source).toBe('builtin');
+    expect(guide!.dir).toBeUndefined();
+    expect(guide!.prompt).toContain('设置页');
     // 出厂面 digest 稳定且非空串摘要（出厂技能在场改变了恒在面）
     const again = await scanSkills(PROJ);
     expect(again.digest).toBe(scan.digest);
@@ -200,6 +212,16 @@ describe('scanSkills — 出厂技能第三发现根（2026-09-08）', () => {
     expect(out).toContain('为兰台写插件');
     expect(out).toContain('cordis');
     expect(out).toContain('manifest.json');
+  });
+
+  it('Skill 工具按名执行 officecli 出厂技能（2026-10-13 收编——全文可取且自包含）', async () => {
+    const reg = new SkillRegistry(PROJ);
+    const out = await createSkillTool(reg).execute({ skill: 'officecli' });
+    expect(out).toContain('office 域');
+    expect(out).toContain('交付门槛');
+    expect(out).toContain('batch');
+    // 自包含纪律：收编正文不得引用仓内路径（出厂技能无磁盘目录，引了也够不着）
+    expect(out).not.toContain('examples/office-cli');
   });
 });
 

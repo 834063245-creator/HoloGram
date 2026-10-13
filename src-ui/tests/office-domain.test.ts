@@ -144,24 +144,23 @@ describe('office 域：纯函数（argv / 目标声明 / 退出码 / 切块）',
     expect(cleanShellOutput('[exit 0] ok\n[cwd: /d/ws]\n')).toBe('[exit 0] ok');
     const missing = cleanShellOutput('[exit 127] bash: line 1: officecli: command not found');
     expect(missing).toContain('command not found');
-    expect(missing).toContain('install-officecli.ps1');
+    // 2026-10-13：指引从“装安装脚本”改为“重装/修复兰台”（后端随包分发；开发机走取件脚本）
+    expect(missing).toContain('重装/修复兰台');
   });
 
   it('cleanShellOutput：只有"二进制缺席"才补安装指引（2026-09-15 收窄——别把文件找不到误报成没装）', () => {
     // 目标文件不存在 / 路径写错：一个字都不许提"装 officecli"
     const noFile = cleanShellOutput('[exit 1] Error: Cannot open /d/ws/报告.docx: No such file or directory');
-    expect(noFile).not.toContain('install-officecli.ps1');
+    expect(noFile).not.toContain('重装/修复兰台');
     const badDom = cleanShellOutput('[exit 1] ERROR: Sheet not found: "参数表"');
-    expect(badDom).not.toContain('install-officecli.ps1');
+    expect(badDom).not.toContain('重装/修复兰台');
     // 真缺席两种拼写都要认（PATH 形态 / 绝对路径形态）
-    expect(cleanShellOutput('[exit 127] bash: line 1: officecli: command not found')).toContain(
-      'install-officecli.ps1',
-    );
+    expect(cleanShellOutput('[exit 127] bash: line 1: officecli: command not found')).toContain('重装/修复兰台');
     expect(
       cleanShellOutput(
         '[exit 127] bash: line 1: /c/u/.lantai/tools/officecli/officecli.exe: No such file or directory',
       ),
-    ).toContain('install-officecli.ps1');
+    ).toContain('重装/修复兰台');
   });
 
   it('parseShellExit：两种形态都认（seam 的 `[exit N]` 与能力口原文的 `[exit code: N]`）；读不到 = null', () => {

@@ -12,17 +12,15 @@
 ## 1. 装
 
 ```powershell
-# ① 二进制（读写能力用；活预览窗的 watch 也从它起）——标准安装位 + 哈希校验
+# ① 二进制（读写能力用；活预览窗的 watch 也从它起）——正式安装包已自带（宿主 exe 同级）；
+#    开发机用取件脚本或安装器装到标准位：
+node scripts\fetch-officecli.mjs                            # 仓库根跑（推荐）
 ..\..\office-cli\install-officecli.ps1 -FromRelease        # 或 -FromLocal <已下载件>
 
-# ② 技能（office 域工具的权威手册；域工具不带技能，技能仍落技能根）
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.lantai\skills\officecli" | Out-Null
-Copy-Item ..\..\office-cli\SKILL.md "$env:USERPROFILE\.lantai\skills\officecli\SKILL.md" -Force
-
-# ③ 本插件（可选的活预览窗）：设置 → 插件 → 安装框填本目录绝对路径 → 安装
+# ② 本插件（可选的活预览窗）：设置 → 插件 → 安装框填本目录绝对路径 → 安装
 ```
 
-二进制**不进插件目录**（走标准安装位 `%USERPROFILE%\.lantai\tools\officecli\`），所以本插件目录很小、
+二进制**不进插件目录**（正式包随兰台分发到宿主 exe 同级；开发机走标准安装位 `%USERPROFILE%\.lantai\tools\officecli\`），所以本插件目录很小、
 换版本只换那一个文件。
 
 ## 2. 用

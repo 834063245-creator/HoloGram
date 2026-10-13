@@ -10,7 +10,7 @@
 |---|---|---|
 | **项目级** | `<工作区>/.lantai/skills/<name>/SKILL.md` | 只对当前项目生效 |
 | **用户级** | `~/.lantai/skills/<name>/SKILL.md`（Windows = `%USERPROFILE%\.lantai\skills\`） | 跨项目共用 |
-| **出厂** | 随包内置（`builtin-skills.ts`，编译进 exe） | 分发环境下 Agent 的插件开发知识；**同名时用户级可覆盖它** |
+| **出厂** | 随包内置（`skill-domain/builtin-skills.ts`，产物随包分发，改内容免重建 exe） | 分发环境下 Agent 缺的兰台特有知识（当前三门：`lantai-plugin-dev` 插件开发手册 · `officecli` office 域动作面手册 · `lantai-guide` 产品地图与操作手册）；**同名时用户级可覆盖它** |
 
 ## 最小形态
 
