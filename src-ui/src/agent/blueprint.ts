@@ -19,8 +19,8 @@
 //      'agent'（Agent 构造后）。阶段内按表序，阶段间先 context 后 agent；
 //   3. 生命周期所有权（board/lifecycle/runtime-maps 的 ctx.effect）留在
 //      runtime 装配层（Phase 4 语义）——capability 只做组合，不做 teardown；
-//   4. hooks / preStep 统一注册进 scope 上的共享注册表，由 runtime 在
-//      capability 循环后一次性 setHooks / setPreStep（整体替换语义，
+//   4. hooks / steps 统一注册进 scope 上的共享注册表，由 runtime 在
+//      capability 循环后一次性 setHooks / setSteps（整体替换语义，
 //      capability 各自 set 会互相覆盖）。
 //
 // 行为规约（tests/blueprint.test.ts 钉住）：重复 key 拒绝；capabilities()
@@ -44,9 +44,9 @@ import type { Agent } from './agent';
 import type { AgentContext } from './context';
 import type { HookRegistry, PreflightHookRegistry } from './hooks';
 import type { MessageBus } from './message-contract';
-import type { PreStepRegistry } from './pre-step';
 import type { AgentAssemblyInputs } from './runtime/types';
 import type { DiagnosticsSource } from './state-inject';
+import type { StepsRegistry } from './steps';
 import type { TaskManagerFace } from './task-contract';
 import type { ToolRegistry } from './tool';
 
@@ -81,8 +81,8 @@ export interface BlueprintScope {
   readonly hooks: HookRegistry;
   /** 共享 preflight hook 注册表 — 同上。 */
   readonly preflightHooks: PreflightHookRegistry;
-  /** 共享步前裁决注册表 — capability 只注册，runtime 折叠通道贡献后统一 setPreStep。 */
-  readonly preStep: PreStepRegistry;
+  /** 共享步骤钩子注册表 — capability 只注册，runtime 折叠通道贡献后统一 setSteps。 */
+  readonly steps: StepsRegistry;
   /** runtime 私有依赖。 */
   readonly deps: BlueprintDeps;
   /** 已构造的 Agent 实例 — 仅 'agent' 阶段可用。 */

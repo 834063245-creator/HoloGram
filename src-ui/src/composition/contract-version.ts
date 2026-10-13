@@ -22,9 +22,28 @@
 // 不静默漂移；这是刻意取舍不是缺陷。
 
 /** 开放面契约当前版本（变更即 +1，历史见 open-surface-contract.md 变更记录）。 */
-export const OPEN_SURFACE_CONTRACT_VERSION = 55;
+export const OPEN_SURFACE_CONTRACT_VERSION = 56;
 
 /** 契约面载体文件（相对 src-ui/；fingerprint 生成器与 guard 消费同一份）。
+ *  v56（2026-10-13）**步骤钩子家族（agent-hooks-plan 二期：面扩展 + 停止边界 + 收编首批）**：
+ *  ① **破坏性重命名**——`ctx.preStep` → **`ctx.steps`**（`composition/steps-service.ts`）、
+ *  内核件 `src/agent/pre-step.ts` → **`src/agent/steps.ts`**（`StepsRegistry`）、
+ *  `AgentLoopHost.preStep` → **`steps`**、`BlueprintScope.preStep` → `steps`、沙箱白名单
+ *  `preStep` → `steps`（一期零消费者窗口期内一次做全，旧名不留别名）；
+ *  ② 贡献形状带 `on: 'pre-step' | 'turn-stopping'` + 可选 `create` 工厂（装配折叠时
+ *  为每个 Agent 调一次——per-Agent 实例归属；抛错 = 装配期 fail-loud）；注册表判据
+ *  按事件维度（`hasListeners(on)`——各点独立零开销，消费点仍走同步短路）；
+ *  ③ `PreStepDecision.enter` 增 `reminders`（transient——content 原样进 transientReminders，
+ *  只给本次请求、不落会话；与 `messages`（durable）分工不变）；
+ *  ④ **新事件 `turn-stopping`**：自然停止边界裁决（stop/continue + 注入），守卫
+ *  `MAX_TURN_CONTINUES = 3`（超限强制停 + log.warn + Notice）；
+ *  ⑤ **收编首批**：发现注入（原 `Agent._injectDiscoveries` 私有方法 + loop 直调）迁为
+ *  runtime 装配期注册的内建 pre-step 钩子（`agent/discovery-reminder-hook.ts`；
+ *  `AgentLoopHost.injectDiscoveries` 成员随之退役）——注入内容与判据（非己 + 未见 +
+ *  5 分钟窗）逐字不变，**顺序位移**（注入链中段 → 链尾）显式记录。
+ *  **对外可感知**：第三方产物能贡献两类边界裁决（含停止控制）；旧名 `preStep` 不再可用
+ *  （diff 即迁移）；**未接面 / 事件零注册者 = 循环逐字节零行为变化**（同步短路，
+ *  回归门 tests/steps.test.ts / turn-stopping.test.ts）。
  *  v55（2026-10-13）**步前裁决贡献面（agent-hooks-plan 一期）**：新增贡献通道
  *  `ctx.preStep`（`composition/pre-step-service.ts`，内核 service 表尾追加第 19 位）
  *  与内核裁决件 `src/agent/pre-step.ts`（`PreStepHook` / `PreStepDecision` /
@@ -371,8 +390,8 @@ export const OPEN_SURFACE_CONTRACT_FILES: readonly string[] = [
   // ctx.* 贡献（裁定：敏感面 = MCP 桥，走 faceDeps 留第一方）。
   'src/composition/workspaces-service.ts',
   'src/composition/shell-rows-service.ts',
-  // 步前裁决面（agent-hooks-plan 一期，2026-10-13）：贡献形状载体（PreStepHook /
-  // PreStepDecision / PreStepPayload / PreStepRegistry）+ 通道 service（ctx.preStep）。
-  'src/agent/pre-step.ts',
-  'src/composition/pre-step-service.ts',
+  // 步骤钩子家族（agent-hooks-plan 一期步前裁决面 + 二期面扩展：统一为 `ctx.steps`
+  // ——含 turn-stopping 停止边界裁决与 transient 注入；贡献形状载体 + 通道 service）。
+  'src/agent/steps.ts',
+  'src/composition/steps-service.ts',
 ];

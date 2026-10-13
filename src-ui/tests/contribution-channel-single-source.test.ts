@@ -48,7 +48,8 @@ const TIMINGS = ['immediate', 'next-assembly', 'request', 'frame'];
 
 /** 16 个 service 的通道构造点：十一条贡献通道 + 五条 seam provider 注册表。
  *  批 9e（2026-09-26）新增第十条：`rootViews`（App 外壳视图槽——首页 / 根浮层）。
- *  agent-hooks-plan 一期（2026-10-13）新增第十一条：`preStep`（步前裁决——每步 enter/reject + 注入）。 */
+ *  agent-hooks-plan（2026-10-13）：第十一条 `steps`——一期步前裁决面（pre-step 每步
+ *  enter/reject + 注入）+ 二期扩展为步骤钩子家族（turn-stopping 停止边界裁决）。 */
 const EXPECTED_KINDS = [
   'panels',
   'commands',
@@ -57,7 +58,7 @@ const EXPECTED_KINDS = [
   'renderers',
   'prompts',
   'hooks',
-  'preStep',
+  'steps',
   'capabilities',
   'overlays',
   'rootViews',

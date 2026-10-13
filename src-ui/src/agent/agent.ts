@@ -58,7 +58,6 @@ import type { Disposer } from './lifecycle';
 import { log } from './logger';
 import { batchStormSignature, type ToolOutcome } from './loop-helpers';
 import { type PlanGate, planGateCheck } from './plan/plan-registry';
-import type { PreStepRegistry } from './pre-step';
 import {
   applyImageBudget,
   collectImageRefs,
@@ -99,6 +98,7 @@ import {
 } from './run-watchdog';
 import { registerOwnerContext } from './session-context';
 import { SessionLog, type SessionResetReason } from './session-log';
+import type { StepsRegistry } from './steps';
 import type { StreamingToolExecutor } from './streaming-executor';
 import { parseAssetEventOutput } from './streaming-executor';
 import type { SubAgentSpawnHost } from './subagent-runtime-contract';
@@ -328,9 +328,10 @@ export class Agent {
   // Preflight hooks — 破坏性写入前告警（edit_file / write_file）
   private preflightHooks: PreflightHookRegistry | null = null;
 
-  // 步前裁决面 — 每步进入前的 enter/reject + 注入（agent-hooks-plan 一期；
-  // 装配经 setPreStep 注入，loop 经 host.preStep 直读；子 Agent 不接 ⇒ null）
-  private preStep: PreStepRegistry | null = null;
+  // 步骤钩子面 — 循环边界上的两处裁决（agent-hooks-plan；'pre-step' 每步入场
+  // enter/reject + 注入、'turn-stopping' 自然停止 stop/continue）；装配经
+  // setSteps 注入，loop 经 host.steps 直读；子 Agent 不接 ⇒ null）
+  private steps: StepsRegistry | null = null;
 
   // Storm breaker — 检测重复失败的工具调用
   stormSig = '';
@@ -515,11 +516,9 @@ export class Agent {
   _taskBoard: TaskBoardFace | null = null;
 
   // DiscoveryBoard — Agent 间知识共享的共享发现区
-  // （子 Agent 派生域经宿主接口读取 — 11c 拆分）
+  // （子 Agent 派生域经宿主接口读取 — 11c 拆分；发现**注入**已收编为
+  //  步骤钩子 discovery-reminder-hook，agent-hooks-plan 二期）
   _discoveryBoard: DiscoveryBoard | null = null;
-
-  // 追踪已注入的 discovery ID — 防止同一 runLoop 内重复注入
-  private _injectedDiscoveryIds = new Set<string>();
 
   // 临时提醒 — 每轮 <system-reminder> 注入，发送给 LLM
   // 但不持久化到 this.session。每个 runLoop 步骤开始时清除。
@@ -676,10 +675,10 @@ export class Agent {
     }
   }
 
-  /** 步前裁决面接线（agent-hooks-plan 一期）——只存引用：loop 经
-   *  host.preStep 直读，不经 eventBus（装配期折叠的贡献注册进同一 registry 实例）。 */
-  setPreStep(registry: PreStepRegistry): void {
-    this.preStep = registry;
+  /** 步骤钩子面接线（agent-hooks-plan）——只存引用：loop 经 host.steps 直读，
+   *  不经 eventBus（装配期折叠的贡献注册进同一 registry 实例）。 */
+  setSteps(registry: StepsRegistry): void {
+    this.steps = registry;
   }
 
   /** preflight 注册表只读访问 — 子 Agent 装配继承门禁用（subagent-spawn.ts）。 */
@@ -1061,12 +1060,6 @@ export class Agent {
     });
   }
 
-  /** 接线 discovery board 用于 Agent 间知识共享。
-   *  由 runtime 调用，将共享 board 注入每个 Agent。 */
-  setDiscoveryBoard(board: DiscoveryBoard): void {
-    this._discoveryBoard = board;
-  }
-
   /** 级联中止: 父 Agent 被中断时停止所有子 Agent。 */
   cascadeAbort(): void {
     const pool = this._subAgentPool;
@@ -1239,26 +1232,6 @@ export class Agent {
     for (const id of this._injectedMsgIds) {
       if (!remainingIds.has(id)) this._injectedMsgIds.delete(id);
     }
-  }
-
-  /** 将其他 Agent 的新发现注入为 system-reminder。
-   *  仅注入本轮尚未见过 + 由其他 Agent 发布 + 5 分钟内的条目。
-   *  使用 _injectedDiscoveryIds 防止重复注入。 */
-  private _injectDiscoveries(): void {
-    if (!this._discoveryBoard) return;
-    const entries = this._discoveryBoard.query();
-    if (entries.length === 0) return;
-    // 仅注入来自其他 Agent、尚未见过、5 分钟内的 discoveries
-    const recent = entries.filter(
-      (e) => e.agentId !== this.id && !this._injectedDiscoveryIds.has(e.id) && Date.now() - e.ts < 5 * 60 * 1000,
-    );
-    if (recent.length === 0) return;
-    for (const e of recent) this._injectedDiscoveryIds.add(e.id);
-    const formatted = recent.map((e) => `[${e.category}] ${e.key}: ${e.value} (by ${e.agentId})`).join('\n');
-    // 临时 — discoveries 可通过 agent_lookup 重新查询
-    this._transientReminders.push(
-      `<system-reminder>\n🔬 共享发现 (${recent.length} 条):\n${formatted}\n\n用 agent_discover 发布你的发现，agent_lookup 查询全部。\n</system-reminder>`,
-    );
   }
 
   /** 开启全新对话 — 保留 system prompt，清除其他所有内容。 */
@@ -1595,7 +1568,7 @@ export class Agent {
       tools: this.tools,
       hooks: this.hooks,
       preflightHooks: this.preflightHooks,
-      preStep: this.preStep,
+      steps: this.steps,
       isolationId: this._isolationId ?? null,
       planGate: this._planGate,
       loopEvents: this._loopEvents,
@@ -1630,7 +1603,6 @@ export class Agent {
       applyPendingInserts: () => this._applyPendingInserts(),
       applyPendingMemoryUpdates: () => this._applyPendingMemoryUpdates(),
       injectInbox: () => this._injectInbox(),
-      injectDiscoveries: () => this._injectDiscoveries(),
       onMessageDelivered: () => this._onMessageDelivered(),
       get currentRunSignal() {
         return self._currentRunSignal;

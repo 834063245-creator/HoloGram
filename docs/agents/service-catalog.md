@@ -67,10 +67,10 @@ shell 后端能力注册表（平台化 Phase 2 · D11；subprocess 并入本 se
 | `ctx.hooks` | `HooksService` | `src/composition/hook-service.ts` | `plan-injector` | 0 文件 |
 | `ctx.overlays` | `OverlayService` | `src/composition/overlay-service.ts` | `asset-rack` · `compose-dock` · `paper-minimap` · `toc-strip` | 2 文件 |
 | `ctx.panels` | `PanelsService` | `src/composition/services.ts` | `canvas-sidebar` · `canvas-spine` · `my-panel` · `paper` · `settings` | 4 文件 |
-| `ctx.preStep` | `PreStepService` | `src/composition/pre-step-service.ts` | — | 0 文件 |
 | `ctx.prompts` | `PromptsService` | `src/composition/prompt-service.ts` | `my/section` | 2 文件 |
 | `ctx.renderers` | `RenderersService` | `src/composition/renderer-service.tsx` | `my/kind` | 7 文件 |
 | `ctx.rootViews` | `RootViewsService` | `src/composition/root-views-service.ts` | `ask-cards` · `sessions-home` | 2 文件 |
+| `ctx.steps` | `StepsService` | `src/composition/steps-service.ts` | — | 0 文件 |
 | `ctx.tools` | `ToolsService` | `src/composition/services.ts` | `communication-tools` · `compaction-tools` · `converge-tools` · `discovery-tools` · `hologram/browser-desktop-domain/tools` · `merge-tools` · `my/dynamic-tool` · `my/query` · `request-tool` · `spawn-tool` | 5 文件 |
 
 ### `ctx.capabilities` — CapabilitiesService（贡献通道）
@@ -113,14 +113,6 @@ capability 贡献注册表（A-3 第八贡献通道）——贡献注册 → dis
 - 默认实现 / 贡献者 id：`canvas-sidebar` · `canvas-spine` · `my-panel` · `paper` · `settings`
 - 消费面（4）：`src/plugins/builtin/canvas-nav/index.ts` · `src/plugins/builtin/paper-shell/index.ts` · `src/plugins/builtin/settings-domain/index.ts` · `src/plugins/builtin/skill-domain/builtin-skills.ts`
 
-### `ctx.preStep` — PreStepService（贡献通道）
-
-步前裁决注册表（agent-hooks-plan 一期）——hook 贡献注册 → disposer； 下次 Agent 装配生效语义。
-
-- owner：`src/composition/pre-step-service.ts`
-- 默认实现 / 贡献者 id：—
-- 消费面：—（无直接 import/ctx 引用——运行时通道注入）
-
 ### `ctx.prompts` — PromptsService（贡献通道）
 
 system-prompt 段落注册表（A-1 第六贡献通道）——段注册 → disposer； 下次 Agent 装配生效。
@@ -144,6 +136,14 @@ App 外壳视图槽通道（批 9e）：首页（slot:'home'）与根浮层（sl
 - owner：`src/composition/root-views-service.ts`
 - 默认实现 / 贡献者 id：`ask-cards` · `sessions-home`
 - 消费面（2）：`src/plugins/builtin/ask-cards/index.tsx` · `src/plugins/builtin/sessions-home/index.tsx`
+
+### `ctx.steps` — StepsService（贡献通道）
+
+步骤钩子注册表（agent-hooks-plan）——钩子贡献注册 → disposer； 下次 Agent 装配生效语义。
+
+- owner：`src/composition/steps-service.ts`
+- 默认实现 / 贡献者 id：—
+- 消费面：—（无直接 import/ctx 引用——运行时通道注入）
 
 ### `ctx.tools` — ToolsService（贡献通道）
 

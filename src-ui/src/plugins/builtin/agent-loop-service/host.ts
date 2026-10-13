@@ -21,6 +21,14 @@ export type { AgentLoop, AgentLoopHost } from '../../../agent/agent-loop/types';
 export { type AgentEvent, EventKind } from '../../../agent/agent-types';
 export { log } from '../../../agent/logger';
 export { finishReasonMessage, parseFilePathArg } from '../../../agent/loop-helpers';
+// 步骤钩子注入/裁决类型（agent-hooks-plan 二期）：loop 本地挂起批与裁决变量的
+// 类型注解用（turn-stopping continue 的注入在下一轮注入链尾落地）。
+export type {
+  PreStepDecision,
+  PreStepMessage,
+  PreStepReminder,
+  TurnStopDecision,
+} from '../../../agent/steps';
 export { StreamingToolExecutor } from '../../../agent/streaming-executor';
 export { resolveGuardToolName } from '../../../agent/tools/domains';
 export { ContributionChannel } from '../../../composition/contribution-channel';

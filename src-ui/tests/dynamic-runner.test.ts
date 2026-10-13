@@ -23,12 +23,12 @@ import { activeCapabilityContributions, capabilitiesServicePlugin } from '../src
 import { fsServicePlugin } from '../src/composition/fs-service';
 import { activeHookContributions, hooksServicePlugin } from '../src/composition/hook-service';
 import { overlayServicePlugin } from '../src/composition/overlay-service';
-import { preStepServicePlugin } from '../src/composition/pre-step-service';
 import { promptsServicePlugin } from '../src/composition/prompt-service';
 import { rendererServicePlugin } from '../src/composition/renderer-service';
 import { activeToolContributions, compositionServicesPlugin } from '../src/composition/services';
 import { sessionPersistenceServicePlugin } from '../src/composition/session-persistence-service';
 import { shellServicePlugin } from '../src/composition/shell-service';
+import { activeStepHookContributions, stepsServicePlugin } from '../src/composition/steps-service';
 import { subagentsServicePlugin } from '../src/composition/subagent-service';
 import { Context } from '../src/cordis';
 import { agentLoopServicePlugin } from '../src/plugins/builtin/agent-loop-service';
@@ -319,7 +319,7 @@ describe('守卫注册面校准（白名单 ↔ 真装配）', () => {
     hooksServicePlugin,
     capabilitiesServicePlugin,
     overlayServicePlugin,
-    preStepServicePlugin,
+    stepsServicePlugin,
     fsServicePlugin,
     shellServicePlugin,
     sessionPersistenceServicePlugin,
@@ -368,7 +368,7 @@ describe('守卫注册面校准（白名单 ↔ 真装配）', () => {
         'llm',
         'prompts',
         'hooks',
-        'preStep',
+        'steps',
         'capabilities',
         'renderers',
         'overlays',
@@ -471,6 +471,49 @@ describe('守卫注册面校准（白名单 ↔ 真装配）', () => {
     await expect(runner.run('s1', badLoop.pluginId, badLoop.packageId, 'run', async () => true)).rejects.toThrow(
       /缺 run 函数成员/,
     );
+    await dispose();
+  });
+
+  it('⑭ steps 嵌套形状装载期校验：合法 pre-step / turn-stopping（含 create）收，畸形拒（agent-hooks-plan 二期）', async () => {
+    const { runner, dispose } = await bootedAll();
+    const ok = runner.define('s1', {
+      kind: 'new',
+      idPrefix: 'stepok',
+      name: 'steps 合法形状',
+      purpose: '嵌套形状收',
+      code:
+        "return { name: 'p', apply(ctx) {" +
+        " ctx.steps.register({ id: 'dyn/s-pre', on: 'pre-step', hook: { name: 'sp', decide: () => ({ action: 'enter' }) } });" +
+        " ctx.steps.register({ id: 'dyn/s-stop', on: 'turn-stopping', hook: { name: 'ss', decide: () => ({ action: 'stop' }) } });" +
+        " ctx.steps.register({ id: 'dyn/s-fac', on: 'pre-step', hook: { name: 'sf', decide: () => ({ action: 'enter' }) }, create: () => ({ name: 'inst', decide: () => ({ action: 'enter' }) }) });" +
+        ' } };',
+    });
+    await runner.run('s1', ok.pluginId, ok.packageId, 'run', async () => true);
+    expect(activeStepHookContributions().map((c) => c.id)).toEqual(['dyn/s-pre', 'dyn/s-stop', 'dyn/s-fac']);
+
+    // 四类畸形：on 拼错 / hook 非对象 / 缺 decide / create 非函数
+    const malformed: Array<[string, RegExp]> = [
+      [
+        "ctx.steps.register({ id: 'dyn/x', on: 'pre', hook: { name: 'n', decide: () => ({ action: 'enter' }) } });",
+        /on 必须是/,
+      ],
+      ["ctx.steps.register({ id: 'dyn/x', on: 'pre-step', hook: 'nope' });", /hook 必须是对象/],
+      ["ctx.steps.register({ id: 'dyn/x', on: 'pre-step', hook: { name: 'n' } });", /缺 decide 函数/],
+      [
+        "ctx.steps.register({ id: 'dyn/x', on: 'pre-step', hook: { name: 'n', decide: () => ({ action: 'enter' }) }, create: 1 });",
+        /create 必须是函数/,
+      ],
+    ];
+    for (const [stmt, re] of malformed) {
+      const bad = runner.define('s1', {
+        kind: 'new',
+        idPrefix: 'stb',
+        name: 'steps 畸形',
+        purpose: '嵌套形状拒',
+        code: `return { name: 'p', apply(ctx) { ${stmt} } };`,
+      });
+      await expect(runner.run('s1', bad.pluginId, bad.packageId, 'run', async () => true)).rejects.toThrow(re);
+    }
     await dispose();
   });
 });

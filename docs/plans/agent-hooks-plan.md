@@ -1,6 +1,6 @@
 # agent hooks 计划
 
-> 状态：**在办**——一期已竣工（2026-10-13）· 二期施工单已定（§7，待施工）· 三期待拍
+> 状态：**在办（三期待拍）**——一期已竣工（2026-10-13）· 二期已竣工（2026-10-13，§7 + 竣工回执 §7.9）· 三期待拍
 > 目标：把 Agent 生命周期从「纯观测」升级为「可裁决、可注入」的扩展点体系——形态对标
 > DSH 的 interception extension points（参照 `d:\useful\deepseek-harness` 的
 > `packages/hooks/` 与 `.agents/notes/implemented/feature/2026-06-30-interception-extension-points.md`，
@@ -151,8 +151,8 @@ B1-B4 全落，门禁全绿：vitest 421 文件 / 4470 用例、build、biome 0e
 
 ## 7. 二期施工单 —— 步骤钩子家族扩展 + 停止边界 + 收编首批
 
-> 状态：待施工。契约 v55 → v56。含一处对一期的**破坏性重命名**（`ctx.preStep` → `ctx.steps`）——
-> 一期零消费者窗口期，一次做全（改名、文件、文档、契约、生成物）。
+> 状态：**已竣工**（2026-10-13，契约 v55 → v56；竣工回执见 §7.9）。含一处对一期的**破坏性重命名**
+> （`ctx.preStep` → `ctx.steps`）——一期零消费者窗口期，一次做全（改名、文件、文档、契约、生成物）。
 
 ### 7.0 目标（三件事）
 
@@ -273,3 +273,26 @@ interface TurnStoppingHook {
 - **B2** turn-stopping：面 + 消费 + 护栏 + 测试。
 - **B3** 收编：发现注入迁移 + 旧路径拆除 + 行为对拍测试。
 - **B4** 契约/文档/生成物 + 全量门禁。
+
+### 7.9 竣工回执（2026-10-13）
+
+B1-B4 全落，门禁全绿：vitest 423 文件 / 4496 用例、build、biome 0e0w、`verify:convergence`
+双轨零漂移、doc-sync + doc-check。实现要点（施工单之外：一个设计要点 + 三处差异）：
+
+1. **同步快路径（设计要点）**：收编让 pre-step 表恒非空（内建发现钩子）——若按朴素
+   async 折叠，每步多一个微任务边界，截断 loop 的「同步通到底」前缀（landmine-l3-hang ⑤
+   当场抓红）。实现按「**全同步钩子的折叠同步返回**」（`T | Promise<T>`；含异步钩子时转
+   异步**串行**续）修复，而非改测试——一期的时序纪律在收编后继续成立，且升级为注册表级
+   语义（tests/steps.test.ts / turn-stopping.test.ts 各有钉子）。
+2. **注入落地统一口**：pre-step 的 messages/reminders 与 turn-stopping continue 的注入
+   统一在「注入链尾」落地；continue 的注入挂起到**下一轮**（transientReminders 会在下轮
+   step/start 后清空——裁决点直接落地会被丢掉）——比施工单「同址」更细一层的时序安排，
+   测试钉住（tests/turn-stopping.test.ts「注入落地」用例）。
+3. **create 抛错语义**：装配期 fail-loud（throw，不静默跳过）——补施工单未写明的错误面，
+   测试钉住（tests/composition-steps-service.test.ts）。
+4. **子 Agent 不接面照旧**：其 `_discoveryBoard` 本就为 null（child() 白名单不含该服务），
+   旧路径 `_injectDiscoveries` 同样是空操作——收编后行为一致，子 Agent 侧无需接线。
+
+顺序位移（发现注入由「注入链中段」→「链尾」）在 `discovery-reminder-hook.ts` 头注、
+`tests/discovery-reminder-hook.test.ts` 头注与 commit 信息三处显式记录；契约双轨零漂移证明
+位移未触及 convergence 快照面（无 baseline 变更）。

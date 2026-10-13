@@ -28,9 +28,13 @@ import {
   finishReasonMessage,
   kernelReadFile,
   log,
+  type PreStepDecision,
+  type PreStepMessage,
+  type PreStepReminder,
   parseFilePathArg,
   resolveGuardToolName,
   StreamingToolExecutor,
+  type TurnStopDecision,
   typedRpcWithTimeout,
 } from './host';
 
@@ -41,6 +45,11 @@ export const DEFAULT_AGENT_LOOP_ID = 'builtin/default';
  *  3s 只在 Rust 侧卡死或回包丢失时触发——落回各自的跳过分支，
  *  循环不死等在无界 await 上（run() 永不 settle = UI 永卡运行态）。 */
 const STEP_RPC_TIMEOUT_MS = 3_000;
+
+/** 同 turn 连续 continue 上限（turn-stopping 护栏，agent-hooks-plan 二期）——
+ *  超限强制停 + log.warn + UI Notice，防「无条件继续」死循环
+ *  （DSH 的 hook 桥至今没有这道闸，兰台显式补上）。 */
+export const MAX_TURN_CONTINUES = 3;
 
 /** promise 超时兜底（fs 域收口后 kernelReadFile 等 helper 直呼不经
  *  typedRpcWithTimeout——需保持超时的调用点本地包一层）。超时后底层
@@ -71,6 +80,12 @@ export const defaultAgentLoop: AgentLoop = {
 export async function runDefaultLoop(host: AgentLoopHost, signal: AbortSignal): Promise<void> {
   const turnStart = performance.now();
   let turnErr: unknown = null;
+  // turn-stopping 护栏计数（本 turn 内 continue 次数，超限强制停）。
+  let turnContinues = 0;
+  // 步骤钩子注入的挂起批（turn-stopping continue 的注入在**下一轮**注入链尾
+  // 落地——transientReminders 会在下轮 step/start 后被清空，裁决点直接落地
+  // 会被丢掉；messages 虽 durable 也统一走同一落地口，保持可观测面单一）。
+  let pendingStepInject: { messages: PreStepMessage[]; reminders: PreStepReminder[] } | null = null;
 
   try {
     host.currentRunSignal = signal; // 子 Agent 派生时合并此 signal 用于级联中止
@@ -93,11 +108,15 @@ export async function runDefaultLoop(host: AgentLoopHost, signal: AbortSignal): 
       // 上层 catch）认的是 RunDeadlineExceededError 这个类型，不是文案。
       if (!host.stepBoundary(signal)) throw host.abandonedError(signal);
 
-      // ── 步前裁决（agent-hooks-plan 一期）——enter 放行（可附注入批）/ reject
-      //    拦下本步（不开步、不发请求，本轮收尾）。未接面 / 无注册者 = 直通
-      //    enter——空表不进异步调用，**连同步时序都零变化**。
-      const preStepDecision =
-        host.preStep && host.preStep.size > 0 ? await host.preStep.decide({ agentId: host.id, step, signal }) : null;
+      // ── 步前裁决（agent-hooks-plan）——enter 放行（可附注入批）/ reject
+      //    拦下本步（不开步、不发请求，本轮收尾）。未接面 / 该事件无注册者 =
+      //    直通 enter；注册表对**全同步钩子同步返回**（同步时序守恒——内建发现
+      //    钩子同步 decide，loop 的步前前缀保持「同步通到底」）——只有真异步时才 await。
+      let preStepDecision: PreStepDecision | null = null;
+      if (host.steps?.hasListeners('pre-step')) {
+        const decision = host.steps.decidePreStep({ agentId: host.id, step, signal });
+        preStepDecision = decision instanceof Promise ? await decision : decision;
+      }
       if (preStepDecision?.action === 'reject') {
         host.sink({
           kind: EventKind.Notice,
@@ -167,17 +186,24 @@ export async function runDefaultLoop(host: AgentLoopHost, signal: AbortSignal): 
       // 注入未读 inbox 消息（窥探 — 不消费）
       host.injectInbox();
 
-      // 注入其他 Agent 的新发现
-      host.injectDiscoveries();
-
-      // ── 步前裁决的注入批（agent-hooks-plan 一期）——enter 时钩子贡献的消息
-      //    作为落会话的 user/message 追加（durable；content 原样，贡献者自备
-      //    文本形态）。位置 = 本步现有注入链之后、压缩预检之前。
-      if (preStepDecision?.action === 'enter' && preStepDecision.messages && preStepDecision.messages.length > 0) {
-        for (const m of preStepDecision.messages) {
-          host.appendMessage('user/message', { role: 'user', content: m.content });
-        }
+      // ── 步骤钩子注入落地（agent-hooks-plan）——durable messages 落会话的
+      //    user/message（content 原样，贡献者自备文本形态）；transient reminders
+      //    content 原样进本步提醒批（只给本次请求、不落会话）。位置 = 本步注入
+      //    链尾、压缩预检之前（与一期 messages 同址）；turn-stopping continue 的
+      //    挂起注入同样在此落地。
+      const stepMessages: PreStepMessage[] = [];
+      const stepReminders: PreStepReminder[] = [];
+      if (pendingStepInject) {
+        stepMessages.push(...pendingStepInject.messages);
+        stepReminders.push(...pendingStepInject.reminders);
+        pendingStepInject = null;
       }
+      if (preStepDecision?.action === 'enter') {
+        if (preStepDecision.messages) stepMessages.push(...preStepDecision.messages);
+        if (preStepDecision.reminders) stepReminders.push(...preStepDecision.reminders);
+      }
+      for (const r of stepReminders) host.transientReminders = [...host.transientReminders, r.content];
+      for (const m of stepMessages) host.appendMessage('user/message', { role: 'user', content: m.content });
 
       // ── 预检上下文窗口（自动压缩主触发点，2026-09 迭代）──
       // 每 step 发送前用估算检查载荷压力；≥ compactRatio(默认 0.8，随模型
@@ -394,7 +420,40 @@ export async function runDefaultLoop(host: AgentLoopHost, signal: AbortSignal): 
       // 此处不再重复追加（单一写入点 = 单一事实源）。
 
       if (calls.length === 0 && host.pendingInserts.length === 0) {
+        // ── 停止边界裁决（agent-hooks-plan 二期 · turn-stopping）——默认停；
+        //    任一钩子 continue ⇒ 再开下一步（注入挂起到下轮注入链尾落地）。
+        //    未接面 / 该事件无注册者 = 直通 stop；全同步钩子同步返回（同 pre-step）。
+        let stopDecision: TurnStopDecision | null = null;
+        if (host.steps?.hasListeners('turn-stopping')) {
+          const decision = host.steps.decideTurnStopping({ agentId: host.id, step, signal });
+          stopDecision = decision instanceof Promise ? await decision : decision;
+        }
+        // 本步已闭合：两个分支都发 step/end（continue 再开下一步）。
         host.loopEvents.emitLoopEvent('step/end', { agentId: host.id, step, toolCalls: 0 });
+        if (stopDecision?.action === 'continue') {
+          if (turnContinues < MAX_TURN_CONTINUES) {
+            turnContinues += 1;
+            if (stopDecision.reason) {
+              log.info('agent', 'turn-stopping continue', { agentId: host.id, step, reason: stopDecision.reason });
+            }
+            pendingStepInject = {
+              messages: stopDecision.messages ?? [],
+              reminders: stopDecision.reminders ?? [],
+            };
+            continue;
+          }
+          // 护栏：同 turn continue 超限 ⇒ 强制停（防「无条件继续」死循环）
+          log.warn('agent', 'turn-stopping continue 超限，强制停步', {
+            agentId: host.id,
+            turnContinues,
+            max: MAX_TURN_CONTINUES,
+          });
+          host.sink({
+            kind: EventKind.Notice,
+            level: 'warn',
+            text: `turn-stopping 钩子请求继续已达上限（${MAX_TURN_CONTINUES} 次），强制停步`,
+          });
+        }
         return;
       }
 

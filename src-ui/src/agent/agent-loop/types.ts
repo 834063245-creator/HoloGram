@@ -20,8 +20,8 @@ import type { AgentEventBus } from '../events';
 import type { HookRegistry, PreflightHookRegistry } from '../hooks';
 import type { MessageBus } from '../message-contract';
 import type { PlanGate } from '../plan/plan-registry';
-import type { PreStepRegistry } from '../pre-step';
 import type { SessionLog } from '../session-log';
+import type { StepsRegistry } from '../steps';
 import type { StreamingToolExecutor } from '../streaming-executor';
 import type { TokenRequestRecord } from '../token-meter';
 import type { ToolRegistry } from '../tool';
@@ -53,9 +53,11 @@ export interface AgentLoopHost {
   readonly tools: ToolRegistry;
   readonly hooks: HookRegistry | null;
   readonly preflightHooks: PreflightHookRegistry | null;
-  /** 步前裁决面（agent-hooks-plan 一期）——每步入场直读；null = 未接面
-   *  （子 Agent 不接）⇒ 直通 enter。第三方 loop 不读 = 零影响。 */
-  readonly preStep: PreStepRegistry | null;
+  /** 步骤钩子面（agent-hooks-plan 一期/二期）——default-loop 两处直读：
+   *  'pre-step' 每步入场裁决（enter/reject）；'turn-stopping' 自然停止边界裁决
+   *  （stop/continue）。null = 未接面（子 Agent 不接）⇒ 两处都直通
+   *  （enter / stop）。第三方 loop 不读 = 零影响。 */
+  readonly steps: StepsRegistry | null;
   /** 隔离 worktree id（null = 主仓）。 */
   readonly isolationId: string | null;
   readonly planGate: PlanGate;
@@ -112,7 +114,6 @@ export interface AgentLoopHost {
   applyPendingInserts(): void;
   applyPendingMemoryUpdates(): void;
   injectInbox(): void;
-  injectDiscoveries(): void;
   onMessageDelivered(): Promise<void>;
 
   // ── 可变标量（get/set 闭包——活性由 Agent 侧字段保证）──

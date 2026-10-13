@@ -851,6 +851,7 @@ describe('loadBuiltinPlugins（第一方插件进插件列表）', () => {
     // 批 10 同窗两条通道 service（workspaces / shellRows）：54 → 56
     // 批 10 部件三 bundled-engine 产物：56 → 57
     // pre-step-service 新增（2026-10-13 agent-hooks-plan 一期：步前裁决贡献面）：57 → 58
+    // 二期面扩展改名 steps-service（2026-10-13：ctx.preStep → ctx.steps + turn-stopping；计数不变）
     expect(ALL_PLUGINS.length).toBe(58);
     expect(plugins.every((p) => p.builtin === true)).toBe(true);
     expect(plugins.every((p) => p.meta?.name === p.name)).toBe(true);

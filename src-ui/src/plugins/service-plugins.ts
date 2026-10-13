@@ -23,7 +23,6 @@ import { capabilitiesServicePlugin } from '../composition/capability-service';
 import { fsServicePlugin } from '../composition/fs-service';
 import { hooksServicePlugin } from '../composition/hook-service';
 import { overlayServicePlugin } from '../composition/overlay-service';
-import { preStepServicePlugin } from '../composition/pre-step-service';
 import { promptsServicePlugin } from '../composition/prompt-service';
 import { rendererServicePlugin } from '../composition/renderer-service';
 import { rootViewsServicePlugin } from '../composition/root-views-service';
@@ -32,6 +31,7 @@ import { sessionPersistenceServicePlugin } from '../composition/session-persiste
 import { shellRowsServicePlugin } from '../composition/shell-rows-service';
 import { shellServicePlugin } from '../composition/shell-service';
 import { spaceServicePlugin } from '../composition/space-service';
+import { stepsServicePlugin } from '../composition/steps-service';
 import { subagentsServicePlugin } from '../composition/subagent-service';
 import { workspacesServicePlugin } from '../composition/workspaces-service';
 import { lspServicePlugin } from '../ui/lsp-client';
@@ -56,9 +56,10 @@ export interface ServicePluginEntry {
  *  也无产物认领（消费方只能 import 内核实现文件）；立 service 后每卷账本由
  *  `ctx.tokenMeter.createLedger()/restoreLedger()` 制造、分桶代数经 `ctx.tokenMeter.usage`
  *  取用——**录入点仍唯一 = `Agent.streamOnce`**。
- *  第 19 位 `pre-step-service`（agent-hooks-plan 一期）：步前裁决贡献面——每步进入前可
- *  enter（附注入批）/ reject；通道贡献经 runtime 装配折叠进 per-Agent PreStepRegistry，
- *  default-loop 经 `host.preStep` 直读（无注册者 = 直通 enter，零行为变化）。 */
+ *  第 19 位 `steps-service`（agent-hooks-plan 一期步前裁决面 + 二期扩展）：步骤钩子
+ *  贡献面——`on: 'pre-step'` 每步进入前可 enter（附注入批）/ reject，`on: 'turn-stopping'`
+ *  自然停止边界可 stop / continue（含注入）；通道贡献经 runtime 装配折叠进 per-Agent
+ *  StepsRegistry，default-loop 经 `host.steps` 直读（零注册者 = 直通，零行为变化）。 */
 export const SERVICE_PLUGINS: readonly ServicePluginEntry[] = [
   {
     plugin: compositionServicesPlugin,
@@ -88,7 +89,7 @@ export const SERVICE_PLUGINS: readonly ServicePluginEntry[] = [
     description: 'token 计量（每卷账本工厂 + 分桶代数真源；录入点唯一 = Agent.streamOnce）',
   },
   {
-    plugin: preStepServicePlugin,
-    description: '步前裁决贡献注册表（每步 enter/reject + 注入）',
+    plugin: stepsServicePlugin,
+    description: '步骤钩子贡献注册表（pre-step 每步 enter/reject + turn-stopping 停止边界裁决，含注入）',
   },
 ];

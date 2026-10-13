@@ -15,8 +15,8 @@
 import type { ActivationHandle } from '../../composition/activation';
 import type { ActivationService } from '../../composition/activation-service';
 import { activeHookContributions } from '../../composition/hook-service';
-import { activePreStepContributions } from '../../composition/pre-step-service';
 import { factoryComposition, type ResolvedComposition } from '../../composition/roster';
+import { activeStepHookContributions } from '../../composition/steps-service';
 import type { Context } from '../../cordis';
 import { providersFilePath } from '../../provider/providers-store';
 import type { StoredThinking } from '../../provider/thinking';
@@ -30,6 +30,7 @@ import { prewarmAssetStateSession } from '../asset-state';
 import { AgentBlueprint, type BlueprintScope } from '../blueprint';
 import { AgentContext } from '../context';
 import { DiscoveryBoard, DiscoveryBoardProxy } from '../discovery-board';
+import { createDiscoveryReminderHook } from '../discovery-reminder-hook';
 import type { ListenerOptions, LoopEventName, LoopEventPayload } from '../events';
 import { createExecState, type ExecStateInstance } from '../execution-state';
 import { HookRegistry, PreflightHookRegistry } from '../hooks';
@@ -39,7 +40,6 @@ import { log } from '../logger';
 import type { MessageBus } from '../message-contract';
 import { requireMultiagentComm } from '../multiagent-impl';
 import { PlanStateManager } from '../plan/plan-state';
-import { PreStepRegistry } from '../pre-step';
 // asset-state 读口（2026-10-07）：owner（bus id）→ 会话号——会话绑定时写入、
 // 销毁时与 _agentSessions 同点清理；渲染侧不经过本表（它直接拿会话号）。
 import { clearOwnerSessionId, setOwnerSessionId } from '../session-context';
@@ -48,6 +48,7 @@ import { SessionLog } from '../session-log';
 // 调用点外层 catch 保住「技能目录读不到不炸装配」的既有降级语义）
 import { scanSkills } from '../skill-impl';
 import type { DiagnosticsSource } from '../state-inject';
+import { StepsRegistry } from '../steps';
 import type { AgentLifecycleManager } from '../subagent-runtime-contract';
 import { requireSubagentRuntime } from '../subagent-runtime-impl';
 import type { TaskBoardFace, TaskBoardProxyFace, TaskManagerFace } from '../task-contract';
@@ -763,7 +764,7 @@ export class AgentRuntime implements RuntimePort {
       tools: r,
       hooks: new HookRegistry(),
       preflightHooks: new PreflightHookRegistry(),
-      preStep: new PreStepRegistry(),
+      steps: new StepsRegistry(),
       deps: {
         isolationExec,
         messageBus: this._bus,
@@ -807,10 +808,10 @@ export class AgentRuntime implements RuntimePort {
     for (const cap of effectiveBlueprint.capabilities('agent')) {
       if (cap.when?.(agentScope) ?? true) cap.install(agentScope);
     }
-    // hooks / preStep 统一接线 — capability 只往共享 registries 注册（整体替换语义）
+    // hooks / steps 统一接线 — capability 只往共享 registries 注册（整体替换语义）
     newAgent.setHooks(scope.hooks);
     newAgent.setPreflightHooks(scope.preflightHooks);
-    newAgent.setPreStep(scope.preStep);
+    newAgent.setSteps(scope.steps);
 
     // 5b. 管道钩子贡献折叠（A-2 通道）——ctx.hooks 贡献（enrich/preflight）
     // 注册进本 Agent 的共享 registries。序：capability 钩子先（state-hooks/
@@ -823,12 +824,22 @@ export class AgentRuntime implements RuntimePort {
       else scope.preflightHooks.register(contribution.hook);
     }
 
-    // 5c. 步前裁决贡献折叠（agent-hooks-plan 一期——ctx.preStep 通道）——
-    // 注册进本 Agent 的 PreStepRegistry。序：capability 先、通道贡献随后
-    // （同 5b 约定）；生效时机 = 装配时点（在途会话不动）。子 Agent 不经
-    // 本路径（spawnSubAgent 不接 pre-step 面 ⇒ host.preStep = null 直通）。
-    for (const contribution of activePreStepContributions()) {
-      scope.preStep.register(contribution.hook);
+    // 5c. 步骤钩子折叠（agent-hooks-plan 二期——ctx.steps 通道）——注册进本
+    // Agent 的 StepsRegistry。序：capability 先（agent 阶段已注册）、**内建钩子**
+    // （发现提醒——收编自 Agent._injectDiscoveries；无 create 需求：装配点天然
+    // per-Agent）、通道贡献最后（同 5b 约定）。生效时机 = 装配时点（在途会话
+    // 不动）。子 Agent 不经本路径（spawnSubAgent 不接本面 ⇒ host.steps = null
+    // 直通；其 _discoveryBoard 本就为 null——旧路径同样不注入）。
+    scope.steps.register('pre-step', createDiscoveryReminderHook({ agentId, board: discoveryProxy }));
+    for (const contribution of activeStepHookContributions()) {
+      if (contribution.on === 'pre-step') {
+        scope.steps.register('pre-step', contribution.create ? contribution.create({ agentId }) : contribution.hook);
+      } else {
+        scope.steps.register(
+          'turn-stopping',
+          contribution.create ? contribution.create({ agentId }) : contribution.hook,
+        );
+      }
     }
 
     // 6. 接线 LifecycleManager — 全局空闲判定 + 泄漏检测 + worktree TTL 清理

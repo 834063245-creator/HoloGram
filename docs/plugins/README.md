@@ -63,7 +63,7 @@ cookbook（`docs/cookbook/`）+ 发布路径（`docs/user/develop/`）是平台�
 | `ctx.prompts` | PromptSection（段） | 下次装配 | composition/prompt-service.ts |
 | `ctx.renderers` | RendererContribution | 即时 | composition/renderer-service.tsx |
 | `ctx.hooks` | Hook 贡献（enrich/preflight） | 下次装配 | composition/hook-service.ts |
-| `ctx.preStep` | PreStepHook 贡献（每步 enter/reject + 注入；agent-hooks-plan 一期） | 下次装配 | composition/pre-step-service.ts |
+| `ctx.steps` | 步骤钩子贡献（`on: 'pre-step'` 每步 enter/reject；`'turn-stopping'` 停止边界 stop/continue；均含注入；agent-hooks-plan） | 下次装配 | composition/steps-service.ts |
 | `ctx.capabilities` | AgentCapability（会话级） | 下次装配 | composition/capability-service.ts |
 | `ctx.overlays` | 画布覆盖层 | 即时 | composition/overlay-service.ts |
 | `ctx.rootViews` | App 外壳视图槽（`'home'` 主区 / `'overlay'` 根浮层——批 9e） | 即时 | composition/root-views-service.ts |
@@ -174,7 +174,8 @@ manifest，随包携带（`tauri.conf.json` resources 目录映射
 | 概念 | 是什么 | 真源 |
 |---|---|---|
 | 插件 | 自包含 ESM 模块（`{ name, inject?, apply(ctx) }`） | 本文档 |
-| 贡献通道 | **全部贡献通道**（计数以生成物 `docs/agents/service-catalog.md` 为准）：`ctx.panels` / `ctx.commands` / `ctx.tools` / `ctx.llm`（LLM adapter）/ `ctx.prompts`（prompt 段，P4 A-1）/ `ctx.hooks`（管道钩子，P4 A-2）/ `ctx.capabilities`（capability，P4 A-3）/ `ctx.renderers`（块渲染器，V3b）/ `ctx.overlays`（画布覆盖层）/ `ctx.rootViews`（App 外壳视图槽，批 9e）/ `ctx.workspaces`（工作区接线贡献，批 10）/ `ctx.shellRows`（壳行贡献，批 10）——**同一个注册表内核**（`contribution-channel.ts` 的 `ContributionChannel`，2026-09-14 M1 收口；`timing` 声明生效时机）；**五条 seam provider 注册表**：`ctx.subagents` / `ctx.fs` / `ctx.shell`（subprocess 并入）/ `ctx.sessionPersistence` / `ctx.agentLoop`（后端替换，平台化 Phase 1/2）；`ctx.graph` seam 随图谱功能全量退役（2026-09-09） | `src-ui/src/composition/contribution-channel.ts`（内核）+ `services.ts` / `renderer-service.tsx` / `prompt-service.ts` / `hook-service.ts` / `capability-service.ts` / `overlay-service.ts` / `root-views-service.ts` / `subagent-service.ts` / `fs-service.ts` / `shell-service.ts` / `session-persistence-service.ts` / `pre-step-service.ts`（各通道；**权威清单以生成物 `docs/agents/service-catalog.md` 为准**） |
+| 贡献通道 | **全部贡献通道**（计数以生成物 `docs/agents/service-catalog.md` 为准）：`ctx.panels` / `ctx.commands` / `ctx.tools` / `ctx.llm`（LLM adapter）/ `ctx.prompts`（prompt 段，P4 A-1）/ `ctx.hooks`（管道钩子，P4 A-2）/ `ctx.capabilities`（capability，P4 A-3）/ `ctx.renderers`（块渲染器，V3b）/ `ctx.overlays`（画布覆盖层）/ `ctx.rootViews`（App 外壳视图槽，批 9e）/ `ctx.workspaces`（工作区接线贡献，批 10）/ `ctx.shellRows`（壳行贡献，批 10）/ `ctx.steps`（步骤钩子家族——pre-step / turn-stopping，agent-hooks-plan）——**同一个注册表内核**（`contribution-channel.ts` 的 `ContributionChannel`，2026-09-14 M1 收口；`timing` 声明生效时机）；**五条 seam provider 注册表**：`ctx.subagents` / `ctx.fs` / `ctx.shell`（subprocess 并入）/ `ctx.sessionPersistence` / `ctx.agentLoop`（后端替换，平台化 Phase 1/2）；`ctx.graph` seam 随图谱功能全量退役（2026-09-09） | `src-ui/src/composition/contribution-channel.ts`（内核）+ `services.ts` / `renderer-service.tsx` / `prompt-service.ts` / `hook-service.ts` / `capability-service.ts` / `overlay-service.ts` / `root-views-service.ts` / `subagent-service.ts` / `fs-service.ts` / `shell-service.ts` / `session-persistence-service.ts` / `steps-service.ts`
+（各通道；**权威清单以生成物 `docs/agents/service-catalog.md` 为准**） |
 | 行（row） | 组合的最小单元——工具族/prompt 段/capability/壳行各有 id | `src-ui/src/composition/*` |
 | preset | 命名的行组合叠加层（standard/minimal 内置 + 用户目录） | §8 + `docs/composition/README.md` |
 | patch | 四域行的增量数据（禁用/覆盖/插入） | `docs/composition/README.md` |
@@ -581,17 +582,19 @@ ctx.effect(
   ——与 graph hooks 不下放子 Agent 的既有语义一致）。
 - 重名 id 装载期拒绝（throw）；disposer 经 ctx.effect 登记（同全部通道）。
 
-### ctx.preStep —— 步前裁决钩子（下次 Agent 装配生效）
+### ctx.steps —— 步骤钩子家族（pre-step / turn-stopping；下次 Agent 装配生效）
 
-步前裁决面（agent-hooks-plan 一期，2026-10-13）：Agent **每步进入前**可裁决「进不进这一步」
-并注入本步上下文——`enter`（放行 + 注入批）或 `reject`（拦下本步）。对标 DSH 的
-`agent/pre-step`（interception extension points）。
+步骤钩子面（agent-hooks-plan：一期步前裁决 2026-10-13，二期面扩展 + 停止边界同批）：
+在 Agent 循环的两个边界上可裁决、可注入——**pre-step**（每步进入前：进不进这一步）
+与 **turn-stopping**（自然停止边界：停还是继续）。对标 DSH 的 interception extension
+points（`agent/pre-step`）。
 
 ```js
 ctx.effect(
   () =>
-    ctx.preStep.register({
+    ctx.steps.register({
       id: 'acme/step-notes', // 约定 '<插件名>/<钩子名>'
+      on: 'pre-step', // 'pre-step' | 'turn-stopping'
       hook: {
         name: 'acme-step-notes',
         // payload = { agentId, step, signal }
@@ -605,18 +608,44 @@ ctx.effect(
     }),
   'acme/step-notes',
 );
+
+// 停止边界：默认停；任一 continue ⇒ 再开下一步（可附注入）
+ctx.effect(
+  () =>
+    ctx.steps.register({
+      id: 'acme/keep-going',
+      on: 'turn-stopping',
+      hook: {
+        name: 'acme-keep-going',
+        shouldAsk: () => pendingWorkExists(),     // 可选：false 跳过本钩子
+        decide: () => ({ action: 'continue', reminders: [{ content: '还差一步：…' }] }),
+        // 或 { action: 'stop' }（缺省）
+      },
+      // 需要 per-Agent 状态（去重集/计数器）时用 create 工厂——装配时为每个 Agent 调一次：
+      // create: ({ agentId }) => ({ name: 'acme-keep-going', decide: () => ({ action: 'stop' }) }),
+    }),
+  'acme/keep-going',
+);
 ```
 
 关键语义：
 
-- **两类决策**：`enter`（放行本步，可附 `messages` 注入批——落会话 `user/message`，
-  模型可见）/ `reject`（拦下本步：不开步、不发请求，本轮收尾；`reason` 经 UI Notice
-  可见，**模型不可见**——对齐 DSH blocked turn）。
-- **合并**：按注册序**全跑**（每个钩子都被调用——审计友好）；**任一 reject ⇒ 整体 reject**
-  （reason 取第一个非空，注入批丢弃）；全部 enter ⇒ 注入批按序累积。`decide` 可异步。
-- **生效时机是下次 Agent 装配**（新会话）——装配折叠进 per-Agent 裁决表；在途会话保持
+- **注入两类**：`messages`（durable——落会话 `user/message`，模型可见）与 `reminders`
+  （transient——只给本次请求的临时提醒、不落会话；content 原样进提醒批）。
+- **pre-step 决策**：`enter`（放行本步，可附注入）/ `reject`（拦下本步：不开步、不发请求，
+  本轮收尾；`reason` 经 UI Notice 可见，**模型不可见**——对齐 DSH blocked turn）。
+- **turn-stopping 决策**：`stop`（结束本轮，缺省）/ `continue`（再开下一步，可附注入）。
+  默认停、任一 continue 则走；**同 turn 连续 continue 有上限（3 次）**——超限强制停 +
+  日志告警 + UI Notice（防「无条件继续」死循环）。
+- **合并**：按注册序**全跑**（每个钩子都被调用——审计友好）；两事件按各自默认值折叠
+  （pre-step 任一 reject ⇒ 整体 reject；turn-stopping 任一 continue ⇒ 整体 continue）；
+  注入累积、`reason` 取第一个非空。`decide` 可异步。
+- **`create` 工厂（可选，给定时优先）**：装配折叠时为**每个 Agent 调一次**——需要
+  per-Agent 状态（去重集、计数器）的钩子有正确归属；不给定时贡献实例跨装配复用（同
+  hooks 通道）。工厂抛错 = 装配期 fail-loud（不静默跳过）。
+- **生效时机是下次 Agent 装配**（新会话）——装配折叠进 per-Agent 注册表；在途会话保持
   创建时点的钩子面不变（§7）。
-- **注入位置**：本步现有注入链（plan/记忆/inbox/发现）之后、压缩预检之前——注入后仍受
+- **注入位置**：本步注入链尾（plan/记忆/inbox 之后）、压缩预检之前——注入后仍受
   压缩保护；落盘为会话尾部 append（不改写请求前缀）。
 - **崩溃静默降级**：钩子抛错 / 返回畸形值 = 视作未投（不阻断、不否决），只进日志。
 - **子 Agent 不继承**（同 hooks 语义）；**卸载/禁用走插件开关**（本通道不进 roster 寻址域）。

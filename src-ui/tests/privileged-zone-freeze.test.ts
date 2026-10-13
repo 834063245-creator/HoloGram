@@ -29,6 +29,8 @@
 // （§4-9 与工作区接线同窗），契约 v52 → v53 → 34 文件。
 // agent-hooks-plan 一期（2026-10-13）：步前裁决贡献面本体入区——`composition/pre-step-service.ts`
 // （`ctx.preStep` 通道；与 hooks/capability 同族的**通道本体**，非可搬产物内容），契约 v54 → v55 → 35 文件。
+// agent-hooks-plan 二期（2026-10-13）：面扩展 + 改名——`composition/steps-service.ts`（`ctx.steps`
+// 通道：步骤钩子家族），契约 v55 → v56。
 
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -53,7 +55,7 @@ const COMPOSITION_MANIFEST = [
   'overlay-service.ts',
   'patch-loader.ts',
   'plugin-tool-rows.ts',
-  'pre-step-service.ts',
+  'steps-service.ts',
   'preset-assembly.ts',
   'preset-discovery.ts',
   'presets.ts',

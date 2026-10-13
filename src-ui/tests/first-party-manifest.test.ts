@@ -50,6 +50,7 @@ describe('first-party-manifest（清单完备性守护）', () => {
     // 贡献面，用户 2026-09-25 裁定 A）：54 → 56
     // bundled-engine 新增（2026-09-26 批 10 部件三：引擎接线产物化）：56 → 57
     // pre-step-service 新增（2026-10-13 agent-hooks-plan 一期：步前裁决贡献面）：57 → 58
+    // 二期面扩展改名 steps-service（2026-10-13：ctx.preStep → ctx.steps + turn-stopping；计数不变）
     expect(Object.keys(FIRST_PARTY_MANIFEST)).toHaveLength(58);
   });
 
@@ -61,6 +62,7 @@ describe('first-party-manifest（清单完备性守护）', () => {
   it('§4-15 单一真源（批 9a）：内核 service 名单只在 service-plugins.ts 写一次', () => {
     const names = SERVICE_PLUGINS.map((e) => e.plugin.name);
     // pre-step-service 追加末位（2026-10-13 agent-hooks-plan 一期）：18 → 19
+    // 二期改名 steps-service（2026-10-13：面扩展；表序/计数不变）
     expect(names).toHaveLength(19);
     // loader 表由本表派生（对象同一，不是「两份名单碰巧一样」）
     expect(BUILTIN_PLUGINS.map((p) => p.name)).toEqual(names);
