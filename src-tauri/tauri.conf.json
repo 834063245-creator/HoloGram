@@ -1,7 +1,7 @@
 {
   "productName": "兰台",
   "identifier": "com.lantai.app",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "build": {
     "frontendDist": "../src-ui/dist",
     "devUrl": "http://127.0.0.1:1420",

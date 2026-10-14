@@ -3,7 +3,7 @@
 
 [package]
 name = "hologram-graph"
-version = "1.0.6"
+version = "1.0.7"
 edition = "2021"
 
 # 图类型层：Node/Edge/Graph/ID 驻留器——全仓库最底层纯类型 crate，

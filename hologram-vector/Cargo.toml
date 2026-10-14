@@ -3,7 +3,7 @@
 
 [package]
 name = "hologram-vector"
-version = "1.0.6"
+version = "1.0.7"
 edition = "2021"
 
 # 向量检索层（纯计算）：CodeVectorIndex（usearch）+ MiniLM ONNX 嵌入 +

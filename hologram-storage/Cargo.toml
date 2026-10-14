@@ -3,7 +3,7 @@
 
 [package]
 name = "hologram-storage"
-version = "1.0.6"
+version = "1.0.7"
 edition = "2021"
 
 # 数据家层（L2 存储外置 · layering-rework-plan §4.3 欠账项 1）：
