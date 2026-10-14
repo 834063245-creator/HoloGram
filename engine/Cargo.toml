@@ -61,7 +61,7 @@ hologram-graph = { path = "../hologram-graph" }
 hologram-storage = { path = "../hologram-storage" }
 hologram-vector = { path = "../hologram-vector" }
 # SCIP 桥接（P1-1）：官方 protobuf 绑定，解析 index.scip 无需 protoc
-scip = "0.9"
+scip = "0.10"
 protobuf = "=3.7.2"
 # LSP 子进程 die-with-parent（PR_SET_PDEATHSIG，unix）
 [target.'cfg(unix)'.dependencies]
