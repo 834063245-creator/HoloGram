@@ -55,7 +55,7 @@ where
                     io::ErrorKind::Interrupted | io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
                 );
                 if !retryable || attempt == IO_RETRY_COUNT {
-                    return Err(format!("{} (尝试 {} 次后失败): {}", label, attempt + 1, e));
+                    return Err(crate::integrity::io_failure_message(label, attempt + 1, &e));
                 }
                 let delay = IO_RETRY_BASE_DELAY * 2u32.pow(attempt);
                 eprintln!(
@@ -67,12 +67,14 @@ where
             }
         }
     }
-    Err(format!(
-        "{} (尝试 {} 次后失败): {}",
-        label,
-        IO_RETRY_COUNT + 1,
-        last_err.map(|e| e.to_string()).unwrap_or_else(|| "未知 I/O 错误".to_string())
-    ))
+    match last_err {
+        Some(e) => Err(crate::integrity::io_failure_message(label, IO_RETRY_COUNT + 1, &e)),
+        None => Err(format!(
+            "{} (尝试 {} 次后失败): 未知 I/O 错误",
+            label,
+            IO_RETRY_COUNT + 1
+        )),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════

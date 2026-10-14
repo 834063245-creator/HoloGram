@@ -68,6 +68,10 @@ windows = { version = "0.61", features = [
     "Win32_System_Memory",
     "Win32_System_DataExchange",
     "Win32_Foundation",
+    # 进程完整性自检（integrity.rs，2026-10-15 事故立法）：
+    # OpenProcessToken / GetTokenInformation(TokenIntegrityLevel) / GetCurrentProcess
+    "Win32_Security",
+    "Win32_System_Threading",
 ] }
 
 [features]

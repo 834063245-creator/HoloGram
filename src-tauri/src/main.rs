@@ -23,6 +23,7 @@ mod audit;
 mod credential;
 mod logging;
 mod boot_log;
+mod integrity;
 pub(crate) mod os_sandbox;
 mod workspace;
 mod ignored_paths;
@@ -69,6 +70,11 @@ fn main() {
     // 只走 `log::error!` 且不回传调用方——不装 logger 就会静默成「双击后什么都不发生」。
     // 必须最先执行：早于 generate_context / 任何可能失败的初始化。
     boot_log::init();
+    // 进程完整性自检（2026-10-15 事故立法）：外部沙箱给工作区打的可继承 Low 标签会被
+    // 构建产物继承 ⇒ 本进程以 Low 运行 ⇒ 写用户目录全被拒（os error 5，且重启无效）。
+    // 进程内无法自愈（抬高标签要 SeRelabelPrivilege），所以这里只做留痕 + 备好修复提示；
+    // 真正的治疗在构建期（scripts\fix-product-integrity.cmd）。头注见 integrity.rs。
+    integrity::check_at_boot();
 
     let context = tauri::generate_context!();
 

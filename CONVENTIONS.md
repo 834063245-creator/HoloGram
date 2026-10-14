@@ -489,6 +489,8 @@ DOM 所有权按层划分，不要跨层抢 DOM：
 
 - **Rust 链接静默失败（2026-10-07 实测，上一条的 Rust 侧）**：`cargo build` / `cargo tauri build` 报 `could not execute process …build-script-build (never executed)` + `系统找不到指定的文件 (os error 2)`，或 `process didn't exit successfully: sccache … (exit code: 0xfffffffe)` —— **先查 TEMP，不要先怀疑代码**。取证链：那条 `--crate-type bin --emit=dep-info,link` 只留下 `.d`、`.exe` 不在盘上（rustc 退出 0，编译器一声不吭）；矩阵探针（各 3 轮）钉死 `TEMP=D:\Temp\user` + 经 `engine/grammars/gcc-wrap.exe` 链接 → **FAIL 3/3**，gcc 自报 `Cannot create temporary file in D:\Temp\user\: Permission denied`（**链接失败仍退出 0** ⇒ rustc 误判成功、cargo 在别处炸）；`TEMP=<项目内>` → OK 3/3；裸 gcc 两种 TEMP 都 OK ⇒ 分界是「进程树 × 临时目录位置」。治法已落 `.cargo/config.toml` 的 `[env]`：`TEMP/TMP = { value = "target", relative = true, force = true }`（**force 必须有**——TEMP 恒存在于环境，cargo 默认不覆盖已存在变量）；同批把 `SCCACHE_DIR` 挪到 `D:\Cache\sccache`（C 盘只剩 0.5 GB 时缓存写入会半截失败，那是 `0xfffffffe` 与「只有 .d 没有 .exe」的另一半来源）。
 
+- **工作区完整性标签被外部沙箱改写 ⇒ 产物降权（2026-10-15 实测）**：设置保存全报 `write_atomic(tmp) … 拒绝访问 (os error 5)`、`[window] 窗口状态落盘失败` 且**重启无效**时，先看 `icacls <exe> | findstr "Mandatory Label"`——本机 DSH 的 `workspace-write` 沙箱给工作区**根目录**打的是**常驻 + 可继承**的 Low 标签（其实现 `buildLowLabelAcl` 明写 `dispose()` 不撤销；继承标志 OI/CI 让全树连同既有产物立刻被盖），目录里构建出的 exe 继承它 ⇒ Windows 按**镜像标签**把进程压成 Low ⇒ 写用户目录（`~/.lantai`、`%APPDATA%`）一律拒绝——**DACL 看着全对**（`BUILTIN\Users:(M)`、无 deny、无只读），拦写入的是强制完整性控制，所以「补权限」一类修法全部无效。抬标签需 `SeRelabelPrivilege`，**进程内无法自愈**（实测 Low 进程 icacls 退出码 1299）。治法已落地：`build.cmd` 收尾调 `scripts/fix-product-integrity.cmd` 把产物标签**显式**钉成 Medium（显式 ACE 不会被后续继承传播改写）；`src-tauri/src/integrity.rs` 启动自检，并把修复命令附进 os error 5 的文案。同族事故（方向相反：WebView2 profile **丢**标签）见`.lantai/memory/webview2-profile-integrity-label-2026-10-07.md`。
+
 ## 4. 文档维护
 
 - **四层形态（2026-09-16 文档面重构立规；施工单 `docs/plans/doc-surface-refactor-plan.md`）**：
