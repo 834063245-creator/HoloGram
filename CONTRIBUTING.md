@@ -108,6 +108,36 @@ docs/            文档（入口 docs/README.md；`archive/` 是历史勿作现�
 | 工具链 | cargo test · vitest · tsc/vite · Biome |
 | 测试基线 | 见 [`CONVENTIONS.md`](CONVENTIONS.md) §3（数字会漂移，以重新实测为准） |
 
+### Windows 代码签名（发版必读）
+
+**为什么**：Windows 的「打开文件 - 安全警告 / 无法验证发布者」要两件事同时成立才弹——① 文件带
+Mark-of-the-Web（下载来的、或从下载来的压缩包里解出来的才有，NTFS 备用数据流 `Zone.Identifier`）；
+② exe 没有可验证的 Authenticode 签名。实测对照（本机 2026-10-14，同一枚未签名 exe）：无 MOTW ⇒
+静默启动；加 `ZoneId=3` ⇒ 弹该框且**不启动**；签名且证书受信任 + MOTW ⇒ 静默启动、无任何弹窗。
+所以**根治 = 给产物签名**，而不是让用户「右键解除锁定」。
+
+**唯一入口**：`scripts/sign-windows.ps1`（头注写了证书来源、退出码，以及「为什么 Tauri 也需要
+signtool」）。`src-tauri/sign.windows.conf.json` 把它接进 `tauri build` 的两个钩子：
+`build.beforeBundleCommand` 签随包件（引擎 / lspd / officecli / 主程序），`bundle.windows.signCommand`
+签主程序与 NSIS 安装包——**必须**在 Tauri 生成 updater `.sig` 之前签完，否则 minisign 与文件字节
+对不上，应用内更新会校验失败。
+
+**本地**：设 `LANTAI_SIGN_THUMBPRINT`（证书指纹，证书装进 `Cert:\CurrentUser\My`）或
+`LANTAI_SIGN_PFX` + `LANTAI_SIGN_PFX_PASSWORD`，再照常跑 `build.cmd`。**没设 ⇒ 完全不启用签名，
+构建行为与从前逐字一致**（连 signtool 都不会去找）。
+
+**CI**：`release.yml` 只在配了对应 secret（`LANTAI_SIGN_PFX_BASE64` / `LANTAI_SIGN_THUMBPRINT` /
+`LANTAI_SIGN_COMMAND`）时才启用签名；没配 ⇒ 发版与从前完全一样。
+
+**签名构建的硬前提**：Tauri 的 bundler 在签 `bundle.resources` 前会先调 `signtool verify` 探「是否
+已签名」（tauri-bundler `sign.rs` 的 `should_sign`），所以签名机器必须能拿到 `signtool.exe`：GitHub
+windows runner 自带 Windows SDK；本地可装 SDK 的 Signing Tools，或把 `TAURI_WINDOWS_SIGNTOOL_PATH`
+指向任意一枚 `signtool.exe`（例如 NuGet 包 `Microsoft.Windows.SDK.BuildTools` 里那枚）。
+
+**签名 ≠ 万事大吉**：SmartScreen（「Windows 已保护你的电脑」）看的是**声誉**——OV 证书初期仍可能弹，
+EV 即时可信，或靠累计下载量；另外 Tauri 的 updater `.sig`（minisign）与 Authenticode 是两回事，
+前者压不掉这个弹窗。
+
 ### 需要帮助？
 
 - 阅读 [README](README.md)

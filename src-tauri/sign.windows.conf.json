@@ -1,0 +1,13 @@
+{
+  "build": {
+    "beforeBundleCommand": "sign-windows.cmd"
+  },
+  "bundle": {
+    "windows": {
+      "signCommand": {
+        "cmd": "cmd.exe",
+        "args": ["/c", "sign-windows.cmd", "%1"]
+      }
+    }
+  }
+}

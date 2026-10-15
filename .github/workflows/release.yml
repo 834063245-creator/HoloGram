@@ -370,6 +370,44 @@ jobs:
             echo CLIFF_EOF
           } >> "$GITHUB_OUTPUT"
 
+      # Windows Authenticode 签名（可选，默认关）——只有在配了签名 secret 时，才把签名配置
+      # 写进 tauri.windows.conf.json，并让 scripts\sign-windows.cmd 能被裸名字找到。
+      #   未配 secret ⇒ 本步整段跳过 ⇒ Tauri 的 can_sign() 为假 ⇒ 发版行为与从前逐字一致
+      #   （runner 上的 Windows SDK 只在真签名时才被用到：bundler 签 bundle.resources 前要先
+      #    跑一次 `signtool verify` 探「是否已签名」，见 tauri-bundler sign.rs: should_sign）。
+      # 证书三选一：LANTAI_SIGN_PFX_BASE64(+_PASSWORD) / LANTAI_SIGN_THUMBPRINT / LANTAI_SIGN_COMMAND。
+      # 细节与本地侧同一份说明：scripts/sign-windows.ps1 头注 + CONTRIBUTING.md「Windows 代码签名」。
+      - name: Enable Windows code signing (no-op unless signing secrets exist)
+        shell: pwsh
+        env:
+          SIGN_PFX_B64: ${{ secrets.LANTAI_SIGN_PFX_BASE64 }}
+          SIGN_PFX_PWD: ${{ secrets.LANTAI_SIGN_PFX_PASSWORD }}
+          SIGN_THUMB: ${{ secrets.LANTAI_SIGN_THUMBPRINT }}
+          SIGN_CMD: ${{ secrets.LANTAI_SIGN_COMMAND }}
+        run: |
+          if (-not ($env:SIGN_PFX_B64 -or $env:SIGN_THUMB -or $env:SIGN_CMD)) {
+            Write-Host 'No Windows signing secrets configured - build stays unsigned (same as before).'
+            exit 0
+          }
+          $confPath = 'src-tauri/tauri.windows.conf.json'
+          $conf = Get-Content $confPath -Raw | ConvertFrom-Json
+          if (-not $conf.build) { $conf | Add-Member -NotePropertyName build -NotePropertyValue ([pscustomobject]@{}) -Force }
+          $conf.build | Add-Member -NotePropertyName beforeBundleCommand -NotePropertyValue 'sign-windows.cmd' -Force
+          if (-not $conf.bundle.windows) { $conf.bundle | Add-Member -NotePropertyName windows -NotePropertyValue ([pscustomobject]@{}) -Force }
+          $signCommand = [pscustomobject]@{ cmd = 'cmd.exe'; args = @('/c', 'sign-windows.cmd', '%1') }
+          $conf.bundle.windows | Add-Member -NotePropertyName signCommand -NotePropertyValue $signCommand -Force
+          $conf | ConvertTo-Json -Depth 10 | Set-Content $confPath
+          Add-Content $env:GITHUB_PATH (Join-Path $env:GITHUB_WORKSPACE 'scripts')
+          if ($env:SIGN_PFX_B64) {
+            $pfx = Join-Path $env:RUNNER_TEMP 'lantai-code-sign.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_B64))
+            Add-Content $env:GITHUB_ENV "LANTAI_SIGN_PFX=$pfx"
+            Add-Content $env:GITHUB_ENV "LANTAI_SIGN_PFX_PASSWORD=$env:SIGN_PFX_PWD"
+          }
+          if ($env:SIGN_THUMB) { Add-Content $env:GITHUB_ENV "LANTAI_SIGN_THUMBPRINT=$env:SIGN_THUMB" }
+          if ($env:SIGN_CMD) { Add-Content $env:GITHUB_ENV "LANTAI_SIGN_COMMAND=$env:SIGN_CMD" }
+          Write-Host 'Windows code signing enabled for this run.'
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
