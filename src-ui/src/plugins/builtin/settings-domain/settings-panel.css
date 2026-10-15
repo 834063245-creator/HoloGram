@@ -5,6 +5,18 @@
    变量直用 tokens.css 兰台 token（C5 --obs-* 别名层已退役）。
    ═══════════════════════════════════════════════════════════════ */
 
+/* ── 幕布 + 面板（2026-10-15 §15 批 3：修「宣告了的过渡永不生效」）──
+ * 病灶：本件 panel-def 标 `unmountOnClose: true`（关即卸载、重开重置 dirty 态），
+ * 所以它**只以「已开」形态存在**——而旧案把起手式写成 `.sp-open` 类，且
+ * SettingsPanel.tsx 首帧就带着这个类：`opacity: 0 → 1` 的过渡**从未运行过一次**
+ * （挂载即终态，没有前一个计算值可比）。两条 `transition` 声明在、效果零——
+ * 全应用最大的模态（900×640）是「啪」地出现的，与 49 处「border 简写被拼装」
+ * 同属「声明存在但不生效」那一类缺陷。
+ * 治法：起手式交还 `@starting-style`（正是为「首帧入场」设计的 API）——
+ * 基座 = 唯一的终态，不动画属性留在 starting-style 里；`.sp-open` 整层退役
+ * （它承载的「开/关两态」在本件上不存在，是死抽象）。不支持的引擎忽略该 at 块
+ * ⇒ 回落旧观感（瞬时），无破面。 */
+
 #settings-panel-overlay {
   position: fixed;
   inset: 0;
@@ -13,14 +25,12 @@
   z-index: var(--z-panel-veil);
   /* 印刷品方向：平色暗化，无玻璃模糊 */
   background: var(--veil);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--snap);
-}
-
-#settings-panel-overlay.sp-open {
+  /* 终态（本件只在开态存在，见上）；`pointer-events` 不入 transition——
+   * 它是离散属性，按离散动画规则会在 50% 翻转（开头那半程点不进去），
+   * 与 §15 约束律「可点即用」相抵。 */
   opacity: 1;
   pointer-events: auto;
+  transition: opacity var(--m-sheet);
 }
 
 #settings-panel {
@@ -36,18 +46,50 @@
   border: var(--rule-strong);
   border-radius: 0; /* 印刷品无圆角 */
   transform: translate(-50%, -50%);
-  opacity: 0;
-  pointer-events: none;
-  transition: all var(--snap);
+  opacity: 1;
+  pointer-events: auto;
+  /* 开合档（§15）：面板出场属「容器登场」——`--m-sheet` 的曲线是出相
+   * （快起慢收），正是入场要的；`--m-scene` 的 io 曲线是给**两侧同时动**的
+   * View Transition 备的，单侧登场用它会在开头钝住。 */
+  transition:
+    opacity var(--m-sheet),
+    transform var(--m-sheet);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   box-shadow: var(--elev-raise); /* letterpress 硬偏移 */
 }
 
-#settings-panel.sp-open {
-  opacity: 1;
-  pointer-events: auto;
+/* 首帧入场（唯一起手式）：幕布淡入；面板自下方 8px 托起归位（§15 墨律的位移
+ * 量纲）——**不缩放**：900px 面板一缩放，其内全部文字要重新栅格化。 */
+@starting-style {
+  #settings-panel-overlay {
+    opacity: 0;
+  }
+
+  #settings-panel {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px));
+  }
+}
+
+/* 出场（§15 退场对称，2026-10-15 批 3b）：本面板声明了 `animateExit`，DockPanel
+ * 关闭时给本子树挂 `[data-panel-leaving]` 并保留 260ms（= tokens.css `--m-sheet`，
+ * 与壳层常量 `PANEL_LEAVE_MS` 同值、由 motion-contract 钉死），窗满才真卸载。
+ * 出场 = 入场的逆写：幕布淡去、面板向下 8px 沉回纸里；**退场期一律不接点击**
+ * （否则「点关闭」那一击之后的连点会打在正在消失的面上）。 */
+[data-panel-leaving] #settings-panel-overlay,
+[data-panel-leaving] #settings-panel {
+  pointer-events: none;
+}
+
+[data-panel-leaving] #settings-panel-overlay {
+  opacity: 0;
+}
+
+[data-panel-leaving] #settings-panel {
+  opacity: 0;
+  transform: translate(-50%, calc(-50% + 8px));
 }
 
 /* ── 头部：卷首式标题 ── */
@@ -160,8 +202,46 @@
   background: var(--line-soft);
 }
 
+/* ── 标签页内容：换景（§15，2026-10-15 批 4a）──
+ * 病灶两段：① 旧案七个页用**内联** `display` 互斥切换（`style={{ display: activeTab===x ? '' : 'none' }}`）
+ * ——换页零方向、零过场，一页「啪」地换成另一页；② `.sp-content` 是**唯一滚动容器**而
+ * 页是它的兄弟子件，切页时 scrollTop 原地留着 ⇒ 从长页切到短页会落在中途（读作跳变）。
+ * 治法：切换权收到 CSS 类（`.is-on`），过场走 `--m-ink`（单侧登场档）+ **`allow-discrete`**
+ * ——`display` 从 `block → none` 时浏览器把元素**留到过渡结束才真正隐藏**（这正是
+ * `transition-behavior: allow-discrete` 对 display 的特例语义），故**出场也有了**；
+ * `@starting-style` 供入场起手（同设置面板本体，见文件头注）。
+ * 引擎不支持该 at 块/关键字 ⇒ 回落旧观感（瞬时切换），无破面。
+ * **跨层归位**：`.sp-tab-content[data-tab="provider"]` 的 `display:flex` 原本在**壳层**
+ * CSS（`app/panels/dock-panels/provider-settings.css`，`main.ts` 直接 import、烧进 exe），
+ * 与本节同选择器同特异度 ⇒ 源序（产物在后）会把它顶掉、provider 页错落成 block。
+ * 切换权与页版式必须同一层 ⇒ 该规则整条迁到本节（壳层那条已删）。 */
 .sp-tab-content {
   counter-reset: setidx;
+  display: none;
+  opacity: 0;
+  transition:
+    opacity var(--m-ink),
+    display var(--m-ink) allow-discrete;
+}
+
+.sp-tab-content.is-on {
+  display: block;
+  opacity: 1;
+}
+
+/* provider 页是双栏自适应布局（原壳层规则，逐字迁入） */
+.sp-tab-content[data-tab="provider"].is-on {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 入场起手（唯一起手式）：只淡入不动位——页是长滚动面，位移会连带读成滚动 */
+@starting-style {
+  .sp-tab-content.is-on {
+    opacity: 0;
+  }
 }
 
 /* ── 分节：序号 + 强规线（原型 .set-section > h2 语法）── */

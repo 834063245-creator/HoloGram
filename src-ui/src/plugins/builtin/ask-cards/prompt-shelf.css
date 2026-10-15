@@ -20,7 +20,7 @@
 }
 
 .prompt-shelf {
-  animation: ps-rise 160ms ease-out;
+  animation: ps-rise var(--m-ink);
 }
 
 /* ── 牒卡骨架（纸叠纸）── */
@@ -91,7 +91,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap);
 }
 .prompt-shelf__dismiss:hover {
   border-color: var(--ink-2);
@@ -118,7 +121,11 @@
   border: var(--rule-soft);
   color: var(--ink-1);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    box-shadow var(--snap),
+    color var(--snap);
 }
 .prompt-shelf__option:hover {
   background: var(--sel-wash); /* 2026-09-01 审计：统一行型选中语言 */
@@ -227,7 +234,10 @@
   border: 1px solid color-mix(in oklch, var(--seal) 40%, transparent);
   color: var(--seal-deep);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    opacity var(--snap);
 }
 .prompt-shelf__confirm:hover {
   background: var(--seal-soft);
@@ -251,7 +261,9 @@
   border: 1px solid color-mix(in oklch, var(--seal) 40%, transparent);
   color: var(--seal-deep);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap);
 }
 .prompt-shelf__submit:hover {
   background: var(--seal-soft);
@@ -302,7 +314,10 @@
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap);
 }
 .prompt-shelf__perm-btn:hover {
   color: var(--ink-1);
@@ -370,7 +385,11 @@
   background: transparent;
   border: var(--rule-soft);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap),
+    opacity var(--snap);
 }
 .prompt-shelf__nav:hover:not(:disabled) {
   color: var(--ink-1);

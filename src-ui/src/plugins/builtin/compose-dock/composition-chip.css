@@ -77,7 +77,7 @@
   background: var(--paper);
   border: 1px solid var(--rule-strong-ink);
   box-shadow: var(--elev-menu);
-  animation: pop-up 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-up var(--m-ink);
 }
 
 .pp-composer-settings .pp-comp-opt {

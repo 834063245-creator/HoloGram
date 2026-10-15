@@ -71,6 +71,10 @@ export interface PanelContribution {
   askAgent?: boolean;
   /** 关闭即卸载、重开重置状态 */
   unmountOnClose?: boolean;
+  /** 关闭时播出场动画（§15 退场对称）——与 `app/panels/panel-def.ts` 的
+   *  `PanelDef.animateExit` **逐字段同义**（两处形状是「贡献面 / 消费面」一对，
+   *  合流时 `panelDefs()` 原样透传）；语义与消费面见那里。 */
+  animateExit?: boolean;
   component: ComponentType;
 }
 

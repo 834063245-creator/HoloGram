@@ -114,6 +114,17 @@ const SettingsPanelApp: React.FC<{
 }> = ({ onClose, onSave }) => {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [activeTab, setActiveTab] = useState<Tab>('provider');
+  /** 内容列滚动容器（切页复位用）——`.sp-content` 是**唯一**滚动容器，而七个页是它的
+   *  兄弟子件：不复位的话从长页切到短页会落在中途/被夹到末尾，读作一次跳变。 */
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // ponytail: 本 effect 的**唯一目的**就是「activeTab 变了就复位」——body 不读它，
+    // 故显式 `void` 表态（同 use-paper-focus.ts 的 `void regions;` 先例；否则
+    // biome 的 useExhaustiveDependencies 会把这个依赖判为多余并建议删掉）。
+    void activeTab;
+    const el = contentRef.current;
+    if (el) el.scrollTop = 0;
+  }, [activeTab]);
   const [appVersion, setAppVersion] = useState('…');
   // S4-2：组合诊断 + preset 选择（Agent tab「组合」节——只读诊断 + 缺省选择器）
   const compositionStatus = useCompositionStore((s) => s.status);
@@ -467,8 +478,11 @@ const SettingsPanelApp: React.FC<{
   return (
     <>
       {/* 背板点击关闭（a11y：背板非交互元素本体，键盘路径走面板内按钮/Esc） */}
-      <div id="settings-panel-overlay" className="sp-open" onMouseDown={handleClose} aria-hidden="true" />
-      <div id="settings-panel" className="sp-open">
+      {/* 无 `sp-open` 类（2026-10-15 §15 批 3）：本面板 `unmountOnClose`，只在开态
+          存在 ⇒「开/关两态」是死抽象，且旧案把 `.sp-open` 写在首帧上导致入场过渡
+          永不触发。入场起手式改由 CSS 的 `@starting-style` 承担（settings-panel.css）。 */}
+      <div id="settings-panel-overlay" onMouseDown={handleClose} aria-hidden="true" />
+      <div id="settings-panel">
         {/* 头部 */}
         <div className="sp-header">
           <span
@@ -500,13 +514,9 @@ const SettingsPanelApp: React.FC<{
         </div>
 
         {/* 内容 */}
-        <div className="sp-content">
+        <div className="sp-content" ref={contentRef}>
           {/* ═══ Provider 标签页（提供方控制台）═══ */}
-          <div
-            className="sp-tab-content"
-            data-tab="provider"
-            style={{ display: activeTab === 'provider' ? '' : 'none' }}
-          >
+          <div className={`sp-tab-content${activeTab === 'provider' ? ' is-on' : ''}`} data-tab="provider">
             <ProviderPage
               settings={settings}
               onCommitProvider={commitProvider}
@@ -555,7 +565,7 @@ const SettingsPanelApp: React.FC<{
           </div>
 
           {/* ═══ Agent 标签页 ═══ */}
-          <div className="sp-tab-content" data-tab="agent" style={{ display: activeTab === 'agent' ? '' : 'none' }}>
+          <div className={`sp-tab-content${activeTab === 'agent' ? ' is-on' : ''}`} data-tab="agent">
             <div className="sp-section">
               <div className="sp-section-title">组合 / Composition</div>
               <div className="sp-field">
@@ -721,7 +731,7 @@ const SettingsPanelApp: React.FC<{
           </div>
 
           {/* ═══ 显示标签页 ═══ */}
-          <div className="sp-tab-content" data-tab="display" style={{ display: activeTab === 'display' ? '' : 'none' }}>
+          <div className={`sp-tab-content${activeTab === 'display' ? ' is-on' : ''}`} data-tab="display">
             {/* 语言选项已摘除（2026-08 UI 大清扫：i18n 只覆盖已退役的观测台图例，
                 纸面全硬编码中文——假选项误导用户。真有多语言需求时再恢复）。 */}
             <div className="sp-section" style={{ marginTop: 18 }}>
@@ -846,31 +856,27 @@ const SettingsPanelApp: React.FC<{
           </div>
 
           {/* ═══ 插件标签页（S4-3 安装通道）═══ */}
-          <div className="sp-tab-content" data-tab="plugins" style={{ display: activeTab === 'plugins' ? '' : 'none' }}>
+          <div className={`sp-tab-content${activeTab === 'plugins' ? ' is-on' : ''}`} data-tab="plugins">
             <PluginsPage />
           </div>
 
           {/* ═══ 技能标签页（skills-mcp-production-plan Commit 4）═══ */}
-          <div className="sp-tab-content" data-tab="skills" style={{ display: activeTab === 'skills' ? '' : 'none' }}>
+          <div className={`sp-tab-content${activeTab === 'skills' ? ' is-on' : ''}`} data-tab="skills">
             <SkillsPage />
           </div>
 
           {/* ═══ MCP 标签页（skills-mcp-production-plan Commit 6c）═══ */}
-          <div className="sp-tab-content" data-tab="mcp" style={{ display: activeTab === 'mcp' ? '' : 'none' }}>
+          <div className={`sp-tab-content${activeTab === 'mcp' ? ' is-on' : ''}`} data-tab="mcp">
             <McpPage />
           </div>
 
           {/* ═══ 诊断标签页（日志可观测性批 4）═══ */}
-          <div
-            className="sp-tab-content"
-            data-tab="diagnostic"
-            style={{ display: activeTab === 'diagnostic' ? '' : 'none' }}
-          >
+          <div className={`sp-tab-content${activeTab === 'diagnostic' ? ' is-on' : ''}`} data-tab="diagnostic">
             <DiagnosticPage />
           </div>
 
           {/* ═══ 关于标签页 ═══ */}
-          <div className="sp-tab-content" data-tab="about" style={{ display: activeTab === 'about' ? '' : 'none' }}>
+          <div className={`sp-tab-content${activeTab === 'about' ? ' is-on' : ''}`} data-tab="about">
             <div className="sp-section">
               <div className="sp-section-title">兰台 Lantai</div>
               <div className="sp-hint" style={{ marginBottom: 16 }}>

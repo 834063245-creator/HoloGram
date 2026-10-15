@@ -88,7 +88,7 @@
   border-top: 2px solid var(--warn);
   box-shadow: var(--elev-menu);
   padding: 8px 12px;
-  animation: pop-down 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-down var(--m-ink);
 }
 .sl-alert-msg {
   flex: 1;
@@ -131,7 +131,7 @@
   border-top: var(--rule-head);
   box-shadow: var(--elev-menu);
   padding: 6px 0;
-  animation: pop-down 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-down var(--m-ink);
 }
 .sl-log-line {
   padding: 5px 12px;

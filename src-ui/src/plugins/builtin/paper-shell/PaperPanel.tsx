@@ -514,6 +514,10 @@ export function PaperPanel() {
     lodFar,
   } = usePaperViewport(core);
 
+  /** 缩放离散步进计数（§15 批 5）：只作读数 span 的 React key——值一变即重挂重播
+   *  微动效。滚轮连续缩放不抬计数（见 canvas-view-store 的字段注），故不抖。 */
+  const zoomTick = useCanvasViewStore((s) => s.zoomTick);
+
   /* ── 拖拽渲染态（声明在 usePaperRegions 之前——regions memo 消费拖拽
    *  保活/带显形输入；拖拽/纸条两域经穿参共读共写，装配根是唯一 owner）── */
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -1006,7 +1010,12 @@ export function PaperPanel() {
           {/* biome-ignore lint/a11y/noStaticElementInteractions: 无限画布是鼠标平移/缩放交互面 */}
           <div
             ref={canvasRef}
-            className={`pp-canvas${panning ? ' pp-panning' : ''}${streamLive ? ' pp-stream-live' : ''}`}
+            /* `pp-live-hand` = 手律态（§15）：整区拖动 / 四角缩放中，块体随流区每帧
+               重排，让位过渡必须摘掉（带 260ms 缓动即成橡皮筋）。与 `pp-stream-live`
+               同族：都是「画布当下处于哪种运动」的声明，由壳层发放、CSS 只管消费。 */
+            className={`pp-canvas${panning ? ' pp-panning' : ''}${streamLive ? ' pp-stream-live' : ''}${
+              edgeDragPos || regionCornerPos ? ' pp-live-hand' : ''
+            }`}
             onMouseDown={onCanvasMouseDown}
           >
             {sessions.length === 0 && (
@@ -1544,7 +1553,13 @@ export function PaperPanel() {
                 title="回到 100%（键盘 0）"
                 onClick={resetZoom}
               >
-                {zoomLabel}
+                {/* 读数微动效（§15 批 5）：`key = zoomTick` ⇒ **离散步进**（−/＋ 或键盘）
+                    时这个 span 重挂、`pp-readout-tick` 随挂载自动重播一次；滚轮连续缩放
+                    不抬计数故不重播（每帧重播会读成抖动）。key 挂在内层 span 而非按钮上
+                    ——重挂按钮会丢焦点（键盘用户点它回 100%，焦点必须留在原处）。 */}
+                <span key={zoomTick} className="pp-zoom-num">
+                  {zoomLabel}
+                </span>
               </button>
               <button
                 type="button"

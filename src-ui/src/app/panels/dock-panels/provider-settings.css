@@ -3,14 +3,11 @@
    原 P10 暗色观测台样式整文件换装：纸面平色 / 圆角恒 0 / 兰台 token。
    语言对齐 settings-panel.css（C2 set-frame）：下划线输入件 / 墨底主按钮 /
    朱砂=危险 / 石青=机读。布局结构（双栏 / 滚动 / 弹层高度护栏）保留原语义。
+   ⚠ 2026-10-15（§15 批 4a）：`.sp-tab-content[data-tab="provider"]` 那条**已迁出**
+   ——页签切换的权责归产物（settings-panel.css 的 `.sp-tab-content.is-on`），
+   而它与那条同选择器同特异度，留在壳层会被产物 CSS 按源序顶掉（provider 页
+   错落成 block）。跨层样式凡与「切换权」同选择器者，必须同层。
    ═══════════════════════════════════════════════════════════════ */
-
-.sp-tab-content[data-tab="provider"] {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
 
 /* ── 引导条（无 Key 时提示去填）── */
 .pp-onboard {
@@ -52,7 +49,11 @@
   border: var(--rule-soft);
   color: var(--ink-2);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap),
+    transform var(--snap);
 }
 .pp-ob-btn:hover {
   background: var(--ink-1);
@@ -225,7 +226,11 @@
   font-size: calc(11px * var(--font-scale));
   letter-spacing: 0.06em;
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap),
+    transform var(--snap);
 }
 .pp-rail-add:hover {
   color: var(--seal-deep);
@@ -782,7 +787,12 @@
   border: var(--rule-strong);
   color: var(--ink-1);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap),
+    opacity var(--snap),
+    transform var(--snap);
 }
 .pp-btn-test:hover:not([disabled]) {
   background: var(--ink-1);
@@ -911,7 +921,7 @@
   background: var(--paper);
   box-shadow: var(--elev-raise);
   padding: 15px 16px;
-  animation: pp-rise 0.18s ease;
+  animation: pp-rise var(--m-ink);
 }
 .cd-sheet::-webkit-scrollbar {
   width: 4px;
@@ -991,7 +1001,10 @@
   padding: 7px 18px;
   border-radius: 0;
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    transform var(--snap);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1030,7 +1043,10 @@
   background: transparent;
   color: var(--ink-1);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    opacity var(--snap);
 }
 .pp-cat-chip:hover:not([disabled]) {
   border-color: var(--seal);
@@ -1144,7 +1160,9 @@
   color: var(--ink-2);
   cursor: pointer;
   text-align: left;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap);
 }
 .pp-pick-model:hover {
   border-color: var(--seal);
@@ -1256,7 +1274,11 @@
   color: var(--paper);
   cursor: pointer;
   box-shadow: var(--shadow-anchor); /* 浸墨②：每屏唯一主动作挂硬偏移投影 */
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    box-shadow var(--snap),
+    transform var(--snap);
 }
 .pp-save-btn:hover {
   background: var(--ink-2);

@@ -102,8 +102,10 @@ body {
 
 /* ── 浮层微动效关键帧（全局共享——纸面递出语言，2026-08-30）──
  * pop-down：向下开的弹层（自锚点侧轻微下落）；pop-up：向上开的弹层（自锚点侧
- * 轻微托起）；veil-in：遮罩淡入。只动 transform/opacity 不触发布局；
- * 消费方在各组件 CSS（时长/曲线各自声明）；reduced-motion 全局豁免已兜底。 */
+ * 轻微托起）；veil-in：遮罩淡入。只动 transform/opacity 不触发布局。
+ * 时长/曲线**不再各自声明**（2026-10-15 §15 动效法收编）：三支的消费面一律
+ * `var(--m-ink)`（显形档）——浮层递出是单件动作，不属让位/换景两档。
+ * reduced-motion 全局豁免已兜底（见本文件末）。 */
 @keyframes pop-down {
   from {
     opacity: 0;

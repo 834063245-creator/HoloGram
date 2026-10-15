@@ -44,6 +44,8 @@ export const canvasNavPlugin = {
           title: '书脊',
           icon: 'book',
           unmountOnClose: true,
+          // 出场：与 sr-slide-in 逆写（§15 退场对称）——互斥两态换态不再「一边滑入、一边凭空消失」
+          animateExit: true,
           component: SpineRack,
         }),
       'canvas-spine-panel',
@@ -56,6 +58,8 @@ export const canvasNavPlugin = {
           title: '案卷',
           icon: 'list',
           unmountOnClose: true,
+          // 出场：与 ss-slide-in 逆写（§15 退场对称）
+          animateExit: true,
           component: SessionSidebar,
         }),
       'canvas-sidebar-panel',

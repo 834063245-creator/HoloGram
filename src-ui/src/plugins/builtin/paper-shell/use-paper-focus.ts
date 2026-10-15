@@ -32,6 +32,26 @@ function progressOf(now: number, t0: number, duration: number): number {
   return Math.min(1, Math.max(0, (now - t0) / duration));
 }
 
+/** 焦点飞行时长（§15 让位档）。
+ *
+ *  ⚠ **必须是 `tokens.css` 的 `--m-sheet` 值**（0.26s）——两把尺子一把：
+ *  这里是 rAF 帧动画、那边是 CSS transition，同一个「让位」读感不能两个时长。
+ *  镜像由 `tests/motion-contract.test.ts` 钉死（改一处不改另一处即红）。
+ *  旧案是「240」字面量**在本文件写了两遍**（flyToPoint + glideViewTo），
+ *  换一处漏一处——2026-10-15 §15 收成单常量。 */
+const FOCUS_FLIGHT_MS = 260;
+
+/** 动效敏感用户（§15 约束律）。
+ *
+ *  病灶：`foundation.css` 的 `prefers-reduced-motion` 块把 animation/transition
+ *  时长压到 0.01ms，但它**管不到 JS 帧动画**——于是开了「减弱动效」的用户，
+ *  唯一还在动的恰好是幅度最大的那个动作：视口飞越整张纸。故 rAF 飞行必须自觉
+ *  读 matchMedia，降级 = **直达目标**（导航功能不变，只是不过场，与 CSS 侧
+ *  0.01ms 的语义一致）。 */
+function prefersReducedMotion(): boolean {
+  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 export function usePaperFocus(params: {
   core: PaperCore | null;
   canvasSize: { w: number; h: number };
@@ -54,11 +74,19 @@ export function usePaperFocus(params: {
       const start = useCanvasViewStore.getState().view;
       const target = viewFocusRegion(start, canvasSize.w, canvasSize.h, { x, y: worldY });
       if (focusRafRef.current) cancelAnimationFrame(focusRafRef.current);
-      const DURATION = 240;
+      /* 动效敏感：不过场，直达（仍要 end() + 清 pending —— 否则画面静了而
+       * 飞行态永远在途，后续 begin() 全被 'rejected' 挡掉 = 导航静默失灵）。 */
+      if (prefersReducedMotion()) {
+        useCanvasViewStore.getState().setView(target);
+        focusRafRef.current = 0;
+        focusFlightRef.current.end();
+        useCanvasViewStore.getState().requestFocus(null);
+        return;
+      }
       let t0: number | null = null; // 首帧 rAF 时间戳（同一把钟，见 progressOf）
       const tick = (now: number) => {
         if (t0 === null) t0 = now;
-        const t = progressOf(now, t0, DURATION);
+        const t = progressOf(now, t0, FOCUS_FLIGHT_MS);
         const ease = 1 - (1 - t) ** 3;
         useCanvasViewStore.getState().setView({
           zoom: start.zoom,
@@ -109,11 +137,18 @@ export function usePaperFocus(params: {
         panY: canvasSize.h / 2 - worldY * start.zoom,
       };
       if (focusRafRef.current) cancelAnimationFrame(focusRafRef.current);
-      const DURATION = 240;
+      /* 动效敏感：同 flyToPoint（不过场，但飞行态必须收尾，见那里注）。 */
+      if (prefersReducedMotion()) {
+        useCanvasViewStore.getState().setView(target);
+        focusRafRef.current = 0;
+        focusFlightRef.current.end();
+        useCanvasViewStore.getState().requestFocus(null);
+        return;
+      }
       let t0: number | null = null; // 同 flyToPoint：起点取首帧 rAF 时间戳（不混钟）
       const tick = (now: number) => {
         if (t0 === null) t0 = now;
-        const t = progressOf(now, t0, DURATION);
+        const t = progressOf(now, t0, FOCUS_FLIGHT_MS);
         const ease = 1 - (1 - t) ** 3;
         useCanvasViewStore.getState().setView({
           zoom: start.zoom,

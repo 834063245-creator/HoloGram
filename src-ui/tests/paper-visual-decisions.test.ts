@@ -139,11 +139,12 @@ describe('纸壳视觉定稿钉值（B3/B4/B5）', () => {
     expect(take).toContain('var(--shadow-sheet-lift)');
     expect(take).toContain('var(--shadow-sheet-active)');
     expect(ruleBody(PANEL_CSS, '.pp-region-active {')).toContain('animation: pp-region-take');
-    // 基座缓退：换主时旧卷影 320ms 缓退非瞬移；整句钉死 = 单属性（只 box-shadow）
-    // + 家风缓动，一石二鸟
-    expect(ruleBody(PANEL_CSS, '.pp-region {')).toContain(
-      'transition: box-shadow 320ms cubic-bezier(0.23, 1, 0.32, 1)',
-    );
+    // 基座缓退：换主时旧卷影缓退非瞬移；整句钉死 = 单属性（只 box-shadow）
+    // + 家风档，一石二鸟。**2026-10-15 §15 动效法批规格变更**：时长/曲线由
+    // 散写 `320ms cubic-bezier(0.23, 1, 0.32, 1)` 收编为 `--m-sheet`（让位档，
+    // 0.26s）——影随手动是「纸被推/被拿起」的物理过场，归纸律；值本身（320→260ms）
+    // 是用户可见变更，已在 §15 与 commit 声明。「只 box-shadow 一项」这条钉子不变。
+    expect(ruleBody(PANEL_CSS, '.pp-region {')).toContain('transition: box-shadow var(--m-sheet)');
   });
 
   it('物理包边 token 载入（tokens.css 真源）：band/lit/shade + 活跃落影一档', () => {
@@ -388,8 +389,9 @@ describe('卷首 folio-head 钉值（2026-08-30 原型转录 → 2026-09-16「�
     expect(tab).toContain('background: var(--seal)');
     // 朱笔划界（2026-09-10 拍板「拿纸 + 朱笔划界」）：激活瞬间红条从 0 划到
     // 56px——落笔划界的书写感。宽度动画不走 transform（块级 transform 事故
-    // 立法同源）；缓动/时长同 pp-enter 家风
-    expect(tab).toContain('animation: pp-seal-draw 0.24s cubic-bezier(0.23, 1, 0.32, 1)');
+    // 立法同源）；缓动走 §15 的 `--m-ease-out`（2026-10-15 动效法批：时长 0.24s
+    // 属**仪式档**故原样保留、登记在案，只把散写 bezier 换成具名曲线 token）。
+    expect(tab).toContain('animation: pp-seal-draw 0.24s var(--m-ease-out)');
     const draw = keyframesBody(PANEL_CSS, 'pp-seal-draw');
     expect(draw).not.toBe('');
     expect(draw).not.toMatch(/transform\s*:/);

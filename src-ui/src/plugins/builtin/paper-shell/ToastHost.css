@@ -1,6 +1,8 @@
 /* ── toast（2026-08-31 贴黄拆迁）：全局瞬时提示浮层 ──
- * 顶中悬浮条：进场淡入 0.15s，hold 期满后 0.4s 淡出（动画总时长 =
- * holdMs + 400，与 toast-store 的移除定时一致）。纸色底 + 墨色字，
+ * 顶中悬浮条：进场淡入 `--m-ink`（显形档），hold 期满后 `--m-sheet` 淡出
+ * （纸片离场——比进场慢一档：渐入快、淡出缓）。**动画总时长 = holdMs +
+ * `TOAST_FADE_MS`**，后者与 toast-store 的移除定时必须同值（两处镜像由
+ * tests/motion-contract.test.ts 钉死）。纸色底 + 墨色字，
  * level 语义色走底线（info 弱规线 / warn 赭黄 / error 朱砂）。 */
 .pp-toast-host {
   position: fixed;
@@ -28,8 +30,8 @@
   box-shadow: var(--elev-raise);
   opacity: 0;
   animation:
-    pp-toast-in 0.15s ease-out forwards,
-    pp-toast-out 0.4s ease-in var(--pp-toast-hold) forwards;
+    pp-toast-in var(--m-ink) forwards,
+    pp-toast-out var(--m-sheet) var(--pp-toast-hold) forwards;
 }
 
 .pp-toast {

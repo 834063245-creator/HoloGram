@@ -68,7 +68,7 @@
   mask-position: center;
   /* 钤印入场（2026-08-30）：印章自空中按下落定——起手偏大微透、中段过压
    * 0.96、末笔回正 -3deg；fill both 兜首帧前不闪原态。 */
-  animation: sh-stamp 0.6s cubic-bezier(0.23, 1, 0.32, 1) 0.12s both;
+  animation: sh-stamp 0.6s var(--m-ease-out) 0.12s both;
 }
 @keyframes sh-stamp {
   0% {
@@ -393,7 +393,7 @@
   transform: scaleY(0.3);
   transition:
     opacity var(--snap),
-    transform var(--glide);
+    transform var(--m-sheet);
 }
 .sh-ws-card--row:hover::before,
 .sh-ws-card--row:focus-within::before {
@@ -723,16 +723,16 @@
   }
 }
 .sh-h1 {
-  animation: sh-rise 0.55s cubic-bezier(0.23, 1, 0.32, 1) 0.05s both;
+  animation: sh-rise 0.55s var(--m-ease-out) 0.05s both;
 }
 .sh-section-title {
-  animation: sh-rise 0.5s cubic-bezier(0.23, 1, 0.32, 1) 0.16s both;
+  animation: sh-rise 0.5s var(--m-ease-out) 0.16s both;
 }
 .sh-workspaces {
-  animation: sh-rise 0.55s cubic-bezier(0.23, 1, 0.32, 1) 0.22s both;
+  animation: sh-rise 0.55s var(--m-ease-out) 0.22s both;
 }
 .sh-actions {
-  animation: sh-rise 0.5s cubic-bezier(0.23, 1, 0.32, 1) 0.28s both;
+  animation: sh-rise 0.5s var(--m-ease-out) 0.28s both;
 }
 
 /* ── 底部 footer ── */

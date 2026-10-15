@@ -133,6 +133,30 @@
   min-width: 44px;
   text-align: center;
 }
+
+/* ── 读数微动效（§15 批 5）：离散步进时读数「一跳」 ──
+ * 病灶：−/＋ 钮与键盘 +/−/0 是**离散步进**，读数从 100% 直接变成 150%——三字替换
+ * 没有任何交代，眼要自己去追。治法＝一次极小的位移 + 淡入（2px，`--m-ink` 显形档），
+ * 重播机制走 React key（`.pp-zoom-num` 以 store 的 zoomTick 作 key ⇒ 重挂即重播），
+ * 不用定时器、不用 JS 动画。
+ * **量纲刻意压到 2px**：读数是机读小字（10px mono），位移一大会读成「字在跳」而不是
+ * 「值更新了」；起点透明度取 .72（同 `.pp-ink-delta` 的起墨档——不从 0 全透，避免闪烁）。
+ * 滚轮连续缩放不抬计数 ⇒ 不重播（每帧重播会读成抖动）。 */
+.pp-zoom-num {
+  display: inline-block;
+  animation: pp-readout-tick var(--m-ink);
+}
+
+@keyframes pp-readout-tick {
+  from {
+    opacity: 0.72;
+    translate: 0 2px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
 .pp-close {
   font-family: var(--f-song);
   font-size: calc(12px * var(--font-scale));
@@ -239,16 +263,6 @@
   }
 }
 
-/* ── 流式重排平滑（2026-09-02 stream-rhythm-smooth）──
- * 根因：会话流每来一段新字 → 正在写的块变高 → 布局重算 → 上面所有块坐标
- * 一次性瞬移到新位置（left/top 直接写）——「每几个字整段跳一下」的割裂感。
- * 药方：流式进行中（.pp-stream-live = 任一卷在跑），flow 块的 transform 有过渡，
- * 旧块被新块"轻轻推开"而非瞬移；无流式（静止/回填/首屏/导航）零过渡——不闪。
- * 铁律：只用 transform（合成器属性，GPU 加速，不触发逐帧排版）；
- *       绝不挂 left/top/height（流式高频必卡）。pinned/拖拽/幽灵零过渡。 */
-.pp-canvas.pp-stream-live .pp-block:not(.pp-pinned):not(.pp-dragging) {
-  transition: transform var(--pp-grow-dur, 200ms) var(--pp-grow-ease, cubic-bezier(0.25, 0.1, 0.25, 1));
-}
 /* 世界层：transform 由 JS 设置（pan/zoom）
  * will-change 只在交互期挂（.pp-world--live）——常驻会让浏览器固定合成层
  * 栅格化分辨率，放大时 GPU 拉伸旧位图导致文字发虚；停止后摘掉 + 强制 reflow
@@ -304,7 +318,7 @@
   /* 影随手动（2026-09-10 拿纸动效）：落影三档（平放/在手/lift）间缓退——
    * 换主时旧卷影不是瞬间消失，拖拽带显形起落也走同一缓动（物理世界纸影
    * 不瞬移）。只声明 box-shadow 一项，别拖其他属性。 */
-  transition: box-shadow 320ms cubic-bezier(0.23, 1, 0.32, 1);
+  transition: box-shadow var(--m-sheet);
 }
 /* active 只动 box-shadow——朱砂洗底退役（2026-09-02「变色」判死）：活跃 = 接触
  * 落影加深一档（手里正拿着的纸，离桌面更高一点），结构墨阶不动纸色；
@@ -314,7 +328,7 @@
  * 的物理过场；基座 transition 承接缓退，keyframes 承接过冲。class 不变不重放
  * （幂等再点同卷无动效）。 */
 .pp-region-active {
-  animation: pp-region-take 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pp-region-take var(--m-sheet);
   box-shadow:
     inset 3px 4px 5px var(--sheet-lit),
     inset -2px -3px 6px var(--sheet-shade),
@@ -449,7 +463,7 @@
   width: 56px;
   height: 3px;
   background: var(--seal);
-  animation: pp-seal-draw 0.24s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pp-seal-draw 0.24s var(--m-ease-out);
 }
 @keyframes pp-seal-draw {
   from {
@@ -566,7 +580,7 @@
   background: var(--paper);
   border: 1px solid var(--rule-strong-ink);
   box-shadow: var(--elev-menu);
-  animation: pop-down 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-down var(--m-ink);
   transform-origin: top right;
 }
 .pp-folio-comp-opt {
@@ -702,10 +716,24 @@
   user-select: text;
   /* 压在流区容器之上（一纸多卷：流区 z:1，块 z:2——块可交互优先） */
   z-index: 2;
-  /* 流式重排平滑（2026-09-02 stream-rhythm-smooth）：块坐标经 transform 定位，
-   * 过渡只挂在流式进行中的块上（见 .pp-canvas.pp-stream-live .pp-block 规则）。
-   * transform 是合成器属性——过渡不触发逐帧排版重算，流式高频时浏览器打断
-   * 重定向而非堆积（性能安全线：绝不把这个过渡挂到 left/top 上）。 */
+  /* ── 让位过渡（2026-09-02 stream-rhythm-smooth 立；2026-10-15 §15 纸律批改为**常驻**）──
+   * 病灶两段：
+   *   ① 旧案只让「流式进行中」（`.pp-stream-live`）的块有过渡——于是 Agent 写字时块
+   *      会滑，而**用户自己**展开折叠行 / 摊开图版 / 改流区宽 / 切卷时，下方块一次性
+   *      瞬移到新位置。实测：一次点击整个人下半屏跳一下——「跳变感」的主犯正是这一类。
+   *   ② 旧案的时长/曲线写 `var(--pp-grow-dur, 200ms)` / `var(--pp-grow-ease, …)`，而
+   *      这两个 token **全仓从无声明**，只剩 fallback 字面量（且因带逗号回退值，
+   *      paper-token-audit 的悬空扫描抓不到）。§15 收编为 `--m-sheet`。
+   * 药方：让位过渡**常驻**——流块/钉块的位置变化一律走 `--m-sheet`（纸被推开，不是
+   * 瞬移）。流式每几字改一次高时浏览器会打断并重定向到新目标（不堆积），与旧案流式
+   * 期间的表现同构，故不是新增风险。
+   * 铁律不变：**只用 transform**（合成器属性，GPU 加速，不触发逐帧排版）——
+   * 绝不挂 left/top/height（流式高频必卡）。手驱动的例外见本文件「让位豁免」段。
+   * 落位说明：本声明放**基座规则内**（而非另立 `.pp-canvas .pp-block`）——后者特异度
+   * (0,2,0) 会压过本文件此前所有的 (0,1,0) `.pp-block` 规则，触发 biome
+   * noDescendingSpecificity；基座内声明天然让所有状态变体（`.pp-block.pp-X`）与
+   * 豁免规则（特异度更高、源序在后）正常覆盖。 */
+  transition: transform var(--m-sheet);
   transform-origin: center center;
 }
 
@@ -773,8 +801,8 @@
 
 /* 流式增量渐显（streaming-fade-render-plan 2026-08-30）：新长出的文本段
  * 淡入（Claude Code 桌面端同款观感）。0.72 起墨（不从 0 全透明——避免
- * 闪烁感；纸壳正文保持始终可读）。时长用 --glide（0.3s）而非 --snap
- * （0.12s 偏快，流式增量需要一点呼吸）。钉值 tests/paper-visual-decisions.test.ts。 */
+ * 闪烁感；纸壳正文保持始终可读）。时长走 `--m-sheet`（§15 让位档，0.26s）
+ * 而非 `--m-ink`（0.16s 偏快，流式增量需要一点呼吸）。钉值 tests/paper-visual-decisions.test.ts。 */
 @keyframes pp-ink-enter {
   from {
     opacity: 0.72;
@@ -784,7 +812,7 @@
   }
 }
 .pp-ink-delta {
-  animation: pp-ink-enter var(--glide) ease-out both;
+  animation: pp-ink-enter var(--m-sheet) both;
 }
 
 /* 结构件/交互件不进选区（2026-09-17 收族）：块是纸面唯一的可选面，而块内长着
@@ -2073,14 +2101,21 @@
   }
 }
 .pp-block.pp-settle {
-  animation: pp-settle-pin var(--glide) both;
+  animation: pp-settle-pin var(--m-sheet) both;
 }
 
-/* 拖拽/缩放/卷切换这些手动操作绝不能被重排过渡污染：pinned 块被拖出/收回、
- * 幽灵占位、resize 手柄全走无过渡路径。（高特异性规则先行，避免降序覆盖警告） */
-.pp-block.pp-ghost,
-.pp-canvas.pp-stream-live .pp-block.pp-pinned,
-.pp-canvas.pp-stream-live .pp-block.pp-dragging {
+/* ── 让位豁免（§15 手律；2026-10-15 随让位过渡常驻批重写）──
+ * **手指直接驱动的布局变化零缓动 1:1**——缓动只属「系统替用户做」的动作。两条：
+ *   ① 块本体拖拽（流块 / 钉块 / 眉批快照）：transform 逐帧跟手写，带过渡即成橡皮筋；
+ *   ② 整区拖动 / 四角缩放：块体随流区每帧重排，同理必须跟手（类 `pp-live-hand`
+ *      由壳层按 `edgeDragPos || regionCornerPos` 发放，见 PaperPanel.tsx）。
+ * （高特异性规则先行，避免降序覆盖警告；源序也在常驻规则之后，双保险。）
+ * 旧案里的 `.pp-block.pp-ghost` 选择器已删：幽灵占位压根不带 `pp-block` 类
+ * （见 PaperPanel.tsx 的 `.pp-ghost` 渲染），且它用 left/top 定位、从不挂 transform
+ * ——该条从来匹配不到任何元素；而 `.pp-ghost` 自身的 transition 是态变轴的
+ * border-color/color（§15 态变轴），**不可**被一条 transition: none 误杀。 */
+.pp-canvas.pp-live-hand .pp-block,
+.pp-canvas .pp-block.pp-dragging {
   transition: none;
 }
 
@@ -2095,7 +2130,7 @@
  * 上浮手感改走独立 translate 属性：与 transform 合成（translate 先乘）而非
  * 覆盖——保住 left/top 时代「相对上浮 8px」的原设计（Chrome 104+）。 */
 .pp-block.pp-enter {
-  animation: pp-enter 0.24s cubic-bezier(0.23, 1, 0.32, 1) backwards;
+  animation: pp-enter var(--m-ink) backwards;
 }
 @keyframes pp-enter {
   from {
@@ -2492,7 +2527,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap);
 }
 .pp-attach-chip:hover {
   color: var(--seal-deep);
@@ -2895,7 +2933,7 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  animation: pop-up 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-up var(--m-ink);
 }
 /* 滚动 flex 列的子项不得被压扁：封高态下默认 flex-shrink:1 会把占用条
    挤成 0 高（2026-09-13 实测 getBoundingClientRect().height = 0——数字自
@@ -2937,7 +2975,7 @@
 }
 .pp-ink-seg {
   height: 100%;
-  transition: width 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+  transition: width 0.4s var(--m-ease-out);
 }
 .pp-ink-seg-system {
   background: var(--ink-1);
@@ -3171,7 +3209,7 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  animation: pop-up 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-up var(--m-ink);
 }
 /* 同墨量册的坑：滚动 flex 列的子项必须 flex:0 0 auto（否则被压成 0 高） */
 .pp-work-panel > * {
@@ -3471,7 +3509,7 @@
   bottom: 0;
   width: 0;
   background: var(--ink-1); /* 浸墨：已用段为浓墨 */
-  transition: width 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+  transition: width 0.4s var(--m-ease-out);
 }
 .pp-inkline.full > span {
   background: var(--seal);
@@ -3532,7 +3570,7 @@
   align-items: center;
   justify-content: center;
   background: color-mix(in oklch, var(--ink-1) 25%, transparent);
-  animation: veil-in 0.15s ease-out;
+  animation: veil-in var(--m-ink);
 }
 .pp-mode-dialog {
   min-width: 320px;
@@ -3542,7 +3580,7 @@
   box-shadow: var(--elev-raise);
   padding: 18px 20px;
   color: var(--ink-1);
-  animation: pop-down 0.16s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-down var(--m-ink);
 }
 .pp-mode-dialog-title {
   font-family: var(--f-song);
@@ -3651,7 +3689,7 @@
   background: var(--paper);
   border: 1px solid var(--rule-strong-ink);
   box-shadow: var(--elev-menu); /* 2026-09-01 审计：弹层海拔统一菜单档 */
-  animation: pop-up 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-up var(--m-ink);
 }
 .pp-composer-settings .pp-thinking-opt {
   display: flex;
@@ -3801,7 +3839,7 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
-  animation: pop-up 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-up var(--m-ink);
 }
 .pp-help-head {
   font-family: var(--f-mono);
@@ -3844,7 +3882,7 @@
   z-index: 45;
   display: flex;
   flex-direction: column;
-  animation: pop-up 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-up var(--m-ink);
 }
 .pp-yin-panel > input {
   border: none;
@@ -4184,7 +4222,7 @@
   z-index: 40;
   padding: 6px 0;
   /* 向上开的弹层自锚点侧托起（全局 pop 关键帧在 foundation.css） */
-  animation: pop-up 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-up var(--m-ink);
 }
 .pp-slash-item {
   display: flex;
@@ -4330,7 +4368,7 @@
   border: 1px dashed var(--seal);
 }
 .pp-lift-mask--done {
-  animation: pp-lift-mask-fade 0.18s ease forwards;
+  animation: pp-lift-mask-fade var(--m-ink) forwards;
 }
 @keyframes pp-lift-mask-fade {
   to {
@@ -4410,7 +4448,7 @@
   padding: 2px 5px;
   cursor: grab;
   opacity: 0;
-  transition: opacity 0.14s ease;
+  transition: opacity var(--snap);
 }
 .pp-marginalia:hover .pp-marginalia-pin {
   opacity: 1;
@@ -4452,7 +4490,7 @@
   height: 12px;
   z-index: 6;
   opacity: 0;
-  transition: opacity 0.14s ease;
+  transition: opacity var(--snap);
 }
 .pp-region-corner--nw {
   top: -6px;
@@ -4526,7 +4564,7 @@
   }
 }
 .pp-strip.pp-settle {
-  animation: pp-settle-drop var(--glide) both;
+  animation: pp-settle-drop var(--m-sheet) both;
 }
 /* 两击销毁确认态（2026-09-05，plan §1.2）：首击变「确认？」——常显（不受
  * hover 门控）+ 朱砂深（销毁是不可逆的用户动作）；3s 超时回退（JSX 状态
@@ -4662,7 +4700,7 @@
   transform: translate(-50%, -50%);
   text-align: center;
   pointer-events: none;
-  animation: pp-empty-in 0.45s cubic-bezier(0.23, 1, 0.32, 1) 0.08s both;
+  animation: pp-empty-in var(--m-sheet) 0.08s both;
 }
 /* 空态入场：只淡入，不动位（保住 translate(-50%,-50%) 的居中） */
 @keyframes pp-empty-in {
@@ -6089,7 +6127,7 @@ button.pp-form-option:disabled {
   background: var(--paper);
   box-shadow: var(--elev-raise);
   padding: 15px 16px;
-  animation: pp-rise 0.18s ease;
+  animation: pp-rise var(--m-ink);
 }
 .pp-root .cd-sheet::-webkit-scrollbar {
   width: 4px;
@@ -6159,7 +6197,10 @@ button.pp-form-option:disabled {
   padding: 7px 18px;
   border-radius: 0;
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    transform var(--snap);
   display: flex;
   align-items: center;
   gap: 4px;

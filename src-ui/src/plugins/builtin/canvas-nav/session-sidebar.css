@@ -33,7 +33,7 @@
   z-index: var(--z-paper-sidebar);
   font-family: var(--f-song);
   /* 展场动画：从左缘滑入 + 内容级联浮现（sh-rise 曲线家族） */
-  animation: ss-slide-in 0.18s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: ss-slide-in var(--m-ink);
 }
 /* 板面纹理层（见头注；绝对定位 ⇒ 不是 flex 项，不参与本栏排版）。
  * ⚠ 四层配方**内联**（2026-09-21 教训）：本文件是**插件产物**（磁盘通道热更，换产物
@@ -68,6 +68,22 @@
     transform: translateX(0);
     opacity: 1;
   }
+}
+
+/* 出场（§15 退场对称，2026-10-15 批 3b）：本面板声明了 `animateExit`，DockPanel
+ * 关闭时给本子树挂 `[data-panel-leaving]` 并保留 260ms（= `--m-sheet`，与壳层常量
+ * `PANEL_LEAVE_MS` 同值、由 motion-contract 钉死），窗满才真卸载。
+ * **入场的逆写**（`ss-slide-in` 的 from 帧）。transition 只写在本规则里是刻意的：
+ * 过渡的起手判据看的是**变更后样式**的 transition-property（CSS Transitions L1），
+ * 故「加类同时给 transition + 目标值」即可成局，不必污染基座。
+ * 退场期不接点击。 */
+[data-panel-leaving] .ss-sidebar {
+  pointer-events: none;
+  transform: translateX(-20px);
+  opacity: 0;
+  transition:
+    transform var(--m-sheet),
+    opacity var(--m-sheet);
 }
 
 /* ── 宽度拖拽柄（右缘）：面板架零投影纪律——纯热区 + hover 显形 ── */

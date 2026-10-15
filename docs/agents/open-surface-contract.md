@@ -8,9 +8,9 @@
 > `doc-sync` 门禁里的 `check:contract-fingerprint`）：契约文件清单的 sha256
 > 指纹记录在下方标记行，**文件变更未升版/未更新指纹 = 红**。
 
-当前版本：56
+当前版本：57
 
-<!-- contract-fingerprint: 73816e49ddbe195122520ab80c4d63618990fdbdb5f8542cef27fc036bd68a16 -->
+<!-- contract-fingerprint: 2af3813ef51969b366a4b98aef4da6da5187708f4d9dc841678b2ea7e4d8b98b -->
 
 ## 契约面载体（`src/composition/contract-version.ts` 单一真源）
 
@@ -41,6 +41,7 @@
 
 | 版本 | 日期 | 变更 | 依据 |
 |---|---|---|---|
+| 57 | 2026-10-15 | **面板贡献面增可选 `animateExit`（§15 退场对称批）**：`composition/services.ts` 的 `PanelContribution` 与 `app/panels/panel-def.ts` 的 `PanelDef` 各增**可选** `animateExit?: boolean`（两处是「贡献面／消费面」一对形状，合流时 `panelDefs()` 原样透传，故必须同批加）。声明后 `DockPanel` 的相位机在关闭时先留一个「正在退场」窗（根元素收 `[data-panel-leaving]`，窗长 `PANEL_LEAVE_MS` = 260ms = `tokens.css` 的 `--m-sheet`），窗满才真卸载——**「关即卸载、重开重置 dirty 态」语义不变**，只是晚一个出场时长；消费面 = 面板自己的 CSS 写 `[data-panel-leaving] <本面板根>`（壳层供钩、产物消费，产物 CSS 比 exe 旧则该选择器不匹配 ⇒ 只是没有出场动画，无破面）。**对外可感知**：第三方面板可声明它取得出场动画；**不声明 = 既有即时卸载行为逐字不变**（纯可选字段，零迁移）。首批接线三个面：设置面板、书脊列、案卷侧栏。 | `docs/design/lantai-design-spec.md` §15（批 3b）；守护 `tests/motion-contract.test.ts`（`PANEL_LEAVE_MS` ↔ `--m-sheet` 镜像 + 三面声明与出场规则成对）|
 | 1 | 2026-08-27 | 初版：六 seam + 裁剪面 + 事件面 + manifest 契约入册（P3-C4） | agent-platformization-plan Phase 3 |
 | 2 | 2026-08-27 | 新增动态插件运行时契约（D7：ctx.dynamicRunner define/run/stop/undefine/inspect + 沙箱三层防线——阴影求值面/守卫注册面/预算；P4-C2/C3） | agent-platformization-plan Phase 4 |
 | 3 | 2026-08-28 | 新增 agent loop seam 契约（D13：AgentLoop/AgentLoopHost + 默认实现；loop 降为第一方默认实现，契约上可替换） | agent-platformization-plan Phase 5 |

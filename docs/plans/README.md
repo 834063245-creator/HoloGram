@@ -14,7 +14,9 @@ S0-S7 / 图谱退役 / 会话存盘换轨 / 文档面 P0-P3）已过，当前在
 （账② 物理归家清零：红区 0 产物 / 0 文件 / 0 行，纯壳集 21 → 0；批 0~10 + §4 各项全落，见
 [`plugin-extraction-inventory.md`](plugin-extraction-inventory.md)）；② **随包图谱引擎端到端真机四条全通**
 （重建 exe，含批 10 把接线搬进产物后的复跑）。此外四条活跃线：paper-shell R5 打磨环 · 画布支
-Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 A+B（09-21 开工）。已竣工线的权威叙事全在
+Stage-6（UI/UX 专项）· 文档面重构 P4（索引收尾）· 卷号治理 A+B（09-21 开工）。**动效法（纸感档）
+已于 2026-10-15 竣工**——规则与全部批次流水在 [`../design/lantai-design-spec.md`](../design/lantai-design-spec.md) §15，
+守护 `tests/motion-contract.test.ts`，故不再占活跃线一行。已竣工线的权威叙事全在
 [`docs/archive/`](../archive/README.md)（组合架构 S0-S7、平台化 Phase 0-6、引擎插件化、bundle 退役、内核
 能力口收口…）；**跨文档数字一律看 [`docs/facts.generated.md`](../facts.generated.md)，本页不复述**。
 

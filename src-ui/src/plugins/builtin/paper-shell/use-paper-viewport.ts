@@ -342,6 +342,9 @@ export function usePaperViewport(core: PaperCore | null) {
       useCanvasViewStore.getState().requestFocus(null);
       const { view: v, canvasSize: cs } = useCanvasViewStore.getState();
       const target = nextZoomStep(v.zoom, dir);
+      // 已在档位端点（夹持返回同值）：不迈步、也不抬读数计数——否则读数会「空跳一下」
+      if (target === v.zoom) return;
+      useCanvasViewStore.getState().markZoomStep();
       setView((cur) => zoomAt(cur, cs.w / 2, cs.h / 2, target / cur.zoom));
     },
     [setView],
@@ -353,7 +356,10 @@ export function usePaperViewport(core: PaperCore | null) {
       focusFlightRef.current.end();
     }
     useCanvasViewStore.getState().requestFocus(null);
-    const { canvasSize: cs } = useCanvasViewStore.getState();
+    const { view: v, canvasSize: cs } = useCanvasViewStore.getState();
+    // 已在 100%：不抬读数计数（同 stepZoom 的端点守卫）
+    if (Math.abs(v.zoom - 1) < 1e-9) return;
+    useCanvasViewStore.getState().markZoomStep();
     setView((cur) => zoomAt(cur, cs.w / 2, cs.h / 2, 1 / cur.zoom));
   }, [setView]);
 

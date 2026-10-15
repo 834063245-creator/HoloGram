@@ -25,6 +25,21 @@ export interface PanelDef {
   /** 关闭即卸载、重开重置状态（对齐旧 Controller 的 unmount 语义）；
    *  缺省常驻挂载 + class 切换（保 CSS 滑入滑出过渡） */
   unmountOnClose?: boolean;
+  /** 关闭时播出场动画（退场对称，§15，2026-10-15 批 3b）。
+   *
+   *  背景：`unmountOnClose` 的面**关即卸载**，卸载即从 DOM 消失——出场动画没有
+   *  落点，故这类面长期只有入场（`@starting-style` / 挂载即播的 keyframes）而没有
+   *  出场。声明本字段后，DockPanel 在关闭时先留 `PANEL_LEAVE_MS` 的「正在退场」窗：
+   *  根元素收到 `[data-panel-leaving]` 属性，窗满才真卸载——**「关即卸载、重开
+   *  重置」的语义不变**（只是晚一个出场时长）。
+   *
+   *  消费面：本面板自己的 CSS 写 `[data-panel-leaving] <本面板根> { … }`
+   *  （壳层供钩、产物消费；产物 CSS 若比 exe 旧、不认识该属性 ⇒ 规则不匹配 ⇒
+   *  只是没有出场动画，无破面）。
+   *
+   *  **未声明 = 即时卸载**（刻画意的默认关）：留一个不播动画的空窗只会变成
+   *  「冻住一帧再消失」，比瞬删更糟。 */
+  animateExit?: boolean;
   component: ComponentType;
 }
 

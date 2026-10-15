@@ -49,6 +49,8 @@ export const settingsPlugin = {
           title: '设置',
           icon: 'settings',
           unmountOnClose: true,
+          // 关时先留一个出场窗（§15 退场对称）——出场样式在 settings-panel.css
+          animateExit: true,
           component: SettingsPanel,
         }),
       'settings-panel',

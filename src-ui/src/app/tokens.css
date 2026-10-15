@@ -172,9 +172,39 @@
   --z-exit-modal: 530; /* 全局退出确认（2026-09-19：App 根的 ExitConfirmDialog）——唯一要盖过命令面板的模态：退出这一问必须先于一切浮层被回答 */
   --z-grain: 9998; /* 真纸纹理氛围层（src/assets/paper/ 实拍纹 + 微颗粒；纯装饰 pointer-events:none，恒在最上） */
 
+  /* ── 动效法（2026-10-15 立法；全文与判例见 docs/design/lantai-design-spec.md §15）──
+   * **两轴分家，禁混用**：
+   *   态变轴 `--snap` = 同一物件换状态（hover/focus/选中/禁用）——只换颜色与描边，
+   *     零位移，短到读作「即时回执」。**它不是动效**，别拿它做过场。
+   *   动用轴 `--m-*` = 物件出现/消失/移动/换景——用户读得见的一段过程。
+   *
+   * 三条物理律（材料只有墨与纸，故律从材料来，不抄通用 UI 缓动）：
+   *   墨律：显形 = 墨落纸（淡入 + 微升 8px），**不回弹**——墨不弹。
+   *   纸律：让位 = 纸被推。**只动 transform，绝不动 left/top/height**；**不过冲**
+   *     （过冲只留给「拿起」这一个动作，先例 `.pp-region-active`）。
+   *   手律：**手指直接驱动的动作零缓动 1:1**（拖拽/划词/书写）——不写 transition，
+   *     缓动只属「系统替用户做」的动作。（判例：paper/sel-ink.ts「手感来自微伏
+   *     不来自粗细变化」。）
+   *
+   * 距离律（选哪一档）：位移 ≤8px 或单件显隐 → `--m-ink`；容器尺寸/位置变化、
+   * 让位推开 → `--m-sheet`；整层替换（首页↔画布 / 页签 / 侧栏↔书脊）→ `--m-scene`。
+   * 曲线只有两条，**禁再散写 bezier**：出相（纸的惯性，快起慢收）/ 对开（两端都交待）。
+   * 约束律：一次动作至多一个动效主体；动效永不阻塞交互（动画只描述，不延迟可点）；
+   * 一切动效走 CSS animation/transition——**唯一豁免点 = foundation.css 的
+   * prefers-reduced-motion 块**，JS 帧动画要么删、要么自觉读 matchMedia
+   * （先例：相机飞行 use-paper-focus.ts 的 rAF 曾绕过该豁免）。
+   *
+   * **仪式/信号/环境动画不属三档**（签章 sh-stamp、呼吸 pp-breathe/pp-ink-live、
+   * 一次性眉批 pp-hint-fade、进度条 width、spin 号）——它们不是结构性动作，各有
+   * 自有节拍；但**必须在 §15 登记**（未登记 = 散写）。新写的结构性动作一律走三档。 */
+  --snap: 0.12s cubic-bezier(0.23, 1, 0.32, 1); /* 态变轴：输入回执，非动效 */
+  --m-ink: 0.16s cubic-bezier(0.23, 1, 0.32, 1); /* 显形/隐没：单件登场退场 */
+  --m-sheet: 0.26s cubic-bezier(0.23, 1, 0.32, 1); /* 让位/开合：纸被推开、容器涨缩 */
+  --m-scene: 0.38s cubic-bezier(0.4, 0, 0.2, 1); /* 换景：整层替换 */
+  --m-ease-out: cubic-bezier(0.23, 1, 0.32, 1); /* 出相：快起慢收（纸的惯性，无回弹） */
+  --m-ease-io: cubic-bezier(0.4, 0, 0.2, 1); /* 对开：开合两端都交待 */
+
   /* ── 迁移收容（C5 --obs-* 退役时原值平移，待换皮归新结构 token）── */
-  --snap: 0.12s cubic-bezier(0.23, 1, 0.32, 1);
-  --glide: 0.3s cubic-bezier(0.23, 1, 0.32, 1);
   --glass: color-mix(in oklch, var(--paper) 78%, transparent);
   --glass-hi: color-mix(in oklch, var(--paper) 92%, transparent);
   --line-soft: color-mix(in oklch, var(--ink-4) 55%, transparent);

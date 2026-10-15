@@ -69,7 +69,7 @@
   pointer-events: auto;
   font-family: var(--f-song);
   /* 互斥两态回场（2026-09-02）：侧栏收起 → 书脊重挂载，从左缘轻滑入 */
-  animation: sr-slide-in 0.16s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: sr-slide-in var(--m-ink);
 }
 @keyframes sr-slide-in {
   from {
@@ -80,6 +80,21 @@
     transform: translateX(0);
     opacity: 1;
   }
+}
+
+/* 出场（§15 退场对称，2026-10-15 批 3b）：本面板声明了 `animateExit`，DockPanel
+ * 关闭时给本子树挂 `[data-panel-leaving]` 并保留 260ms（= `--m-sheet`，与壳层常量
+ * `PANEL_LEAVE_MS` 同值、由 motion-contract 钉死），窗满才真卸载。
+ * **入场的逆写**——互斥两态换态此前是「侧栏滑入 + 书脊凭空消失」，现在两端对称。
+ * 退场期不接点击（板是整块命中面，见上方 pointer-events 注，别让它吃掉正在
+ * 落到画布上的那一击）。 */
+[data-panel-leaving] .sr-rack {
+  pointer-events: none;
+  transform: translateX(-12px);
+  opacity: 0;
+  transition:
+    transform var(--m-sheet),
+    opacity var(--m-sheet);
 }
 
 /* ── 板面纹理（2026-09-21 纸面批）：与 .ss-sidebar **同一张桌** ──
@@ -410,8 +425,8 @@
   padding: 6px 0;
   cursor: pointer;
   transition:
-    background 0.12s ease,
-    color 0.12s ease;
+    background var(--snap),
+    color var(--snap);
 }
 .sr-close-btn:hover:not(:disabled) {
   background: var(--ink-1);

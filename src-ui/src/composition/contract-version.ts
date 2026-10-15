@@ -22,9 +22,21 @@
 // 不静默漂移；这是刻意取舍不是缺陷。
 
 /** 开放面契约当前版本（变更即 +1，历史见 open-surface-contract.md 变更记录）。 */
-export const OPEN_SURFACE_CONTRACT_VERSION = 56;
+export const OPEN_SURFACE_CONTRACT_VERSION = 57;
 
 /** 契约面载体文件（相对 src-ui/；fingerprint 生成器与 guard 消费同一份）。
+ *  v57（2026-10-15）**面板贡献面增可选 `animateExit`（§15 退场对称批）**：
+ *  ① `composition/services.ts` 的 `PanelContribution` 与 `app/panels/panel-def.ts`
+ *  的 `PanelDef` 各增**可选** `animateExit?: boolean`（两处形状是「贡献面 / 消费面」
+ *  一对，合流时 `panelDefs()` 原样透传，故必须同批加）；
+ *  ② 语义：声明后 `DockPanel` 的相位机在面板关闭时先留一个「正在退场」窗——根元素
+ *  收到 `[data-panel-leaving]`，窗长 `PANEL_LEAVE_MS`（= 260ms = `tokens.css` 的
+ *  `--m-sheet`，镜像由 `tests/motion-contract.test.ts` 钉死），窗满才真卸载；
+ *  **「关即卸载、重开重置 dirty 态」的语义不变**（只是晚一个出场时长）；
+ *  ③ 消费面：面板自己的 CSS 写 `[data-panel-leaving] <本面板根>`（壳层供钩、
+ *  产物消费；产物 CSS 比 exe 旧 ⇒ 选择器不匹配 ⇒ 只是没有出场动画，无破面）。
+ *  **对外可感知**：第三方面板可声明它以得到出场动画；**不声明 = 既有即时卸载行为
+ *  逐字不变**（纯可选字段，零迁移——旧插件源码逐字节照跑）。
  *  v56（2026-10-13）**步骤钩子家族（agent-hooks-plan 二期：面扩展 + 停止边界 + 收编首批）**：
  *  ① **破坏性重命名**——`ctx.preStep` → **`ctx.steps`**（`composition/steps-service.ts`）、
  *  内核件 `src/agent/pre-step.ts` → **`src/agent/steps.ts`**（`StepsRegistry`）、

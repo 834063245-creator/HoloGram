@@ -53,7 +53,9 @@
   background: none;
   border: none;
   border-radius: 0;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    color var(--snap);
 }
 
 .ms-input-clear:hover {
@@ -78,7 +80,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap);
 }
 
 .ms-refresh-btn:hover {
@@ -118,7 +123,7 @@
   border-radius: 0;
   box-shadow: var(--elev-menu);
   background: var(--paper);
-  animation: pop-down 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+  animation: pop-down var(--m-ink);
 }
 
 /* ── 2026-09-06 收口：compact 弹层 = 搜索行 + 列表滚动区（DSH chip 形态）。
@@ -255,7 +260,10 @@
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
-  transition: all var(--snap);
+  transition:
+    background var(--snap),
+    border-color var(--snap),
+    color var(--snap);
 }
 
 .ms-catalog-chip:hover {

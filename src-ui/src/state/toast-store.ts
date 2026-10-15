@@ -31,12 +31,12 @@ interface ToastState {
   dismissToast: (id: number) => void;
 }
 
-/** 默认停留：3.2s hold + 0.4s 淡出（与 CSS 动画时长一致）。 */
+/** 默认停留：3.2s hold + 0.26s 淡出（与 CSS `.pp-toast` 收尾段一致——§15 `--m-sheet`）。 */
 export const TOAST_HOLD_MS = 3200;
 /** 数据风险/长文：加倍停留。 */
 export const TOAST_LONG_HOLD_MS = 6400;
-/** 淡出时长（CSS .pp-toast 动画收尾段一致）。 */
-export const TOAST_FADE_MS = 400;
+/** 淡出时长（= CSS `.pp-toast` 的 `--m-sheet` 段；两处镜像由 tests/motion-contract.test.ts 钉死）。 */
+export const TOAST_FADE_MS = 260;
 /** 同文去重窗口：4 秒。 */
 const TOAST_DEDUP_MS = 4000;
 

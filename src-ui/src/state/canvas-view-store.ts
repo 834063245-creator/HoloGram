@@ -30,6 +30,15 @@ interface CanvasViewState {
   restoredView: Viewport | null;
   /** 在途定位请求（sessionId）；null = 无。 */
   pendingFocusId: string | null;
+  /** 缩放**离散步进**计数（§15 批 5，读数微动效）。
+   *
+   *  ⚠ 只由 `stepZoom` / `resetZoom` 抬升（−/＋ 钮与键盘 +/−/0），**滚轮平滚的
+   *  连续缩放不抬**：连续路径每帧都在改读数，给它挂入场动画只会变成抖动。
+   *  消费面 = 顶部浮件的缩放读数——`.pp-zoom-num` 以本值作 React key ⇒ 值一变
+   *  就重挂重播一次「读数一跳」的微动效（keyframes 随挂载自动播，无需定时器）。 */
+  zoomTick: number;
+  /** 抬升缩放步进计数（离散步进语义端调用；无变化时调用方自己别调）。 */
+  markZoomStep: () => void;
   /** 更新视口（PaperPanel 平移/缩放/动画共用）。 */
   setView: (updater: Viewport | ((v: Viewport) => Viewport)) => void;
   /** 更新画布尺寸（幂等——未变不触发订阅）。 */
@@ -45,6 +54,9 @@ export const useCanvasViewStore = create<CanvasViewState>((set) => ({
   canvasSize: { w: 800, h: 600 },
   restoredView: null,
   pendingFocusId: null,
+  zoomTick: 0,
+
+  markZoomStep: () => set((s) => ({ zoomTick: s.zoomTick + 1 })),
 
   setView: (updater) =>
     set((s) => {
