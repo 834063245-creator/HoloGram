@@ -114,6 +114,7 @@ import { spaceServicePlugin } from '../src/composition/space-service';
 import { Context } from '../src/cordis';
 import { RACK_CAP } from '../src/paper/asset-rack';
 import { composeDockPlugin } from '../src/plugins/builtin/compose-dock';
+import { BAND_STYLE_ID } from '../src/plugins/builtin/paper-shell/composer-band';
 import { RACK_H } from '../src/plugins/builtin/paper-shell/composer-float';
 import { PaperPanel } from '../src/plugins/builtin/paper-shell/PaperPanel';
 import { getCanvasStore } from '../src/state/canvas-store';
@@ -225,7 +226,20 @@ describe('图版架（坞下横架 · 丙案）', () => {
     await overlays?.dispose();
     overlays = null;
     document.documentElement.style.removeProperty('--composer-band');
+    document.getElementById(BAND_STYLE_ID)?.remove();
   });
+
+  /** 让位带读数（**行为级**：照真消费者在 `.psh-host` 上读解析后的值）。
+   *  载体 = 只命中让位消费面的一条规则（`composer-band.ts`，2026-10-18 性能批）——
+   *  **不是** `:root` 内联（后者在拖动期是 62ms/帧的全树样式重算）。 */
+  function bandVar(): string {
+    const host = document.createElement('div');
+    host.className = 'psh-host';
+    document.body.appendChild(host);
+    const v = getComputedStyle(host).getPropertyValue('--composer-band').trim();
+    host.remove();
+    return v;
+  }
 
   /** 挂纸壳：一卷（可带 N 张图版）；返回坞槽元素（已铺实测矩形）。 */
   async function mount(assets: number): Promise<HTMLDivElement> {
@@ -322,7 +336,7 @@ describe('图版架（坞下横架 · 丙案）', () => {
     expect(css).toContain(`height: ${RACK_H}px`);
     // 让位带读数（CSS 消费面读的那个数）不含架
     expect(DOCK_H + 96).toBe(227);
-    expect(document.documentElement.style.getPropertyValue('--composer-band')).toBe('227px');
+    expect(bandVar()).toBe('227px');
   }, 30_000);
 
   it('空态 = 架内零张（本卷零资产）⇒ 整条不渲染', async () => {

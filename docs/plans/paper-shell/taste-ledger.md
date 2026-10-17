@@ -447,3 +447,10 @@
   **连带**：① `folioHeadWidthFor` → `columnWidthFor`（消费面已从卷首扩到正文块，名字跟上）；② `FOLIO_TOKENS.colW` 退役（版心不再是 token，是本比例的函数）；③ **钉住块跳过缩放**（钉块在桌面、脱离流区，宽由 `pin.w` 定格；旧公式窄流区下会把钉块一起压扁——同批修正）；④ 顺手修 `state/canvas-store.setRegion` 同值短路漏比 `width`（纯宽度变更被 anchor 比较静默吞掉——「错误不静默」同族）。
   **钉值**：`paper-folio-height` 契约按纸半重写（档位表 720→360 / 1440→720 / 2160→1080，拉宽变矮 / 缩窄变高）；新增 `paper-column-width`（用户操作序列：默认 1440 值逐字节不变 / 拉宽两族 1.5× / 缩窄两族 0.5× / 挂载后拉手柄当场跟随 / 钉块定格 500 不动）；`session-tree-canvas` 边界算式复核（父卷 extent 右缘随块宽 480→360 收窄，旧 panX −1100 越出 STUB_MX 900 余量 ⇒ 改 −1050，算式入注释）。
   **交付口径**：改动全在插件产物（paper-shell），宿主面 `faceDeps` 零动 ⇒ `build:builtin-plugins` 后应用自动重载即可见，**无需重建 exe**。**待用户实机验收**：拉到 2160 看正文/卷首/图表卡的宽度手感是否合意（嫌宽/嫌窄只需改 `COLUMN_RATIO` 一个数）。
+
+- 2026-10-18 · **让位带换载体：不写 `:root` 内联，改写「只命中消费面」的一条规则（性能批）**（用户报：「『移』激活之后，创作坞的自由拖动过程非常的卡，很明显的一顿一顿的手感」）·
+  **病灶（真机 CDP 取证，不是手感分歧）**：让位带 `--composer-band` 由 `use-composer-float` **每帧**写 `document.documentElement.style` 内联——未注册自定义属性落在 `:root` 上 ⇒ Blink 对**整棵文档树**重算计算样式。同机同窗（2560×1400 / 599 元素 / 2542 规则）每帧实测：空帧循环 9.9ms ｜ `:root` 内联本变量 **61.0ms（RecalcStyle 59.3ms）** ｜ 写一个**没有任何消费者**的 `:root` 变量 59.9ms（⇒ 与消费面多寡无关）｜ 坞自身 left/bottom 内联 10.0ms。真鼠标拖坞 5.4s：**28 次 64~70ms 长任务**、p99 67ms、帧率 75——纵向拖动期实为 ~16fps 的段落式位移，就是「一顿一顿」。
+  **选**：值落在**一条只命中让位消费面的规则**上（`.psh-host, .pw-dock { --composer-band: … }`，`composer-band.ts` 自建自有、`dispose` 摘除）⇒ Blink 按选择器定向失效，实测 **0.97ms/帧**；后挂载的消费面（递牒卡/插件造物坞都是出没件）自动命中，不必挂 MutationObserver。变量名与消费面 CSS（`var(--composer-band, 兜底算式)`）一字不改——**只换载体，不换口径**。
+  **弃**：① 拖动期冻结、松手才补一次（让位件与坞当场错位、松手跳变，与 10-15 动效法「消灭跳变」正相反）；② 逐个元素写内联（0.30ms 更快，但后挂载者要额外补写）；③ `@property` 注册（实测与注册无关，`inherits` 亦然）；④ 把值写到 `.pp-root`（仍 34ms）。
+  **钉值**：`composer-float.test.ts` 新增载体组（建/写/复用/**断连重建**/摘除）+ **名册 vs CSS 实读对拍**（`COMPOSER_BAND_CONSUMERS` 漏登记即红）；`paper-composer-float` 与 `composer-dock-rack` 的让位带读数改**行为级**（照真消费者在 `.psh-host` 上读解析后的值）+ 钉「`:root` 上不得再有这个变量」。
+  **交付口径**：改动全在插件产物（paper-shell 两文件 + 新增一件）⇒ `build:builtin-plugins` 后应用自动重载即可见，**无需重建 exe**。**修后同法实测**：帧率 100.1、p99 11.8ms、>50ms 帧 0、长任务 **0**。

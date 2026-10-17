@@ -8,9 +8,11 @@
 //   - 坞位真源 = 本 hook 的 `pos`（null = 无覆盖 = CSS 默认居中坐底），落
 //     localStorage（composer-float.ts 的 load/save）；拖动锁同族落盘；
 //   - 几何/吸附/拖动面判据 = composer-float.ts 纯函数（可单测）；
-//   - 让位带 --composer-band 由本 hook 写 :root（旧 --composer-h-live 由坞自己
-//     上报「坞高」，浮动态失效——让位带是槽主人的几何，收归一处）。**过渡期**由
-//     本 hook 代发旧 token 一版：运行中 exe 内嵌的外壳 CSS 仍读它，只换产物不重编
+//   - 让位带 --composer-band 由本 hook 下发**到让位消费面那条规则**（composer-band.ts，
+//     旧实现在此写 `:root` 内联 = 拖动期 62ms/帧全树重算，详见该文件头注；旧
+//     --composer-h-live 由坞自己上报「坞高」，浮动态失效——让位带是槽主人的几何，
+//     收归一处）。**过渡期**由本 hook 代发旧 token 一版（仍走 `:root` 内联——它只在
+//     坞高变化时写，不在拖动帧上）：运行中 exe 内嵌的外壳 CSS 仍读它，只换产物不重编
 //     exe 时那两处消费面要它续命（拆除条件见下方 effect 注释）；
 //   - 坞本体（compose-dock 插件）**一字不知**：拖动面判据基于坞 DOM 命中
 //     （事件从坞冒泡到槽，槽主人接手势），不给 PaperDockContext 加回调、不动
@@ -25,6 +27,7 @@
 
 import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComposerBandSink, createComposerBandSink } from './composer-band';
 import type { ComposerBox, ComposerDockGeom, ComposerPos, ComposerViewport } from './composer-float';
 import {
   clampComposerPos,
@@ -137,13 +140,24 @@ export function useComposerFloat(opts?: ComposerFloatOpts): ComposerFloat {
   const anchor = useMemo(() => composerAnchorOf(effective, vp, box), [effective, vp, box]);
   const band = dock.bottom + dock.height;
 
-  /* 让位带下发 :root（CSS 消费面：递牒卡宿主 / 插件 dock）。 */
+  /* 让位带下发（消费面：递牒卡宿主 `.psh-host` / 插件造物坞 `.pw-dock` 读
+   * `var(--composer-band, 静态兜底算式)`）。
+   *
+   * **2026-10-18 性能批换载体**：旧实现写 `document.documentElement.style` 内联
+   * ——拖动期每帧一次全树样式重算，真机实测 **62ms/帧**（用户报「一顿一顿」的病灶，
+   * 全量实测数据在 `composer-band.ts` 头注）。现在写的是**只命中让位消费面**的
+   * 一条规则（≈1ms/帧，且后挂载的消费面自动命中）。**别退回内联写法。** */
+  const bandSink = useRef<ComposerBandSink | null>(null);
   useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty('--composer-band', `${Math.round(band)}px`);
+    const sink = createComposerBandSink();
+    bandSink.current = sink;
     return () => {
-      root.style.removeProperty('--composer-band');
+      bandSink.current = null;
+      sink.dispose();
     };
+  }, []);
+  useEffect(() => {
+    bandSink.current?.publish(band);
   }, [band]);
 
   /* ── 过渡期旧 token 代发（**随下次整包重编删除**，债在 docs/landmine-map.md）──
@@ -151,7 +165,7 @@ export function useComposerFloat(opts?: ComposerFloatOpts): ComposerFloat {
    * 外壳 CSS 是内嵌在 exe 里的**（`shell.css` 的 .psh-host / `plugin-windows.css` 的
    * .pw-dock 仍读它）——只换产物不重编 exe 时那两处会回退到 `--composer-h`(66px)，
    * 让位少 44px/32px、压住坞顶。故由槽主人（本 hook 已测坞高）在过渡期代发旧口径，
-   * 新口径 `--composer-band` 同帧并存：新旧两代消费面都正确。
+   * 新口径 `--composer-band` 同时下发（载体不同——见上；两代消费面都正确）。
    * 拆除条件：下一次 `cargo tauri build`（整包重编 ⇒ 内嵌 CSS 换成本仓库的新式）——
    * 届时本 effect 内两行与 landmine 条目一并删除。 */
   useEffect(() => {

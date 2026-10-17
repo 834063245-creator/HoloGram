@@ -140,10 +140,14 @@
   --composer-rise: 96px;
   /* --composer-band：创作坞**让位带**（2026-09-17 浮动化后取代
    * --composer-h-live 配对式）——视口底 → 坞顶线的距离，运行期由 paper-shell
-   * 的 use-composer-float 写入 :root（坞可被拖离底带：自由浮动 + 吸附 + 双击
-   * 复位，让位件按坞的**实际位置**重算）。默认位 = 抬高 + 坞实测高（与旧口径
+   * 的 use-composer-float 下发（坞可被拖离底带：自由浮动 + 吸附 + 双击复位，
+   * 让位件按坞的**实际位置**重算）。默认位 = 抬高 + 坞实测高（与旧口径
    * 零漂移）；paper 关闭（槽卸载）时撤除，消费面回退静态 token 算式。
-   * 消费面：递牒卡宿主（shell.css）/ 插件 dock（plugin-windows.css）。 */
+   * **载体（2026-10-18 性能批）**：不下发在 `:root` 上，而是由
+   * `paper-shell/composer-band.ts` 建成一条**只命中消费面**的规则（`:root` 内联写法
+   * 在拖动期是 62ms/帧的全树样式重算——实测见该文件头注）。
+   * 消费面：递牒卡宿主（shell.css）/ 插件 dock（plugin-windows.css）——**新增消费面
+   * 须在 `COMPOSER_BAND_CONSUMERS` 名册登记**（守护测试按 CSS 实读对拍）。 */
   /* --composer-h-live：**过渡期**旧口径（坞实测高，原由 ComposerDock 自报）——
    * 运行中 exe 内嵌的外壳 CSS 仍读它（exe 不重编则换不掉那两处消费面），故过渡期
    * 由槽主人 use-composer-float 代发；**下一次整包重编（cargo tauri build）后**

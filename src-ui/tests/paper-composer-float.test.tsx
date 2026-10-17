@@ -98,6 +98,7 @@ import { useShellStore } from '../src/app/shell-store';
 import { overlayServicePlugin } from '../src/composition/overlay-service';
 import { Context } from '../src/cordis';
 import { usePaperDock, usePaperRegion } from '../src/paper/overlay-context';
+import { BAND_STYLE_ID, COMPOSER_BAND_CONSUMERS } from '../src/plugins/builtin/paper-shell/composer-band';
 import { COMPOSER_POS_KEY } from '../src/plugins/builtin/paper-shell/composer-float';
 import { PaperPanel } from '../src/plugins/builtin/paper-shell/PaperPanel';
 import { getCanvasStore } from '../src/state/canvas-store';
@@ -210,6 +211,7 @@ describe('创作坞浮动化（槽主人链路：坞位 + 让位带 + 手势）'
     await overlayFiber?.dispose();
     overlayFiber = null;
     document.documentElement.style.removeProperty('--composer-band');
+    document.getElementById(BAND_STYLE_ID)?.remove();
   });
 
   /** 挂纸壳 + 把槽实测矩形钉成真尺寸（jsdom 无布局：RO 桩 + 实例方法覆盖）。 */
@@ -252,8 +254,17 @@ describe('创作坞浮动化（槽主人链路：坞位 + 让位带 + 手势）'
     });
   }
 
+  /** 让位带读数（**行为级**：照真消费者的样子在 `.psh-host` 上读**解析后**的值）。
+   *  载体是「只命中让位消费面的一条规则」（`composer-band.ts`，2026-10-18 性能批），
+   *  **不是** `:root` 内联——后者在拖动期是 62ms/帧的全树样式重算，是用户报
+   *  「一顿一顿」的病灶。此处刻意不读载体内幕：换实现只要消费面读得到，测试不动。 */
   function bandVar(): string {
-    return document.documentElement.style.getPropertyValue('--composer-band');
+    const host = document.createElement('div');
+    host.className = 'psh-host';
+    document.body.appendChild(host);
+    const value = getComputedStyle(host).getPropertyValue('--composer-band').trim();
+    host.remove();
+    return value;
   }
   function tocBand(): string | null {
     return container?.querySelector('.fake-toc')?.getAttribute('data-band') ?? null;
@@ -363,6 +374,34 @@ describe('创作坞浮动化（槽主人链路：坞位 + 让位带 + 手势）'
     expect(slot.style.bottom).toBe('');
     expect(localStorage.getItem(COMPOSER_POS_KEY)).toBeNull();
     expect(bandVar()).toBe('206px');
+  });
+
+  it('让位带载体（2026-10-18 性能批）：不写 :root 内联，只下发到命中让位消费面的那条规则', async () => {
+    const slot = await mount();
+    /* 消费面读得到（解析后的值 = 真值；载体形状不是测试对象）。 */
+    expect(bandVar()).toBe('206px');
+    /* 性能契约：`:root` 上**没有**这个变量——旧载体在拖动期每帧触发整棵文档树的
+     * 样式重算（本机实测 62ms/帧、28 次 64ms 长任务 ⇒ 用户报的「一顿一顿」）。 */
+    expect(document.documentElement.style.getPropertyValue('--composer-band')).toBe('');
+    expect(document.documentElement.getAttribute('style') ?? '').not.toContain('--composer-band');
+    const carrier = document.getElementById(BAND_STYLE_ID) as HTMLStyleElement | null;
+    expect(carrier?.sheet?.cssRules[0].selectorText).toBe(COMPOSER_BAND_CONSUMERS);
+
+    /* 拖动期**逐帧**下发（不是只在松手时补一次）：坞上移 100 ⇒ 让位带 206 → 306。 */
+    unlock(slot);
+    const dock = slot.querySelector('.pp-composer') as HTMLElement;
+    fire(dock, 'pointerdown', { button: 0, clientX: 300, clientY: 660 });
+    fire(window, 'pointermove', { clientX: 300, clientY: 560 });
+    expect(bandVar()).toBe('306px');
+    fire(window, 'pointerup', { clientX: 300, clientY: 560 });
+
+    /* 槽卸载（paper 关闭）= 撤载体 ⇒ 消费面回落到 CSS 里的静态兜底算式。 */
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    expect(document.getElementById(BAND_STYLE_ID)).toBeNull();
+    expect(bandVar()).toBe('');
   });
 
   it('解锁态：坞内交互件仍不承载拖坞手势（翰钮/输入框）', async () => {

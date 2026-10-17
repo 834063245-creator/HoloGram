@@ -12,9 +12,15 @@
 //   - 让位带 band = bottom + 坞高（默认位恒 = 96 + 坞高 ⇒ 与浮动化前零漂移）；
 //   - 命中判据 isComposerHandle：坞书眉行内的**非交互件**才是抓手。
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  BAND_STYLE_ID,
+  COMPOSER_BAND_CONSUMERS,
+  COMPOSER_BAND_VAR,
+  createComposerBandSink,
+} from '../src/plugins/builtin/paper-shell/composer-band';
 import {
   COMPOSER_CHROME_H,
   COMPOSER_EDGE,
@@ -257,6 +263,130 @@ describe('创作坞浮动化 · 坞位记忆（localStorage）', () => {
     expect(loadComposerPos()).toBeNull();
   });
 });
+
+/* 让位带载体（2026-10-18 性能批）：`--composer-band` 的**下发面**是「只命中让位
+ * 消费面的一条规则」，不是 `:root` 内联——旧写法在拖动期每帧触发整棵文档树的样式
+ * 重算（CDP 实测 62ms/帧、28 次 64ms 长任务；规则式 0.97ms/帧）。本组考两件事：
+ *   ① 载体本身（建/写/复用/摘除）；
+ *   ② **名册 vs CSS 实读对拍**——新增一个读让位带的消费面而忘了登记名册 = 那个面
+ *      永远读到静态兜底（坞浮上去压住它）且不报错，故按 CSS 源码逐条对拍。 */
+describe('创作坞浮动化 · 让位带载体（性能契约：不许退回 :root 内联）', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.getElementById(BAND_STYLE_ID)?.remove();
+    document.documentElement.style.removeProperty(COMPOSER_BAND_VAR);
+  });
+
+  it('建载体：规则选择器 = 让位消费面名册；publish 写的是规则声明块', () => {
+    const sink = createComposerBandSink(document);
+    sink.publish(206);
+    expect(document.getElementById(BAND_STYLE_ID)).not.toBeNull();
+    const rule = carrierRule();
+    expect(rule?.selectorText).toBe(COMPOSER_BAND_CONSUMERS);
+    expect(rule?.style.getPropertyValue(COMPOSER_BAND_VAR)).toBe('206px');
+    /* 关键：值落在**规则**上，不在 `:root` 内联上（后者 = 全树重算）。 */
+    expect(document.documentElement.style.getPropertyValue(COMPOSER_BAND_VAR)).toBe('');
+    /* 消费面（照真消费者挂一个 .psh-host）= 解析到实时值——后挂载者也自动命中。
+     * ⚠ 每次**新建**元素再读：jsdom 的计算样式按元素缓存，同一个元素读第二次不刷新。 */
+    const resolved = (): string => {
+      const host = document.createElement('div');
+      host.className = 'psh-host';
+      document.body.appendChild(host);
+      const v = getComputedStyle(host).getPropertyValue(COMPOSER_BAND_VAR).trim();
+      host.remove();
+      return v;
+    };
+    expect(resolved()).toBe('206px');
+    sink.publish(306.4);
+    expect(rule?.style.getPropertyValue(COMPOSER_BAND_VAR)).toBe('306px');
+    expect(resolved()).toBe('306px');
+  });
+
+  it('幂等与摘除：重复建只留一条载体；dispose 摘除后消费面回落（读到空 = CSS 兜底生效）', () => {
+    const a = createComposerBandSink(document);
+    const b = createComposerBandSink(document);
+    a.publish(200);
+    b.publish(210);
+    expect(document.querySelectorAll(`#${BAND_STYLE_ID}`).length).toBe(1);
+    /* 后写者胜（同旧 :root 口径：多实例不叠规则）。 */
+    expect(carrierRule()?.style.getPropertyValue(COMPOSER_BAND_VAR)).toBe('210px');
+    /* 复用来的载体（非自有）dispose 不摘别人的：b 先摘 → 值仍在。 */
+    b.dispose();
+    expect(document.getElementById(BAND_STYLE_ID)).not.toBeNull();
+    a.dispose();
+    expect(document.getElementById(BAND_STYLE_ID)).toBeNull();
+    a.publish(999); // 摘除后 publish 是空操作（不复活死载体、不炸）
+    expect(document.getElementById(BAND_STYLE_ID)).toBeNull();
+  });
+
+  it('载体被摘除后仍能续命（热重载竞态）：publish 发现断连即重建，不写在死表上', () => {
+    const owner = createComposerBandSink(document);
+    const reuser = createComposerBandSink(document);
+    owner.publish(100); // 首发者建载体（自有）
+    reuser.publish(200); // 后来者复用同一条（不自有）
+    owner.dispose(); // 自有者退场（产物热重载那一下）⇒ 载体被摘除
+    expect(document.getElementById(BAND_STYLE_ID)).toBeNull();
+    reuser.publish(210); // 仍须下发得出去（重建成自有）
+    expect(carrierRule()?.style.getPropertyValue(COMPOSER_BAND_VAR)).toBe('210px');
+    reuser.dispose();
+  });
+
+  it('名册 vs CSS 实读对拍：每条读 var(--composer-band) 的规则，主体元素都得登记', () => {
+    const registered = new Set(COMPOSER_BAND_CONSUMERS.split(',').map((sel) => subjectClassOf(sel.trim())));
+    const found = new Set<string>();
+    for (const file of cssFilesUnder(join(__dirname, '..', 'src'))) {
+      const css = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+      for (const sel of subjectsReadingBand(css)) found.add(subjectClassOf(sel));
+    }
+    // 现网两名消费者都得在（对拍本身有牙：漏登记即红、名册写错也红）
+    expect(found).toEqual(new Set(['.psh-host', '.pw-dock']));
+    expect([...found].filter((s) => !registered.has(s))).toEqual([]);
+  });
+});
+
+/** 载体规则（测试读面；用 `cssRules.item()` 取，避开索引取值的 lint）。 */
+function carrierRule(): CSSStyleRule | null {
+  const el = document.getElementById(BAND_STYLE_ID) as HTMLStyleElement | null;
+  return (el?.sheet?.cssRules.item(0) as CSSStyleRule | undefined) ?? null;
+}
+
+/** 规则主体里的 `.class` 名（取选择器末端那个简单选择器——`.pp-root .psh-host` ⇒ `.psh-host`）。 */
+function subjectClassOf(selector: string): string {
+  const last = selector.split(/\s+/).filter(Boolean).pop() ?? '';
+  const m = last.match(/\.[A-Za-z0-9_-]+/g);
+  return m ? m[m.length - 1] : '';
+}
+
+/** src 下全部 `.css` 文件（递归；升序保证对拍确定性）。 */
+function cssFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...cssFilesUnder(p));
+    else if (entry.name.endsWith('.css')) out.push(p);
+  }
+  return out;
+}
+
+/** 逐条报出「声明块里读了 var(--composer-band)」的规则的**主体选择器**。
+ *  朴素扫描：按 `{` 回溯到上一条规则的 `}` 或块首（覆盖 @media 内嵌规则——
+ *  选择器串里混进 `@media (...)` 前缀不影响主体取词）。 */
+function subjectsReadingBand(css: string): string[] {
+  const out: string[] = [];
+  const needle = `var(${COMPOSER_BAND_VAR}`;
+  for (let i = css.indexOf(needle); i >= 0; i = css.indexOf(needle, i + 1)) {
+    const open = css.lastIndexOf('{', i);
+    if (open < 0) continue;
+    const boundary = Math.max(css.lastIndexOf('}', open), css.lastIndexOf(';', open), css.lastIndexOf('{', open - 1));
+    const sel = css
+      .slice(boundary + 1, open)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    out.push(...sel);
+  }
+  return out;
+}
 
 describe('创作坞浮动化 · 拖动锁记忆（默认锁定）', () => {
   beforeEach(() => {
